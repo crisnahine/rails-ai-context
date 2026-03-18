@@ -121,4 +121,27 @@ namespace :ai do
     puts ""
     puts "Run `rails ai:context` to generate context files."
   end
+
+  desc "Run diagnostic checks and report AI readiness score"
+  task doctor: :environment do
+    require "rails_ai_context"
+
+    puts "🩺 Running AI readiness diagnostics..."
+    puts ""
+
+    result = RailsAiContext::Doctor.new.run
+
+    result[:checks].each do |check|
+      icon = case check.status
+             when :pass then "✅"
+             when :warn then "⚠️ "
+             when :fail then "❌"
+             end
+      puts "  #{icon} #{check.name}: #{check.message}"
+      puts "     Fix: #{check.fix}" if check.fix
+    end
+
+    puts ""
+    puts "AI Readiness Score: #{result[:score]}/100"
+  end
 end

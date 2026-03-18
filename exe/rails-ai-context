@@ -43,6 +43,25 @@ module RailsAiContext
       puts JSON.pretty_generate(context)
     end
 
+    desc "doctor", "Run diagnostic checks and report AI readiness score"
+    def doctor
+      boot_rails!
+      require "rails_ai_context"
+
+      result = RailsAiContext::Doctor.new.run
+      result[:checks].each do |check|
+        icon = case check.status
+               when :pass then "PASS"
+               when :warn then "WARN"
+               when :fail then "FAIL"
+               end
+        $stderr.puts "  [#{icon}] #{check.name}: #{check.message}"
+        $stderr.puts "         Fix: #{check.fix}" if check.fix
+      end
+      $stderr.puts ""
+      $stderr.puts "AI Readiness Score: #{result[:score]}/100"
+    end
+
     desc "version", "Print version"
     def version
       require_relative "../rails_ai_context/version"
