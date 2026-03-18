@@ -49,11 +49,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.4"
+          bundler-cache: true
 
       - name: Verify tag matches gem version
         run: |
@@ -64,9 +68,6 @@ jobs:
             exit 1
           fi
           echo "Version verified: $GEM_VERSION"
-
-      - name: Build gem
-        run: gem build rails-ai-context.gemspec
 
       - name: Push to RubyGems
         uses: rubygems/release-gem@v1
