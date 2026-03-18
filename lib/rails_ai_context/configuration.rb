@@ -28,9 +28,6 @@ module RailsAiContext
     # Models/tables to exclude from introspection
     attr_accessor :excluded_models
 
-    # Maximum depth for association traversal
-    attr_accessor :max_association_depth
-
     # TTL in seconds for cached introspection (default: 30)
     attr_accessor :cache_ttl
 
@@ -50,7 +47,6 @@ module RailsAiContext
         ActionText::RichText ActionText::EncryptedRichText
         ActionMailbox::InboundEmail ActionMailbox::Record
       ]
-      @max_association_depth = 2
       @cache_ttl            = 30
     end
 

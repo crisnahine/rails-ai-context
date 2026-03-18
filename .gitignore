@@ -9,3 +9,4 @@
 /tmp/
 *.gem
 Gemfile.lock
+spec/internal/log/

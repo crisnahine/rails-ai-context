@@ -10,7 +10,6 @@ RSpec.describe RailsAiContext::Configuration do
     expect(config.http_port).to eq(6029)
     expect(config.http_bind).to eq("127.0.0.1")
     expect(config.auto_mount).to eq(false)
-    expect(config.max_association_depth).to eq(2)
     expect(config.cache_ttl).to eq(30)
   end
 
