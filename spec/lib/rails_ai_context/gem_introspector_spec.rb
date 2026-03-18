@@ -9,6 +9,7 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
 
   describe "#call" do
     before do
+      FileUtils.mkdir_p(fixture_path)
       File.write(File.join(fixture_path, "Gemfile.lock"), <<~LOCK)
         GEM
           remote: https://rubygems.org/

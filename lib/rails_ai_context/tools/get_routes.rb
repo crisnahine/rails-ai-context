@@ -29,7 +29,7 @@ module RailsAiContext
           by_controller = filtered
         end
 
-        lines = ["# Routes (#{routes[:total_routes]} total)", ""]
+        lines = [ "# Routes (#{routes[:total_routes]} total)", "" ]
         lines << "| Verb | Path | Controller#Action | Name |"
         lines << "|------|------|-------------------|------|"
 

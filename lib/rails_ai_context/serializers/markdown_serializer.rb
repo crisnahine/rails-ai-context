@@ -46,7 +46,7 @@ module RailsAiContext
         arch = conv[:architecture] || []
         patterns = conv[:patterns] || []
 
-        lines = ["## Overview"]
+        lines = [ "## Overview" ]
         lines << "- **Architecture:** #{arch.join(', ')}" if arch.any?
         lines << "- **Patterns:** #{patterns.join(', ')}" if patterns.any?
         lines.join("\n")
@@ -56,7 +56,7 @@ module RailsAiContext
         schema = context[:schema]
         return if schema[:error]
 
-        lines = ["## Database Schema (#{schema[:total_tables]} tables)"]
+        lines = [ "## Database Schema (#{schema[:total_tables]} tables)" ]
         schema[:tables]&.each do |name, data|
           cols = (data[:columns] || []).map { |c| "`#{c[:name]}` (#{c[:type]})" }.join(", ")
           lines << "### #{name}"
@@ -69,7 +69,7 @@ module RailsAiContext
         models = context[:models]
         return if models.is_a?(Hash) && models[:error]
 
-        lines = ["## Models (#{models.size})"]
+        lines = [ "## Models (#{models.size})" ]
         models.each do |name, data|
           next if data[:error]
           assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }.join(", ")
@@ -89,7 +89,7 @@ module RailsAiContext
         routes = context[:routes]
         return if routes[:error]
 
-        lines = ["## Routes (#{routes[:total_routes]} total)"]
+        lines = [ "## Routes (#{routes[:total_routes]} total)" ]
         routes[:by_controller]&.sort&.each do |ctrl, actions|
           lines << "### #{ctrl}"
           actions.each do |r|
@@ -128,7 +128,7 @@ module RailsAiContext
         notable = gems[:notable_gems] || []
         return if notable.empty?
 
-        lines = ["## Notable Gems"]
+        lines = [ "## Notable Gems" ]
         notable.group_by { |g| g[:category] }.sort.each do |cat, group|
           lines << "### #{cat.capitalize}"
           group.each { |g| lines << "- **#{g[:name]}** (#{g[:version]}): #{g[:note]}" }
@@ -140,7 +140,7 @@ module RailsAiContext
         conv = context[:conventions]
         return unless conv[:directory_structure]&.any?
 
-        lines = ["## Project Structure"]
+        lines = [ "## Project Structure" ]
         conv[:directory_structure].sort.each do |dir, count|
           lines << "- `#{dir}/` — #{count} files"
         end

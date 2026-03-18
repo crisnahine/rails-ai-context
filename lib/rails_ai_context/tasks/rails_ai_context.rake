@@ -29,7 +29,7 @@ namespace :ai do
   end
 
   desc "Generate AI context in a specific format (claude, cursor, windsurf, copilot, json)"
-  task :context_for, [:format] => :environment do |_t, args|
+  task :context_for, [ :format ] => :environment do |_t, args|
     require "rails_ai_context"
 
     format = (args[:format] || ENV["FORMAT"] || "claude").to_sym

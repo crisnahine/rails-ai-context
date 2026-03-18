@@ -14,7 +14,7 @@ module RailsAiContext
         conventions = cached_context[:conventions]
         return text_response("Convention detection failed: #{conventions[:error]}") if conventions.is_a?(Hash) && conventions[:error]
 
-        lines = ["# App Conventions & Architecture", ""]
+        lines = [ "# App Conventions & Architecture", "" ]
 
         # Architecture
         if conventions[:architecture]&.any?

@@ -1,5 +1,5 @@
-require:
-  - rubocop-rails-omakase
+inherit_gem:
+  rubocop-rails-omakase: rubocop.yml
 
 AllCops:
   TargetRubyVersion: 3.2

@@ -29,7 +29,7 @@ module RailsAiContext
 
         # Helper: wrap text in an MCP::Tool::Response
         def text_response(text)
-          MCP::Tool::Response.new([{ type: "text", text: text }])
+          MCP::Tool::Response.new([ { type: "text", text: text } ])
         end
       end
     end

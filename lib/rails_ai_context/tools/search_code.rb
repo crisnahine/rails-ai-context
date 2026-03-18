@@ -25,7 +25,7 @@ module RailsAiContext
             description: "Maximum number of results. Default: 30."
           }
         },
-        required: ["pattern"]
+        required: [ "pattern" ]
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
@@ -40,9 +40,9 @@ module RailsAiContext
 
         results = if ripgrep_available?
                     search_with_ripgrep(pattern, search_path, file_type, max_results, root)
-                  else
+        else
                     search_with_ruby(pattern, search_path, file_type, max_results, root)
-                  end
+        end
 
         if results.empty?
           return text_response("No results found for '#{pattern}' in #{path || 'app'}.")
@@ -68,7 +68,7 @@ module RailsAiContext
         output = `#{cmd}`
         parse_rg_output(output, root)
       rescue => e
-        [{ file: "error", line_number: 0, content: e.message }]
+        [ { file: "error", line_number: 0, content: e.message } ]
       end
 
       private_class_method def self.search_with_ruby(pattern, search_path, file_type, max_results, root)

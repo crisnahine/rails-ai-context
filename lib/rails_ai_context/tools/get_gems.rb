@@ -25,13 +25,13 @@ module RailsAiContext
         notable = gems[:notable_gems] || []
         notable = notable.select { |g| g[:category] == category } unless category == "all"
 
-        lines = ["# Gem Analysis", ""]
+        lines = [ "# Gem Analysis", "" ]
         lines << "Total gems: #{gems[:total_gems]}"
         lines << ""
 
         if notable.any?
           current_cat = nil
-          notable.sort_by { |g| [g[:category], g[:name]] }.each do |g|
+          notable.sort_by { |g| [ g[:category], g[:name] ] }.each do |g|
             if g[:category] != current_cat
               current_cat = g[:category]
               lines << "" << "## #{current_cat.capitalize}"

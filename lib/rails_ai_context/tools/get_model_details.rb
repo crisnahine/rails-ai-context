@@ -36,7 +36,7 @@ module RailsAiContext
       end
 
       private_class_method def self.format_model(name, data)
-        lines = ["# #{name}", ""]
+        lines = [ "# #{name}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
 
         # Associations

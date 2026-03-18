@@ -44,7 +44,7 @@ module RailsAiContext
       end
 
       private_class_method def self.format_table_markdown(name, data)
-        lines = ["## Table: #{name}", ""]
+        lines = [ "## Table: #{name}", "" ]
         lines << "| Column | Type | Nullable | Default |"
         lines << "|--------|------|----------|---------|"
 

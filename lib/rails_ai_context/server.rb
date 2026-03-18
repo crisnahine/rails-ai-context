@@ -79,7 +79,7 @@ module RailsAiContext
       lambda do |env|
         # Only handle requests at the configured MCP path
         unless env["PATH_INFO"] == path || env["PATH_INFO"] == "#{path}/"
-          return [404, { "Content-Type" => "application/json" }, ['{"error":"Not found"}']]
+          return [ 404, { "Content-Type" => "application/json" }, [ '{"error":"Not found"}' ] ]
         end
 
         request = Rack::Request.new(env)

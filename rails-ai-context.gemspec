@@ -5,8 +5,8 @@ require_relative "lib/rails_ai_context/version"
 Gem::Specification.new do |spec|
   spec.name          = "rails-ai-context"
   spec.version       = RailsAiContext::VERSION
-  spec.authors       = ["crisnahine"]
-  spec.email         = ["crisjosephnahine@gmail.com"]
+  spec.authors       = [ "crisnahine" ]
+  spec.email         = [ "crisjosephnahine@gmail.com" ]
 
   spec.summary       = "Auto-expose Rails app structure to AI via MCP (Model Context Protocol) — zero config."
   spec.description   = <<~DESC
@@ -46,7 +46,7 @@ Gem::Specification.new do |spec|
 
   spec.bindir        = "exe"
   spec.executables   = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
-  spec.require_paths = ["lib"]
+  spec.require_paths = [ "lib" ]
 
   # Core dependencies
   spec.add_dependency "mcp", "~> 0.8"             # Official MCP Ruby SDK
