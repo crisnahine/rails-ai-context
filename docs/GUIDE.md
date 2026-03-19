@@ -579,7 +579,7 @@ Both transports are **read-only** — they expose the same 11 tools and never mo
 RailsAiContext.configure do |config|
   # --- Introspectors ---
 
-  # Presets: :standard (10 core, default) or :full (all 28)
+  # Presets: :standard (11 core, default) or :full (all 28)
   config.preset = :standard
 
   # Cherry-pick on top of a preset
@@ -636,7 +636,7 @@ end
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `preset` | Symbol | `:standard` | Introspector preset (`:standard` or `:full`) |
-| `introspectors` | Array | 10 core symbols | Which introspectors to run |
+| `introspectors` | Array | 11 core symbols | Which introspectors to run |
 | `context_mode` | Symbol | `:compact` | `:compact` or `:full` |
 | `claude_max_lines` | Integer | `150` | Max lines for CLAUDE.md in compact mode |
 | `max_tool_response_chars` | Integer | `120_000` | Safety cap for MCP tool responses |

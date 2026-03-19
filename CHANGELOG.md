@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rails_get_controllers` `action` parameter** — returns actual action source code + applicable filters instead of the entire controller file. Saves ~1,400 tokens per call. ([#9](https://github.com/crisnahine/rails-ai-context/issues/9))
 - **`rails_get_test_info` enhanced** — now supports `detail` levels (summary/standard/full), `model` and `controller` params to find existing tests, fixture/factory names, test helper setup. ([#10](https://github.com/crisnahine/rails-ai-context/issues/10))
 - **ViewTemplateIntrospector** — new introspector that reads view file contents and extracts partial references and Stimulus data attributes.
-- **Stimulus in standard preset** — `:stimulus` introspector now included in the `:standard` preset (was `:full` only).
+- **Stimulus and view_templates in standard preset** — both introspectors now in `:standard` preset (11 introspectors, was 10).
 
 ## [0.9.0] - 2026-03-19
 

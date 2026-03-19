@@ -85,5 +85,62 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         expect(result[:factories][:count]).to eq(1)
       end
     end
+
+    it "returns fixture_names as nil when no fixtures exist" do
+      expect(result[:fixture_names]).to be_nil
+    end
+
+    it "returns factory_names as nil when no factories exist" do
+      expect(result[:factory_names]).to be_nil
+    end
+
+    it "returns test_helper_setup as array" do
+      expect(result[:test_helper_setup]).to be_an(Array)
+    end
+
+    it "returns test_files as hash" do
+      expect(result[:test_files]).to be_a(Hash)
+    end
+
+    context "with fixtures" do
+      let(:fixtures_dir) { File.join(Rails.root, "test/fixtures") }
+
+      before do
+        FileUtils.mkdir_p(fixtures_dir)
+        File.write(File.join(fixtures_dir, "users.yml"), "one:\n  name: Alice\ntwo:\n  name: Bob\n")
+      end
+
+      after { FileUtils.rm_rf(File.join(Rails.root, "test")) }
+
+      it "extracts fixture names from YAML files" do
+        expect(result[:fixture_names]).to be_a(Hash)
+        expect(result[:fixture_names]["users"]).to include("one", "two")
+      end
+    end
+
+    context "with factory files containing factory definitions" do
+      let(:factories_dir) { File.join(Rails.root, "spec/factories") }
+
+      before do
+        FileUtils.mkdir_p(factories_dir)
+        File.write(File.join(factories_dir, "users.rb"), <<~RUBY)
+          FactoryBot.define do
+            factory :user do
+              name { "Alice" }
+            end
+            factory :admin_user do
+              name { "Admin" }
+            end
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_rf(File.join(Rails.root, "spec")) }
+
+      it "extracts factory names from ruby files" do
+        expect(result[:factory_names]).to be_a(Hash)
+        expect(result[:factory_names]["spec/factories/users.rb"]).to include("user", "admin_user")
+      end
+    end
   end
 end

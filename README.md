@@ -174,7 +174,7 @@ Root files (CLAUDE.md, AGENTS.md, etc.) use **section markers** — your custom 
 | **DevOps** | Puma, Procfile, Docker, deployment tools, asset pipeline |
 | **Architecture** | Service objects, STI, polymorphism, state machines, multi-tenancy, engines |
 
-28 introspectors total. The `:standard` preset runs 10 core ones by default; use `:full` for 27 (`database_stats` is opt-in, PostgreSQL only).
+28 introspectors total. The `:standard` preset runs 11 core ones by default; use `:full` for 27 (`database_stats` is opt-in, PostgreSQL only).
 
 ---
 
@@ -228,7 +228,7 @@ end
 ```ruby
 # config/initializers/rails_ai_context.rb
 RailsAiContext.configure do |config|
-  # Presets: :standard (10 introspectors, default) or :full (all 28)
+  # Presets: :standard (11 introspectors, default) or :full (all 28)
   config.preset = :standard
 
   # Cherry-pick on top of a preset
@@ -262,7 +262,7 @@ end
 | Option | Default | Description |
 |--------|---------|-------------|
 | `preset` | `:standard` | Introspector preset (`:standard` or `:full`) |
-| `introspectors` | 10 core | Array of introspector symbols |
+| `introspectors` | 11 core | Array of introspector symbols |
 | `context_mode` | `:compact` | `:compact` (≤150 lines) or `:full` (dump everything) |
 | `claude_max_lines` | `150` | Max lines for CLAUDE.md in compact mode |
 | `max_tool_response_chars` | `120_000` | Safety cap for MCP tool responses |
@@ -362,7 +362,7 @@ The gem parses `db/schema.rb` as text when no database is connected. Works in CI
 ```bash
 git clone https://github.com/crisnahine/rails-ai-context.git
 cd rails-ai-context && bundle install
-bundle exec rspec       # 412 examples
+bundle exec rspec       # 456 examples
 bundle exec rubocop     # Lint
 ```
 
