@@ -353,7 +353,7 @@ The gem parses `db/schema.rb` as text when no database is connected. Works in CI
 ```bash
 git clone https://github.com/crisnahine/rails-ai-context.git
 cd rails-ai-context && bundle install
-bundle exec rspec       # 392 examples
+bundle exec rspec       # 403 examples
 bundle exec rubocop     # Lint
 ```
 
