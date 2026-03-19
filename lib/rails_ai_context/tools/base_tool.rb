@@ -39,9 +39,16 @@ module RailsAiContext
           @cache_fingerprint = nil
         end
 
-        # Helper: wrap text in an MCP::Tool::Response
+        # Helper: wrap text in an MCP::Tool::Response with safety-net truncation
         def text_response(text)
-          MCP::Tool::Response.new([ { type: "text", text: text } ])
+          max = RailsAiContext.configuration.max_tool_response_chars
+          if max && text.length > max
+            truncated = text[0...max]
+            truncated += "\n\n---\n_Response truncated (#{text.length} chars). Use `detail:\"summary\"` for an overview, or filter by a specific item (e.g. `table:\"users\"`)._"
+            MCP::Tool::Response.new([ { type: "text", text: truncated } ])
+          else
+            MCP::Tool::Response.new([ { type: "text", text: text } ])
+          end
         end
       end
     end
