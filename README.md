@@ -151,6 +151,26 @@ rails_get_model_details(model: "User")
 
 A safety net (`max_tool_response_chars`, default 120K) truncates oversized responses with hints to use filters.
 
+### Token Savings
+
+The summary-first approach dramatically reduces AI token consumption — especially for large apps:
+
+| Metric | Without gem | Full dump (v0.6) | Smart mode (v0.7+) |
+|--------|-------------|------------------|---------------------|
+| Context file | 0 tokens | ~15,000 tokens | ~1,500 tokens |
+| Schema lookup | manual copy-paste | ~45,000 tokens (all tables) | ~800 tokens (summary) |
+| Drill into 1 table | manual copy-paste | included above | ~400 tokens |
+| **2-call workflow** | **error-prone** | **~60,000 tokens** | **~2,700 tokens** |
+
+That's **~95% fewer tokens** for the same understanding. The AI gets a compact overview first, then only loads what it actually needs — you pay for precision, not bulk.
+
+**How it saves:**
+- Compact context files load ≤150 lines instead of thousands
+- `detail:"summary"` gives the AI the full landscape in ~800 tokens
+- Specific lookups (`table:`, `model:`, `controller:`) return only what's needed
+- Pagination prevents dumping hundreds of tables/routes at once
+- Split rule files only activate in relevant directories (e.g., model rules load only when editing `app/models/`)
+
 ---
 
 ## MCP Server Setup
