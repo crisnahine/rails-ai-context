@@ -8,6 +8,10 @@ module RailsAiContext
     # Inherits from the official MCP::Tool to get schema validation,
     # annotations, and protocol compliance for free.
     class BaseTool < MCP::Tool
+      # Shared cache across all tool subclasses, protected by a Mutex
+      # for thread safety in multi-threaded servers (e.g., Puma).
+      SHARED_CACHE = { mutex: Mutex.new }
+
       class << self
         # Convenience: access the Rails app and cached introspection
         def rails_app
@@ -18,31 +22,36 @@ module RailsAiContext
           RailsAiContext.configuration
         end
 
-        # Cache introspection results with TTL + fingerprint invalidation
+        # Cache introspection results with TTL + fingerprint invalidation.
+        # Uses SHARED_CACHE so all tool subclasses share one introspection
+        # result instead of each caching independently.
         def cached_context
-          now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          ttl = RailsAiContext.configuration.cache_ttl
+          SHARED_CACHE[:mutex].synchronize do
+            now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            ttl = RailsAiContext.configuration.cache_ttl
 
-          if @cached_context && (now - @cache_timestamp) < ttl && !Fingerprinter.changed?(rails_app, @cache_fingerprint)
-            return @cached_context
+            if SHARED_CACHE[:context] && (now - SHARED_CACHE[:timestamp]) < ttl && !Fingerprinter.changed?(rails_app, SHARED_CACHE[:fingerprint])
+              return SHARED_CACHE[:context]
+            end
+
+            SHARED_CACHE[:context] = RailsAiContext.introspect
+            SHARED_CACHE[:timestamp] = now
+            SHARED_CACHE[:fingerprint] = Fingerprinter.compute(rails_app)
+            SHARED_CACHE[:context]
           end
-
-          @cached_context = RailsAiContext.introspect
-          @cache_timestamp = now
-          @cache_fingerprint = Fingerprinter.compute(rails_app)
-          @cached_context
         end
 
         def reset_cache!
-          @cached_context = nil
-          @cache_timestamp = nil
-          @cache_fingerprint = nil
+          SHARED_CACHE[:mutex].synchronize do
+            SHARED_CACHE.delete(:context)
+            SHARED_CACHE.delete(:timestamp)
+            SHARED_CACHE.delete(:fingerprint)
+          end
         end
 
-        # Reset cache on ALL registered tool subclasses at once.
-        # Used by LiveReload to invalidate everything on file change.
+        # Reset the shared cache. Used by LiveReload to invalidate on file change.
         def reset_all_caches!
-          RailsAiContext::Server::TOOLS.each(&:reset_cache!)
+          reset_cache!
         end
 
         # Helper: wrap text in an MCP::Tool::Response with safety-net truncation

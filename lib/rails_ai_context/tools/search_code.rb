@@ -99,7 +99,7 @@ module RailsAiContext
         cmd << search_path
 
         output, _status = Open3.capture2(*cmd, err: File::NULL)
-        parse_rg_output(output, root)
+        parse_rg_output(output, root).first(max_results)
       rescue => e
         [ { file: "error", line_number: 0, content: e.message } ]
       end
