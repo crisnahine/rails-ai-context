@@ -11,6 +11,9 @@ RSpec.describe RailsAiContext::Configuration do
     expect(config.http_bind).to eq("127.0.0.1")
     expect(config.auto_mount).to eq(false)
     expect(config.cache_ttl).to eq(30)
+    expect(config.context_mode).to eq(:compact)
+    expect(config.claude_max_lines).to eq(150)
+    expect(config.max_tool_response_chars).to eq(120_000)
   end
 
   it "defaults to standard preset" do
