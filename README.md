@@ -293,7 +293,13 @@ Frontend introspectors (views, Turbo, Stimulus, assets) degrade gracefully — t
 | `rails ai:watch` | Auto-regenerate context files on code changes |
 | `rails ai:inspect` | Print introspection summary to stdout |
 
-> Override context mode: `CONTEXT_MODE=full rails ai:context`
+> **Context modes:**
+> ```bash
+> rails ai:context                              # compact (default) — all formats
+> rails ai:context:full                         # full dump — all formats
+> CONTEXT_MODE=full rails ai:context:claude     # full dump — Claude only
+> CONTEXT_MODE=full rails ai:context:cursor     # full dump — Cursor only
+> ```
 
 ---
 
