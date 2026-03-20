@@ -246,7 +246,7 @@ rails ai:context:claude           # Use this instead (no quoting needed)
 
 ## MCP Tools — Full Reference
 
-All 11 tools are **read-only** and **idempotent** — they never modify your application or database.
+All 12 tools are **read-only** and **idempotent** — they never modify your application or database.
 
 ### rails_get_schema
 
@@ -568,7 +568,7 @@ RailsAiContext.configure do |config|
 end
 ```
 
-Both transports are **read-only** — they expose the same 11 tools and never modify your app.
+Both transports are **read-only** — they expose the same 12 tools and never modify your app.
 
 ---
 
@@ -579,7 +579,7 @@ Both transports are **read-only** — they expose the same 11 tools and never mo
 RailsAiContext.configure do |config|
   # --- Introspectors ---
 
-  # Presets: :standard (11 core, default) or :full (all 28)
+  # Presets: :standard (12 core, default) or :full (all 28)
   config.preset = :standard
 
   # Cherry-pick on top of a preset
@@ -636,7 +636,7 @@ end
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `preset` | Symbol | `:standard` | Introspector preset (`:standard` or `:full`) |
-| `introspectors` | Array | 11 core symbols | Which introspectors to run |
+| `introspectors` | Array | 12 core symbols | Which introspectors to run |
 | `context_mode` | Symbol | `:compact` | `:compact` or `:full` |
 | `claude_max_lines` | Integer | `150` | Max lines for CLAUDE.md in compact mode |
 | `max_tool_response_chars` | Integer | `120_000` | Safety cap for MCP tool responses |
@@ -689,7 +689,7 @@ These run by default. Fast and cover core Rails structure.
 | `tests` | Test framework (rspec/minitest), factories/fixtures with locations and counts, system tests, CI config files, coverage tool, test helpers, VCR cassettes. |
 | `migrations` | Total count, schema version, pending migrations, recent migration history with detected actions (create_table, add_column, etc.), migration statistics. |
 
-### Full preset (28 introspectors)
+### Full preset (29 introspectors)
 
 Includes all standard introspectors plus:
 
@@ -812,7 +812,7 @@ OpenCode uses **per-directory lazy-loading**: when the agent reads a file, it wa
 
 | Setup | Coverage | Notes |
 |-------|----------|-------|
-| Rails full-stack (ERB + Hotwire) | 28/28 | All introspectors relevant |
+| Rails full-stack (ERB + Hotwire) | 29/29 | All introspectors relevant |
 | Rails + Inertia.js (React/Vue) | ~22/27 | Views/Turbo partially useful, backend fully covered |
 | Rails API + React/Next.js SPA | ~20/27 | Schema, models, routes, API, auth, jobs — all covered |
 | Rails API + mobile app | ~20/27 | Same as SPA — backend introspection is identical |

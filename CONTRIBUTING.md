@@ -18,8 +18,8 @@ The test suite uses [Combustion](https://github.com/pat/combustion) to boot a mi
 
 ```
 lib/rails_ai_context/
-├── introspectors/     # 28 introspectors (schema, models, routes, etc.)
-├── tools/             # 11 MCP tools with detail levels and pagination
+├── introspectors/     # 29 introspectors (schema, models, routes, etc.)
+├── tools/             # 12 MCP tools with detail levels and pagination
 ├── serializers/       # Per-assistant formatters (claude, opencode, cursor, windsurf, copilot, JSON)
 ├── server.rb          # MCP server setup (stdio + HTTP)
 ├── live_reload.rb     # MCP live reload (file watcher + cache invalidation)

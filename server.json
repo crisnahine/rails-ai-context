@@ -2,16 +2,16 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.crisnahine/rails-ai-context",
   "title": "Rails AI Context",
-  "description": "Auto-expose Rails app structure to AI via MCP. Zero config, 11 read-only tools.",
+  "description": "Auto-expose Rails app structure to AI via MCP. Zero config, 12 read-only tools.",
   "repository": {
     "url": "https://github.com/crisnahine/rails-ai-context",
     "source": "github"
   },
-  "version": "0.11.0",
+  "version": "0.12.0",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/crisnahine/rails-ai-context/releases/download/v0.11.0/rails-ai-context-mcp.mcpb",
+      "identifier": "https://github.com/crisnahine/rails-ai-context/releases/download/v0.12.0/rails-ai-context-mcp.mcpb",
       "fileSha256": "dd711a0ad6c4de943ae4da94eaf59a6dc9494b9d57f726e24649ed4e2f156990",
       "transport": {
         "type": "stdio"

@@ -115,11 +115,15 @@ module RailsAiContext
         views_dir = Rails.root.join("app", "views")
         full_path = views_dir.join(path)
 
-        # Path traversal protection
-        unless full_path.to_s.start_with?(views_dir.to_s)
-          return text_response("Path not allowed: #{path}")
-        end
+        # Path traversal protection (resolves symlinks)
         unless File.exist?(full_path)
+          return text_response("View not found: #{path}")
+        end
+        begin
+          unless File.realpath(full_path).start_with?(File.realpath(views_dir))
+            return text_response("Path not allowed: #{path}")
+          end
+        rescue Errno::ENOENT
           return text_response("View not found: #{path}")
         end
         if File.size(full_path) > MAX_FILE_SIZE

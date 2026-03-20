@@ -33,7 +33,7 @@ RSpec.describe RailsAiContext::Serializers::OpencodeSerializer do
 
       it "includes MCP tools section" do
         output = described_class.new(context).call
-        expect(output).to include("MCP Tools (11)")
+        expect(output).to include("MCP Tools (12)")
         expect(output).to include("rails_get_schema")
         expect(output).to include('detail:"summary"')
       end

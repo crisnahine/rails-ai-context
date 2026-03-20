@@ -107,26 +107,28 @@ module RailsAiContext
           end
         end
 
-        # Extract source code
+        # Extract source code with line numbers
         source_path = Rails.root.join("app", "controllers", "#{controller_name.underscore}.rb")
-        source_code = extract_method_source(source_path, action_name)
+        source_with_lines = extract_method_with_lines(source_path, action_name)
 
         lines = [ "# #{controller_name}##{action_name}", "" ]
+        lines << "**File:** `app/controllers/#{controller_name.underscore}.rb`"
 
         if filters.any?
-          lines << "## Applicable Filters"
+          lines << "" << "## Applicable Filters"
           filters.each do |f|
             line = "- `#{f[:kind]}` **#{f[:name]}**"
             line += " (only: #{f[:only].join(', ')})" if f[:only]&.any?
             lines << line
           end
-          lines << ""
         end
 
-        if source_code
-          lines << "## Source" << "```ruby" << source_code << "```"
+        if source_with_lines
+          lines << "" << "## Source (lines #{source_with_lines[:start_line]}-#{source_with_lines[:end_line]})"
+          lines << "```ruby" << source_with_lines[:code] << "```"
+          lines << "" << "_Use this exact code as old_string for Edit — no need to Read the full file._"
         else
-          lines << "_Could not extract source code. File: #{source_path}_"
+          lines << "" << "_Could not extract source code. File: #{source_path}_"
         end
 
         if info[:strong_params]&.any?
@@ -136,21 +138,31 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      private_class_method def self.extract_method_source(file_path, method_name)
+      MAX_CONTROLLER_SIZE = 2_000_000 # 2MB safety limit
+
+      private_class_method def self.extract_method_with_lines(file_path, method_name)
         return nil unless File.exist?(file_path)
+        return nil if File.size(file_path) > MAX_CONTROLLER_SIZE
         source_lines = File.readlines(file_path)
         start_idx = source_lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/) }
         return nil unless start_idx
 
         depth = 0
         result = []
-        source_lines[start_idx..].each do |line|
+        end_idx = start_idx
+        source_lines[start_idx..].each_with_index do |line, i|
           depth += line.scan(/\b(?:def|do|if|unless|case|begin|class|module)\b/).size
           depth -= line.scan(/\bend\b/).size
           result << line.rstrip
+          end_idx = start_idx + i
           break if depth <= 0
         end
-        result.join("\n")
+
+        {
+          code: result.join("\n"),
+          start_line: start_idx + 1,
+          end_line: end_idx + 1
+        }
       rescue
         nil
       end

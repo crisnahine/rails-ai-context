@@ -3,8 +3,8 @@
 module RailsAiContext
   class Configuration
     PRESETS = {
-      standard: %i[schema models routes jobs gems conventions controllers tests migrations stimulus view_templates],
-      full: %i[schema models routes jobs gems conventions stimulus controllers views view_templates turbo
+      standard: %i[schema models routes jobs gems conventions controllers tests migrations stimulus view_templates design_tokens],
+      full: %i[schema models routes jobs gems conventions stimulus controllers views view_templates design_tokens turbo
                i18n config active_storage action_text auth api tests rake_tasks assets
                devops action_mailbox migrations seeds middleware engines multi_database]
     }.freeze

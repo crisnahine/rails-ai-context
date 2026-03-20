@@ -19,7 +19,8 @@ module RailsAiContext
       Tools::GetConfig,
       Tools::GetTestInfo,
       Tools::GetView,
-      Tools::GetStimulus
+      Tools::GetStimulus,
+      Tools::GetEditContext
     ].freeze
 
     def initialize(app, transport: :stdio)

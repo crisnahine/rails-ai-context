@@ -40,7 +40,7 @@ module RailsAiContext
         case detail
         when "summary"
           lines = [ "# Stimulus Controllers (#{controllers.size})", "" ]
-          controllers.sort_by { |c| c[:name].to_s }.each do |ctrl|
+          controllers.sort_by { |c| c[:name]&.to_s || "" }.each do |ctrl|
             targets = (ctrl[:targets] || []).size
             actions = (ctrl[:actions] || []).size
             lines << "- **#{ctrl[:name]}** — #{targets} targets, #{actions} actions"
@@ -50,7 +50,7 @@ module RailsAiContext
 
         when "standard"
           lines = [ "# Stimulus Controllers (#{controllers.size})", "" ]
-          controllers.sort_by { |c| c[:name].to_s }.each do |ctrl|
+          controllers.sort_by { |c| c[:name]&.to_s || "" }.each do |ctrl|
             lines << "## #{ctrl[:name]}"
             lines << "- Targets: #{(ctrl[:targets] || []).join(', ')}" if ctrl[:targets]&.any?
             lines << "- Actions: #{(ctrl[:actions] || []).join(', ')}" if ctrl[:actions]&.any?
@@ -60,7 +60,7 @@ module RailsAiContext
 
         when "full"
           lines = [ "# Stimulus Controllers (#{controllers.size})", "" ]
-          controllers.sort_by { |c| c[:name].to_s }.each do |ctrl|
+          controllers.sort_by { |c| c[:name]&.to_s || "" }.each do |ctrl|
             lines << format_controller_full(ctrl) << ""
           end
           text_response(lines.join("\n"))

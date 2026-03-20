@@ -30,7 +30,7 @@ RSpec.describe "Token-saving improvements" do
     it "includes UI Patterns in ClaudeSerializer compact output" do
       context = RailsAiContext.introspect
       context[:view_templates] = {
-        ui_patterns: { buttons: [ "bg-orange-600 text-white px-4 py-2 rounded-xl hover:bg-orange-700" ] }
+        ui_patterns: { components: [ { type: :button, label: "Button (primary)", classes: "bg-orange-600 text-white px-4 py-2 rounded-xl hover:bg-orange-700" } ], color_scheme: { primary: "orange" } }
       }
       output = RailsAiContext::Serializers::ClaudeSerializer.new(context).call
       expect(output).to include("UI Patterns")
@@ -40,7 +40,7 @@ RSpec.describe "Token-saving improvements" do
     it "includes UI Patterns in OpencodeSerializer compact output" do
       context = RailsAiContext.introspect
       context[:view_templates] = {
-        ui_patterns: { cards: [ "bg-white rounded-2xl p-6 shadow-sm" ] }
+        ui_patterns: { components: [ { type: :card, label: "Card", classes: "bg-white rounded-2xl p-6 shadow-sm" } ] }
       }
       output = RailsAiContext::Serializers::OpencodeSerializer.new(context).call
       expect(output).to include("UI Patterns")
@@ -49,7 +49,7 @@ RSpec.describe "Token-saving improvements" do
     it "includes UI Patterns in CopilotSerializer compact output" do
       context = RailsAiContext.introspect
       context[:view_templates] = {
-        ui_patterns: { inputs: [ "border rounded-lg px-3 py-2 focus:ring-2" ] }
+        ui_patterns: { components: [ { type: :input, label: "Input", classes: "border rounded-lg px-3 py-2 focus:ring-2" } ] }
       }
       output = RailsAiContext::Serializers::CopilotSerializer.new(context).call
       expect(output).to include("UI Patterns")
@@ -58,7 +58,7 @@ RSpec.describe "Token-saving improvements" do
     it "generates rails-ui-patterns.md in Claude rules" do
       context = RailsAiContext.introspect
       context[:view_templates] = {
-        ui_patterns: { buttons: [ "bg-orange-600 text-white rounded-xl" ] }
+        ui_patterns: { components: [ { type: :button, label: "Button (primary)", classes: "bg-orange-600 text-white rounded-xl" } ] }
       }
       Dir.mktmpdir do |dir|
         result = RailsAiContext::Serializers::ClaudeRulesSerializer.new(context).call(dir)
@@ -71,7 +71,7 @@ RSpec.describe "Token-saving improvements" do
     it "generates rails-ui-patterns.mdc in Cursor rules" do
       context = RailsAiContext.introspect
       context[:view_templates] = {
-        ui_patterns: { cards: [ "bg-white rounded-xl shadow-sm" ] }
+        ui_patterns: { components: [ { type: :card, label: "Card", classes: "bg-white rounded-xl shadow-sm" } ] }
       }
       Dir.mktmpdir do |dir|
         result = RailsAiContext::Serializers::CursorRulesSerializer.new(context).call(dir)
@@ -84,7 +84,7 @@ RSpec.describe "Token-saving improvements" do
     it "generates rails-ui-patterns.instructions.md in Copilot rules" do
       context = RailsAiContext.introspect
       context[:view_templates] = {
-        ui_patterns: { labels: [ "block text-sm font-semibold" ] }
+        ui_patterns: { components: [ { type: :label, label: "Label", classes: "block text-sm font-semibold" } ] }
       }
       Dir.mktmpdir do |dir|
         result = RailsAiContext::Serializers::CopilotInstructionsSerializer.new(context).call(dir)

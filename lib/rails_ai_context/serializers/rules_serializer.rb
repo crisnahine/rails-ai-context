@@ -76,12 +76,10 @@ module RailsAiContext
         # UI Patterns
         vt = context[:view_templates]
         if vt.is_a?(Hash) && !vt[:error]
-          patterns = vt[:ui_patterns] || {}
-          if patterns.any?
+          components = vt.dig(:ui_patterns, :components) || []
+          if components.any?
             lines << "## UI Patterns"
-            patterns.each do |type, classes_list|
-              classes_list.each { |c| lines << "- #{type.to_s.chomp('s').capitalize}: `#{c}`" }
-            end
+            components.first(15).each { |c| next unless c[:label] && c[:classes]; lines << "- #{c[:label]}: `#{c[:classes]}`" }
             lines << ""
           end
         end

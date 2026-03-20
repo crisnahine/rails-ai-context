@@ -138,8 +138,8 @@ module RailsAiContext
       def render_ui_patterns_instructions
         vt = context[:view_templates]
         return nil unless vt.is_a?(Hash) && !vt[:error]
-        patterns = vt[:ui_patterns] || {}
-        return nil if patterns.empty?
+        components = vt.dig(:ui_patterns, :components) || []
+        return nil if components.empty?
 
         lines = [
           "---",
@@ -147,14 +147,9 @@ module RailsAiContext
           "---",
           "",
           "# UI Patterns",
-          "",
-          "Use these CSS class patterns to match the existing design.",
           ""
         ]
-
-        patterns.each do |type, classes_list|
-          classes_list.each { |c| lines << "- #{type.to_s.chomp('s').capitalize}: `#{c}`" }
-        end
+        components.first(15).each { |c| next unless c[:label] && c[:classes]; lines << "- #{c[:label]}: `#{c[:classes]}`" }
 
         lines.join("\n")
       end
@@ -165,10 +160,10 @@ module RailsAiContext
           "applyTo: \"**/*\"",
           "---",
           "",
-          "# Rails MCP Tools (11) — Use These First",
+          "# Rails MCP Tools (12) — Use These First",
           "",
-          "ALWAYS use these MCP tools BEFORE reading files directly.",
-          "They return parsed, up-to-date data and save tokens.",
+          "Use MCP for reference files (schema, routes, tests). Read directly if you'll edit.",
+          "MCP tools return line numbers for surgical edits.",
           "**Start with `detail:\"summary\"`, then drill into specifics.**",
           "",
           "- `rails_get_schema(detail:\"summary\")` → `rails_get_schema(table:\"name\")`",

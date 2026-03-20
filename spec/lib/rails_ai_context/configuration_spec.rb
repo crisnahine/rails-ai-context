@@ -40,18 +40,18 @@ RSpec.describe RailsAiContext::Configuration do
   describe "#preset=" do
     it "sets introspectors to standard preset" do
       config.preset = :standard
-      expect(config.introspectors).to eq(%i[schema models routes jobs gems conventions controllers tests migrations stimulus view_templates])
+      expect(config.introspectors).to eq(%i[schema models routes jobs gems conventions controllers tests migrations stimulus view_templates design_tokens])
     end
 
     it "sets introspectors to full preset" do
       config.preset = :full
-      expect(config.introspectors.size).to eq(27)
-      expect(config.introspectors).to include(:stimulus, :views, :view_templates, :turbo, :auth, :api, :devops, :migrations, :seeds, :middleware, :engines, :multi_database)
+      expect(config.introspectors.size).to eq(28)
+      expect(config.introspectors).to include(:stimulus, :views, :view_templates, :design_tokens, :turbo, :auth, :api, :devops, :migrations, :seeds, :middleware, :engines, :multi_database)
     end
 
     it "accepts string preset names" do
       config.preset = "full"
-      expect(config.introspectors.size).to eq(27)
+      expect(config.introspectors.size).to eq(28)
     end
 
     it "raises on unknown preset" do
@@ -62,7 +62,7 @@ RSpec.describe RailsAiContext::Configuration do
       config.preset = :standard
       config.introspectors += %i[views turbo]
       expect(config.introspectors).to include(:views, :turbo)
-      expect(config.introspectors.size).to eq(13)
+      expect(config.introspectors.size).to eq(14)
     end
   end
 

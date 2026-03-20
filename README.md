@@ -27,7 +27,7 @@ Same task — *"Add status and date range filters to the Cooks index page"* — 
 
 | Setup | Tokens | Saved | What it knows |
 |-------|--------|-------|---------------|
-| **rails-ai-context (full)** | **28,834** | **37%** | 11 MCP tools + generated docs + rules |
+| **rails-ai-context (full)** | **28,834** | **37%** | 12 MCP tools + generated docs + rules |
 | rails-ai-context CLAUDE.md only | 33,106 | 27% | Generated docs + rules, no MCP tools |
 | Normal Claude `/init` | 40,700 | 11% | Generic CLAUDE.md only |
 | No rails-ai-context at all | 45,477 | baseline | Nothing — discovers everything from scratch |
@@ -95,9 +95,9 @@ The install generator creates `.mcp.json` for auto-discovery — Claude Code and
 
 ---
 
-## 11 Live MCP Tools
+## 12 Live MCP Tools
 
-The gem exposes **11 read-only tools** via MCP that AI clients call on-demand:
+The gem exposes **12 read-only tools** via MCP that AI clients call on-demand:
 
 | Tool | What it returns |
 |------|----------------|
@@ -112,6 +112,7 @@ The gem exposes **11 read-only tools** via MCP that AI clients call on-demand:
 | `rails_search_code` | Ripgrep-powered regex search across the codebase |
 | `rails_get_view` | View templates, partials, Stimulus references |
 | `rails_get_stimulus` | Stimulus controllers — targets, values, actions, outlets |
+| `rails_get_edit_context` | Surgical edit helper — returns code around a match with line numbers |
 
 ### Smart Detail Levels
 
@@ -201,7 +202,7 @@ Root files (CLAUDE.md, AGENTS.md, etc.) use **section markers** — your custom 
 | **DevOps** | Puma, Procfile, Docker, deployment tools, asset pipeline |
 | **Architecture** | Service objects, STI, polymorphism, state machines, multi-tenancy, engines |
 
-28 introspectors total. The `:standard` preset runs 11 core ones by default; use `:full` for 27 (`database_stats` is opt-in, PostgreSQL only).
+29 introspectors total. The `:standard` preset runs 12 core ones by default; use `:full` for 28 (`database_stats` is opt-in, PostgreSQL only).
 
 ---
 
@@ -255,7 +256,7 @@ end
 ```ruby
 # config/initializers/rails_ai_context.rb
 RailsAiContext.configure do |config|
-  # Presets: :standard (11 introspectors, default) or :full (all 28)
+  # Presets: :standard (12 introspectors, default) or :full (all 28)
   config.preset = :standard
 
   # Cherry-pick on top of a preset
@@ -289,7 +290,7 @@ end
 | Option | Default | Description |
 |--------|---------|-------------|
 | `preset` | `:standard` | Introspector preset (`:standard` or `:full`) |
-| `introspectors` | 11 core | Array of introspector symbols |
+| `introspectors` | 12 core | Array of introspector symbols |
 | `context_mode` | `:compact` | `:compact` (≤150 lines) or `:full` (dump everything) |
 | `claude_max_lines` | `150` | Max lines for CLAUDE.md in compact mode |
 | `max_tool_response_chars` | `120_000` | Safety cap for MCP tool responses |
@@ -350,7 +351,7 @@ Works with every Rails architecture — auto-detects what's relevant:
 
 | Setup | Coverage | Notes |
 |-------|----------|-------|
-| Rails full-stack (ERB + Hotwire) | 28/28 | All introspectors relevant |
+| Rails full-stack (ERB + Hotwire) | 29/29 | All introspectors relevant |
 | Rails + Inertia.js (React/Vue) | ~22/27 | Views/Turbo partially useful, backend fully covered |
 | Rails API + React/Next.js SPA | ~20/27 | Schema, models, routes, API, auth, jobs — all covered |
 | Rails API + mobile app | ~20/27 | Same as SPA — backend introspection is identical |
@@ -389,7 +390,7 @@ The gem parses `db/schema.rb` as text when no database is connected. Works in CI
 ```bash
 git clone https://github.com/crisnahine/rails-ai-context.git
 cd rails-ai-context && bundle install
-bundle exec rspec       # 468 examples
+bundle exec rspec       # 481 examples
 bundle exec rubocop     # Lint
 ```
 

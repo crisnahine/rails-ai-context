@@ -119,6 +119,8 @@ module RailsAiContext
         end
       end
 
+      MAX_TEST_FILE_SIZE = 500_000 # 500KB safety limit
+
       private_class_method def self.find_test_file(name, type)
         snake = name.to_s.underscore.sub(/_controller$/, "")
         candidates = case type
@@ -138,6 +140,15 @@ module RailsAiContext
         candidates.each do |rel|
           path = Rails.root.join(rel)
           next unless File.exist?(path)
+          # Path traversal protection
+          begin
+            real_path = File.realpath(path)
+            real_root = File.realpath(Rails.root)
+            next unless real_path.start_with?(real_root)
+          rescue Errno::ENOENT
+            next
+          end
+          next if File.size(path) > MAX_TEST_FILE_SIZE
           content = File.read(path)
           return "# #{rel}\n\n```ruby\n#{content}\n```"
         end

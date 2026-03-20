@@ -98,8 +98,9 @@ module RailsAiContext
         ]
 
         skip_cols = %w[id created_at updated_at]
-        # Always show these even if they end in _id/_type (important for AI)
         keep_cols = %w[type deleted_at discarded_at]
+        # Get enum values from models introspection if available
+        models = context[:models] || {}
 
         tables.keys.sort.first(30).each do |name|
           data = tables[name]
@@ -108,19 +109,38 @@ module RailsAiContext
           pk = data[:primary_key]
           pk_display = pk.is_a?(Array) ? pk.join(", ") : (pk || "id").to_s
 
-          key_cols = columns.map { |c| c[:name] }.select do |c|
-            next true if keep_cols.include?(c)
-            next true if c.end_with?("_type") # polymorphic associations
-            next false if skip_cols.include?(c)
-            next false if c.end_with?("_id")
+          # Show column names WITH types for key columns
+          key_cols = columns.select do |c|
+            next true if keep_cols.include?(c[:name])
+            next true if c[:name].end_with?("_type")
+            next false if skip_cols.include?(c[:name])
+            next false if c[:name].end_with?("_id")
             true
           end
 
-          col_sample = key_cols.first(12)
-          shown = col_sample.join(", ")
-          shown += ", ..." if key_cols.size > 12
-          col_names = col_sample.any? ? " — #{shown}" : ""
-          lines << "- #{name} (#{col_count} cols, pk: #{pk_display})#{col_names}"
+          col_sample = key_cols.first(10).map { |c| "#{c[:name]}:#{c[:type]}" }
+          col_sample << "..." if key_cols.size > 10
+          col_str = col_sample.any? ? " — #{col_sample.join(', ')}" : ""
+
+          # Foreign keys
+          fks = (data[:foreign_keys] || []).map { |f| "#{f[:column]}→#{f[:to_table]}" }
+          fk_str = fks.any? ? " | FK: #{fks.join(', ')}" : ""
+
+          # Key indexes (unique or composite)
+          idxs = (data[:indexes] || []).select { |i| i[:unique] || Array(i[:columns]).size > 1 }
+            .map { |i| i[:unique] ? "#{Array(i[:columns]).join('+')}(unique)" : Array(i[:columns]).join("+") }
+          idx_str = idxs.any? ? " | Idx: #{idxs.join(', ')}" : ""
+
+          lines << "- **#{name}** (#{col_count} cols)#{col_str}#{fk_str}#{idx_str}"
+
+          # Include enum values if model has them
+          model_name = name.classify
+          model_data = models[model_name]
+          if model_data.is_a?(Hash) && model_data[:enums]&.any?
+            model_data[:enums].each do |attr, values|
+              lines << "  #{attr}: #{values.join(', ')}"
+            end
+          end
         end
 
         if tables.size > 30
@@ -161,20 +181,33 @@ module RailsAiContext
         vt = context[:view_templates]
         return nil unless vt.is_a?(Hash) && !vt[:error]
         patterns = vt[:ui_patterns] || {}
-        return nil if patterns.empty?
+        components = patterns[:components] || []
+        return nil if components.empty?
 
-        lines = [
-          "# UI Patterns",
-          "",
-          "Common CSS class patterns found in this app's views.",
-          "Use these when creating new views to match the existing design.",
-          ""
-        ]
+        lines = [ "# UI Patterns", "" ]
 
-        patterns.each do |type, classes_list|
-          classes_list.each do |classes|
-            lines << "- #{type.to_s.chomp('s').capitalize}: `#{classes}`"
-          end
+        scheme = patterns[:color_scheme] || {}
+        parts = []
+        parts << "Primary: #{scheme[:primary]}" if scheme[:primary]
+        parts << "Text: #{scheme[:text]}" if scheme[:text]
+        lines << parts.join(" | ") if parts.any?
+
+        radius = patterns[:radius] || {}
+        if radius.any?
+          # Group by radius value to avoid repetition
+          by_radius = radius.group_by { |_, r| r }.map { |r, types| "#{r} (#{types.map(&:first).join(', ')})" }
+          lines << "Radius: #{by_radius.join(', ')}"
+        end
+        lines << ""
+
+        lines << "## Components"
+        components.first(20).each { |c| next unless c[:label] && c[:classes]; lines << "- #{c[:label]}: `#{c[:classes]}`" }
+
+        fl = patterns[:form_layout] || {}
+        if fl.any?
+          lines << "" << "## Form layout"
+          lines << "- Spacing: #{fl[:spacing]}" if fl[:spacing]
+          lines << "- Grid: #{fl[:grid]}" if fl[:grid]
         end
 
         lines.join("\n")
@@ -188,19 +221,23 @@ module RailsAiContext
           "ALWAYS use these tools BEFORE reading files like db/schema.rb, config/routes.rb, or model source files.",
           "The tools return structured, token-efficient summaries. Reading raw files wastes tokens and may be stale.",
           "",
-          "## Required Workflow",
-          "1. ALWAYS start with `detail:\"summary\"` to get the full landscape",
-          "2. Then drill into specifics with filters (`table:`, `model:`, `controller:`)",
-          "3. NEVER use `detail:\"full\"` unless you specifically need indexes, FKs, or constraints",
-          "4. DO NOT read db/schema.rb — use `rails_get_schema` instead",
-          "5. DO NOT read model files to understand associations — use `rails_get_model_details` instead",
-          "6. DO NOT read config/routes.rb — use `rails_get_routes` instead",
-          "7. DO NOT read view ERB files to understand UI — use `rails_get_view` instead",
-          "8. DO NOT read JS files to understand Stimulus — use `rails_get_stimulus` instead",
-          "9. DO NOT read entire controllers — use `rails_get_controllers(controller:\"Name\", action:\"index\")` for one action",
-          "10. DO NOT read test files for patterns — use `rails_get_test_info(detail:\"full\")` instead",
+          "## When to use MCP tools vs Read",
+          "- Use MCP for files you WON'T edit (schema, routes, understanding context)",
+          "- For files you WILL edit, just Read them directly — you need Read before Edit anyway",
+          "- Use MCP for orientation (summary calls) on large codebases",
+          "- Skip MCP when CLAUDE.md + rules already have the info you need",
           "",
-          "## Tools (11)",
+          "## MCP tools return line numbers — use for surgical edits",
+          "- `rails_get_controllers(action:\"index\")` returns source with line numbers",
+          "- `rails_get_model_details(model:\"Cook\")` returns file structure with line ranges",
+          "- `rails_get_view(path:\"cooks/index.html.erb\")` returns full template",
+          "",
+          "## Reference-only files — ALWAYS use MCP instead of Read",
+          "- DO NOT read db/schema.rb — use `rails_get_schema` instead",
+          "- DO NOT read config/routes.rb — use `rails_get_routes` instead",
+          "- DO NOT read test files for patterns — use `rails_get_test_info(detail:\"full\")` instead",
+          "",
+          "## Tools (12)",
           "",
           "**rails_get_schema** — database tables, columns, indexes, foreign keys",
           "- `rails_get_schema(detail:\"summary\")` — all tables with column counts",
@@ -230,6 +267,9 @@ module RailsAiContext
           "- `rails_get_test_info(detail:\"full\")` — fixture names, factory names, helper setup",
           "- `rails_get_test_info(model:\"Cook\")` — existing tests for a model",
           "- `rails_get_test_info(controller:\"Cooks\")` — existing controller tests",
+          "",
+          "**rails_get_edit_context** — surgical edit helper with line numbers",
+          "- `rails_get_edit_context(file:\"app/models/cook.rb\", near:\"scope\")` — returns code around match with line numbers",
           "",
           "**rails_get_config** — cache store, session, timezone, middleware, initializers",
           "**rails_get_gems** — notable gems categorized by function",

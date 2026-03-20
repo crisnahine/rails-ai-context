@@ -80,6 +80,16 @@ module RailsAiContext
         lines = [ "# #{name}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
 
+        # File structure with line ranges
+        structure = extract_model_structure(name)
+        if structure
+          lines << "**File:** `#{structure[:path]}` (#{structure[:total_lines]} lines)"
+          lines << "" << "## File Structure"
+          structure[:sections].each do |section|
+            lines << "- Lines #{section[:start]}-#{section[:end]}: #{section[:label]}"
+          end
+        end
+
         # Associations
         if data[:associations]&.any?
           lines << "" << "## Associations"
@@ -138,6 +148,47 @@ module RailsAiContext
         end
 
         lines.join("\n")
+      end
+
+      MAX_MODEL_SIZE = 2_000_000 # 2MB safety limit
+
+      private_class_method def self.extract_model_structure(model_name)
+        path = "app/models/#{model_name.underscore}.rb"
+        full_path = Rails.root.join(path)
+        return nil unless File.exist?(full_path)
+        return nil if File.size(full_path) > MAX_MODEL_SIZE
+
+        source_lines = File.readlines(full_path)
+        sections = []
+        current_section = nil
+        current_start = nil
+
+        source_lines.each_with_index do |line, idx|
+          label = case line
+          when /\A\s*class\s/ then "class definition"
+          when /\A\s*(include|extend|prepend)\s/ then "includes"
+          when /\A\s*[A-Z_]+\s*=/ then "constants"
+          when /\A\s*(belongs_to|has_many|has_one|has_and_belongs_to_many)\s/ then "associations"
+          when /\A\s*(validates|validate)\s/ then "validations"
+          when /\A\s*scope\s/ then "scopes"
+          when /\A\s*(enum|encrypts|normalizes|has_secure_password|has_one_attached|has_many_attached)\s/ then "macros"
+          when /\A\s*(before_|after_|around_)/ then "callbacks"
+          when /\A\s*def\s+self\./ then "class methods"
+          when /\A\s*def\s/ then "instance methods"
+          when /\A\s*private\s*$/ then "private"
+          end
+
+          if label && label != current_section
+            sections << { start: current_start, end: idx + 1, label: current_section } if current_section
+            current_section = label
+            current_start = idx + 1
+          end
+        end
+        sections << { start: current_start, end: source_lines.size, label: current_section } if current_section
+
+        { path: path, total_lines: source_lines.size, sections: sections }
+      rescue
+        nil
       end
     end
   end

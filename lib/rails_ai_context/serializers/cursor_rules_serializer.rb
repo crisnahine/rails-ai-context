@@ -158,8 +158,8 @@ module RailsAiContext
       def render_ui_patterns_rule
         vt = context[:view_templates]
         return nil unless vt.is_a?(Hash) && !vt[:error]
-        patterns = vt[:ui_patterns] || {}
-        return nil if patterns.empty?
+        components = vt.dig(:ui_patterns, :components) || []
+        return nil if components.empty?
 
         lines = [
           "---",
@@ -170,14 +170,9 @@ module RailsAiContext
           "---",
           "",
           "# UI Patterns",
-          "",
-          "Use these CSS class patterns to match the existing design.",
           ""
         ]
-
-        patterns.each do |type, classes_list|
-          classes_list.each { |c| lines << "- #{type.to_s.chomp('s').capitalize}: `#{c}`" }
-        end
+        components.first(15).each { |c| next unless c[:label] && c[:classes]; lines << "- #{c[:label]}: `#{c[:classes]}`" }
 
         lines.join("\n")
       end
@@ -186,13 +181,14 @@ module RailsAiContext
       def render_mcp_tools_rule # rubocop:disable Metrics/MethodLength
         lines = [
           "---",
-          "description: \"Rails MCP tools (11) — ALWAYS use these before reading Rails files directly\"",
+          "description: \"Rails MCP tools (12) — use for reference files, read directly if you'll edit\"",
           "alwaysApply: true",
           "---",
           "",
-          "# Rails MCP Tools (11) — Use These First",
+          "# Rails MCP Tools (12) — Use These First",
           "",
-          "ALWAYS use these MCP tools BEFORE reading files directly. They save tokens.",
+          "Use MCP for reference files (schema, routes, tests). Read files directly if you'll edit them.",
+          "MCP tools return line numbers for surgical edits.",
           "",
           "- `rails_get_schema(detail:\"summary\")` → `rails_get_schema(table:\"name\")`",
           "- `rails_get_model_details(detail:\"summary\")` → `rails_get_model_details(model:\"Name\")`",

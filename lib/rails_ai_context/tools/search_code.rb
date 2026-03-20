@@ -95,6 +95,7 @@ module RailsAiContext
           cmd.push("--type-add", "custom:*.#{file_type}", "--type", "custom")
         end
 
+        cmd << "--" # Prevent pattern from being parsed as flags
         cmd << pattern
         cmd << search_path
 

@@ -163,24 +163,27 @@ module RailsAiContext
         vt = context[:view_templates]
         return [] unless vt.is_a?(Hash) && !vt[:error]
         patterns = vt[:ui_patterns] || {}
-        return [] if patterns.empty?
+        components = patterns[:components] || []
+        return [] if components.empty?
 
         lines = [ "## UI Patterns" ]
-        patterns.each do |type, classes_list|
-          classes_list.each do |classes|
-            lines << "- #{type.to_s.chomp('s').capitalize}: `#{classes}`"
-          end
-        end
+        scheme = patterns[:color_scheme] || {}
+        parts = []
+        parts << "Primary: #{scheme[:primary]}" if scheme[:primary]
+        parts << "Text: #{scheme[:text]}" if scheme[:text]
+        lines << parts.join(" | ") if parts.any?
+        lines << ""
+        components.first(15).each { |c| next unless c[:label] && c[:classes]; lines << "- #{c[:label]}: `#{c[:classes]}`" }
         lines << ""
         lines
       end
 
       def render_mcp_guide # rubocop:disable Metrics/MethodLength
         [
-          "## MCP Tools (11) — ALWAYS Use These First",
+          "## MCP Tools (12) — ALWAYS Use These First",
           "",
-          "ALWAYS use these tools BEFORE reading files directly. They save tokens.",
-          "Start with `detail:\"summary\"`, then drill into specifics.",
+          "Use MCP for reference files (schema, routes, tests). Read directly if you'll edit.",
+          "MCP tools return line numbers. Start with `detail:\"summary\"`.",
           "",
           "- `rails_get_schema(detail:\"summary\")` → `rails_get_schema(table:\"name\")`",
           "- `rails_get_model_details(detail:\"summary\")` → `rails_get_model_details(model:\"Name\")`",

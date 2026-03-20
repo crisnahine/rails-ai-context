@@ -53,21 +53,19 @@ module RailsAiContext
       def render_ui_patterns_rule
         vt = context[:view_templates]
         return nil unless vt.is_a?(Hash) && !vt[:error]
-        patterns = vt[:ui_patterns] || {}
-        return nil if patterns.empty?
+        components = vt.dig(:ui_patterns, :components) || []
+        return nil if components.empty?
 
-        lines = [ "# UI Patterns", "", "Match these CSS classes when creating new views.", "" ]
-        patterns.each do |type, classes_list|
-          classes_list.first(2).each { |c| lines << "- #{type}: `#{c}`" }
-        end
+        lines = [ "# UI Patterns", "" ]
+        components.first(8).each { |c| next unless c[:label] && c[:classes]; lines << "- #{c[:label]}: `#{c[:classes]}`" }
         lines.join("\n")
       end
 
       def render_mcp_tools_rule # rubocop:disable Metrics/MethodLength
         lines = [
-          "# Rails MCP Tools (11) — Use These First",
+          "# Rails MCP Tools (12) — Use These First",
           "",
-          "ALWAYS use these tools BEFORE reading files directly. Start with detail:\"summary\".",
+          "Use MCP for reference files (schema, routes, tests). Read directly if you'll edit.",
           "",
           "- rails_get_schema(detail:\"summary\") → rails_get_schema(table:\"name\")",
           "- rails_get_model_details(detail:\"summary\") → rails_get_model_details(model:\"Name\")",
