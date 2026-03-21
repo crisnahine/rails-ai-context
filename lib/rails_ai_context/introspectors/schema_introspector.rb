@@ -147,7 +147,13 @@ module RailsAiContext
           elsif (match = line.match(/add_index\s+"(\w+)",\s+(.+)/))
             table_name = match[1]
             rest = match[2]
-            cols = rest.scan(/(?::|\")(\w+)/).flatten
+            array_match = rest.match(/\[([^\]]+)\]/)
+            cols = if array_match
+              inside = array_match[1]
+              inside.include?('"') ? inside.scan(/"(\w+)"/).flatten : inside.scan(/\b(\w+)\b/).flatten
+            else
+              rest.match(/(?::|")(\w+)/)&.[](1)&.then { |c| [ c ] } || []
+            end
             unique = rest.include?("unique: true")
             idx_name = rest.match(/name:\s*"(\w+)"/)&.send(:[], 1)
             tables[table_name]&.dig(:indexes)&.push({ name: idx_name, columns: cols, unique: unique }.compact) if cols.any?
