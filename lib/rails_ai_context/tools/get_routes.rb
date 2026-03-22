@@ -32,14 +32,9 @@ module RailsAiContext
         }
       )
 
-      INTERNAL_PREFIXES = %w[
-        action_mailbox/ active_storage/ rails/ conductor/
-      ].freeze
-
-      # Framework routes that add noise to summary listings
-      FRAMEWORK_PREFIXES = %w[
-        devise/ turbo/
-      ].freeze
+      def self.route_prefixes
+        RailsAiContext.configuration.excluded_route_prefixes
+      end
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
@@ -53,7 +48,7 @@ module RailsAiContext
 
         # Filter out internal Rails routes by default
         if app_only
-          by_controller = by_controller.reject { |k, _| INTERNAL_PREFIXES.any? { |p| k.downcase.start_with?(p) } }
+          by_controller = by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
         end
 
         # Filter by controller — accepts both slash and :: notation
@@ -71,8 +66,8 @@ module RailsAiContext
         case detail
         when "summary"
           # Separate app routes from framework routes for cleaner output
-          app_routes = controller ? by_controller : by_controller.reject { |k, _| FRAMEWORK_PREFIXES.any? { |p| k.downcase.start_with?(p) } }
-          framework_routes = controller ? {} : by_controller.select { |k, _| FRAMEWORK_PREFIXES.any? { |p| k.downcase.start_with?(p) } }
+          app_routes = controller ? by_controller : by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
+          framework_routes = controller ? {} : by_controller.select { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
 
           lines = [ "# Routes Summary (#{filtered_total} routes)", "" ]
 
@@ -117,8 +112,8 @@ module RailsAiContext
         when "standard"
           limit ||= 100
           # Separate app vs framework routes (unless user filtered by controller)
-          app_routes = controller ? by_controller : by_controller.reject { |k, _| FRAMEWORK_PREFIXES.any? { |p| k.downcase.start_with?(p) } }
-          framework_routes = controller ? {} : by_controller.select { |k, _| FRAMEWORK_PREFIXES.any? { |p| k.downcase.start_with?(p) } }
+          app_routes = controller ? by_controller : by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
+          framework_routes = controller ? {} : by_controller.select { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
 
           lines = [ "# Routes (#{filtered_total} routes)", "" ]
           count = 0

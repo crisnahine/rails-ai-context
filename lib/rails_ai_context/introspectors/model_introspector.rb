@@ -168,11 +168,8 @@ module RailsAiContext
 
       def framework_concern?(name)
         return true if name.nil?
-        return true if name.include?("::Generated")
-        return true if name.match?(/\A(ActiveRecord|ActiveModel|ActiveSupport|ActionText|ActionMailbox|ActiveStorage|ActionDispatch|ActionController|ActionView|AbstractController)/)
-        return true if name.match?(/\A(Devise::Models|Devise::Orm|Bullet::|Turbo::|GlobalID::|Rolify::)/)
         return true if %w[Kernel JSON PP Marshal MessagePack].include?(name)
-        false
+        RailsAiContext.configuration.excluded_concerns.any? { |pattern| name.match?(pattern) }
       end
 
       def extract_public_class_methods(model)

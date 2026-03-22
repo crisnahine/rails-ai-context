@@ -187,11 +187,10 @@ module RailsAiContext
 
         # Concerns — filter out framework/gem internal modules
         if data[:concerns]&.any?
+          excluded_patterns = RailsAiContext.configuration.excluded_concerns
           app_concerns = data[:concerns].reject do |c|
-            c.include?("::Generated") ||
-              c.match?(/\A(ActiveRecord|ActiveModel|ActiveSupport|ActionText|ActionMailbox|ActiveStorage|ActionDispatch|ActionController|ActionView|AbstractController)/) ||
-              c.match?(/\A(Devise::Models|Devise::Orm|Bullet::|Turbo::|GlobalID::|Rolify::)/) ||
-              %w[Kernel JSON PP Marshal MessagePack].any? { |mod| c == mod || c.start_with?("#{mod}::") }
+            %w[Kernel JSON PP Marshal MessagePack].include?(c) ||
+              excluded_patterns.any? { |pattern| c.match?(pattern) }
           end
           if app_concerns.any?
             lines << "" << "## Concerns"
@@ -263,8 +262,12 @@ module RailsAiContext
       # Extract public method names from a concern's source file
       private_class_method def self.extract_concern_methods(concern_name)
         max_size = RailsAiContext.configuration.max_file_size
-        path = Rails.root.join("app", "models", "concerns", "#{concern_name.underscore}.rb")
-        return nil unless File.exist?(path)
+        underscore = concern_name.underscore
+        # Search configurable concern paths
+        path = RailsAiContext.configuration.concern_paths
+          .map { |dir| Rails.root.join(dir, "#{underscore}.rb") }
+          .find { |p| File.exist?(p) }
+        return nil unless path
         return nil if File.size(path) > max_size
 
         source = File.read(path, encoding: "UTF-8", invalid: :replace, undef: :replace)

@@ -146,7 +146,8 @@ module RailsAiContext
         rescue RegexpError => e
           return [ { file: "error", line_number: 0, content: "Invalid regex: #{e.message}" } ]
         end
-        glob = file_type ? "**/*.#{file_type}" : "**/*.{rb,js,erb,yml,yaml,json}"
+        extensions = RailsAiContext.configuration.search_extensions.join(",")
+        glob = file_type ? "**/*.#{file_type}" : "**/*.{#{extensions}}"
         excluded = RailsAiContext.configuration.excluded_paths
         sensitive = RailsAiContext.configuration.sensitive_patterns
 

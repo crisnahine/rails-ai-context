@@ -42,7 +42,7 @@ module RailsAiContext
         controllers = data[:controllers] || {}
 
         # Filter out framework-internal controllers for listings/error messages
-        framework_controllers = %w[DeviseController Devise::OmniauthCallbacksController]
+        framework_controllers = RailsAiContext.configuration.excluded_controllers
         app_controller_names = controllers.keys.reject { |name| framework_controllers.include?(name) }.sort
 
         # Specific controller — always full detail (searches ALL controllers including framework)

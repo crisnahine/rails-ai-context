@@ -9,12 +9,9 @@ module RailsAiContext
     class ControllerIntrospector
       attr_reader :app
 
-      # Framework filters inherited from ActionController::Base — suppress to reduce noise
-      FRAMEWORK_FILTERS = %w[
-        verify_authenticity_token verify_same_origin_request
-        turbo_tracking_request_id handle_unverified_request
-        mark_for_same_origin_verification
-      ].freeze
+      def excluded_filters
+        RailsAiContext.configuration.excluded_filters
+      end
 
       def initialize(app)
         @app = app
@@ -164,7 +161,7 @@ module RailsAiContext
 
         ctrl._process_action_callbacks.filter_map do |cb|
           next if cb.filter.is_a?(Proc) || cb.filter.to_s.start_with?("_")
-          next if FRAMEWORK_FILTERS.include?(cb.filter.to_s)
+          next if excluded_filters.include?(cb.filter.to_s)
 
           filter = { name: cb.filter.to_s, kind: cb.kind.to_s }
           filter[:only] = cb.instance_variable_get(:@if)&.filter_map { |c| extract_action_condition(c) }&.flatten

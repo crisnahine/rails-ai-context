@@ -69,6 +69,17 @@ module RailsAiContext
     attr_accessor :max_search_results     # Max search results per call (default: 100)
     attr_accessor :max_validate_files     # Max files per validate call (default: 20)
 
+    # Filtering — customize what's hidden from AI output
+    attr_accessor :excluded_controllers   # Controller classes hidden from listings (e.g. DeviseController)
+    attr_accessor :excluded_route_prefixes # Route controller prefixes hidden with app_only (e.g. action_mailbox/)
+    attr_accessor :excluded_concerns      # Regex patterns for concerns to hide (e.g. /Devise::Models/)
+    attr_accessor :excluded_filters       # Framework filter names hidden from controller output
+    attr_accessor :excluded_middleware     # Default middleware hidden from config output
+
+    # Search and file discovery
+    attr_accessor :search_extensions      # File extensions for Ruby fallback search (default: rb,js,erb,yml,yaml,json)
+    attr_accessor :concern_paths          # Where to look for concern source files (default: app/models/concerns)
+
     def initialize
       @server_name         = "rails-ai-context"
       @server_version      = RailsAiContext::VERSION
@@ -103,6 +114,34 @@ module RailsAiContext
       @max_view_file_size       = 500_000
       @max_search_results       = 100
       @max_validate_files       = 20
+      @excluded_controllers     = %w[DeviseController Devise::OmniauthCallbacksController]
+      @excluded_route_prefixes  = %w[action_mailbox/ active_storage/ rails/ conductor/ devise/ turbo/]
+      @excluded_concerns        = [
+        /::Generated/,
+        /\A(ActiveRecord|ActiveModel|ActiveSupport|ActionText|ActionMailbox|ActiveStorage)/,
+        /\A(ActionDispatch|ActionController|ActionView|AbstractController)/,
+        /\A(Devise::Models|Devise::Orm|Bullet::|Turbo::|GlobalID::|Rolify::)/
+      ]
+      @excluded_filters         = %w[
+        verify_authenticity_token verify_same_origin_request
+        turbo_tracking_request_id handle_unverified_request
+        mark_for_same_origin_verification
+      ]
+      @excluded_middleware      = %w[
+        Rack::Sendfile ActionDispatch::Static ActionDispatch::Executor
+        ActionDispatch::ServerTiming Rack::Runtime
+        ActionDispatch::RequestId ActionDispatch::RemoteIp
+        Rails::Rack::Logger ActionDispatch::ShowExceptions
+        ActionDispatch::DebugExceptions ActionDispatch::Callbacks
+        ActionDispatch::Cookies ActionDispatch::Session::CookieStore
+        ActionDispatch::Flash ActionDispatch::ContentSecurityPolicy::Middleware
+        ActionDispatch::PermissionsPolicy::Middleware ActionDispatch::ActionableExceptions
+        Rack::Head Rack::ConditionalGet Rack::ETag Rack::TempfileReaper
+        ActiveRecord::Migration::CheckPending ActionDispatch::HostAuthorization
+        Rack::MethodOverride ActionDispatch::Session::AbstractSecureStore
+      ]
+      @search_extensions        = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
+      @concern_paths            = %w[app/models/concerns app/controllers/concerns]
     end
 
     def preset=(name)

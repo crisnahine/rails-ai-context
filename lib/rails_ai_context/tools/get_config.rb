@@ -6,21 +6,6 @@ module RailsAiContext
       tool_name "rails_get_config"
       description "Get Rails application configuration including cache store, session store, timezone, middleware stack, and initializers."
 
-      # Default Rails middleware — suppress to only show app-specific middleware
-      DEFAULT_MIDDLEWARE = %w[
-        Rack::Sendfile ActionDispatch::Static ActionDispatch::Executor
-        ActionDispatch::ServerTiming Rack::Runtime
-        ActionDispatch::RequestId ActionDispatch::RemoteIp
-        Rails::Rack::Logger ActionDispatch::ShowExceptions
-        ActionDispatch::DebugExceptions ActionDispatch::Callbacks
-        ActionDispatch::Cookies ActionDispatch::Session::CookieStore
-        ActionDispatch::Flash ActionDispatch::ContentSecurityPolicy::Middleware
-        ActionDispatch::PermissionsPolicy::Middleware ActionDispatch::ActionableExceptions
-        Rack::Head Rack::ConditionalGet Rack::ETag Rack::TempfileReaper
-        ActiveRecord::Migration::CheckPending ActionDispatch::HostAuthorization
-        Rack::MethodOverride ActionDispatch::Session::AbstractSecureStore
-      ].freeze
-
       input_schema(properties: {})
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
@@ -45,7 +30,8 @@ module RailsAiContext
             Propshaft::Server WebConsole::Middleware ActionDispatch::Reloader
             Bullet::Rack ActiveSupport::Cache::Strategy::LocalCache
           ]
-          custom = data[:middleware_stack].reject { |m| DEFAULT_MIDDLEWARE.include?(m) || dev_middleware.include?(m) }
+          excluded_mw = RailsAiContext.configuration.excluded_middleware
+          custom = data[:middleware_stack].reject { |m| excluded_mw.include?(m) || dev_middleware.include?(m) }
           if custom.any?
             lines << "" << "## Custom Middleware"
             custom.each { |m| lines << "- #{m}" }
