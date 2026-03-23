@@ -8,13 +8,14 @@ Gem::Specification.new do |spec|
   spec.authors       = [ "crisnahine" ]
   spec.email         = [ "crisjosephnahine@gmail.com" ]
 
-  spec.summary       = "Auto-expose Rails app structure to AI via MCP (Model Context Protocol) — zero config."
+  spec.summary       = "Give AI agents a complete mental model of your Rails app via MCP — zero config."
   spec.description   = <<~DESC
-    rails-ai-context automatically introspects your Rails application and exposes
-    models, routes, schema, controllers, views, jobs, mailers, Turbo/Hotwire,
-    auth, API layer, tests, config, and conventions through the Model Context
-    Protocol (MCP). Works with Claude Code, Cursor, Windsurf, GitHub Copilot, and
-    any MCP-compatible AI tool. Zero configuration required.
+    rails-ai-context gives AI coding agents a complete mental model of your Rails
+    app — not just files, but how schema, models, routes, controllers, views, and
+    conventions connect. 13 live MCP tools let agents query structure on demand with
+    semantic validation that catches cross-file errors (wrong columns, missing
+    partials, broken routes) before code runs. Auto-generates context files for
+    Claude Code, Cursor, Windsurf, GitHub Copilot, and OpenCode. Zero config.
   DESC
 
   spec.homepage      = "https://github.com/crisnahine/rails-ai-context"
