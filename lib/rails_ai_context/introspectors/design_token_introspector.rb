@@ -32,6 +32,7 @@ module RailsAiContext
         extract_css_custom_properties(root, tokens)
         extract_webpacker_styles(root, tokens)
         extract_component_css(root, tokens)
+        extract_apply_directives(root, tokens)
 
         return { skipped: true, reason: "No design tokens found" } if tokens.empty?
 
@@ -48,20 +49,29 @@ module RailsAiContext
 
       def detect_framework(root)
         gemfile = File.join(root, "Gemfile")
-        return "unknown" unless File.exist?(gemfile)
-        content = File.read(gemfile, encoding: "UTF-8", invalid: :replace, undef: :replace)
+        package_json = File.join(root, "package.json")
+        gemfile_content = File.exist?(gemfile) ? (File.read(gemfile, encoding: "UTF-8", invalid: :replace, undef: :replace) rescue "") : ""
+        pkg_content = File.exist?(package_json) ? (File.read(package_json, encoding: "UTF-8", invalid: :replace, undef: :replace) rescue "") : ""
 
-        if content.include?("tailwindcss-rails")
+        framework = if gemfile_content.include?("tailwindcss-rails")
           "tailwind"
-        elsif content.include?("bootstrap")
+        elsif gemfile_content.include?("bootstrap")
           "bootstrap"
-        elsif content.include?("dartsass-rails") || content.include?("sassc-rails") || content.include?("sass-rails")
+        elsif gemfile_content.include?("dartsass-rails") || gemfile_content.include?("sassc-rails") || gemfile_content.include?("sass-rails")
           "sass"
-        elsif content.include?("cssbundling-rails")
+        elsif gemfile_content.include?("cssbundling-rails")
           "cssbundling"
         else
           "plain_css"
         end
+
+        # DS17: Detect Tailwind plugin libraries
+        plugins = []
+        plugins << "daisyui" if pkg_content.include?("daisyui") || gemfile_content.include?("daisyui")
+        plugins << "flowbite" if pkg_content.include?("flowbite")
+        plugins << "headlessui" if pkg_content.include?("headlessui") || pkg_content.include?("@headlessui")
+
+        plugins.any? ? "#{framework}+#{plugins.join('+')}" : framework
       rescue
         "unknown"
       end
@@ -236,6 +246,18 @@ module RailsAiContext
         end
 
         categories.reject { |_, v| v.empty? }
+      end
+
+      # DS16: Extract @apply directives as named component classes
+      def extract_apply_directives(root, tokens)
+        %w[app/assets/stylesheets app/assets/tailwind].each do |dir|
+          Dir.glob(File.join(root, dir, "**", "*.css")).each do |path|
+            content = File.read(path, encoding: "UTF-8", invalid: :replace, undef: :replace) rescue next
+            content.scan(/\.([a-zA-Z][\w-]*)\s*\{[^}]*@apply\s+([^;]+);/m).each do |name, classes|
+              tokens["@apply-#{name}"] = classes.strip
+            end
+          end
+        end
       end
 
       # Helper: extract :root { --var: value } from CSS content

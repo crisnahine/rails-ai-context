@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-03-23
+
+### Added
+
+- **Full-stack `analyze_feature` tool** — now discovers services (AF1), jobs with queue/retry config (AF2), views with partial/Stimulus refs (AF3), Stimulus controllers with targets/values/actions (AF4), test files with counts (AF5), related models via associations (AF6), concern tracing (AF12), callback chains (AF13), channels (AF10), mailers (AF11), and environment variable dependencies (AF9). One call returns the complete feature picture.
+- **Modal pattern extraction** (DS1) — detects overlay (`fixed inset-0 bg-black/50`) and modal card patterns
+- **List item pattern extraction** (DS5) — detects repeating card/item patterns from views
+- **Shared partials with descriptions** (DS7) — scans `app/views/shared/` and infers purpose (flash, navbar, status badge, loading, modal, etc.)
+- **"When to use what" decision guide** (DS8) — explicit rules: primary button for CTAs, danger for destructive, when to use shared partials
+- **Bootstrap component extraction** (DS13-DS15) — detects `btn-primary`, `card`, `modal`, `form-control`, `badge`, `alert`, `nav` patterns from Bootstrap apps
+- **Tailwind `@apply` directive parsing** (DS16) — extracts named component classes from CSS `@apply` rules
+- **DaisyUI/Flowbite/Headless UI detection** (DS17) — reports Tailwind plugin libraries from package.json
+- **Animation/transition inventory** (DS19) — extracts `transition-*`, `duration-*`, `animate-*`, `ease-*` patterns
+- **Smarter JSONB strong params check** (V1) — only skips params matching JSON column names, validates the rest
+- **Route-action fix suggestions** (V2) — suggests "add `def action; end`" when route exists but action is missing
+
+### Fixed
+
+- **`self` filtered from class methods** (B2/MD1) — no longer appears in model class method lists
+- **Rules serializer methods cap raised to 20** (RS1) — uses introspector's pre-filtered methods directly instead of redundant re-filtering
+- **oklch token noise filtered** (DS21) — complex color values (oklch, calc, var) hidden from summary, only shown in `detail:"full"`
+
 ## [1.2.1] - 2026-03-23
 
 ### Fixed

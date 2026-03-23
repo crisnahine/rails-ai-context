@@ -72,6 +72,9 @@ module RailsAiContext
           # Icons
           lines.concat(render_icons(patterns))
 
+          # Animations
+          lines.concat(render_animations(patterns))
+
           # Design tokens
           lines.concat(render_tokens(dt))
         end
@@ -102,12 +105,14 @@ module RailsAiContext
             lines << "- **Borders:** #{scheme[:border_palette].first(4).join(', ')}"
           end
 
-          # Design token colors
+          # Design token colors (DS21: filter oklch noise from summary)
           if dt.is_a?(Hash) && !dt[:error]
             colors = dt.dig(:categorized, :colors) || {}
-            if colors.any?
+            # Filter oklch/complex values in non-full modes — show only hex/rgb/named
+            readable_colors = colors.reject { |_, v| v.to_s.match?(/oklch|calc|var\(/) }
+            if readable_colors.any?
               lines << "" << "### Token Colors"
-              colors.first(10).each { |name, value| lines << "- `#{name}`: #{value}" }
+              readable_colors.first(10).each { |name, value| lines << "- `#{name}`: #{value}" }
             end
           end
 
@@ -254,6 +259,19 @@ module RailsAiContext
           lines << "- Library: #{icons[:library]}" if icons[:library]
           lines << "- Inline SVGs: #{icons[:inline_svg_count]}" if icons[:inline_svg_count]
           lines << "- Sizes: #{icons[:sizes].keys.first(3).join(', ')}" if icons[:sizes]&.any?
+          lines << ""
+          lines
+        end
+
+        def render_animations(patterns)
+          anims = patterns[:animations]
+          return [] unless anims.is_a?(Hash) && anims.any?
+
+          lines = [ "## Animations & Transitions", "" ]
+          lines << "- Transitions: #{anims[:transitions].keys.join(', ')}" if anims[:transitions]&.any?
+          lines << "- Durations: #{anims[:durations].keys.join(', ')}" if anims[:durations]&.any?
+          lines << "- Animations: #{anims[:animates].keys.join(', ')}" if anims[:animates]&.any?
+          lines << "- Easing: #{anims[:easing].keys.join(', ')}" if anims[:easing]&.any?
           lines << ""
           lines
         end

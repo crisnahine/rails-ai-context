@@ -239,7 +239,8 @@ module RailsAiContext
         all_methods = (model.methods - ActiveRecord::Base.methods - Object.methods)
           .reject { |m|
             ms = m.to_s
-            ms.start_with?("_", "autosave") ||
+            ms == "self" ||
+              ms.start_with?("_", "autosave") ||
               scope_names.include?(ms) ||
               DEVISE_CLASS_METHOD_PATTERNS.include?(ms) ||
               ms.end_with?("=") && ms.length > 20 # Devise setter-like methods

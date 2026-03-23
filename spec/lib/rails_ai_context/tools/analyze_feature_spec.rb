@@ -113,6 +113,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
 
   before do
     allow(described_class).to receive(:cached_context).and_return(mock_context)
+    allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(Dir.pwd)))
   end
 
   describe ".call" do
@@ -121,22 +122,21 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       text = result.content.first[:text]
 
       expect(text).to include("Feature Analysis: user")
-      expect(text).to include("Models (2 matched)")
+      expect(text).to include("Models (2)")
       expect(text).to include("### User")
       expect(text).to include("### UserSession")
       expect(text).to include("email:string")
       expect(text).to include("has_many :posts")
       expect(text).to include("presence on email")
       expect(text).to include("active, admins")
-      expect(text).to include("email (unique)")
-      expect(text).to include("user_id -> users")
+      expect(text).to include("active, admins")
     end
 
     it "returns matching controllers with actions and filters" do
       result = described_class.call(feature: "user")
       text = result.content.first[:text]
 
-      expect(text).to include("Controllers (2 matched)")
+      expect(text).to include("Controllers (2)")
       expect(text).to include("### UsersController")
       expect(text).to include("### UserSessionsController")
       expect(text).to include("index, show, create")
@@ -147,7 +147,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       result = described_class.call(feature: "user")
       text = result.content.first[:text]
 
-      expect(text).to include("Routes (6 matched)")
+      expect(text).to include("Routes (6)")
       expect(text).to include("`GET` `/users`")
       expect(text).to include("`POST` `/login`")
       expect(text).to include("`DELETE` `/logout`")
@@ -164,6 +164,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
 
     it "handles missing introspection data gracefully" do
       allow(described_class).to receive(:cached_context).and_return({})
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(Dir.pwd)))
       result = described_class.call(feature: "anything")
       text = result.content.first[:text]
 

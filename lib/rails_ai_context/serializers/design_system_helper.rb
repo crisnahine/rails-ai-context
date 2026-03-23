@@ -32,6 +32,7 @@ module RailsAiContext
         lines.concat(render_spacing_summary(patterns))
         lines.concat(render_interaction_summary(patterns))
         lines.concat(render_dark_mode_summary(patterns))
+        lines.concat(render_decision_guide(patterns))
         lines.concat(render_design_rules(patterns))
 
         lines.first(max_lines)
@@ -80,6 +81,17 @@ module RailsAiContext
           lines << "## Icons"
           lines << "- Library: #{icons[:library]}"
           lines << "- Sizes: #{icons[:sizes]&.keys&.first(3)&.join(', ')}" if icons[:sizes]&.any?
+          lines << ""
+        end
+
+        # Shared partials with descriptions
+        shared = patterns[:shared_partials] || []
+        if shared.any?
+          lines << "## Shared Partials — Reuse Before Creating New Markup"
+          lines << ""
+          shared.each do |p|
+            lines << "- `#{p[:name]}` — #{p[:description]}"
+          end
           lines << ""
         end
 
@@ -197,6 +209,41 @@ module RailsAiContext
         lines = [ "### Dark Mode" ]
         lines << "- Active — use `dark:` prefix for all color-dependent classes"
         lines << "- Common: #{dark[:patterns].keys.first(5).join(', ')}" if dark[:patterns]&.any?
+        lines << ""
+        lines
+      end
+
+      # DS8: Decision guide — when to use what
+      def render_decision_guide(patterns)
+        components = patterns[:components] || []
+        return [] if components.size < 3
+
+        lines = [ "### When to Use What" ]
+
+        # Button decisions
+        has_primary = components.any? { |c| c[:label]&.include?("primary") }
+        has_danger = components.any? { |c| c[:label]&.include?("danger") }
+        has_secondary = components.any? { |c| c[:label]&.include?("secondary") }
+        if has_primary || has_danger
+          lines << "- **Primary action** (Save, Submit, Continue) → Primary button"
+          lines << "- **Secondary action** (Cancel, Back, Skip) → Secondary button" if has_secondary
+          lines << "- **Destructive action** (Delete, Remove) → Danger button" if has_danger
+        end
+
+        # Turbo confirm
+        lines << "- **Confirmation needed** → `data: { turbo_confirm: \"Are you sure?\" }` on `button_to`"
+
+        # Shared partials usage
+        shared = patterns[:shared_partials] || []
+        shared.each do |p|
+          case p[:name]
+          when /flash|notification/ then lines << "- **Show feedback** → `render \"shared/#{p[:name].sub(/\A_/, '').sub(/\..*/, '')}\"` "
+          when /status|badge/ then lines << "- **Show status** → `render \"shared/#{p[:name].sub(/\A_/, '').sub(/\..*/, '')}\"` "
+          when /modal|dialog/ then lines << "- **Need overlay/dialog** → `render \"shared/#{p[:name].sub(/\A_/, '').sub(/\..*/, '')}\"` "
+          when /loading|spinner/ then lines << "- **Show loading** → `render \"shared/#{p[:name].sub(/\A_/, '').sub(/\..*/, '')}\"` "
+          end
+        end
+
         lines << ""
         lines
       end

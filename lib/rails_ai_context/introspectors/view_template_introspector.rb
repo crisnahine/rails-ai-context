@@ -21,7 +21,8 @@ module RailsAiContext
           templates: scan_templates(views_dir),
           partials: scan_partials(views_dir),
           ui_patterns: extract_ui_patterns(all_content).merge(
-            canonical_examples: extract_canonical_examples(views_dir)
+            canonical_examples: extract_canonical_examples(views_dir),
+            shared_partials: discover_shared_partials(views_dir)
           )
         }
       rescue => e
@@ -86,7 +87,10 @@ module RailsAiContext
         components = []
         used = Set.new
 
-        # Extract element-aware patterns
+        # DS13-15: Framework-aware component extraction
+        extract_bootstrap_components(all_content, components, used) if all_content.match?(/btn-|form-control|card-body/)
+
+        # Extract element-aware patterns (Tailwind + generic)
         extract_buttons(all_content, class_groups, components, used)
         extract_cards(class_groups, components, used)
         extract_inputs(all_content, class_groups, components, used)
@@ -98,6 +102,8 @@ module RailsAiContext
         extract_headings(all_content, components)
         extract_flashes(all_content, components)
         extract_alerts(class_groups, components, used)
+        extract_modals(all_content, class_groups, components, used)
+        extract_list_items(class_groups, components, used)
 
         # Design tokens
         color_scheme = extract_color_scheme(all_content, class_groups)
@@ -114,7 +120,8 @@ module RailsAiContext
           responsive: extract_responsive_patterns(all_content),
           interactive_states: extract_interactive_states(all_content),
           dark_mode: extract_dark_mode_patterns(all_content),
-          icons: extract_icon_system(all_content)
+          icons: extract_icon_system(all_content),
+          animations: extract_animations(all_content)
         }
       end
 
@@ -302,6 +309,71 @@ module RailsAiContext
         components << { type: :alert, label: "Alert", classes: best[0] }
       end
 
+      # DS13-15: Bootstrap component extraction
+      def extract_bootstrap_components(content, components, used)
+        bootstrap_patterns = {
+          "btn-primary" => { type: :button, label: "Button (primary)" },
+          "btn-secondary" => { type: :button, label: "Button (secondary)" },
+          "btn-danger" => { type: :button, label: "Button (danger)" },
+          "btn-outline-primary" => { type: :button, label: "Button (outline)" },
+          "card" => { type: :card, label: "Card" },
+          "modal" => { type: :modal_card, label: "Modal" },
+          "form-control" => { type: :input, label: "Input" },
+          "form-select" => { type: :select, label: "Select" },
+          "badge" => { type: :badge, label: "Badge" },
+          "alert" => { type: :alert, label: "Alert" },
+          "nav" => { type: :nav, label: "Navigation" }
+        }
+
+        bootstrap_patterns.each do |pattern, meta|
+          matches = content.scan(/class=["'][^"']*\b#{pattern}\b[^"']*["']/).map do |m|
+            m.gsub(/class=["']|["']/, "").strip
+          end
+          next if matches.empty?
+
+          best = matches.tally.max_by { |_, c| c }
+          unless used.include?(best[0])
+            components << meta.merge(classes: best[0])
+            used << best[0]
+          end
+        end
+      end
+
+      # DS1: Modal/overlay patterns
+      def extract_modals(content, groups, components, used)
+        # Detect overlay pattern (fixed inset-0 bg-black/50 or similar)
+        overlay = groups.select { |c, _| c.match?(/fixed.*inset-0|fixed.*z-\d+.*bg-/) && !used.include?(c) }
+        if overlay.any?
+          best = overlay.max_by { |_, count| count }
+          components << { type: :modal_overlay, label: "Modal overlay", classes: best[0] }
+          used << best[0]
+        end
+
+        # Detect modal card (usually the child of overlay)
+        modal_card = groups.select do |c, _|
+          c.match?(/bg-white.*rounded.*shadow.*max-w-|modal/) && c.match?(/p-\d/) && !used.include?(c)
+        end
+        if modal_card.any?
+          best = modal_card.max_by { |_, count| count }
+          components << { type: :modal_card, label: "Modal card", classes: best[0] }
+          used << best[0]
+        end
+      end
+
+      # DS5: List item / repeating card pattern
+      def extract_list_items(groups, components, used)
+        candidates = groups.select do |c, count|
+          count >= 3 && # appears 3+ times (repeating pattern)
+            c.match?(/(?:flex|grid).*(?:items-|justify-|gap-)/) &&
+            c.match?(/(?:bg-white|border|shadow|rounded)/) &&
+            !used.include?(c)
+        end
+        return if candidates.empty?
+        best = candidates.max_by { |_, count| count }
+        components << { type: :list_item, label: "List item", classes: best[0] }
+        used << best[0]
+      end
+
       def extract_color_scheme(content, groups)
         # Find primary color from button backgrounds
         primary_colors = Hash.new(0)
@@ -452,6 +524,29 @@ module RailsAiContext
         icons.empty? ? nil : icons
       end
 
+      # DS19: Animation and transition patterns
+      def extract_animations(content)
+        animations = {}
+
+        # Transition classes
+        transitions = content.scan(/transition(?:-\w+)*/).tally
+        animations[:transitions] = transitions.sort_by { |_, c| -c }.first(5).to_h unless transitions.empty?
+
+        # Duration classes
+        durations = content.scan(/duration-\d+/).tally
+        animations[:durations] = durations.sort_by { |_, c| -c }.first(3).to_h unless durations.empty?
+
+        # Animate classes
+        animates = content.scan(/animate-\w+/).tally
+        animations[:animates] = animates.sort_by { |_, c| -c }.first(5).to_h unless animates.empty?
+
+        # Ease classes
+        eases = content.scan(/ease-\w+/).tally
+        animations[:easing] = eases.sort_by { |_, c| -c }.first(3).to_h unless eases.empty?
+
+        animations.empty? ? nil : animations
+      end
+
       # Analyzes individual templates to find canonical examples of common page types.
       # Returns up to 5 representative ERB snippets that AI can copy.
       def extract_canonical_examples(views_dir) # rubocop:disable Metrics
@@ -539,6 +634,36 @@ module RailsAiContext
         used << :badge if content.match?(/rounded-full.*text-(?:xs|sm)|badge/i)
         used << :grid if content.match?(/grid-cols-|grid\s+grid-/)
         used
+      end
+
+      # DS7: Shared partials with one-line descriptions
+      def discover_shared_partials(views_dir)
+        shared_dir = File.join(views_dir, "shared")
+        return [] unless Dir.exist?(shared_dir)
+
+        Dir.glob(File.join(shared_dir, "_*.{erb,haml,slim}")).sort.map do |path|
+          name = File.basename(path)
+          content = File.read(path, encoding: "UTF-8", invalid: :replace, undef: :replace) rescue ""
+          description = infer_partial_description(name, content)
+          { name: name, lines: content.lines.size, description: description }
+        end
+      rescue
+        []
+      end
+
+      def infer_partial_description(name, content)
+        # Infer from content patterns
+        return "Flash/notification messages" if name.include?("flash") || name.include?("notification")
+        return "Navigation bar" if name.include?("nav") || name.include?("header")
+        return "Footer" if name.include?("footer")
+        return "Status badge/indicator" if name.include?("status") || name.include?("badge")
+        return "Loading/spinner" if name.include?("loading") || name.include?("spinner") || content.include?("animate-spin")
+        return "Modal dialog" if name.include?("modal") || name.include?("dialog")
+        return "Form component" if name.include?("form") || content.match?(/form_with|form_for/)
+        return "Upgrade prompt" if name.include?("upgrade") || name.include?("nudge")
+        return "Share dialog" if name.include?("share")
+        return "Error display" if name.include?("error")
+        "Shared partial (#{content.lines.size} lines)"
       end
 
       EXCLUDED_METHODS = %w[

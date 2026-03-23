@@ -602,14 +602,17 @@ module RailsAiContext
         model_data[:associations]&.each { |a| valid << a[:name]; valid << a[:foreign_key] if a[:foreign_key] }
         valid.merge(%w[id _destroy created_at updated_at])
 
-        # If model has JSONB/JSON columns, params may be stored as hash keys inside them — skip check
-        has_json_columns = table_data[:columns]&.any? { |c| %w[jsonb json].include?(c[:type]) }
-        return warnings if has_json_columns
+        # V1: Smarter JSONB skip — only skip params matching JSON column names, check the rest
+        json_column_names = table_data[:columns]
+          &.select { |c| %w[jsonb json].include?(c[:type]) }
+          &.map { |c| c[:name] }
+          &.to_set || Set.new
 
         visitor.permit_calls.each do |pc|
           pc[:params].each do |param|
             next if param.end_with?("_attributes") # nested attributes
             next if valid.include?(param)
+            next if json_column_names.include?(param) # param matches a JSON column, skip
             warnings << "permits :#{param} \u2014 not a column in #{table_name} table"
           end
         end
@@ -678,7 +681,7 @@ module RailsAiContext
           action = route[:action]
           next unless action
           unless actions.include?(action)
-            warnings << "route #{route[:verb]} #{route[:path]} \u2192 #{action} \u2014 action not found in #{ctrl_class}"
+            warnings << "route #{route[:verb]} #{route[:path]} \u2192 #{action} \u2014 action not found in #{ctrl_class}. Fix: add `def #{action}; end` to #{ctrl_class} or remove the route"
           end
         end
         warnings
