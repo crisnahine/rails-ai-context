@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.8] - 2026-03-23
+
+### Added
+
+- **Semantic validation (`level:"rails"`)** — `rails_validate` now supports `level:"rails"` for deep semantic checks beyond syntax: partial existence, route helper validity, column references vs schema, strong params vs schema columns, callback method existence, route-action consistency, `has_many` dependent options, missing FK indexes, and Stimulus controller file existence.
+
 ## [0.15.7] - 2026-03-22
 
 ### Improved
