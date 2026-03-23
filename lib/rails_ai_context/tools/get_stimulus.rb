@@ -45,7 +45,11 @@ module RailsAiContext
         if controller
           normalized = controller.downcase.tr("-", "_")
           ctrl = all_controllers.find { |c| c[:name]&.downcase&.tr("-", "_") == normalized }
-          return text_response("Controller '#{controller}' not found. Available: #{all_controllers.map { |c| c[:name] }.sort.join(', ')}\n\n_Note: use dashes in HTML (`data-controller=\"my-name\"`) but underscores for lookup (`controller:\"my_name\"`)._") unless ctrl
+          unless ctrl
+            names = all_controllers.map { |c| c[:name] }.sort
+            return not_found_response("Stimulus controller", controller, names,
+              recovery_tool: "Call rails_get_stimulus(detail:\"summary\") to see all controllers. Note: use dashes in HTML, underscores for lookup.")
+          end
           return text_response(format_controller_full(ctrl))
         end
 
@@ -60,7 +64,7 @@ module RailsAiContext
           return text_response("No controllers at offset #{offset_val}. Total: #{total}. Use `offset:0` to start over.")
         end
 
-        pagination_hint = offset_val + limit_val < total ? "\n_Showing #{controllers.size} of #{total}. Use `offset:#{offset_val + limit_val}` for more._" : ""
+        pagination_hint = offset_val + limit_val < total ? "\n_Showing #{controllers.size} of #{total}. Use `offset:#{offset_val + limit_val}` for more. cache_key: #{cache_key}_" : ""
 
         case detail
         when "summary"

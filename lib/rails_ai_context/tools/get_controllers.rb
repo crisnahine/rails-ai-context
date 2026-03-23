@@ -62,8 +62,8 @@ module RailsAiContext
           } || controller
           info = controllers[key]
           unless info
-            available = app_controller_names.any? ? "Available: #{app_controller_names.join(', ')}" : "No controllers discovered."
-            return text_response("Controller '#{controller}' not found. #{available}")
+            return not_found_response("Controller", controller, app_controller_names,
+              recovery_tool: "Call rails_get_controllers(detail:\"summary\") to see all controllers")
           end
           return text_response("Error inspecting #{key}: #{info[:error]}") if info[:error]
 
@@ -88,7 +88,7 @@ module RailsAiContext
           return text_response("No controllers at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
         end
 
-        pagination_hint = offset + limit < total ? "\n_Showing #{paginated_names.size} of #{total}. Use `offset:#{offset + limit}` for more._" : ""
+        pagination_hint = offset + limit < total ? "\n_Showing #{paginated_names.size} of #{total}. Use `offset:#{offset + limit}` for more. cache_key: #{cache_key}_" : ""
 
         # Listing mode
         case detail

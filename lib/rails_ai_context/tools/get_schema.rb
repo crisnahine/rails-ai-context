@@ -59,7 +59,10 @@ module RailsAiContext
         if table
           table_key = tables.keys.find { |k| k.downcase == table.downcase } || table
           table_data = tables[table_key]
-          return text_response("Table '#{table}' not found. Available: #{tables.keys.sort.join(', ')}") unless table_data
+          unless table_data
+            return not_found_response("Table", table, tables.keys.sort,
+              recovery_tool: "Call rails_get_schema(detail:\"summary\") to see all tables")
+          end
           output = format == "json" ? table_data.to_json : format_table_markdown(table_key, table_data)
           return text_response(output)
         end
@@ -79,7 +82,10 @@ module RailsAiContext
             idx_count = data[:indexes]&.size || 0
             lines << "- **#{name}** — #{col_count} columns, #{idx_count} indexes"
           end
-          lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more, or `table:\"name\"` for full detail._" if offset + limit < total
+          if offset + limit < total
+            lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more, or `table:\"name\"` for full detail._"
+            lines << "_cache_key: #{cache_key}_"
+          end
           text_response(lines.join("\n"))
 
         when "standard"
@@ -115,7 +121,10 @@ module RailsAiContext
             lines << format_table_markdown(name, tables[name])
             lines << ""
           end
-          lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more._" if offset + limit < total
+          if offset + limit < total
+            lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more._"
+            lines << "_cache_key: #{cache_key}_"
+          end
           text_response(lines.join("\n"))
         else
           # Fallback to full dump (backward compat)

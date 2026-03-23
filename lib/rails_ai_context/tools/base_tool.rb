@@ -54,6 +54,33 @@ module RailsAiContext
           reset_cache!
         end
 
+        # Structured not-found error with fuzzy suggestion and recovery hint.
+        # Helps AI agents self-correct without retrying blind.
+        def not_found_response(type, name, available, recovery_tool: nil)
+          suggestion = find_closest_match(name, available)
+          lines = [ "#{type} '#{name}' not found." ]
+          lines << "Did you mean '#{suggestion}'?" if suggestion
+          lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}"
+          lines << "_Recovery: #{recovery_tool}_" if recovery_tool
+          text_response(lines.join("\n"))
+        end
+
+        # Simple fuzzy match: find the closest available name by substring or edit distance
+        def find_closest_match(input, available)
+          return nil if available.empty?
+          downcased = input.downcase
+          # Exact substring match first
+          exact = available.find { |a| a.downcase.include?(downcased) || downcased.include?(a.downcase) }
+          return exact if exact
+          # Prefix match
+          available.find { |a| a.downcase.start_with?(downcased[0..2]) }
+        end
+
+        # Cache key for paginated responses — lets agents detect stale data between pages
+        def cache_key
+          SHARED_CACHE[:fingerprint] || "none"
+        end
+
         # Helper: wrap text in an MCP::Tool::Response with safety-net truncation
         def text_response(text)
           max = RailsAiContext.configuration.max_tool_response_chars

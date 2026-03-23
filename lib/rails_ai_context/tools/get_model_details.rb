@@ -41,7 +41,10 @@ module RailsAiContext
         if model
           key = models.keys.find { |k| k.downcase == model.downcase } || model
           data = models[key]
-          return text_response("Model '#{model}' not found. Available: #{models.keys.sort.join(', ')}") unless data
+          unless data
+            return not_found_response("Model", model, models.keys.sort,
+              recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
+          end
           return text_response("Error inspecting #{key}: #{data[:error]}") if data[:error]
           return text_response(format_model(key, data))
         end
@@ -57,7 +60,7 @@ module RailsAiContext
           return text_response("No models at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
         end
 
-        pagination_hint = offset + limit < total ? "\n_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more._" : ""
+        pagination_hint = offset + limit < total ? "\n_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more. cache_key: #{cache_key}_" : ""
 
         # Listing mode
         case detail
