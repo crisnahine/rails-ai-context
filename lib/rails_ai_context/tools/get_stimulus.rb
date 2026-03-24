@@ -128,7 +128,63 @@ module RailsAiContext
         lines << "- **Lifecycle:** #{lifecycle.join(', ')}" if lifecycle&.any?
 
         lines << "- **File:** #{ctrl[:file]}" if ctrl[:file]
+
+        # HTML data-attribute format — copy-paste ready
+        html_attrs = generate_html_attrs(ctrl)
+        if html_attrs.any?
+          lines << "" << "### HTML Usage (copy-paste)"
+          lines << "```html"
+          lines << html_attrs.join("\n")
+          lines << "```"
+        end
+
+        # Reverse view lookup — where this controller is used
+        views_using = find_views_using(ctrl[:name])
+        if views_using.any?
+          lines << "" << "### Used in views"
+          views_using.each { |v| lines << "- `#{v}`" }
+        end
+
         lines.join("\n")
+      end
+
+      private_class_method def self.generate_html_attrs(ctrl)
+        name = ctrl[:name]
+        attrs = []
+        attrs << "data-controller=\"#{name}\""
+
+        (ctrl[:targets] || []).each do |t|
+          attrs << "data-#{name}-target=\"#{t}\""
+        end
+
+        (ctrl[:values] || {}).each do |k, _v|
+          # Convert camelCase to kebab-case for HTML attribute
+          kebab = k.to_s.gsub(/([a-z])([A-Z])/, '\1-\2').downcase
+          attrs << "data-#{name}-#{kebab}-value=\"...\""
+        end
+
+        (ctrl[:actions] || []).each do |a|
+          attrs << "data-action=\"click->#{name}##{a}\""
+        end
+
+        attrs
+      end
+
+      private_class_method def self.find_views_using(controller_name)
+        views_dir = Rails.root.join("app", "views")
+        return [] unless Dir.exist?(views_dir)
+
+        pattern = "data-controller=\"#{controller_name}\""
+        # Also check for multi-controller declarations
+        alt_pattern = controller_name
+
+        Dir.glob(File.join(views_dir, "**", "*.{erb,html.erb}")).filter_map do |path|
+          content = File.read(path) rescue next
+          next unless content.include?(alt_pattern)
+          path.sub("#{Rails.root}/app/views/", "")
+        end.first(10)
+      rescue
+        []
       end
 
       private_class_method def self.detect_lifecycle(relative_path)

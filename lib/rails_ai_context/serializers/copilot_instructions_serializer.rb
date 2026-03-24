@@ -219,7 +219,7 @@ module RailsAiContext
           "applyTo: \"**/*\"",
           "---",
           "",
-          "# Rails MCP Tools (16) — Use These First",
+          "# Rails MCP Tools (25) — Use These First",
           "",
           "Use MCP for reference files (schema, routes, tests). Read directly if you'll edit.",
           "MCP tools return line numbers for surgical edits.",

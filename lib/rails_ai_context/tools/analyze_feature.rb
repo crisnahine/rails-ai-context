@@ -81,7 +81,10 @@ module RailsAiContext
               if data[:validations].is_a?(Array) && data[:validations].any?
                 lines << "**Validations:** #{data[:validations].select { |v| v.is_a?(Hash) }.map { |v| "#{v[:kind]} on #{Array(v[:attributes]).join(', ')}" }.uniq.join('; ')}"
               end
-              lines << "**Scopes:** #{data[:scopes].join(', ')}" if data[:scopes].is_a?(Array) && data[:scopes].any?
+              if data[:scopes].is_a?(Array) && data[:scopes].any?
+                scope_strs = data[:scopes].map { |s| s.is_a?(Hash) ? s[:name] : s.to_s }
+                lines << "**Scopes:** #{scope_strs.join(', ')}"
+              end
               if data[:enums].is_a?(Hash) && data[:enums].any?
                 enum_strs = data[:enums].map do |k, v|
                   v.is_a?(Hash) ? "#{k}: #{v.keys.join(', ')}" : "#{k}: #{Array(v).join(', ')}"

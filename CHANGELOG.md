@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`rails_security_scan` tool** — Brakeman static security analysis via MCP. Detects SQL injection, XSS, mass assignment, and more. Optional dependency — returns install instructions if Brakeman isn't present. Supports file filtering, confidence levels (high/medium/weak), specific check selection, and three detail levels (summary/standard/full).
-- **`config.skip_tools`** — users can now exclude specific built-in tools: `config.skip_tools = %w[rails_security_scan]`. Defaults to empty (all 16 tools active).
+- **`config.skip_tools`** — users can now exclude specific built-in tools: `config.skip_tools = %w[rails_security_scan]`. Defaults to empty (all 25 tools active).
 - **Schema index hints** — `get_schema` standard detail now shows `[indexed]`/`[unique]` on columns, saving a round-trip to full detail.
 - **Enum backing types** — `get_model_details` now shows integer vs string backing: `status: pending(0), active(1) [integer]`.
 - **Search context lines default 2** — `search_code` now returns 2 lines of context by default (was 0). Eliminates follow-up calls for context.

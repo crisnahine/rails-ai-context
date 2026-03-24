@@ -256,11 +256,11 @@ module RailsAiContext
       def render_mcp_tools_rule # rubocop:disable Metrics/MethodLength
         lines = [
           "---",
-          "description: \"Rails MCP tools (16) — use for reference files, read directly if you'll edit\"",
+          "description: \"Rails MCP tools (25) — use for reference files, read directly if you'll edit\"",
           "alwaysApply: true",
           "---",
           "",
-          "# Rails MCP Tools (16) — Use These First",
+          "# Rails MCP Tools (25) — Use These First",
           "",
           "Use MCP for reference files (schema, routes, tests). Read files directly if you'll edit them.",
           "MCP tools return line numbers for surgical edits.",

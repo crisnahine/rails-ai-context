@@ -127,7 +127,10 @@ module RailsAiContext
         source_path = model_source_path(model)
         return [] unless source_path && File.exist?(source_path)
 
-        File.read(source_path).scan(/^\s*scope\s+:(\w+)/).flatten
+        source = File.read(source_path)
+        source.scan(/^\s*scope\s+:(\w+)\s*,\s*->\s*(?:\([^)]*\)\s*)?\{([^}]*)\}/m).map do |name, body|
+          { name: name, body: body.strip }
+        end
       rescue
         []
       end

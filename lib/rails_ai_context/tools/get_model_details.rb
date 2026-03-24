@@ -201,10 +201,16 @@ module RailsAiContext
           end
         end
 
-        # Scopes
+        # Scopes — show lambda body so AI can chain correctly
         if data[:scopes]&.any?
           lines << "" << "## Scopes"
-          lines << data[:scopes].map { |s| "- `#{s}`" }.join("\n")
+          data[:scopes].each do |s|
+            if s.is_a?(Hash)
+              lines << "- `#{s[:name]}` → #{s[:body]}"
+            else
+              lines << "- `#{s}`"
+            end
+          end
         end
 
         # Callbacks

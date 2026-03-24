@@ -24,7 +24,16 @@ module RailsAiContext
       Tools::Validate,
       Tools::AnalyzeFeature,
       Tools::GetDesignSystem,
-      Tools::SecurityScan
+      Tools::SecurityScan,
+      Tools::GetConcern,
+      Tools::GetCallbacks,
+      Tools::GetHelperMethods,
+      Tools::GetServicePattern,
+      Tools::GetJobPattern,
+      Tools::GetEnv,
+      Tools::GetPartialInterface,
+      Tools::GetTurboMap,
+      Tools::GetContext
     ].freeze
 
     def initialize(app, transport: :stdio)

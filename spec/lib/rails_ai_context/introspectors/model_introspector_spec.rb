@@ -34,8 +34,10 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
 
     it "extracts scopes from source files" do
-      expect(result["User"][:scopes]).to include("active", "admins")
-      expect(result["Post"][:scopes]).to include("published", "recent")
+      user_scope_names = result["User"][:scopes].map { |s| s.is_a?(Hash) ? s[:name] : s }
+      post_scope_names = result["Post"][:scopes].map { |s| s.is_a?(Hash) ? s[:name] : s }
+      expect(user_scope_names).to include("active", "admins")
+      expect(post_scope_names).to include("published", "recent")
     end
 
     it "extracts enums with values" do

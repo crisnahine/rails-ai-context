@@ -28,7 +28,7 @@ RSpec.describe "MCP Tool Integration" do
     let(:server) { RailsAiContext::Server.new(Rails.application).build }
 
     it "builds with all tools registered" do
-      expect(server.tools.size).to eq(16)
+      expect(server.tools.size).to eq(25)
       expect(server.tools.keys).to contain_exactly(
         "rails_get_schema",
         "rails_get_routes",
@@ -45,7 +45,16 @@ RSpec.describe "MCP Tool Integration" do
         "rails_validate",
         "rails_analyze_feature",
         "rails_get_design_system",
-        "rails_security_scan"
+        "rails_security_scan",
+        "rails_get_concern",
+        "rails_get_callbacks",
+        "rails_get_helper_methods",
+        "rails_get_service_pattern",
+        "rails_get_job_pattern",
+        "rails_get_env",
+        "rails_get_partial_interface",
+        "rails_get_turbo_map",
+        "rails_get_context"
       )
     end
 
@@ -85,7 +94,7 @@ RSpec.describe "MCP Tool Integration" do
       server = RailsAiContext::Server.new(Rails.application).build
 
       expect(server.tools.keys).to include("my_custom_tool")
-      expect(server.tools.size).to eq(17)
+      expect(server.tools.size).to eq(26)
     ensure
       RailsAiContext.configuration.custom_tools = []
     end
@@ -93,7 +102,7 @@ RSpec.describe "MCP Tool Integration" do
     it "defaults to no custom tools" do
       server = RailsAiContext::Server.new(Rails.application).build
 
-      expect(server.tools.size).to eq(16)
+      expect(server.tools.size).to eq(25)
     end
   end
 
@@ -107,13 +116,13 @@ RSpec.describe "MCP Tool Integration" do
 
       expect(server.tools.keys).not_to include("rails_security_scan")
       expect(server.tools.keys).not_to include("rails_get_design_system")
-      expect(server.tools.size).to eq(14)
+      expect(server.tools.size).to eq(23)
     end
 
     it "defaults to no skipped tools" do
       server = RailsAiContext::Server.new(Rails.application).build
 
-      expect(server.tools.size).to eq(16)
+      expect(server.tools.size).to eq(25)
     end
   end
 

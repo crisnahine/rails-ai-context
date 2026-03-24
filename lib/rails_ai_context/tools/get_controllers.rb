@@ -203,7 +203,20 @@ module RailsAiContext
         if source_with_lines
           lines << "" << "## Source (lines #{source_with_lines[:start_line]}-#{source_with_lines[:end_line]})"
           lines << "```ruby" << source_with_lines[:code] << "```"
-          lines << "" << "_Use this exact code as old_string for Edit — no need to Read the full file._"
+
+          # Instance variables set by this action
+          ivars = source_with_lines[:code].scan(/@(\w+)\s*=/).flatten.uniq
+          lines << "" << "## Instance Variables" << ivars.map { |v| "- `@#{v}`" }.join("\n") if ivars.any?
+
+          # Private methods called by this action — include their source inline
+          called_methods = detect_called_private_methods(source_with_lines[:code], source_path)
+          if called_methods.any?
+            lines << "" << "## Private Methods Called"
+            called_methods.each do |pm|
+              lines << "### #{pm[:name]} (lines #{pm[:start_line]}-#{pm[:end_line]})"
+              lines << "```ruby" << pm[:code] << "```"
+            end
+          end
         else
           lines << "" << "_Could not extract source code. File: #{source_path}_"
         end
@@ -221,6 +234,37 @@ module RailsAiContext
         end
 
         lines.join("\n")
+      end
+
+      # Detect private methods called within an action's source
+      private_class_method def self.detect_called_private_methods(action_code, source_path)
+        return [] unless File.exist?(source_path)
+        return [] if File.size(source_path) > RailsAiContext.configuration.max_file_size
+
+        # Find all method-like calls in the action (word followed by optional parens)
+        candidates = action_code.scan(/\b([a-z_]\w*[!?]?)(?:\s*[\(,]|\s*$)/).flatten.uniq
+
+        # Read the full file to find private methods
+        full_source = File.readlines(source_path)
+        in_private = false
+        private_methods = Set.new
+
+        full_source.each do |line|
+          in_private = true if line.match?(/\A\s*private\s*$/)
+          if in_private && (m = line.match(/\A\s*def\s+(\w+[!?]?)/))
+            private_methods << m[1]
+          end
+        end
+
+        # Extract source of private methods that are called
+        called = candidates & private_methods.to_a
+        called.filter_map do |method_name|
+          body = extract_method_with_lines(source_path, method_name)
+          next unless body
+          { name: method_name, code: body[:code], start_line: body[:start_line], end_line: body[:end_line] }
+        end.first(5) # Limit to 5 to avoid overwhelming response
+      rescue
+        []
       end
 
       private_class_method def self.extract_method_with_lines(file_path, method_name)
