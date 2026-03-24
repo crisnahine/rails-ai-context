@@ -325,7 +325,15 @@ module RailsAiContext
             when Prism::SymbolNode then params << arg.value
             end
           end
-          @permit_calls << { params: params, line: node.location.start_line } if params.any?
+          # Extract model key from params.require(:model).permit(...)
+          require_key = nil
+          receiver = node.receiver
+          if receiver.is_a?(Prism::CallNode) && receiver.name == :require
+            req_args = receiver.arguments&.arguments || []
+            first = req_args.first
+            require_key = first.value if first.is_a?(Prism::SymbolNode)
+          end
+          @permit_calls << { params: params, require_key: require_key, line: node.location.start_line } if params.any?
         end
 
         def extract_has_many(node)
@@ -597,31 +605,34 @@ module RailsAiContext
         models = context[:models]
         return warnings unless schema && models
 
-        # Infer model from controller: posts_controller.rb → Post → posts table
-        controller_base = File.basename(file, ".rb").sub(/_controller$/, "")
-        model_name = controller_base.classify
-        model_data = models[model_name]
-        return warnings unless model_data
-
-        table_name = model_data[:table_name]
-        table_data = schema[:tables] && schema[:tables][table_name]
-        return warnings unless table_data
-
-        valid = Set.new
-        table_data[:columns]&.each { |c| valid << c[:name] }
-        model_data[:associations]&.each { |a| valid << a[:name]; valid << a[:foreign_key] if a[:foreign_key] }
-        valid.merge(%w[id _destroy created_at updated_at])
-
-        # JSONB/JSON columns accept arbitrary keys — plain-word params may be JSON keys
-        has_json_columns = table_data[:columns]&.any? { |c| %w[jsonb json].include?(c[:type]) }
-
         visitor.permit_calls.each do |pc|
+          # Infer model: prefer require_key (:cook → Cook), fall back to controller filename
+          model_name = if pc[:require_key]
+            pc[:require_key].to_s.classify
+          else
+            File.basename(file, ".rb").sub(/_controller$/, "").classify
+          end
+
+          model_data = models[model_name]
+          next unless model_data
+
+          table_name = model_data[:table_name]
+          table_data = schema[:tables] && schema[:tables][table_name]
+          next unless table_data
+
+          valid = Set.new
+          table_data[:columns]&.each { |c| valid << c[:name] }
+          model_data[:associations]&.each { |a| valid << a[:name]; valid << a[:foreign_key] if a[:foreign_key] }
+          valid.merge(%w[id _destroy created_at updated_at])
+
+          # Collect JSONB/JSON column names — params matching these names are valid
+          json_column_names = Set.new
+          table_data[:columns]&.each { |c| json_column_names << c[:name] if %w[jsonb json].include?(c[:type]) }
+
           pc[:params].each do |param|
             next if param.end_with?("_attributes") # nested attributes
             next if valid.include?(param)
-            # When JSONB columns exist, only flag _id params (FKs must be real columns)
-            # Plain-word params could be keys inside JSONB columns
-            next if has_json_columns && !param.end_with?("_id")
+            next if json_column_names.include?(param) # direct JSONB column reference
             warnings << "permits :#{param} \u2014 not a column in #{table_name} table (check virtual attributes or add migration)"
           end
         end

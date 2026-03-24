@@ -65,6 +65,40 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
   end
 
+  describe "strong params vs schema check" do
+    let(:controllers_dir) { File.join(Rails.root, "app", "controllers") }
+
+    after do
+      path = File.join(controllers_dir, "posts_bad_params_controller.rb")
+      File.delete(path) if File.exist?(path)
+    end
+
+    it "flags permitted params that are not columns in the table" do
+      File.write(File.join(controllers_dir, "posts_bad_params_controller.rb"), <<~RUBY)
+        class PostsBadParamsController < ApplicationController
+          def create
+            @post = Post.new(post_params)
+          end
+
+          private
+
+          def post_params
+            params.require(:post).permit(:title, :nonexistent_field, :totally_fake)
+          end
+        end
+      RUBY
+
+      result = described_class.call(
+        files: [ "app/controllers/posts_bad_params_controller.rb" ],
+        level: "rails"
+      )
+      text = result.content.first[:text]
+      expect(text).to include("permits :nonexistent_field")
+      expect(text).to include("permits :totally_fake")
+      expect(text).not_to include("permits :title") # title is a valid column
+    end
+  end
+
   describe "JavaScript fallback validator" do
     let(:tmp_dir) { File.join(Rails.root, "tmp") }
 
