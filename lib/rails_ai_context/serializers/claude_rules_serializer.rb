@@ -320,7 +320,7 @@ module RailsAiContext
           "- app/javascript/controllers/index.js — Stimulus auto-registers controllers. No need to read.",
           "- Test files — use `rails_get_test_info(detail:\"full\")` for patterns.",
           "",
-          "## Tools (15)",
+          "## Tools (16)",
           "",
           "**rails_get_schema** — database tables, columns, indexes, foreign keys",
           "- `rails_get_schema(detail:\"summary\")` — all tables with column counts",

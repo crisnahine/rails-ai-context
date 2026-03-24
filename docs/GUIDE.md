@@ -252,7 +252,7 @@ rails ai:context:claude           # Use this instead (no quoting needed)
 
 ## MCP Tools — Full Reference
 
-All 15 tools are **read-only** and **idempotent** — they never modify your application or database.
+All 16 tools are **read-only** and **idempotent** — they never modify your application or database.
 
 ### rails_get_schema
 
@@ -645,6 +645,34 @@ rails_get_design_system(detail: "full")
 
 **Returns:** Structured design system reference. Includes real HTML/ERB snippets from the app's actual views as canonical examples, semantic color roles (primary for CTAs, danger for destructive), component variants, typography hierarchy, spacing scale, and explicit design rules for AI to follow.
 
+### rails_security_scan
+
+Runs Brakeman static security analysis on the Rails app. Detects SQL injection, XSS, mass assignment, command injection, and other vulnerabilities. Requires the `brakeman` gem — returns installation instructions if not present.
+
+**Parameters:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `files` | array | Filter results to specific files (e.g. `["app/controllers/users_controller.rb"]`). Omit to scan entire app. |
+| `confidence` | string | Minimum confidence: `high`, `medium`, `weak` (default) |
+| `checks` | array | Run only specific checks (e.g. `["CheckSQL", "CheckXSS"]`) |
+| `detail` | string | `summary` (counts only), `standard` (file/line + message, default), `full` (+ code snippets + CWE + remediation links) |
+
+**Examples:**
+
+```
+rails_security_scan()
+  → All warnings across the entire app, sorted by confidence
+
+rails_security_scan(files: ["app/controllers/users_controller.rb"], confidence: "high")
+  → Only high-confidence warnings in the specified controller
+
+rails_security_scan(detail: "full", checks: ["CheckSQL"])
+  → Full detail with code snippets, CWE IDs, and remediation links for SQL injection only
+```
+
+**Returns:** Security warnings grouped by type with file locations, confidence levels, and messages. Full detail includes offending code snippets, CWE identifiers, and links to Brakeman documentation for each warning type.
+
 ### Detail Level Summary
 
 All tools that support `detail` use these three levels. Default limits vary by tool — schema defaults shown below:
@@ -773,7 +801,7 @@ RailsAiContext.configure do |config|
 end
 ```
 
-Both transports are **read-only** — they expose the same 15 tools and never modify your app.
+Both transports are **read-only** — they expose the same 16 tools and never modify your app.
 
 ---
 

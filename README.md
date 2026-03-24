@@ -62,7 +62,7 @@ Agent: rails_validate(files:["app/models/cook.rb"], level:"rails") → catches c
 |-------|-----------------|---------------|------------|
 | **Static files** (CLAUDE.md, .cursorrules, etc.) | App overview: stack, models, gems, architecture, UI patterns, MCP tool reference | Automatically at session start | ~150 lines, zero tool calls |
 | **Split rules** (.claude/rules/, .cursor/rules/) | Deep reference: full schema with column types, all model associations/scopes, controller listings | Conditionally — only when editing relevant files | Zero when not needed |
-| **Live MCP tools** (15 tools) | Real-time queries: drill into any table, model, controller action, or view on demand. Semantic validation. Design system. | On-demand via agent tool calls | ~25-100 lines per call |
+| **Live MCP tools** (16 tools) | Real-time queries: drill into any table, model, controller action, or view on demand. Semantic validation. Design system. Security scanning. | On-demand via agent tool calls | ~25-100 lines per call |
 
 **Progressive disclosure:** the agent gets the map for free, reference guides when relevant, and live GPS when building.
 
@@ -72,7 +72,7 @@ Agent: rails_validate(files:["app/models/cook.rb"], level:"rails") → catches c
 
 | Setup | Tokens | What it knows |
 |-------|--------|---------------|
-| **rails-ai-context (full)** | **28,834** | 15 MCP tools + generated docs + split rules |
+| **rails-ai-context (full)** | **28,834** | 16 MCP tools + generated docs + split rules |
 | rails-ai-context CLAUDE.md only | 33,106 | Generated docs + rules, no MCP tools |
 | Normal Claude `/init` | 40,700 | Generic CLAUDE.md only |
 | No rails-ai-context | 45,477 | Nothing — discovers everything from scratch |
@@ -97,9 +97,9 @@ But token savings is the side effect. The real value:
 
 ---
 
-## 15 Live MCP Tools
+## 16 Live MCP Tools
 
-The gem exposes **15 read-only tools** via MCP that AI clients call on-demand:
+The gem exposes **16 read-only tools** via MCP that AI clients call on-demand:
 
 | Tool | What it returns |
 |------|----------------|
@@ -118,6 +118,7 @@ The gem exposes **15 read-only tools** via MCP that AI clients call on-demand:
 | `rails_validate` | Batch syntax validation for Ruby, ERB, and JavaScript files. `level:"rails"` adds semantic checks (partials, route helpers, columns, strong params, callbacks, FK indexes, Stimulus) |
 | `rails_analyze_feature` | Full-stack feature analysis — models, controllers, routes, services, jobs, views, Stimulus, tests, related models, env deps |
 | `rails_get_design_system` | App design system — color palette, component patterns with real HTML examples, typography, layout, responsive breakpoints |
+| `rails_security_scan` | Brakeman static security analysis — SQL injection, XSS, mass assignment. Filter by file, confidence level, specific checks |
 
 ### Smart Detail Levels
 

@@ -70,7 +70,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
 
       tools_rule = File.read(File.join(dir, ".cursor", "rules", "rails-mcp-tools.mdc"))
       expect(tools_rule).to include("alwaysApply: true")
-      expect(tools_rule).to include("MCP Tools (15)")
+      expect(tools_rule).to include("MCP Tools (16)")
       expect(tools_rule).to include("rails_get_schema")
       expect(tools_rule).to include('detail:"summary"')
       expect(tools_rule).to include("reference files")

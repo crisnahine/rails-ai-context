@@ -9,7 +9,7 @@ structure to AI assistants via the Model Context Protocol (MCP).
 - `lib/rails_ai_context/configuration.rb` — User-facing config with presets (:standard, :full)
 - `lib/rails_ai_context/introspector.rb` — Orchestrates sub-introspectors
 - `lib/rails_ai_context/introspectors/` — 29 introspectors (schema, models, routes, jobs, gems, conventions, stimulus, database_stats, controllers, views, view_templates, design_tokens, turbo, i18n, config, active_storage, action_text, auth, api, tests, rake_tasks, assets, devops, action_mailbox, migrations, seeds, middleware, engines, multi_database)
-- `lib/rails_ai_context/tools/` — 15 MCP tools using the official mcp SDK
+- `lib/rails_ai_context/tools/` — 16 MCP tools using the official mcp SDK
 - `lib/rails_ai_context/serializers/` — Output formatters (claude, claude_rules, opencode, opencode_rules, cursor_rules, windsurf, windsurf_rules, copilot, copilot_instructions, rules, markdown, JSON, context_file_serializer, test_command_detection)
 - `lib/rails_ai_context/resources.rb` — MCP resources (static data AI clients read directly)
 - `lib/rails_ai_context/server.rb` — MCP server configuration (stdio + HTTP transports)
@@ -39,7 +39,7 @@ structure to AI assistants via the Model Context Protocol (MCP).
 13. **Per-tool split rules** — `.claude/rules/`, `.cursor/rules/`, `.windsurf/rules/`, `.github/instructions/`
 14. **Section markers** — root file content wrapped in `<!-- BEGIN/END rails-ai-context -->` to preserve user content
 15. **generate_root_files toggle** — when false, skip root files (CLAUDE.md, etc.), only generate split rules
-16. **custom_tools API** — `config.custom_tools` array lets users register additional MCP::Tool subclasses alongside the 15 built-in tools
+16. **custom_tools API** — `config.custom_tools` array lets users register additional MCP::Tool subclasses alongside the 16 built-in tools
 17. **Design system extraction** — view templates analyzed for canonical examples, color palette, typography, responsive patterns, interactive states, dark mode
 
 ## Testing

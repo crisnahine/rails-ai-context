@@ -12,7 +12,7 @@ Gem::Specification.new do |spec|
   spec.description   = <<~DESC
     rails-ai-context gives AI coding agents a complete mental model of your Rails
     app — not just files, but how schema, models, routes, controllers, views, and
-    conventions connect. 13 live MCP tools let agents query structure on demand with
+    conventions connect. 16 live MCP tools let agents query structure on demand with
     semantic validation that catches cross-file errors (wrong columns, missing
     partials, broken routes) before code runs. Auto-generates context files for
     Claude Code, Cursor, Windsurf, GitHub Copilot, and OpenCode. Zero config.
