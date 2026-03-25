@@ -25,23 +25,30 @@ def apply_context_mode_override
 end unless defined?(apply_context_mode_override)
 
 namespace :ai do
-  desc "Generate AI context files (CLAUDE.md, .cursor/rules/, .windsurfrules, .github/copilot-instructions.md)"
+  desc "Generate AI context files for configured AI tools (or all if none configured)"
   task context: :environment do
     require "rails_ai_context"
 
     apply_context_mode_override
 
+    ai_tools = RailsAiContext.configuration.ai_tools
     puts "🔍 Introspecting #{Rails.application.class.module_parent_name}..."
 
-    puts "📝 Writing context files..."
-    result = RailsAiContext.generate_context(format: :all)
+    if ai_tools.nil? || ai_tools.empty?
+      puts "📝 Writing context files for all AI tools..."
+      result = RailsAiContext.generate_context(format: :all)
+      print_result(result)
+    else
+      puts "📝 Writing context files for: #{ai_tools.map(&:to_s).join(', ')}..."
+      ai_tools.each do |fmt|
+        result = RailsAiContext.generate_context(format: fmt)
+        print_result(result)
+      end
+    end
 
-    print_result(result)
     puts ""
-    puts "Done! Your AI assistants now understand your Rails app."
-    puts "Commit these files so your whole team benefits."
-    puts ""
-    puts ASSISTANT_TABLE
+    puts "Done! Commit these files so your team benefits."
+    puts "Change AI tools: config/initializers/rails_ai_context.rb (config.ai_tools)"
   end
 
   desc "Generate AI context in a specific format (claude, cursor, windsurf, copilot, json)"
