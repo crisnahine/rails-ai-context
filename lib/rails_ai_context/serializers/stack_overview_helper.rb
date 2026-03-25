@@ -72,7 +72,8 @@ module RailsAiContext
 
         multi_db = ctx[:multi_database]
         if multi_db.is_a?(Hash) && !multi_db[:error] && multi_db[:databases]&.size.to_i > 1
-          lines << "- Databases: #{multi_db[:databases].size} (#{multi_db[:databases].keys.first(3).join(', ')})"
+          db_names = multi_db[:databases].is_a?(Array) ? multi_db[:databases].map { |d| d[:name] } : multi_db[:databases].keys
+          lines << "- Databases: #{multi_db[:databases].size} (#{db_names.first(3).join(', ')})"
         end
 
         lines
