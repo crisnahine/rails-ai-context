@@ -265,10 +265,10 @@ RSpec.describe "Cursor MDC compliance" do
       expect(file[:content]).to include("What Are You Trying to Do?")
     end
 
-    it "MCP tools rule has enforcement rules" do
+    it "MCP tools rule has preference-based rules with fallback" do
       file = generated_files["rails-mcp-tools.mdc"]
-      expect(file[:content]).to include("NEVER")
-      expect(file[:content]).to include("MANDATORY")
+      expect(file[:content]).to include("Prefer MCP tools")
+      expect(file[:content]).to include("not available")
     end
   end
 

@@ -31,7 +31,7 @@ RSpec.describe RailsAiContext::Serializers::CopilotInstructionsSerializer do
 
       tools_file = File.read(File.join(dir, ".github", "instructions", "rails-mcp-tools.instructions.md"))
       expect(tools_file).to include("applyTo:")
-      expect(tools_file).to include("MANDATORY")
+      expect(tools_file).to include("MCP Tools")
       expect(tools_file).to include("rails_get_schema")
       expect(tools_file).to include('detail:"summary"')
     end
