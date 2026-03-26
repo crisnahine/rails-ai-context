@@ -8,14 +8,15 @@ Gem::Specification.new do |spec|
   spec.authors       = [ "crisnahine" ]
   spec.email         = [ "crisjosephnahine@gmail.com" ]
 
-  spec.summary       = "Give AI agents a complete mental model of your Rails app via MCP — zero config."
+  spec.summary       = "Give AI agents a complete mental model of your Rails app — 25 tools via MCP or CLI. Zero config."
   spec.description   = <<~DESC
     rails-ai-context gives AI coding agents a complete mental model of your Rails
     app — not just files, but how schema, models, routes, controllers, views, and
-    conventions connect. 25 live MCP tools let agents query structure on demand with
-    semantic validation that catches cross-file errors (wrong columns, missing
-    partials, broken routes) before code runs. Auto-generates context files for
-    Claude Code, Cursor, GitHub Copilot, and OpenCode. Zero config.
+    conventions connect. 25 live tools (via MCP server or CLI) let agents query
+    structure on demand with semantic validation that catches cross-file errors
+    (wrong columns, missing partials, broken routes) before code runs.
+    Auto-generates context files for Claude Code, Cursor, GitHub Copilot, and
+    OpenCode. Zero config.
   DESC
 
   spec.homepage      = "https://github.com/crisnahine/rails-ai-context"
