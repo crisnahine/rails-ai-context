@@ -64,7 +64,14 @@ module RailsAiContext
     def check_pending_migrations
       return nil unless defined?(ActiveRecord::Base) && ActiveRecord::Base.connected?
 
-      pending = ActiveRecord::Migrator.new(:up, ActiveRecord::MigrationContext.new(File.join(app.root, "db/migrate")).migrations).pending_migrations
+      context = ActiveRecord::MigrationContext.new(File.join(app.root, "db/migrate"))
+      pending = if context.respond_to?(:pending_migrations)
+        # Rails 7.1+
+        context.pending_migrations
+      else
+        # Rails 7.0 and earlier
+        ActiveRecord::Migrator.new(:up, context.migrations).pending_migrations
+      end
       if pending.empty?
         Check.new(name: "Pending migrations", status: :pass, message: "No pending migrations", fix: nil)
       else

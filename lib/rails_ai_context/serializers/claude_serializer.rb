@@ -125,7 +125,8 @@ module RailsAiContext
           constants = (data[:constants] || [])
           if scopes.any? || constants.any?
             extras = []
-            extras << "scopes: #{scopes.join(', ')}" if scopes.any?
+            scope_names = scopes.map { |s| s.is_a?(Hash) ? s[:name] : s }
+            extras << "scopes: #{scope_names.join(', ')}" if scopes.any?
             constants.each { |c| extras << "#{c[:name]}: #{c[:values].join(', ')}" }
             lines << "  #{extras.join(' | ')}"
           end

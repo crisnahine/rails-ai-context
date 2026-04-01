@@ -79,6 +79,31 @@ RSpec.describe RailsAiContext::Serializers::ClaudeSerializer do
     end
   end
 
+  describe "scope name rendering" do
+    before { RailsAiContext.configuration.context_mode = :compact }
+    after  { RailsAiContext.configuration.context_mode = :compact }
+
+    it "renders scope names from hash-style scopes, not garbled hash output" do
+      context = {
+        app_name: "App", rails_version: "8.0", ruby_version: "3.4",
+        generated_at: Time.now.iso8601,
+        models: {
+          "User" => {
+            associations: [],
+            validations: [],
+            scopes: [ { name: "active", body: "where(active: true)" }, { name: "recent", body: "order(created_at: :desc)" } ],
+            constants: []
+          }
+        }
+      }
+
+      output = described_class.new(context).call
+      expect(output).to include("scopes: active, recent")
+      expect(output).not_to include("{:name=>")
+      expect(output).not_to include("body")
+    end
+  end
+
   describe "test command" do
     let(:base_context) do
       {

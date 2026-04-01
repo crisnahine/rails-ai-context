@@ -236,7 +236,7 @@ module RailsAiContext
       ].to_set.freeze
 
       def extract_public_class_methods(model)
-        scope_names = extract_scopes(model).map(&:to_s)
+        scope_names = extract_scopes(model).map { |s| s.is_a?(Hash) ? s[:name].to_s : s.to_s }
 
         # Prioritize methods defined in the model's own source file
         source_methods = extract_source_class_methods(model)

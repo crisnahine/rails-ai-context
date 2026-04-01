@@ -151,12 +151,12 @@ module RailsAiContext
           in_ctrl = ctrl_ivars.include?(ivar)
           in_view = view_ivars.include?(ivar)
           if in_ctrl && in_view
-            lines << "- \\u2713 @#{ivar} — set in controller, used in view"
+            lines << "- \u2713 @#{ivar} — set in controller, used in view"
           elsif in_view && !in_ctrl
-            lines << "- \\u2717 @#{ivar} — used in view but NOT set in controller"
+            lines << "- \u2717 @#{ivar} — used in view but NOT set in controller"
             mismatches = true
           elsif in_ctrl && !in_view
-            lines << "- \\u26A0 @#{ivar} — set in controller but not used in view"
+            lines << "- \u26A0 @#{ivar} — set in controller but not used in view"
           end
         end
 

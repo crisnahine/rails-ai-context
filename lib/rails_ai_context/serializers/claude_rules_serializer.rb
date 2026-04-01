@@ -220,7 +220,8 @@ module RailsAiContext
 
           # Include scopes so agents know available query methods
           scopes = data[:scopes] || []
-          lines << "  scopes: #{scopes.join(', ')}" if scopes.any?
+          scope_names = scopes.map { |s| s.is_a?(Hash) ? s[:name] : s }
+          lines << "  scopes: #{scope_names.join(', ')}" if scopes.any?
 
           # Instance methods — introspector already prioritizes source-defined and filters Devise
           methods = (data[:instance_methods] || []).reject { |m| m.end_with?("=") }.first(20)

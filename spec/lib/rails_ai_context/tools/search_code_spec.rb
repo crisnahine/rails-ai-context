@@ -40,5 +40,42 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       text = result.content.first[:text]
       expect(text).to include("No results found")
     end
+
+    it "rejects empty patterns" do
+      result = described_class.call(pattern: "   ")
+      text = result.content.first[:text]
+      expect(text).to include("Pattern is required")
+    end
+
+    it "rejects invalid regex patterns" do
+      result = described_class.call(pattern: "[invalid")
+      text = result.content.first[:text]
+      expect(text).to include("Invalid regex")
+    end
+
+    it "rejects unknown match_type" do
+      result = described_class.call(pattern: "test", match_type: "bogus")
+      text = result.content.first[:text]
+      expect(text).to include("Unknown match_type")
+    end
+  end
+
+  describe ".ripgrep_available?" do
+    after { described_class.instance_variable_set(:@rg_available, nil) }
+
+    it "caches the result including false" do
+      # Reset to nil so we can observe caching
+      described_class.instance_variable_set(:@rg_available, nil)
+
+      # First call: should run system check
+      result = described_class.send(:ripgrep_available?)
+
+      # Store the result and call again — should not re-check
+      expect(described_class.instance_variable_get(:@rg_available)).not_to be_nil
+
+      # Force false and verify it stays cached
+      described_class.instance_variable_set(:@rg_available, false)
+      expect(described_class.send(:ripgrep_available?)).to eq(false)
+    end
   end
 end

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.3] — 2026-04-01
+
+### Fixed
+- **Unicode output** — `rails_get_context` ivar cross-check now renders actual Unicode symbols (✓✗⚠) instead of literal `\u2713` escape sequences
+- **Scope name rendering** — all 6 serializers (claude, cursor, copilot, opencode, claude_rules, copilot_instructions) now extract scope names from hash-style scope data instead of dumping raw `{:name=>"active", :body=>"..."}` into output
+- **Scope exclusion** — `ModelIntrospector#extract_public_class_methods` now correctly extracts scope names from hash-style scope data so scopes are properly excluded from the class methods listing
+- **Pending migrations check** — `Doctor#check_pending_migrations` now uses `MigrationContext#pending_migrations` on Rails 7.1+ instead of the deprecated `ActiveRecord::Migrator.new` API (silently returned nil on modern Rails)
+- **SQLite query timeout** — `rails_query` now uses `set_progress_handler` for real statement timeout enforcement on SQLite instead of `busy_timeout` (which only controls lock-wait, not query execution time)
+- **ripgrep caching** — `SearchCode.ripgrep_available?` now caches `false` results, avoiding repeated `which rg` system calls on every search when ripgrep is not installed
+- **Controller action extraction** — `SearchCode#extract_controller_actions_from_matches` now correctly captures RESTful action names instead of always appending `nil` (was using `match?` which doesn't set `$1`, plus overly broad `[a-z_]+` regex)
+
+### Changed
+- Test count: 1003 → 1016
+
 ## [4.2.2] — 2026-04-01
 
 ### Fixed

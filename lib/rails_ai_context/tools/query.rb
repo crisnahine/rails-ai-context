@@ -175,12 +175,24 @@ module RailsAiContext
 
       private_class_method def self.execute_sqlite(conn, sql, timeout)
         raw = conn.raw_connection
-        raw.busy_timeout = (timeout * 1000).to_i
         result = nil
         begin
           conn.execute("PRAGMA query_only = ON")
+          # SQLite has no native statement timeout. Use a progress handler
+          # to abort queries that run too long (checked every 1000 VM steps).
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+          if raw.respond_to?(:set_progress_handler)
+            raw.set_progress_handler(1000) do
+              if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+                1 # non-zero = abort
+              else
+                0
+              end
+            end
+          end
           result = conn.select_all(sql)
         ensure
+          raw.set_progress_handler(0, nil) if raw.respond_to?(:set_progress_handler)
           conn.execute("PRAGMA query_only = OFF")
         end
         result

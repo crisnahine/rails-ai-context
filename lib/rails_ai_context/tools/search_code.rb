@@ -180,7 +180,8 @@ module RailsAiContext
       end
 
       private_class_method def self.ripgrep_available?
-        @rg_available ||= system("which rg > /dev/null 2>&1")
+        return @rg_available unless @rg_available.nil?
+        @rg_available = system("which rg > /dev/null 2>&1")
       end
 
       private_class_method def self.search_with_ripgrep(pattern, search_path, file_type, max_results, root, ctx_lines = 0, exclude_tests: false)
@@ -462,8 +463,10 @@ module RailsAiContext
       private_class_method def self.extract_controller_actions_from_matches(matches)
         actions = []
         matches.each do |m|
-          # Look for the method name from indentation context
-          actions << $1 if m[:content].match?(/\b(create|index|show|new|edit|update|destroy|[a-z_]+)\b/)
+          # Match standard RESTful action names from the content
+          if (match = m[:content].match(/\b(index|show|new|create|edit|update|destroy)\b/))
+            actions << match[1]
+          end
         end
         actions.uniq.first(3)
       end
