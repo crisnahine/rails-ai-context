@@ -24,20 +24,20 @@ module RailsAiContext
       end
 
       def tools_header
-        "## Tools (33) — MANDATORY, Use Before Read"
+        "## Tools (37) — MANDATORY, Use Before Read"
       end
 
       def tools_intro
         case tool_mode
         when :cli
           [
-            "This project has 33 introspection tools. **MANDATORY — use these instead of reading files.**",
+            "This project has 37 introspection tools. **MANDATORY — use these instead of reading files.**",
             "They return only relevant, structured data and save tokens. Read files ONLY when you are about to Edit them.",
             ""
           ]
         else
           [
-            "This project has 33 MCP tools via `rails ai:serve` (configured in `.mcp.json`).",
+            "This project has 37 MCP tools via `rails ai:serve` (configured in `.mcp.json`).",
             "**MANDATORY — use these instead of reading files.** They return structured data and save tokens.",
             "Read files ONLY when you are about to Edit them.",
             "If MCP tools are not connected, use CLI fallback: `#{cli_cmd("TOOL_NAME", "param=value")}`",
@@ -46,57 +46,92 @@ module RailsAiContext
         end
       end
 
-      def tools_task_section # rubocop:disable Metrics/MethodLength
+      def tools_detail_guidance
+        detail_param = tool_mode == :cli ? "detail=summary" : "detail:\"summary\""
         [
-          "### What Are You Trying to Do?",
+          "### detail parameter — ALWAYS start with summary",
           "",
-          "**Understand a feature or area:**",
-          tool_call("rails_analyze_feature(feature:\"cook\")", cli_cmd("analyze_feature", "feature=cook")),
+          "Most tools accept `#{detail_param}`. Use the right level:",
+          "- **summary** — first call, orient yourself (table list, model names, route overview)",
+          "- **standard** — working detail (columns with types, associations, action source) — DEFAULT",
+          "- **full** — only when you need indexes, foreign keys, code snippets, or complete content",
+          "",
+          "Pattern: summary to find the target → standard to understand it → full only if needed.",
+          ""
+        ]
+      end
+
+      def tools_power_tool_section
+        [
+          "### Start here — composite tools save multiple calls",
+          "",
+          "**New to this project?** Get a full walkthrough first:",
+          tool_call("rails_onboard(detail:\"standard\")", cli_cmd("onboard", "detail=standard")),
+          "",
+          "**`get_context` is your power tool** — bundles schema + model + controller + routes + views in ONE call:",
+          tool_call("rails_get_context(controller:\"CooksController\", action:\"create\")", cli_cmd("context", "controller=CooksController action=create")),
           tool_call("rails_get_context(model:\"Cook\")", cli_cmd("context", "model=Cook")),
-          tool_call("rails_get_frontend_stack", cli_cmd("frontend_stack")),
+          tool_call("rails_get_context(feature:\"cook\")", cli_cmd("context", "feature=cook")),
           "",
-          "**Understand a method (who calls it, what it calls):**",
-          tool_call("rails_search_code(pattern:\"can_cook?\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"can_cook?\" match_type=trace")),
+          "**`analyze_feature` for broad discovery** — scans all layers (models, controllers, routes, services, jobs, views, tests):",
+          tool_call("rails_analyze_feature(feature:\"authentication\")", cli_cmd("analyze_feature", "feature=authentication")),
           "",
-          "**Add a field or modify a model:**",
-          tool_call("rails_get_schema(table:\"cooks\")", cli_cmd("schema", "table=cooks")),
-          tool_call("rails_get_model_details(model:\"Cook\")", cli_cmd("model_details", "model=Cook")),
-          tool_call("rails_migration_advisor(action:\"add_column\", table:\"cooks\", column:\"rating\", type:\"integer\")", cli_cmd("migration_advisor", "action=add_column table=cooks column=rating type=integer")),
+          "Use individual tools only when you need deeper detail on a specific layer.",
+          ""
+        ]
+      end
+
+      def tools_workflow_section # rubocop:disable Metrics/MethodLength
+        [
+          "### Step-by-step workflows (follow this order)",
+          "",
+          "**Modify a model** (add field, change validation, add scope):",
+          "1. #{tool_call_inline("rails_get_context", "model:\"Cook\"", "context", "model=Cook")} — schema + associations + validations in one call",
+          "2. Read the model file, make your edit",
+          "3. #{tool_call_inline("rails_migration_advisor", "action:\"add_column\", table:\"cooks\", column:\"rating\", type:\"integer\"", "migration_advisor", "action=add_column table=cooks column=rating type=integer")} — if schema change needed",
+          "4. #{tool_call_inline("rails_validate", "files:[\"app/models/cook.rb\"], level:\"rails\"", "validate", "files=app/models/cook.rb level=rails")} — EVERY time after editing",
+          "5. #{tool_call_inline("rails_generate_test", "model:\"Cook\"", "generate_test", "model=Cook")} — generate tests matching project patterns",
           "",
           "**Fix a controller bug:**",
-          tool_call("rails_get_controllers(controller:\"CooksController\", action:\"create\")", cli_cmd("controllers", "controller=CooksController action=create")),
+          "1. #{tool_call_inline("rails_get_context", "controller:\"CooksController\", action:\"create\"", "context", "controller=CooksController action=create")} — action source + routes + views + model",
+          "2. Read the controller file, make your fix",
+          "3. #{tool_call_inline("rails_validate", "files:[\"app/controllers/cooks_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/cooks_controller.rb level=rails")}",
           "",
           "**Build or modify a view:**",
-          tool_call("rails_get_design_system(detail:\"standard\")", cli_cmd("design_system", "detail=standard")),
-          tool_call("rails_get_view(controller:\"cooks\")", cli_cmd("view", "controller=cooks")),
-          tool_call("rails_get_partial_interface(partial:\"shared/status_badge\")", cli_cmd("partial_interface", "partial=shared/status_badge")),
-          tool_call("rails_get_component_catalog(component:\"Alert\")", cli_cmd("component_catalog", "component=Alert")),
+          "1. #{tool_call_inline("rails_get_design_system", "detail:\"standard\"", "design_system", "detail=standard")} — get copy-paste HTML/ERB patterns",
+          "2. #{tool_call_inline("rails_get_view", "controller:\"cooks\"", "view", "controller=cooks")} — existing templates, partials, Stimulus refs",
+          "3. #{tool_call_inline("rails_get_partial_interface", "partial:\"shared/status_badge\"", "partial_interface", "partial=shared/status_badge")} — partial locals contract",
+          "4. Read the view file, make your edit",
+          "5. #{tool_call_inline("rails_validate", "files:[\"app/views/cooks/index.html.erb\"]", "validate", "files=app/views/cooks/index.html.erb")}",
           "",
-          "**Write tests:**",
-          tool_call("rails_get_test_info(detail:\"standard\")", cli_cmd("test_info", "detail=standard")),
-          tool_call("rails_get_test_info(model:\"Cook\")", cli_cmd("test_info", "model=Cook")),
+          "**Trace a method:**",
+          tool_call("rails_search_code(pattern:\"can_cook?\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"can_cook?\" match_type=trace")),
           "",
-          "**Find code:**",
-          tool_call("rails_search_code(pattern:\"has_many\")", cli_cmd("search_code", "pattern=\"has_many\"")),
-          tool_call("rails_search_code(pattern:\"create\", match_type:\"definition\")", cli_cmd("search_code", "pattern=create match_type=definition")),
+          "**Debug an error (one call — gathers context + git + logs + fix):**",
+          tool_call("rails_diagnose(error:\"NoMethodError: undefined method `foo` for nil\", file:\"app/models/cook.rb\")", cli_cmd("diagnose", "error=\"NoMethodError: undefined method foo\" file=app/models/cook.rb")),
           "",
-          "**Check performance:**",
-          tool_call("rails_performance_check(model:\"Cook\")", cli_cmd("performance_check", "model=Cook")),
+          "**Review changes before merging:**",
+          tool_call("rails_review_changes(ref:\"main\")", cli_cmd("review_changes", "ref=main")),
           "",
-          "**Understand dependencies:**",
-          tool_call("rails_dependency_graph(model:\"Cook\", format:\"mermaid\")", cli_cmd("dependency_graph", "model=Cook format=mermaid")),
+          "**Generate tests matching project patterns:**",
+          tool_call("rails_generate_test(model:\"Cook\")", cli_cmd("generate_test", "model=Cook")),
+          ""
+        ]
+      end
+
+      def tools_antipatterns_section
+        search_tool = tool_mode == :cli ? cli_cmd("search_code") : "rails_search_code"
+        validate_tool = tool_mode == :cli ? cli_cmd("validate") : "rails_validate"
+        [
+          "### Common mistakes — avoid these",
           "",
-          "**Query the database:**",
-          tool_call("rails_query(sql:\"SELECT COUNT(*) FROM users WHERE created_at > '2024-01-01'\")", cli_cmd("query", "sql=\"SELECT COUNT(*) FROM users WHERE created_at > '2024-01-01'\"")),
-          "",
-          "**Debug errors:**",
-          tool_call("rails_read_logs(level:\"error\", lines:100)", cli_cmd("read_logs", "level=error lines=100")),
-          "",
-          "**Search docs:**",
-          tool_call("rails_search_docs(query:\"active_record_queries\")", cli_cmd("search_docs", "query=active_record_queries")),
-          "",
-          "**After editing (EVERY time):**",
-          tool_call("rails_validate(files:[\"app/models/cook.rb\"], level:\"rails\")", cli_cmd("validate", "files=app/models/cook.rb level=rails")),
+          "- **Don't read db/schema.rb** — use `get_schema`. It adds [indexed]/[unique] hints you'd miss.",
+          "- **Don't read model files for reference** — use `get_model_details`. It resolves concerns, inherited methods, and implicit belongs_to validations.",
+          "- **Don't use Grep/search agents** — use `#{search_tool}`. It excludes sensitive files, supports `match_type:\"trace\"`, and paginates.",
+          "- **Don't call tools without a target** — `get_model_details()` without `model:` returns a paginated list, not an error. Always specify what you want.",
+          "- **Don't skip validation** — run `#{validate_tool}` after EVERY edit. It catches syntax errors AND Rails-specific issues (missing partials, bad column refs).",
+          "- **Don't ignore cross-references** — tool responses include `_Next:` hints suggesting the best follow-up call. Follow them.",
+          "- **Don't call `detail:\"full\"` first** — start with `summary` to find your target, then drill in. Full responses waste tokens.",
           ""
         ]
       end
@@ -107,30 +142,32 @@ module RailsAiContext
           [
             "### Rules",
             "",
-            "1. NEVER read db/schema.rb, config/routes.rb, model files, or test files for reference — use the CLI tools above",
-            "2. NEVER use Grep or search agents for code search — use `#{cli_cmd("search_code")}`",
-            "3. NEVER run `ruby -c`, `erb`, or `node -c` — use `#{cli_cmd("validate")}`",
-            "4. Read files ONLY when you are about to Edit them",
-            "5. Start with `detail=summary` to orient, then drill into specifics",
+            "1. **Use composite tools first** — `#{cli_cmd("context")}` and `#{cli_cmd("analyze_feature")}` before individual tools",
+            "2. **NEVER read reference files** — db/schema.rb, config/routes.rb, model files, test files — tools are better",
+            "3. **NEVER use Grep** — use `#{cli_cmd("search_code")}`",
+            "4. **Read files ONLY to Edit them** — not for reference",
+            "5. **Validate EVERY edit** — `#{cli_cmd("validate", "files=... level=rails")}`",
+            "6. **Follow _Next:_ hints** — tool responses suggest the best follow-up call",
             ""
           ]
         else
           [
             "### Rules",
             "",
-            "1. NEVER read db/schema.rb, config/routes.rb, model files, or test files for reference — use the MCP tools above",
-            "2. NEVER use Grep or search agents for code search — use `rails_search_code`",
-            "3. NEVER run `ruby -c`, `erb`, or `node -c` — use `rails_validate`",
-            "4. Read files ONLY when you are about to Edit them",
-            "5. Start with `detail:\"summary\"` to orient, then drill into specifics",
-            "6. If MCP tools are not connected, use CLI: `#{cli_cmd("TOOL_NAME", "param=value")}`",
+            "1. **Use composite tools first** — `rails_get_context` and `rails_analyze_feature` before individual tools",
+            "2. **NEVER read reference files** — db/schema.rb, config/routes.rb, model files, test files — tools are better",
+            "3. **NEVER use Grep** — use `rails_search_code`",
+            "4. **Read files ONLY to Edit them** — not for reference",
+            "5. **Validate EVERY edit** — `rails_validate(files:[...], level:\"rails\")`",
+            "6. **Follow _Next:_ hints** — tool responses suggest the best follow-up call",
+            "7. If MCP tools are not connected, use CLI: `#{cli_cmd("TOOL_NAME", "param=value")}`",
             ""
           ]
         end
       end
 
       def tools_table # rubocop:disable Metrics/MethodLength
-        lines = [ "### All 33 Tools", "" ]
+        lines = [ "### All 37 Tools", "" ]
 
         if tool_mode == :cli
           lines.concat(tools_table_cli)
@@ -145,11 +182,11 @@ module RailsAiContext
         [
           "| MCP | CLI | What it does |",
           "|-----|-----|-------------|",
+          "| `rails_get_context(model:\"X\")` | `#{cli_cmd("context", "model=X")}` | **START HERE** — schema + model + controller + routes + views in one call |",
           "| `rails_analyze_feature(feature:\"X\")` | `#{cli_cmd("analyze_feature", "feature=X")}` | Full-stack: models + controllers + routes + services + jobs + views + tests |",
-          "| `rails_get_context(model:\"X\")` | `#{cli_cmd("context", "model=X")}` | Composite: schema + model + controller + routes + views in one call |",
-          "| `rails_search_code(pattern:\"X\", match_type:\"trace\")` | `#{cli_cmd("search_code", "pattern=X match_type=trace")}` | Trace: definition + source + siblings + callers + test coverage |",
+          "| `rails_search_code(pattern:\"X\", match_type:\"trace\")` | `#{cli_cmd("search_code", "pattern=X match_type=trace")}` | Search + trace: definition, source, callers, test coverage. Also: `match_type:\"any\"` for regex search |",
           "| `rails_get_controllers(controller:\"X\", action:\"Y\")` | `#{cli_cmd("controllers", "controller=X action=Y")}` | Action source + inherited filters + render map + private methods |",
-          "| `rails_validate(files:[...], level:\"rails\")` | `#{cli_cmd("validate", "files=a.rb,b.rb level=rails")}` | Syntax + semantic validation + Brakeman security |",
+          "| `rails_validate(files:[...], level:\"rails\")` | `#{cli_cmd("validate", "files=a.rb,b.rb level=rails")}` | Syntax + semantic validation (run after EVERY edit) |",
           "| `rails_get_schema(table:\"X\")` | `#{cli_cmd("schema", "table=X")}` | Columns with [indexed]/[unique]/[encrypted]/[default] hints |",
           "| `rails_get_model_details(model:\"X\")` | `#{cli_cmd("model_details", "model=X")}` | Associations, validations, scopes, enums, macros, delegations |",
           "| `rails_get_routes(controller:\"X\")` | `#{cli_cmd("routes", "controller=X")}` | Routes with code-ready helpers and controller filters inline |",
@@ -160,7 +197,6 @@ module RailsAiContext
           "| `rails_get_concern(name:\"X\", detail:\"full\")` | `#{cli_cmd("concern", "name=X detail=full")}` | Concern methods with source + which models include it |",
           "| `rails_get_callbacks(model:\"X\")` | `#{cli_cmd("callbacks", "model=X")}` | Callbacks in Rails execution order with source |",
           "| `rails_get_edit_context(file:\"X\", near:\"Y\")` | `#{cli_cmd("edit_context", "file=X near=Y")}` | Code around a match with class/method context |",
-          "| `rails_search_code(pattern:\"X\")` | `#{cli_cmd("search_code", "pattern=X")}` | Regex search + `exclude_tests` + `group_by_file` + pagination |",
           "| `rails_get_service_pattern` | `#{cli_cmd("service_pattern")}` | Service objects: interface, dependencies, side effects, callers |",
           "| `rails_get_job_pattern` | `#{cli_cmd("job_pattern")}` | Jobs: queue, retries, guard clauses, broadcasts, schedules |",
           "| `rails_get_env` | `#{cli_cmd("env")}` | Environment variables + credentials keys (not values) |",
@@ -178,7 +214,11 @@ module RailsAiContext
           "| `rails_get_frontend_stack` | `#{cli_cmd("frontend_stack")}` | React/Vue/Svelte/Angular, Inertia, TypeScript, package manager |",
           "| `rails_search_docs(query:\"X\")` | `#{cli_cmd("search_docs", "query=X")}` | Bundled topic index with weighted keyword search, on-demand GitHub fetch |",
           "| `rails_query(sql:\"X\")` | `#{cli_cmd("query", "sql=X")}` | Safe read-only SQL queries with timeout, row limit, column redaction |",
-          "| `rails_read_logs(level:\"X\")` | `#{cli_cmd("read_logs", "level=X")}` | Reverse file tail with level filtering and sensitive data redaction |"
+          "| `rails_read_logs(level:\"X\")` | `#{cli_cmd("read_logs", "level=X")}` | Reverse file tail with level filtering and sensitive data redaction |",
+          "| `rails_generate_test(model:\"X\")` | `#{cli_cmd("generate_test", "model=X")}` | Generate test scaffolding matching project patterns (framework, factories, style) |",
+          "| `rails_diagnose(error:\"X\")` | `#{cli_cmd("diagnose", "error=\"X\"")}` | One-call error diagnosis: context + git changes + logs + fix suggestions |",
+          "| `rails_review_changes(ref:\"main\")` | `#{cli_cmd("review_changes", "ref=main")}` | PR/commit review: file context + warnings (missing indexes, removed validations) |",
+          "| `rails_onboard(detail:\"standard\")` | `#{cli_cmd("onboard", "detail=standard")}` | Narrative app walkthrough for new developers or AI agents |"
         ]
       end
 
@@ -186,11 +226,11 @@ module RailsAiContext
         [
           "| CLI | What it does |",
           "|-----|-------------|",
+          "| `#{cli_cmd("context", "model=X")}` | **START HERE** — schema + model + controller + routes + views in one call |",
           "| `#{cli_cmd("analyze_feature", "feature=X")}` | Full-stack: models + controllers + routes + services + jobs + views + tests |",
-          "| `#{cli_cmd("context", "model=X")}` | Composite: schema + model + controller + routes + views in one call |",
-          "| `#{cli_cmd("search_code", "pattern=X match_type=trace")}` | Trace: definition + source + siblings + callers + test coverage |",
+          "| `#{cli_cmd("search_code", "pattern=X match_type=trace")}` | Search + trace: definition, source, callers, test coverage. Also: `match_type=any` for regex search |",
           "| `#{cli_cmd("controllers", "controller=X action=Y")}` | Action source + inherited filters + render map + private methods |",
-          "| `#{cli_cmd("validate", "files=a.rb,b.rb level=rails")}` | Syntax + semantic validation + Brakeman security |",
+          "| `#{cli_cmd("validate", "files=a.rb,b.rb level=rails")}` | Syntax + semantic validation (run after EVERY edit) |",
           "| `#{cli_cmd("schema", "table=X")}` | Columns with [indexed]/[unique]/[encrypted]/[default] hints |",
           "| `#{cli_cmd("model_details", "model=X")}` | Associations, validations, scopes, enums, macros, delegations |",
           "| `#{cli_cmd("routes", "controller=X")}` | Routes with code-ready helpers and controller filters inline |",
@@ -201,7 +241,6 @@ module RailsAiContext
           "| `#{cli_cmd("concern", "name=X detail=full")}` | Concern methods with source + which models include it |",
           "| `#{cli_cmd("callbacks", "model=X")}` | Callbacks in Rails execution order with source |",
           "| `#{cli_cmd("edit_context", "file=X near=Y")}` | Code around a match with class/method context |",
-          "| `#{cli_cmd("search_code", "pattern=X")}` | Regex search + `exclude_tests` + `group_by_file` + pagination |",
           "| `#{cli_cmd("service_pattern")}` | Service objects: interface, dependencies, side effects, callers |",
           "| `#{cli_cmd("job_pattern")}` | Jobs: queue, retries, guard clauses, broadcasts, schedules |",
           "| `#{cli_cmd("env")}` | Environment variables + credentials keys (not values) |",
@@ -219,20 +258,63 @@ module RailsAiContext
           "| `#{cli_cmd("frontend_stack")}` | React/Vue/Svelte/Angular, Inertia, TypeScript, package manager |",
           "| `#{cli_cmd("search_docs", "query=X")}` | Bundled topic index with weighted keyword search, on-demand GitHub fetch |",
           "| `#{cli_cmd("query", "sql=X")}` | Safe read-only SQL queries with timeout, row limit, column redaction |",
-          "| `#{cli_cmd("read_logs", "level=X")}` | Reverse file tail with level filtering and sensitive data redaction |"
+          "| `#{cli_cmd("read_logs", "level=X")}` | Reverse file tail with level filtering and sensitive data redaction |",
+          "| `#{cli_cmd("generate_test", "model=X")}` | Generate test scaffolding matching project patterns (framework, factories, style) |",
+          "| `#{cli_cmd("diagnose", "error=\"X\"")}` | One-call error diagnosis: context + git changes + logs + fix suggestions |",
+          "| `#{cli_cmd("review_changes", "ref=main")}` | PR/commit review: file context + warnings (missing indexes, removed validations) |",
+          "| `#{cli_cmd("onboard", "detail=standard")}` | Narrative app walkthrough for new developers or AI agents |"
         ]
       end
 
-      # Full tool guide section — used by all serializers.
+      # Full tool guide section — used by split rules files (.claude/rules/, .cursor/rules/, etc.)
       def render_tools_guide
         lines = []
         lines << tools_header
         lines << ""
         lines.concat(tools_intro)
-        lines.concat(tools_task_section)
+        lines.concat(tools_detail_guidance)
+        lines.concat(tools_power_tool_section)
+        lines.concat(tools_workflow_section)
+        lines.concat(tools_antipatterns_section)
         lines.concat(tools_rules_section)
         lines.concat(tools_table)
         lines
+      end
+
+      # Compact tool guide for root files (CLAUDE.md, AGENTS.md) that have line limits.
+      # Includes power tools + workflows + rules + dense tool name list (no table).
+      def render_tools_guide_compact
+        lines = []
+        lines << tools_header
+        lines << ""
+        lines.concat(tools_intro)
+        lines.concat(tools_power_tool_section)
+        lines.concat(tools_workflow_section)
+        lines.concat(tools_rules_section)
+        lines.concat(tools_name_list)
+        lines
+      end
+
+      # Dense one-line-per-tool listing — fits in compact mode without the table overhead
+      def tools_name_list
+        all_tools = %w[
+          rails_get_context rails_analyze_feature rails_search_code rails_get_controllers
+          rails_validate rails_get_schema rails_get_model_details rails_get_routes
+          rails_get_view rails_get_design_system rails_get_stimulus rails_get_test_info
+          rails_get_concern rails_get_callbacks rails_get_edit_context
+          rails_get_service_pattern rails_get_job_pattern rails_get_env
+          rails_get_partial_interface rails_get_turbo_map rails_get_helper_methods
+          rails_get_config rails_get_gems rails_get_conventions rails_security_scan
+          rails_get_component_catalog rails_performance_check rails_dependency_graph
+          rails_migration_advisor rails_get_frontend_stack rails_search_docs
+          rails_query rails_read_logs rails_generate_test rails_diagnose
+          rails_review_changes rails_onboard
+        ]
+        [
+          "### All #{all_tools.size} tools",
+          "`#{all_tools.join('` `')}`",
+          ""
+        ]
       end
 
       private
@@ -242,6 +324,19 @@ module RailsAiContext
         cmd = "rails 'ai:tool[#{tool_name}]'"
         cmd += " #{params}" if params
         cmd
+      end
+
+      # Inline tool call for workflow steps (shorter format).
+      # mcp_name is the full MCP tool name (e.g. "rails_validate", "rails_get_context").
+      def tool_call_inline(mcp_name, mcp_params, cli_short, cli_params)
+        case tool_mode
+        when :cli
+          "`#{cli_cmd(cli_short, cli_params)}`"
+        when :mcp
+          "`#{mcp_name}(#{mcp_params})` or `#{cli_cmd(cli_short, cli_params)}`"
+        else
+          "`#{mcp_name}(#{mcp_params})`"
+        end
       end
     end
   end

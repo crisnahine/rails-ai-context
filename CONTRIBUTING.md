@@ -20,7 +20,7 @@ The test suite uses [Combustion](https://github.com/pat/combustion) to boot a mi
 lib/rails_ai_context/
 ├── cli/               # CLI tool runner (tool_runner.rb) — executes MCP tools from rake/Thor
 ├── introspectors/     # 33 introspectors (schema, models, routes, etc.)
-├── tools/             # 33 MCP tools with detail levels and pagination
+├── tools/             # 37 MCP tools with detail levels and pagination
 ├── serializers/       # Per-assistant formatters + shared ToolGuideHelper
 ├── server.rb          # MCP server setup (stdio + HTTP)
 ├── live_reload.rb     # MCP live reload (file watcher + cache invalidation)

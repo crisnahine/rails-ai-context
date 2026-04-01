@@ -9,7 +9,7 @@ structure to AI assistants via the Model Context Protocol (MCP).
 - `lib/rails_ai_context/configuration.rb` — User-facing config with presets (:standard, :full)
 - `lib/rails_ai_context/introspector.rb` — Orchestrates sub-introspectors
 - `lib/rails_ai_context/introspectors/` — 33 introspectors (schema, models, routes, jobs, gems, conventions, stimulus, database_stats, controllers, views, view_templates, design_tokens, turbo, i18n, config, active_storage, action_text, auth, api, tests, rake_tasks, assets, devops, action_mailbox, migrations, seeds, middleware, engines, multi_database, components, accessibility, performance, frontend_frameworks)
-- `lib/rails_ai_context/tools/` — 33 MCP tools using the official mcp SDK
+- `lib/rails_ai_context/tools/` — 37 MCP tools using the official mcp SDK
 - `lib/rails_ai_context/cli/` — CLI tool runner (`tool_runner.rb`) — executes MCP tools from rake/Thor
 - `lib/rails_ai_context/serializers/` — Output formatters (claude, claude_rules, opencode, opencode_rules, cursor_rules, copilot, copilot_instructions, rules, markdown, JSON, context_file_serializer, test_command_detection, tool_guide_helper, design_system_helper, stack_overview_helper)
 - `lib/rails_ai_context/resources.rb` — MCP resources (static data AI clients read directly)
@@ -40,12 +40,12 @@ structure to AI assistants via the Model Context Protocol (MCP).
 13. **Per-tool split rules** — `.claude/rules/`, `.cursor/rules/`, `.github/instructions/`
 14. **Section markers** — root file content wrapped in `<!-- BEGIN/END rails-ai-context -->` to preserve user content
 15. **generate_root_files toggle** — when false, skip root files (CLAUDE.md, etc.), only generate split rules
-16. **custom_tools API** — `config.custom_tools` array lets users register additional MCP::Tool subclasses alongside the 33 built-in tools
+16. **custom_tools API** — `config.custom_tools` array lets users register additional MCP::Tool subclasses alongside the 37 built-in tools
 17. **Design system extraction** — view templates analyzed for canonical examples, color palette, typography, responsive patterns, interactive states, dark mode
 18. **skip_tools API** — `config.skip_tools` array lets users exclude specific built-in tools (e.g. `%w[rails_security_scan]`)
 19. **Security scanning** — optional Brakeman integration via `rails_security_scan` tool (graceful degradation if not installed)
 20. **tool_mode config** — `:mcp` (default, MCP primary + CLI fallback) or `:cli` (CLI only, no MCP server needed). Selected during install.
-21. **CLI tool access** — all 33 MCP tools callable from terminal: `rails ai:tool[schema]`, `rails-ai-context tool schema`. Tool name resolution: `schema` → `get_schema` → `rails_get_schema`.
+21. **CLI tool access** — all 37 MCP tools callable from terminal: `rails ai:tool[schema]`, `rails-ai-context tool schema`. Tool name resolution: `schema` → `get_schema` → `rails_get_schema`.
 22. **Shared ToolGuideHelper** — serializers use a shared module for tool reference sections, rendering MCP or CLI syntax based on `tool_mode`
 23. **Component catalog** — ViewComponent/Phlex introspection: props, slots, previews, sidecar assets, usage examples via `rails_get_component_catalog`
 24. **Accessibility scanning** — ARIA attributes, semantic HTML, screen reader text, alt text, landmark roles, accessibility score via AccessibilityIntrospector
@@ -60,7 +60,7 @@ structure to AI assistants via the Model Context Protocol (MCP).
 ## Testing
 
 ```bash
-bundle exec rspec           # Run specs (1016 examples)
+bundle exec rspec           # Run specs (1052 examples)
 bundle exec rubocop         # Lint
 ```
 

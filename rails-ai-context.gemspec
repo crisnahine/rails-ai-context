@@ -8,11 +8,11 @@ Gem::Specification.new do |spec|
   spec.authors       = [ "crisnahine" ]
   spec.email         = [ "crisjosephnahine@gmail.com" ]
 
-  spec.summary       = "Give AI agents a complete mental model of your Rails app — 33 tools via MCP or CLI. Zero config."
+  spec.summary       = "Give AI agents a complete mental model of your Rails app — 37 tools via MCP or CLI. Zero config."
   spec.description   = <<~DESC
     rails-ai-context gives AI coding agents a complete mental model of your Rails
     app — not just files, but how schema, models, routes, controllers, views, and
-    conventions connect. 33 live tools (via MCP server or CLI) let agents query
+    conventions connect. 37 live tools (via MCP server or CLI) let agents query
     structure on demand with semantic validation that catches cross-file errors
     (wrong columns, missing partials, broken routes) before code runs.
     Auto-generates context files for Claude Code, Cursor, GitHub Copilot, and
@@ -36,7 +36,7 @@ Gem::Specification.new do |spec|
     rails-ai-context installed! Quick start:
       rails generate rails_ai_context:install
       rails ai:context              # generate context files
-      rails 'ai:tool[schema]'      # run any of the 33 tools from CLI
+      rails 'ai:tool[schema]'      # run any of the 37 tools from CLI
       rails ai:serve                # start MCP server (optional)
   MSG
 

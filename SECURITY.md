@@ -26,7 +26,7 @@ If you discover a security vulnerability in rails-ai-context, please report it r
 
 ## Security Design
 
-- All 33 MCP tools are **read-only** and never modify your application or database.
+- All 37 MCP tools are **read-only** and never modify your application or database.
 - **Sensitive file blocking** — configurable `sensitive_patterns` blocks access to `.env`, `*.key`, `*.pem`, `credentials.yml.enc` across all search and read tools. Patterns are checked in `rails_search_code`, `rails_get_edit_context`, and all new tools.
 - **Path traversal protection** — all file-reading tools validate paths with `File.realpath()` against `Rails.root` to prevent directory escape.
 - **Command injection prevention** — code search uses `Open3.capture2` with array arguments (never shell strings). The `--` flag separator prevents pattern injection.

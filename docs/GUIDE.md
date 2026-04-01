@@ -252,7 +252,7 @@ rails ai:context:claude           # Use this instead (no quoting needed)
 
 ## CLI Tools
 
-All 33 MCP tools can be run directly from the terminal — no MCP server or AI client needed.
+All 37 MCP tools can be run directly from the terminal — no MCP server or AI client needed.
 
 ### Rake
 
@@ -316,7 +316,7 @@ The `tool_mode` is selected during `rails generate rails_ai_context:install`.
 
 ## MCP Tools — Full Reference
 
-All 33 tools are **read-only** and **idempotent** — they never modify your application or database.
+All 37 tools are **read-only** and **idempotent** — they never modify your application or database.
 
 ### rails_get_schema
 
@@ -1117,7 +1117,7 @@ RailsAiContext.configure do |config|
 end
 ```
 
-Both transports are **read-only** — they expose the same 33 tools and never modify your app.
+Both transports are **read-only** — they expose the same 37 tools and never modify your app.
 
 ---
 

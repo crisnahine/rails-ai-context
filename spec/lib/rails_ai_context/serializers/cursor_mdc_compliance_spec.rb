@@ -262,7 +262,7 @@ RSpec.describe "Cursor MDC compliance" do
 
     it "MCP tools rule has task-based workflow" do
       file = generated_files["rails-mcp-tools.mdc"]
-      expect(file[:content]).to include("What Are You Trying to Do?")
+      expect(file[:content]).to include("Step-by-step workflows")
     end
 
     it "MCP tools rule has mandatory language with CLI fallback" do

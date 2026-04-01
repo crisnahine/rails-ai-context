@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.0] — 2026-04-01
+
+### Added
+- **`rails_onboard`** — narrative app walkthrough (quick/standard/full) for new developers and AI agents: stack, data model, authentication, key flows, jobs, frontend, testing, getting started
+- **`rails_generate_test`** — generates test scaffolding matching project patterns: detects framework (RSpec/Minitest), factories vs fixtures, assertion style, Devise helpers; covers validations, associations, scopes, enums, request specs with routes
+- **`rails_diagnose`** — one-call error diagnosis: parses error → classifies (nil_reference, record_not_found, validation_failure, routing, strong_params, schema_mismatch) → gathers controller/model/schema context → shows recent git changes → pulls error logs → suggests fix
+- **`rails_review_changes`** — PR/commit review context: classifies changed files, pulls per-file context (model → schema, controller → routes, migration → affected models), detects warnings (missing indexes, removed validations, no test changes)
+- **Improved AI instructions** — workflow sequencing (step-by-step tool call order), `detail` parameter guidance, anti-patterns section, `get_context` promoted as power tool, app-specific footer rules from conventions introspector
+- **Compact tool name list** — root files (CLAUDE.md, AGENTS.md) now include all 37 tool names in a dense format that fits within the 150-line compact mode limit
+
+### Changed
+- Tool count: 33 → 37
+- Test count: 1016 → 1052
+- Root file render order: commands and rules before tool guide to prevent truncation
+- Cursor rules description: fixed stale "25 tools" → "37 tools"
+
 ## [4.2.3] — 2026-04-01
 
 ### Fixed

@@ -255,7 +255,7 @@ module RailsAiContext
       def render_mcp_tools_rule
         lines = [
           "---",
-          "description: \"Rails tools (25) — MANDATORY, use before reading any reference files\"",
+          "description: \"Rails tools (37) — MANDATORY, use before reading any reference files\"",
           "alwaysApply: true",
           "---",
           ""

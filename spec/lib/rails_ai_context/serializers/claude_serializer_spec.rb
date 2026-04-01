@@ -33,9 +33,9 @@ RSpec.describe RailsAiContext::Serializers::ClaudeSerializer do
       line_count = output.lines.count
 
       expect(line_count).to be <= 175
-      expect(output).to include("MCP tools")
+      expect(output).to include("Tools (37)")
       expect(output).to include("rails_get_schema")
-      expect(output).to include('detail:"summary"')
+      expect(output).to include("rails_diagnose")
     end
 
     it "includes key models capped at 15" do

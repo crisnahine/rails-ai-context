@@ -35,10 +35,10 @@ module RailsAiContext
         lines.concat(render_notable_gems)
         lines.concat(render_architecture)
         lines.concat(render_ui_patterns)
-        lines.concat(render_mcp_guide)
-        lines.concat(render_conventions)
         lines.concat(render_commands)
         lines.concat(render_footer)
+        lines.concat(render_conventions)
+        lines.concat(render_mcp_guide_compact)
 
         # Enforce max lines
         max = RailsAiContext.configuration.claude_max_lines
@@ -202,6 +202,10 @@ module RailsAiContext
         render_tools_guide
       end
 
+      def render_mcp_guide_compact
+        render_tools_guide_compact
+      end
+
       def render_conventions
         conv = context[:conventions]
         return [] unless conv.is_a?(Hash) && !conv[:error]
@@ -227,15 +231,30 @@ module RailsAiContext
       end
 
       def render_footer
-        [
-          "## Rules",
-          "- Follow existing patterns and conventions",
-          "- Match existing code style",
-          "- Run tests after changes",
-          "- Do NOT re-read files to verify edits — trust your Edit, validate syntax only",
-          "- Stimulus controllers auto-register — no manual import in controllers/index.js needed",
-          ""
-        ]
+        test_cmd = detect_test_command
+        lines = [ "## Rules" ]
+        lines << "- Run `#{test_cmd}` after changes"
+        lines << "- Do NOT re-read files to verify edits — trust your Edit, validate syntax only"
+
+        # App-specific conventions from introspection
+        conv = context[:conventions]
+        if conv.is_a?(Hash) && !conv[:error]
+          arch = conv[:architecture] || []
+          lines << "- Follow #{arch.join(' + ')} architecture" if arch.any?
+          patterns = conv[:patterns] || []
+          lines << "- Use service objects for business logic" if patterns.include?("service_objects")
+          lines << "- Use form objects for complex forms" if patterns.include?("form_objects")
+          lines << "- Use query objects for complex queries" if patterns.include?("query_objects")
+        end
+
+        # Stimulus auto-register if detected
+        stimulus = context[:stimulus]
+        if stimulus.is_a?(Hash) && !stimulus[:error] && (stimulus[:controllers]&.any? || stimulus[:total_controllers]&.positive?)
+          lines << "- Stimulus controllers auto-register — no manual import in controllers/index.js needed"
+        end
+
+        lines << ""
+        lines
       end
     end
 

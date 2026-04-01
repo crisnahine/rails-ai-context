@@ -249,7 +249,7 @@ RSpec.describe "Copilot instructions compliance" do
 
       it "MCP tools file has task-based workflow" do
         file = generated_files["rails-mcp-tools.instructions.md"]
-        expect(file[:content]).to include("What Are You Trying to Do?")
+        expect(file[:content]).to include("Step-by-step workflows")
       end
 
       it "MCP tools file has mandatory language with CLI fallback" do

@@ -44,7 +44,7 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       tools_file = File.join(dir, ".claude", "rules", "rails-mcp-tools.md")
       expect(File.exist?(tools_file)).to be true
       content = File.read(tools_file)
-      expect(content).to include("Tools (33)")
+      expect(content).to include("Tools (37)")
       expect(content).to include("rails_get_schema")
       expect(content).to include('detail:"summary"')
     end

@@ -8,19 +8,19 @@
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green)](https://registry.modelcontextprotocol.io)
 [![Ruby](https://img.shields.io/badge/Ruby-3.2%20%7C%203.3%20%7C%203.4-red)](https://github.com/crisnahine/rails-ai-context)
 [![Rails](https://img.shields.io/badge/Rails-7.1%20%7C%207.2%20%7C%208.0-red)](https://github.com/crisnahine/rails-ai-context)
-[![Tests](https://img.shields.io/badge/Tests-1016%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
+[![Tests](https://img.shields.io/badge/Tests-1052%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Works with:** Claude Code &bull; Cursor &bull; GitHub Copilot &bull; OpenCode &bull; Any terminal
 
-> Built by a Rails developer with 10+ years of production experience. AI assisted — the same way it assists me shipping features at work. I designed the architecture, made every decision, reviewed every line, and wrote 1016 tests. This gem exists because I understand Rails deeply enough to know exactly what AI agents get wrong and what context they need to get it right.
+> Built by a Rails developer with 10+ years of production experience. AI assisted — the same way it assists me shipping features at work. I designed the architecture, made every decision, reviewed every line, and wrote 1052 tests. This gem exists because I understand Rails deeply enough to know exactly what AI agents get wrong and what context they need to get it right.
 
 ```bash
 gem "rails-ai-context", group: :development
 rails generate rails_ai_context:install
 ```
 
-That's it. Your AI now has 33 tools that understand your entire Rails app — via MCP server or CLI. Zero config.
+That's it. Your AI now has 37 tools that understand your entire Rails app — via MCP server or CLI. Zero config.
 
 > **[Full Guide →](docs/GUIDE.md)** — every command, every parameter, every configuration option.
 
@@ -50,7 +50,7 @@ rails 'ai:tool[schema]' table=users
 rails 'ai:tool[analyze_feature]' feature=billing
 ```
 
-Same 33 tools. Same output. AI agents run these as shell commands. **Works in any terminal, any AI tool, any workflow.** No MCP client required.
+Same 37 tools. Same output. AI agents run these as shell commands. **Works in any terminal, any AI tool, any workflow.** No MCP client required.
 
 ---
 
@@ -174,7 +174,7 @@ Tested on a real Rails 8 app (5 models, 19 controllers, 95 routes):
 
 ---
 
-## 33 Tools
+## 37 Tools
 
 Every tool is **read-only** and returns structured, token-efficient data.
 
@@ -246,7 +246,7 @@ Every tool is **read-only** and returns structured, token-efficient data.
          ▼                  ▼              ▼
 ┌──────────────────┐ ┌────────────┐ ┌────────────────────┐
 │  Static Files     │ │  MCP Server │ │  CLI Tools          │
-│  CLAUDE.md        │ │  33 tools   │ │  Same 33 tools      │
+│  CLAUDE.md        │ │  37 tools   │ │  Same 37 tools      │
 │  .cursor/rules/   │ │  stdio/HTTP │ │  No server needed   │
 │  .github/instr... │ │  .mcp.json  │ │  rails 'ai:tool[X]' │
 └──────────────────┘ └────────────┘ └────────────────────┘
@@ -282,7 +282,7 @@ MCP auto-discovery: `.mcp.json` is detected automatically by Claude Code and Cur
 | Command | What it does |
 |---------|-------------|
 | `rails ai:context` | Generate context files for your AI tools |
-| `rails 'ai:tool[NAME]'` | Run any of the 33 tools from the CLI |
+| `rails 'ai:tool[NAME]'` | Run any of the 37 tools from the CLI |
 | `rails ai:tool` | List all available tools with short names |
 | `rails ai:serve` | Start MCP server (stdio) |
 | `rails ai:doctor` | Diagnostics + AI readiness score |

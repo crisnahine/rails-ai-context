@@ -41,7 +41,11 @@ module RailsAiContext
       Tools::GetFrontendStack,
       Tools::SearchDocs,
       Tools::Query,
-      Tools::ReadLogs
+      Tools::ReadLogs,
+      Tools::GenerateTest,
+      Tools::Diagnose,
+      Tools::ReviewChanges,
+      Tools::Onboard
     ].freeze
 
     def initialize(app, transport: :stdio)
