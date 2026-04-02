@@ -50,7 +50,8 @@ module RailsAiContext
         end
 
         config.empty? ? nil : config
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_puma_config failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -77,7 +78,8 @@ module RailsAiContext
         content = File.read(routes_path)
         return true if content.match?(/\b(?:health|up|ping|status)\b/)
         nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_health_check failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -96,7 +98,8 @@ module RailsAiContext
         info[:compose] = compose
 
         info
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_docker_info failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

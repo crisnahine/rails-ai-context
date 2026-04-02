@@ -333,7 +333,8 @@ module RailsAiContext
         end
 
         lines
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] generate_test_template failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -367,7 +368,8 @@ module RailsAiContext
         end
 
         lines.any? ? lines.join("\n") : nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_factory_details failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

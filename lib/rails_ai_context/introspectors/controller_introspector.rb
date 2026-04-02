@@ -51,7 +51,8 @@ module RailsAiContext
         else
           Rails.application.eager_load!
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] eager_load_controllers! failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -131,7 +132,8 @@ module RailsAiContext
           return actions if actions.any?
         end
         ctrl.action_methods.to_a.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_actions failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -192,7 +194,8 @@ module RailsAiContext
         end
 
         []
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_filters failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -215,7 +218,8 @@ module RailsAiContext
           klass = klass.superclass
         end
         constraints
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] collect_source_constraints failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -287,7 +291,8 @@ module RailsAiContext
       def devise_controller?(ctrl)
         return false unless defined?(::DeviseController)
         ctrl < ::DeviseController || ctrl.ancestors.any? { |a| a.name&.start_with?("Devise::") }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] devise_controller? failed: #{e.message}" if ENV["DEBUG"]
         false
       end
 
@@ -303,7 +308,8 @@ module RailsAiContext
           .reject { |mod| mod.name&.start_with?("ActionController", "ActionDispatch", "ActiveSupport", "AbstractController") }
           .map(&:name)
           .compact
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_concerns failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -338,7 +344,8 @@ module RailsAiContext
           exceptions = exception_part&.scan(/([A-Z][\w:]+)/)&.flatten || []
           exceptions.map { |ex| { exception: ex, handler: handler }.compact }
         end.flatten
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_rescue_from failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -349,7 +356,8 @@ module RailsAiContext
         return nil unless match
 
         match[1].strip
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_rate_limit failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -369,7 +377,8 @@ module RailsAiContext
           end
         end
         actions.uniq.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_turbo_stream_actions failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -377,7 +386,8 @@ module RailsAiContext
         path = source_path(ctrl)
         return nil unless path && File.exist?(path)
         File.read(path)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] read_source failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

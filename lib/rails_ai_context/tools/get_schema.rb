@@ -205,7 +205,8 @@ module RailsAiContext
         return [] unless models.is_a?(Hash)
 
         models.select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] models_for_table failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

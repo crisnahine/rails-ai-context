@@ -490,7 +490,8 @@ module RailsAiContext
           match = line.match(/broadcasts_refreshes_to\s+:?(\w+)/)
           match ? match[1] : nil
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_stream_name_from_macro failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -515,7 +516,8 @@ module RailsAiContext
         pattern = /#{Regexp.escape(method)}\s*\(?\s*:?["']?(\w+)["']?/
         match = line.match(pattern)
         match ? match[1] : "(dynamic)"
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_stream_from_broadcast failed: #{e.message}" if ENV["DEBUG"]
         "(dynamic)"
       end
 
@@ -523,7 +525,8 @@ module RailsAiContext
       private_class_method def self.extract_target_from_broadcast(line)
         match = line.match(/target:\s*["'](\w+)["']/)
         match ? match[1] : nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_target_from_broadcast failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -531,7 +534,8 @@ module RailsAiContext
       private_class_method def self.extract_partial_from_broadcast(line)
         match = line.match(/partial:\s*["']([^"']+)["']/)
         match ? match[1] : nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_partial_from_broadcast failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -559,7 +563,8 @@ module RailsAiContext
 
         # Clean up and return meaningful stream name
         args.gsub(/["']/, "").gsub(/\s*,\s*/, ", ").strip
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_stream_from_subscription failed: #{e.message}" if ENV["DEBUG"]
         "(dynamic)"
       end
 
@@ -570,7 +575,8 @@ module RailsAiContext
         # turbo_frame_tag dom_id(@model)
         match = line.match(/turbo_frame_tag\s+["':]*([^"',\s)]+)/)
         match ? match[1] : "(dynamic)"
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_frame_id failed: #{e.message}" if ENV["DEBUG"]
         "(dynamic)"
       end
 
@@ -578,7 +584,8 @@ module RailsAiContext
       private_class_method def self.extract_frame_src(line)
         match = line.match(/src:\s*["']?([^"',\s)]+)["']?/)
         match ? match[1] : nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_frame_src failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -618,7 +625,8 @@ module RailsAiContext
         end
 
         warnings.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_mismatches failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -660,20 +668,23 @@ module RailsAiContext
         end
 
         wiring.sort_by { |k, _| k }.to_h
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] build_stream_wiring failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
       private_class_method def self.extract_class_name(source)
         match = source.match(/class\s+([\w:]+)/)
         match[1] if match
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_class_name failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
       private_class_method def self.safe_read(path)
         File.read(path, encoding: "UTF-8", invalid: :replace, undef: :replace)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] safe_read failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

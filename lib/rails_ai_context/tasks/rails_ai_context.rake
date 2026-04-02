@@ -91,7 +91,8 @@ def save_tool_mode_to_initializer(mode)
   end
 
   File.write(init_path, content)
-rescue
+rescue => e
+  $stderr.puts "[rails-ai-context] save_tool_mode_to_initializer failed: #{e.message}" if ENV["DEBUG"]
   nil
 end unless defined?(save_tool_mode_to_initializer)
 
@@ -113,7 +114,8 @@ def tool_mode_configured?
   content = File.read(init_path)
   # Check for uncommented tool_mode line (not just a comment)
   content.match?(/^\s*config\.tool_mode\s*=/)
-rescue
+rescue => e
+  $stderr.puts "[rails-ai-context] tool_mode_configured? failed: #{e.message}" if ENV["DEBUG"]
   false
 end unless defined?(tool_mode_configured?)
 
@@ -136,7 +138,8 @@ def save_ai_tools_to_initializer(tools)
 
   File.write(init_path, content)
   puts "💾 Saved to config/initializers/rails_ai_context.rb"
-rescue
+rescue => e
+  $stderr.puts "[rails-ai-context] save_ai_tools_to_initializer failed: #{e.message}" if ENV["DEBUG"]
   nil
 end unless defined?(save_ai_tools_to_initializer)
 
@@ -165,7 +168,8 @@ def add_ai_tool_to_initializer(format)
     File.write(init_path, content)
     puts "💾 Set config.ai_tools = %i[#{format_sym}]"
   end
-rescue
+rescue => e
+  $stderr.puts "[rails-ai-context] add_ai_tool_to_initializer failed: #{e.message}" if ENV["DEBUG"]
   nil
 end unless defined?(add_ai_tool_to_initializer)
 

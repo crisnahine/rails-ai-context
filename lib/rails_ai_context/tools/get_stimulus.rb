@@ -236,7 +236,8 @@ module RailsAiContext
           next unless content.include?(alt_pattern)
           path.sub("#{Rails.root}/app/views/", "")
         end.first(10)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] find_views_using failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

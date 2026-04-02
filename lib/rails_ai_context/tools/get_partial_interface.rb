@@ -267,7 +267,8 @@ module RailsAiContext
         end
 
         locals.uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_magic_comment_locals failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -324,7 +325,8 @@ module RailsAiContext
 
         # Filter out things that are clearly method definitions or blocks
         locals.reject { |l| l.match?(/\A(each|map|select|reject|find|collect|do|end)\z/) }.to_a.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_local_variable_references failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -387,7 +389,8 @@ module RailsAiContext
         end
 
         sites
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] find_render_sites failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -414,7 +417,8 @@ module RailsAiContext
         end
 
         locals.uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_locals_from_render failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -443,7 +447,8 @@ module RailsAiContext
         end
 
         calls
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_method_calls_on_locals failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -456,13 +461,15 @@ module RailsAiContext
           parts[-1] = parts[-1].delete_prefix("_").sub(/\..*\z/, "")
           parts.join("/")
         end.sort.first(30)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] find_available_partials failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
       private_class_method def self.safe_read(path)
         File.read(path, encoding: "UTF-8", invalid: :replace, undef: :replace)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] safe_read failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

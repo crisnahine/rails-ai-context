@@ -47,7 +47,8 @@ module RailsAiContext
         end
 
         attachments.sort_by { |a| [ a[:model], a[:name] ] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_attachments failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -58,7 +59,8 @@ module RailsAiContext
         require "yaml"
         config = YAML.load_file(config_path, permitted_classes: [ Symbol ], aliases: true) || {}
         config.keys.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_storage_services failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -71,7 +73,8 @@ module RailsAiContext
           Dir.glob(File.join(dir, "**/*")).any? do |f|
             next false if File.directory?(f)
             File.read(f).match?(/direct.upload|DirectUpload|direct_upload/)
-          rescue
+          rescue => e
+            $stderr.puts "[rails-ai-context] detect_direct_upload failed: #{e.message}" if ENV["DEBUG"]
             false
           end
         end

@@ -442,7 +442,8 @@ module RailsAiContext
         end
 
         services.uniq { |s| "#{s[:name]}:#{s[:file]}" }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_http_clients failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -459,7 +460,8 @@ module RailsAiContext
           return nil if parts.size < 2
           # Use the main domain part
           parts[-2]&.capitalize
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] extract_service_name_from_url failed: #{e.message}" if ENV["DEBUG"]
           nil
         end
       end
@@ -484,7 +486,8 @@ module RailsAiContext
         end
 
         vars.to_a.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] find_env_vars_with_prefix failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -639,7 +642,8 @@ module RailsAiContext
 
       private_class_method def self.safe_read(path)
         File.read(path, encoding: "UTF-8", invalid: :replace, undef: :replace)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] safe_read failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

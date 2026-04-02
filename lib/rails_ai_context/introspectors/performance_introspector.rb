@@ -91,7 +91,8 @@ module RailsAiContext
             scopes_with_includes: content.scan(/scope\s+:\w+.*\.includes\(/).any?,
             content: content
           }
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] load_model_data failed: #{e.message}" if ENV["DEBUG"]
           nil
         end
       end
@@ -218,7 +219,8 @@ module RailsAiContext
             content = File.read(path)
             match = content.match(/class\s+(\w+)\s*<\s*ApplicationRecord/)
             match[1] if match
-          rescue
+          rescue => e
+            $stderr.puts "[rails-ai-context] detect_model_all_in_controllers failed: #{e.message}" if ENV["DEBUG"]
             nil
           end
         else
@@ -270,7 +272,8 @@ module RailsAiContext
             associations: has_many_assocs,
             suggestion: "Consider eager loading when rendering #{class_name} with associations: #{has_many_assocs.join(", ")}"
           }
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] detect_eager_load_candidates failed: #{e.message}" if ENV["DEBUG"]
           next
         end
 

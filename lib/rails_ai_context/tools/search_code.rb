@@ -454,7 +454,8 @@ module RailsAiContext
           end
         end
         nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_class_context failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -474,7 +475,8 @@ module RailsAiContext
           end
         end
         methods
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_sibling_methods failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -499,7 +501,8 @@ module RailsAiContext
         return nil unless ctrl_routes&.any?
         # Show the first 2 routes as hints
         ctrl_routes.first(2).map { |r| "`#{r[:verb]} #{r[:path]}`" }.join(", ")
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] find_routes_for_controller failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -521,7 +524,8 @@ module RailsAiContext
         end
 
         result.join("\n")
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_method_body failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
     end

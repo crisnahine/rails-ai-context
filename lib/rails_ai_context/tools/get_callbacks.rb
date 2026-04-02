@@ -257,7 +257,8 @@ module RailsAiContext
           start_line: start_idx + 1,
           end_line: end_idx + 1
         }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_method_source failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -294,7 +295,8 @@ module RailsAiContext
         end
 
         concern_callbacks
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] find_concern_callbacks failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
     end

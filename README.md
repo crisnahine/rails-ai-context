@@ -388,7 +388,7 @@ The installer asks which AI tools you use and whether you want MCP or CLI mode. 
 RailsAiContext.configure do |config|
   config.ai_tools   = %i[claude cursor]   # Which AI tools to generate for
   config.tool_mode   = :mcp               # :mcp (default) or :cli
-  config.preset      = :full              # :full (32 introspectors) or :standard (14)
+  config.preset      = :full              # :full (33 introspectors) or :standard (19)
 end
 ```
 
@@ -399,7 +399,7 @@ end
 
 | Option | Default | Description |
 |:-------|:--------|:------------|
-| `preset` | `:full` | `:full` (32 introspectors) or `:standard` (14 core) |
+| `preset` | `:full` | `:full` (33 introspectors) or `:standard` (19) |
 | `context_mode` | `:compact` | `:compact` (150 lines) or `:full` |
 | `generate_root_files` | `true` | Set `false` for split rules only |
 | `cache_ttl` | `60` | Cache TTL in seconds |

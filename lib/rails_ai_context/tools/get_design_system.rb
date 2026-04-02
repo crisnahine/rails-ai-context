@@ -370,7 +370,8 @@ module RailsAiContext
           end
 
           lines
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] render_layout_patterns failed: #{e.message}" if ENV["DEBUG"]
           []
         end
 

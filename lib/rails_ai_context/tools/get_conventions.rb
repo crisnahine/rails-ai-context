@@ -374,7 +374,8 @@ module RailsAiContext
         end
 
         info
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_locale_info failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -431,7 +432,8 @@ module RailsAiContext
         sections << "Detected from: #{detected_in.first(3).join(', ')}"
 
         sections
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_test_pattern failed: #{e.message}" if ENV["DEBUG"]
         []
       end
     end

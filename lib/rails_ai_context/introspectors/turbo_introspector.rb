@@ -49,7 +49,8 @@ module RailsAiContext
         end
 
         frames.sort_by { |f| f[:id] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_turbo_frames failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -77,7 +78,8 @@ module RailsAiContext
         end
 
         broadcasts.sort_by { |b| b[:model] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_model_broadcasts failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -89,7 +91,8 @@ module RailsAiContext
           content = File.read(path) rescue next
           content.include?('name="turbo-refresh-method"') && content.include?('content="morph"')
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_morph_meta failed: #{e.message}" if ENV["DEBUG"]
         false
       end
 
@@ -122,7 +125,8 @@ module RailsAiContext
         end
 
         elements.uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_permanent_elements failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -146,7 +150,8 @@ module RailsAiContext
         end
 
         counts
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_turbo_drive_settings failed: #{e.message}" if ENV["DEBUG"]
         { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 }
       end
 
@@ -159,7 +164,8 @@ module RailsAiContext
           native_navigation: detect_native_navigation(controllers_dir),
           native_conditionals: detect_native_conditionals
         }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_turbo_native failed: #{e.message}" if ENV["DEBUG"]
         { detected: false, native_helpers: [], native_navigation: [], native_conditionals: 0 }
       end
 
@@ -170,7 +176,8 @@ module RailsAiContext
           content = File.read(path) rescue next
           content.match?(/include\s+Turbo::Native::Navigation/)
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_native_include failed: #{e.message}" if ENV["DEBUG"]
         false
       end
 
@@ -183,7 +190,8 @@ module RailsAiContext
             path.sub("#{root}/", "")
           end
         end.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_native_helpers failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -207,7 +215,8 @@ module RailsAiContext
         end
 
         results.sort_by { |r| [ r[:file], r[:method] ] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_native_navigation failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -221,7 +230,8 @@ module RailsAiContext
         end
 
         count
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_native_conditionals failed: #{e.message}" if ENV["DEBUG"]
         0
       end
 
@@ -248,7 +258,8 @@ module RailsAiContext
         end
 
         responses.uniq.sort_by { |r| [ r[:controller], r[:action] ] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_turbo_stream_responses failed: #{e.message}" if ENV["DEBUG"]
         []
       end
     end

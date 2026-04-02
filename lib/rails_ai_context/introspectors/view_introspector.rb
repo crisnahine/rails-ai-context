@@ -98,7 +98,8 @@ module RailsAiContext
             file: relative,
             methods: methods
           }
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] extract_helpers failed: #{e.message}" if ENV["DEBUG"]
           nil
         end.sort_by { |h| h[:file] }
       end
@@ -150,7 +151,8 @@ module RailsAiContext
         end
 
         counts.sort_by { |_, v| -v }.to_h
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_form_builders failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -168,7 +170,8 @@ module RailsAiContext
         end
 
         components.to_a.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_component_usage failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -183,7 +186,8 @@ module RailsAiContext
           name = basename.sub(/\.(html|xml|json)\.(erb|haml|slim)\z/, "").sub(/\.(erb|haml|slim)\z/, "")
           name
         end.uniq.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_layout_mapping failed: #{e.message}" if ENV["DEBUG"]
         []
       end
     end

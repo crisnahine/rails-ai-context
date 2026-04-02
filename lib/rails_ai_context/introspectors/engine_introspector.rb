@@ -100,10 +100,12 @@ module RailsAiContext
           next if engine.name.start_with?("Rails::", "ActionPack::", "ActionView::", "ActiveModel::")
 
           { name: engine.name, root: engine.root.to_s.sub("#{Gem.dir}/gems/", "") }
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] discover_rails_engines failed: #{e.message}" if ENV["DEBUG"]
           nil
         end.sort_by { |e| e[:name] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] discover_rails_engines failed: #{e.message}" if ENV["DEBUG"]
         []
       end
     end

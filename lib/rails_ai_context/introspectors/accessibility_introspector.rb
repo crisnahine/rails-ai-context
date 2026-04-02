@@ -50,7 +50,8 @@ module RailsAiContext
           Dir.glob(File.join(dir, "**/*.{erb,haml,slim,html}")).each do |path|
             content = File.read(path, encoding: "UTF-8", invalid: :replace, undef: :replace)
             views << { file: path.sub("#{root}/", ""), content: content }
-          rescue
+          rescue => e
+            $stderr.puts "[rails-ai-context] collect_view_content failed: #{e.message}" if ENV["DEBUG"]
             next
           end
         end

@@ -43,7 +43,8 @@ module RailsAiContext
         else
           parse_database_yml
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] discover_databases failed: #{e.message}" if ENV["DEBUG"]
         parse_database_yml
       end
 
@@ -56,7 +57,8 @@ module RailsAiContext
         else
           []
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] discover_replicas failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -66,7 +68,8 @@ module RailsAiContext
 
         content = File.read(database_yml)
         { detected: true, note: "Sharding configuration found in database.yml" } if content.match?(/shard/i)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_sharding failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -90,7 +93,8 @@ module RailsAiContext
           if content.match?(/connected_to\b/)
             connections << { model: model_name, uses_connected_to: true } unless connections.any? { |c| c[:model] == model_name }
           end
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] detect_model_connections failed: #{e.message}" if ENV["DEBUG"]
           next
         end
 
@@ -124,7 +128,8 @@ module RailsAiContext
         end
 
         databases
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_database_yml failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -136,7 +141,8 @@ module RailsAiContext
         else
           name
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] anonymize_db_name failed: #{e.message}" if ENV["DEBUG"]
         "external"
       end
     end

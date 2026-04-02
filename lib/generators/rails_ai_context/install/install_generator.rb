@@ -377,7 +377,8 @@ module RailsAiContext
         return nil unless match
 
         match[1].split.map(&:to_sym)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] read_previous_ai_tools failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
       end # no_tasks

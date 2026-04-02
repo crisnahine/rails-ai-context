@@ -84,7 +84,8 @@ module RailsAiContext
           message: "#{pending.size} pending migration(s) — schema data will be stale",
           fix: "Run `rails db:migrate`")
       end
-    rescue
+    rescue => e
+      $stderr.puts "[rails-ai-context] check_pending_migrations failed: #{e.message}" if ENV["DEBUG"]
       # Can't check pending migrations in this environment
       nil
     end
@@ -234,7 +235,8 @@ module RailsAiContext
           message: "#{errors.size} introspector(s) returned errors: #{errors.join(', ')}",
           fix: "Check if the app has the required features (e.g., stimulus needs app/javascript/controllers/)")
       end
-    rescue
+    rescue => e
+      $stderr.puts "[rails-ai-context] check_introspector_health failed: #{e.message}" if ENV["DEBUG"]
       nil
     end
 

@@ -407,7 +407,8 @@ module RailsAiContext
 
       private_class_method def self.safe_read(path)
         File.read(path, encoding: "UTF-8", invalid: :replace, undef: :replace)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] safe_read failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

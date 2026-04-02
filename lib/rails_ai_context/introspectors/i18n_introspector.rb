@@ -42,7 +42,8 @@ module RailsAiContext
             begin
               data = YAML.load_file(path, permitted_classes: [ Symbol ], aliases: true) || {}
               info[:key_count] = count_keys(data)
-            rescue
+            rescue => e
+              $stderr.puts "[rails-ai-context] extract_locale_files failed: #{e.message}" if ENV["DEBUG"]
               info[:parse_error] = true
             end
           end

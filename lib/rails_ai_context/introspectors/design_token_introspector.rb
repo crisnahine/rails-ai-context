@@ -75,7 +75,8 @@ module RailsAiContext
         plugins << "headlessui" if pkg_content.include?("headlessui") || pkg_content.include?("@headlessui")
 
         plugins.any? ? "#{framework}+#{plugins.join('+')}" : framework
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_framework failed: #{e.message}" if ENV["DEBUG"]
         "unknown"
       end
 
@@ -288,7 +289,8 @@ module RailsAiContext
         end
 
         result
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_font_loading failed: #{e.message}" if ENV["DEBUG"]
         { font_face: 0, google_fonts: false, system_fonts: false }
       end
 
@@ -304,7 +306,8 @@ module RailsAiContext
           end
         end
         layers.uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_css_layers failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -325,7 +328,8 @@ module RailsAiContext
           end
         end
         plugins.uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_postcss_plugins failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

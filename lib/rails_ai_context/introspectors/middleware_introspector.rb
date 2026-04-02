@@ -65,7 +65,8 @@ module RailsAiContext
           name = middleware.name || middleware.klass.to_s
           { name: name, category: categorize_middleware(name) }
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_middleware_stack failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -74,7 +75,8 @@ module RailsAiContext
           total: app.middleware.size,
           custom: custom.size
         }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] middleware_count failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 

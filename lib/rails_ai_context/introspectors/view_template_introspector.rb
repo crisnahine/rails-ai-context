@@ -569,7 +569,8 @@ module RailsAiContext
         builders[:simple_form_for] = content.scan(/\bsimple_form_for\b/).size
         builders[:formtastic] = content.scan(/\bsemantic_form_for\b/).size
         builders.reject { |_, v| v == 0 }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_form_builders failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -580,7 +581,8 @@ module RailsAiContext
           tags[tag.to_sym] = count if count > 0
         end
         tags
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_semantic_html failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -593,7 +595,8 @@ module RailsAiContext
         sr_only_count = content.scan(/\bsr-only\b/).size
         patterns[:sr_only] = sr_only_count if sr_only_count > 0
         patterns
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_accessibility_patterns failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -636,7 +639,8 @@ module RailsAiContext
         end
 
         examples.values.map { |e| e.except(:score) }.first(5)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_canonical_examples failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -697,7 +701,8 @@ module RailsAiContext
           description = infer_partial_description(name, content)
           { name: name, lines: content.lines.size, description: description }
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] discover_shared_partials failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

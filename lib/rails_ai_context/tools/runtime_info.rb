@@ -144,7 +144,8 @@ module RailsAiContext
             begin
               result = conn.select_all("SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC")
               return result.map { |r| { name: r["name"], bytes: r["bytes"].to_i } } if result.any?
-            rescue
+            rescue => e
+              $stderr.puts "[rails-ai-context] gather_table_sizes failed: #{e.message}" if ENV["DEBUG"]
               nil
             end
             # Fallback: whole database size
@@ -156,7 +157,8 @@ module RailsAiContext
           else
             nil
           end
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] gather_table_sizes failed: #{e.message}" if ENV["DEBUG"]
           nil
         end
 
@@ -171,7 +173,8 @@ module RailsAiContext
             ActiveRecord::Migrator.new(:up, context.migrations).pending_migrations
           end
           pending.map { |m| "#{m.version} — #{m.name}" }
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] gather_pending_migrations failed: #{e.message}" if ENV["DEBUG"]
           nil
         end
 
@@ -183,7 +186,8 @@ module RailsAiContext
           else
             nil
           end
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] gather_index_usage failed: #{e.message}" if ENV["DEBUG"]
           nil
         end
 
@@ -228,7 +232,8 @@ module RailsAiContext
           adapter_name = begin
             name = ActiveJob::Base.queue_adapter_name
             name.empty? ? "not configured" : name
-          rescue
+          rescue => e
+            $stderr.puts "[rails-ai-context] gather_jobs failed: #{e.message}" if ENV["DEBUG"]
             "not available"
           end
           lines << "**Adapter:** #{adapter_name}"

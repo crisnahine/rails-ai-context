@@ -85,7 +85,8 @@ module RailsAiContext
              .map { |path| path.sub("#{root}/", "") }
              .sort
              .uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_openapi_specs failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -99,7 +100,8 @@ module RailsAiContext
         end
 
         { file: "config/initializers/cors.rb", origins: origins }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_cors_config failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -111,7 +113,8 @@ module RailsAiContext
         codegen_tools = %w[openapi-typescript @graphql-codegen/cli orval]
 
         codegen_tools.select { |tool| content.include?(%("#{tool}")) }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_api_client_generation failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -126,7 +129,8 @@ module RailsAiContext
           Dir.glob(File.join(controllers_dir, "**/*.rb")).each do |path|
             content = File.read(path)
             return { rails_rate_limiting: true } if content.match?(/rate_limit\b/)
-          rescue
+          rescue => e
+            $stderr.puts "[rails-ai-context] detect_rate_limiting failed: #{e.message}" if ENV["DEBUG"]
             next
           end
         end

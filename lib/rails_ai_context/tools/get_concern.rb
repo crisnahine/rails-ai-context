@@ -294,7 +294,8 @@ module RailsAiContext
         end
 
         methods
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_public_methods failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -332,7 +333,8 @@ module RailsAiContext
         end
 
         methods
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_class_methods failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -364,7 +366,8 @@ module RailsAiContext
         end
 
         macros
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_concern_macros failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -379,7 +382,8 @@ module RailsAiContext
         end
 
         callbacks
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_concern_callbacks failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -405,7 +409,8 @@ module RailsAiContext
         end
 
         result.join("\n")
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_method_source failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -448,7 +453,8 @@ module RailsAiContext
         end
 
         includers.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] find_includers failed: #{e.message}" if ENV["DEBUG"]
         []
       end
     end

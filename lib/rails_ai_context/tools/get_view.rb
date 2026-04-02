@@ -280,7 +280,8 @@ module RailsAiContext
       private_class_method def self.read_view_content(relative_path)
         full_path = Rails.root.join("app", "views", relative_path)
         File.exist?(full_path) ? File.read(full_path) : "(file not found)"
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] read_view_content failed: #{e.message}" if ENV["DEBUG"]
         "(error reading file)"
       end
 
@@ -311,7 +312,8 @@ module RailsAiContext
         end
 
         result
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_view_metadata failed: #{e.message}" if ENV["DEBUG"]
         { ivars: [], turbo: [], components: [], helpers: [] }
       end
 
@@ -361,7 +363,8 @@ module RailsAiContext
         end
 
         locals.to_a.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_partial_locals failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

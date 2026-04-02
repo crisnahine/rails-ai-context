@@ -146,7 +146,8 @@ module RailsAiContext
         return matches.first.sub("#{Rails.root}/", "") if matches.any?
 
         nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] find_file_suggestion failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -460,7 +461,8 @@ module RailsAiContext
         visitor = RailsSemanticVisitor.new
         result.value.accept(visitor)
         visitor
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_and_visit failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -900,7 +902,8 @@ module RailsAiContext
           warnings << "@#{ivar} used in view but not set in #{ctrl_class}. Fix: add `@#{ivar} = ...` to action"
         end
         warnings
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] check_instance_variable_usage failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -934,7 +937,8 @@ module RailsAiContext
           end
         end
         warnings
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] check_turbo_stream_channels failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -959,7 +963,8 @@ module RailsAiContext
           warnings << "#{file} uses turbo_stream_from but #{turbo_template} doesn't exist (Turbo Stream updates may need this)"
         end
         warnings
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] check_respond_to_template_existence failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -984,7 +989,8 @@ module RailsAiContext
           end
         end
         warnings.first(3) # cap at 3 to avoid noise
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] check_memory_loading failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -1013,7 +1019,8 @@ module RailsAiContext
         end
 
         warnings.first(5)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] check_performance_warnings failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -1044,7 +1051,8 @@ module RailsAiContext
           loc = w.line ? "#{w.file.relative}:#{w.line}" : w.file.relative
           "[#{w.confidence_name}] #{w.warning_type} — #{loc}: #{w.message}"
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] check_brakeman_security failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

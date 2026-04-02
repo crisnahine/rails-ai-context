@@ -127,7 +127,8 @@ module RailsAiContext
           end
         end
         imports
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_import_graph failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -138,14 +139,16 @@ module RailsAiContext
         methods = content.scan(/^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*\{/).flatten
         method_count = methods.count { |m| !JS_KEYWORDS.include?(m) }
         { loc: loc, method_count: method_count }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_complexity failed: #{e.message}" if ENV["DEBUG"]
         { loc: 0, method_count: 0 }
       end
 
       def extract_turbo_event_listeners(content)
         events = content.scan(/["']turbo:([\w:-]+)["']/).flatten.uniq
         events.map { |e| "turbo:#{e}" }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_turbo_event_listeners failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -166,7 +169,8 @@ module RailsAiContext
         end
 
         compositions.uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_cross_controller_composition failed: #{e.message}" if ENV["DEBUG"]
         []
       end
     end

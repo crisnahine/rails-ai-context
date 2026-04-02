@@ -418,7 +418,8 @@ module RailsAiContext
         return false unless File.exist?(path)
         content = File.read(path, encoding: "bom|utf-8")
         content.include?("\"#{name}\"")
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] package_json_has_script? failed: #{e.message}" if ENV["DEBUG"]
         false
       end
     end

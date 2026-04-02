@@ -41,7 +41,8 @@ module RailsAiContext
           end
 
           { name: name, file: relative, routing: routing }
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] extract_mailboxes failed: #{e.message}" if ENV["DEBUG"]
           nil
         end.sort_by { |m| m[:name] }
       end

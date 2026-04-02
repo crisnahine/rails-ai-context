@@ -128,7 +128,8 @@ module RailsAiContext
           else
             "#{(diff / 3600).to_i}h ago"
           end
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] time_ago failed: #{e.message}" if ENV["DEBUG"]
           iso_timestamp
         end
       end

@@ -401,7 +401,8 @@ module RailsAiContext
 
         def rails_version
           Rails.version.split(".").first(2).join(".")
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] rails_version failed: #{e.message}" if ENV["DEBUG"]
           "7.1"
         end
       end

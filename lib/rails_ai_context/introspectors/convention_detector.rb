@@ -146,7 +146,8 @@ module RailsAiContext
           .select { |d| File.directory?(File.join(app_dir, d)) }
           .reject { |d| STANDARD_APP_DIRS.include?(d) }
           .sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_custom_directories failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

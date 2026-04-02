@@ -220,7 +220,8 @@ module RailsAiContext
         end
 
         methods
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_helper_methods failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -250,7 +251,8 @@ module RailsAiContext
         end
 
         references
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] find_view_references failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -303,7 +305,8 @@ module RailsAiContext
         end
 
         detected
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_framework_helpers failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
     end

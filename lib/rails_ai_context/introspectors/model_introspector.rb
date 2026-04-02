@@ -39,7 +39,8 @@ module RailsAiContext
         else
           Rails.application.eager_load!
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] eager_load_models! failed: #{e.message}" if ENV["DEBUG"]
         # In some environments (CI, Claude Code) eager_load may partially fail
         nil
       end
@@ -135,7 +136,8 @@ module RailsAiContext
         source.scan(/^\s*scope\s+:(\w+)\s*,\s*->\s*(?:\([^)]*\)\s*)?\{([^}]*)\}/m).map do |name, body|
           { name: name, body: body.strip }
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_scopes failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -146,7 +148,8 @@ module RailsAiContext
         return [] unless source_path && File.exist?(source_path)
 
         File.read(source_path).scan(/^\s*validate\s+:(\w+)/).flatten
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_custom_validates failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -185,7 +188,8 @@ module RailsAiContext
         # If reflection returned nothing, fall back to source parsing
         return result if result.any?
         extract_callbacks_from_source(model)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_callbacks failed: #{e.message}" if ENV["DEBUG"]
         extract_callbacks_from_source(model)
       end
 
@@ -204,7 +208,8 @@ module RailsAiContext
           end
         end
         callbacks
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_callbacks_from_source failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -276,7 +281,8 @@ module RailsAiContext
           in_class_methods = false if in_class_methods && line.match?(/\A\s*end\s*$/) && !line.match?(/def/)
         end
         methods.uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_source_class_methods failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -332,7 +338,8 @@ module RailsAiContext
           end
         end
         methods.uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_source_instance_methods failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -350,7 +357,8 @@ module RailsAiContext
           ])
         end
         methods
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] generated_association_methods failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -390,7 +398,8 @@ module RailsAiContext
 
         # Remove empty arrays
         macros.reject { |_, v| v.is_a?(Array) && v.empty? }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_source_macros failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -443,7 +452,8 @@ module RailsAiContext
         macros[:token_generation] = tokens if tokens.any?
 
         macros
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_detailed_macros failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 

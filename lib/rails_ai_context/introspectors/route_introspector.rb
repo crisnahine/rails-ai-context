@@ -47,7 +47,8 @@ module RailsAiContext
       def extract_constraints(route)
         constraints = route.constraints.to_s
         constraints.empty? ? nil : constraints
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_constraints failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -77,7 +78,8 @@ module RailsAiContext
               engine: engine_class.name,
               path: r.path.spec.to_s
             }
-          rescue
+          rescue => e
+            $stderr.puts "[rails-ai-context] detect_mounted_engines failed: #{e.message}" if ENV["DEBUG"]
             nil
           end
       end

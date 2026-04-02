@@ -113,7 +113,8 @@ module RailsAiContext
             file = path.sub("#{root}/", "")
             factories = File.read(path).scan(/factory\s+:(\w+)/).flatten
             names[file] = factories if factories.any?
-          rescue
+          rescue => e
+            $stderr.puts "[rails-ai-context] detect_factory_names failed: #{e.message}" if ENV["DEBUG"]
             next
           end
           return names if names.any?
@@ -200,7 +201,8 @@ module RailsAiContext
         content = File.read(gemfile_lock)
         return "simplecov" if content.include?("simplecov (")
         nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_coverage failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -219,7 +221,8 @@ module RailsAiContext
           return traits if traits.any?
         end
         nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_factory_traits failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -234,7 +237,8 @@ module RailsAiContext
           end
         end
         counts
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_test_count_by_category failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
     end

@@ -1128,7 +1128,7 @@ Both transports are **read-only** — they expose the same 39 tools and never mo
 RailsAiContext.configure do |config|
   # --- Introspectors ---
 
-  # Presets: :full (32 introspectors, default) or :standard (14 core)
+  # Presets: :full (33 introspectors, default) or :standard (19)
   config.preset = :full
 
   # Cherry-pick on top of a preset
@@ -1300,7 +1300,7 @@ All split rules include an app overview file, so no context is lost when root fi
 
 ## Introspectors — Full List
 
-### Standard preset (14 introspectors)
+### Standard preset (19 introspectors)
 
 Core Rails structure only. Use `config.preset = :standard` for a lighter footprint.
 
@@ -1320,19 +1320,21 @@ Core Rails structure only. Use `config.preset = :standard` for a lighter footpri
 | `view_templates` | View file contents, partial references, Stimulus data attributes, UI pattern extraction, model field usage in partials. |
 | `design_tokens` | Auto-detects CSS framework (Tailwind v3/v4, Bootstrap, Sass, plain CSS) and extracts design tokens from config files and built CSS. |
 | `components` | ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage examples. |
+| `turbo` | Turbo Frames (IDs and files), Turbo Stream templates, model broadcasts (`broadcasts_to`, `broadcasts`). |
+| `auth` | Devise models with modules, Rails 8 built-in auth, has_secure_password, Pundit policies, CanCanCan, CORS config, CSP config. |
+| `accessibility` | ARIA attributes, semantic HTML elements, screen reader text, alt text coverage, landmark roles, accessibility score. |
+| `performance` | N+1 query risks, missing counter_cache, missing FK indexes, Model.all anti-patterns, eager load candidates. |
+| `i18n` | Default locale, available locales, locale files with key counts, backend class, parse errors. |
 
-### Full preset (32 introspectors) — default
+### Full preset (33 introspectors) — default
 
 Includes all standard introspectors plus:
 
 | Introspector | What it discovers |
 |-------------|-------------------|
 | `views` | Layouts, templates grouped by controller, partials (per-controller and shared), helpers with methods, template engines (erb, haml, slim), view components. |
-| `turbo` | Turbo Frames (IDs and files), Turbo Stream templates, model broadcasts (`broadcasts_to`, `broadcasts`). |
-| `i18n` | Default locale, available locales, locale files with key counts, backend class, parse errors. |
 | `active_storage` | Attachments (has_one_attached, has_many_attached per model), storage services, direct upload config. |
 | `action_text` | Rich text fields (has_rich_text per model), Action Text installation status. |
-| `auth` | Devise models with modules, Rails 8 built-in auth, has_secure_password, Pundit policies, CanCanCan, CORS config, CSP config. |
 | `api` | API-only mode, API versioning (from directory structure), serializers (Jbuilder, AMS, etc.), GraphQL (types, mutations), rate limiting (Rack::Attack). |
 | `rake_tasks` | Custom rake tasks in `lib/tasks/` with names, descriptions, namespaces, file paths. |
 | `assets` | Asset pipeline (Propshaft/Sprockets), JS bundler (importmap/esbuild/webpack/vite), CSS framework, importmap pins, manifest files. |
@@ -1342,10 +1344,8 @@ Includes all standard introspectors plus:
 | `middleware` | Custom Rack middleware in app/middleware/ with detected patterns (auth, rate limiting, tenant isolation, logging). Full middleware stack. |
 | `engines` | Mounted Rails engines from routes.rb with paths and descriptions for 23+ known engines (Sidekiq::Web, Flipper::UI, PgHero, ActiveAdmin, etc.). |
 | `multi_database` | Multiple databases, replicas, sharding config, model-specific `connects_to` declarations. database.yml parsing fallback. |
-| `accessibility` | ARIA attributes, semantic HTML elements, screen reader text, alt text coverage, landmark roles, accessibility score. |
-| `performance` | N+1 query risks, missing counter_cache, missing FK indexes, Model.all anti-patterns, eager load candidates. |
 | `frontend_frameworks` | Frontend JS framework detection (React/Vue/Svelte/Angular), mounting strategy (Inertia/react-rails), TypeScript config, state management, package manager. |
-| `database_stats` | PostgreSQL approximate row counts via `pg_stat_user_tables`. **Opt-in only** — not in any preset, add manually: `config.introspectors += [:database_stats]`. |
+| `database_stats` | PostgreSQL approximate row counts via `pg_stat_user_tables`. Gracefully skips on non-PostgreSQL adapters. |
 
 ### Using the standard preset
 

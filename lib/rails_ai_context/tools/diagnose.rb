@@ -377,7 +377,8 @@ module RailsAiContext
           end
 
           lines
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] gather_git_context failed: #{e.message}" if ENV["DEBUG"]
           []
         end
 
@@ -390,7 +391,8 @@ module RailsAiContext
             return [] if text.include?("Log file is empty") || text.include?("not found") || text.include?("No entries")
 
             [ "## Recent Error Logs", text, "" ]
-          rescue
+          rescue => e
+            $stderr.puts "[rails-ai-context] gather_log_context failed: #{e.message}" if ENV["DEBUG"]
             []
           end
         end

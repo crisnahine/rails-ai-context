@@ -93,7 +93,8 @@ module RailsAiContext
         content = File.read(schema_path)
         match = content.match(/version:\s*([\d_]+)/)
         match ? match[1].delete("_") : nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] current_schema_version failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

@@ -78,7 +78,8 @@ module RailsAiContext
             model_name = match[0]
             models << model_name unless non_models.include?(model_name)
           end
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] detect_seeded_models failed: #{e.message}" if ENV["DEBUG"]
           next
         end
 

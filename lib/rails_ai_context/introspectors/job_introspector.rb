@@ -42,7 +42,8 @@ module RailsAiContext
             priority: job.priority
           }.compact
         end.sort_by { |j| j[:name] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_jobs failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -80,7 +81,8 @@ module RailsAiContext
           job[:perform_signature] = perform_signature if perform_signature
           job
         end.sort_by { |j| j[:name] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_jobs_from_source failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -99,7 +101,8 @@ module RailsAiContext
             delivery_method: mailer.delivery_method.to_s
           }
         end.sort_by { |m| m[:name] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_mailers failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -116,7 +119,8 @@ module RailsAiContext
               .map(&:to_s)
           }
         end.sort_by { |c| c[:name] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_channels failed: #{e.message}" if ENV["DEBUG"]
         []
       end
     end

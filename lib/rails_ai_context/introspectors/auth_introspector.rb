@@ -103,7 +103,8 @@ module RailsAiContext
         end
 
         result
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_devise_modules_per_model failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -115,7 +116,8 @@ module RailsAiContext
         token_auth[:http_token_auth] = detect_http_token_auth
 
         token_auth
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_token_auth failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -129,7 +131,8 @@ module RailsAiContext
         end
 
         { detected: true }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_devise_jwt failed: #{e.message}" if ENV["DEBUG"]
         { detected: false }
       end
 
@@ -150,7 +153,8 @@ module RailsAiContext
         result[:grant_flows] = grant_flows if grant_flows
         result[:access_token_expires_in] = expires_in if expires_in
         result
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_doorkeeper failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -164,7 +168,8 @@ module RailsAiContext
             path.sub("#{root}/", "")
           end
         end.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_http_token_auth failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -182,7 +187,8 @@ module RailsAiContext
           results << { model: model_name, matches: matches.flatten.map(&:strip) }
         end
         results.sort_by { |r| r[:model] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] scan_models_for failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -190,7 +196,8 @@ module RailsAiContext
         lock_path = File.join(root, "Gemfile.lock")
         return false unless File.exist?(lock_path)
         File.read(lock_path).include?("    #{name} (")
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] gem_present? failed: #{e.message}" if ENV["DEBUG"]
         false
       end
 

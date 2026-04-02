@@ -135,7 +135,8 @@ module RailsAiContext
           else
             "main"
           end
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] detect_rails_branch failed: #{e.message}" if ENV["DEBUG"]
           "main"
         end
 

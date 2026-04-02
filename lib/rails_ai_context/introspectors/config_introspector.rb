@@ -40,7 +40,8 @@ module RailsAiContext
         when Array then store.first.to_s
         else store.class.name
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_cache_store failed: #{e.message}" if ENV["DEBUG"]
         "unknown"
       end
 
@@ -55,7 +56,8 @@ module RailsAiContext
         when Class then adapter.name
         else adapter.to_s
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_queue_adapter failed: #{e.message}" if ENV["DEBUG"]
         "unknown"
       end
 
@@ -78,13 +80,15 @@ module RailsAiContext
         end
 
         settings.empty? ? nil : settings
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_mailer_settings failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
       def extract_middleware
         app.middleware.map { |m| m.name || m.klass.to_s }.uniq
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_middleware failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -100,7 +104,8 @@ module RailsAiContext
       def credentials_configured?
         creds = app.credentials
         creds.respond_to?(:config) && creds.config.keys.any?
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] credentials_configured? failed: #{e.message}" if ENV["DEBUG"]
         false
       end
 
@@ -113,7 +118,8 @@ module RailsAiContext
           if content.match?(/< ActiveSupport::CurrentAttributes|< Rails::CurrentAttributes/)
             File.basename(path, ".rb").camelize
           end
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] detect_current_attributes failed: #{e.message}" if ENV["DEBUG"]
           nil
         end
       end

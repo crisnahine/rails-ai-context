@@ -393,7 +393,8 @@ module RailsAiContext
           end
         end
         bodies
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_custom_validate_bodies failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -414,7 +415,8 @@ module RailsAiContext
         end
 
         methods.empty? ? nil : methods
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_source_defined_methods failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -439,7 +441,8 @@ module RailsAiContext
         end
 
         signatures
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_method_signatures failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -469,7 +472,8 @@ module RailsAiContext
         end
 
         methods.empty? ? nil : methods
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_concern_methods failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -512,7 +516,8 @@ module RailsAiContext
         sections << { start: current_start, end: source_lines.size, label: current_section } if current_section
 
         { path: path, total_lines: source_lines.size, sections: sections }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_model_structure failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
     end

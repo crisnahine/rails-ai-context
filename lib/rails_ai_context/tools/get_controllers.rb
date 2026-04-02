@@ -301,7 +301,8 @@ module RailsAiContext
           next unless body
           { name: method_name, code: body[:code], start_line: body[:start_line], end_line: body[:end_line] }
         end.first(5) # Limit to 5 to avoid overwhelming response
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_called_private_methods failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -332,7 +333,8 @@ module RailsAiContext
           end
         end
         filters
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_parent_filters failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -359,7 +361,8 @@ module RailsAiContext
           end
         end
         skipped
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_skipped_filters failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -415,7 +418,8 @@ module RailsAiContext
         end
 
         { redirects: redirects.uniq, renders: renders.uniq, side_effects: side_effects.uniq }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_render_map failed: #{e.message}" if ENV["DEBUG"]
         { redirects: [], renders: [], side_effects: [] }
       end
 
@@ -443,7 +447,8 @@ module RailsAiContext
           start_line: start_idx + 1,
           end_line: end_idx + 1
         }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_method_with_lines failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

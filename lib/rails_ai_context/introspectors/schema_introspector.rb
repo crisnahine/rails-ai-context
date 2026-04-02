@@ -33,13 +33,15 @@ module RailsAiContext
 
       def active_record_connected?
         defined?(ActiveRecord::Base) && ActiveRecord::Base.connected?
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] active_record_connected? failed: #{e.message}" if ENV["DEBUG"]
         false
       end
 
       def adapter_name
         ActiveRecord::Base.connection.adapter_name
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] adapter_name failed: #{e.message}" if ENV["DEBUG"]
         "unknown"
       end
 
@@ -106,7 +108,8 @@ module RailsAiContext
             on_update: fk.on_update
           }.compact
         end
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_foreign_keys failed: #{e.message}" if ENV["DEBUG"]
         [] # Some adapters don't support foreign_keys
       end
 
@@ -136,7 +139,8 @@ module RailsAiContext
         end
 
         defaults
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_schema_defaults_for_table failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
 
@@ -333,7 +337,8 @@ module RailsAiContext
         end
 
         constraints
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_check_constraints failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -352,7 +357,8 @@ module RailsAiContext
         end
 
         enums
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_enum_types failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -382,7 +388,8 @@ module RailsAiContext
         end
 
         columns
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] parse_generated_columns failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

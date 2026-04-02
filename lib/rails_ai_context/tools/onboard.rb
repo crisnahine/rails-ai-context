@@ -638,7 +638,8 @@ module RailsAiContext
             name = File.basename(path, ".rb").camelize
             name unless name == "ApplicationService" || name == "BaseService"
           end
-        rescue
+        rescue => e
+          $stderr.puts "[rails-ai-context] extract_service_names failed: #{e.message}" if ENV["DEBUG"]
           []
         end
 

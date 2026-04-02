@@ -42,7 +42,8 @@ module RailsAiContext
 
         content = File.read(path)
         content.scan(/pin\s+["']([^"']+)["']/).flatten.sort
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_importmap_pins failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -76,7 +77,8 @@ module RailsAiContext
       def read_gemfile_lock
         path = File.join(root, "Gemfile.lock")
         File.exist?(path) ? File.read(path) : nil
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] read_gemfile_lock failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -84,7 +86,8 @@ module RailsAiContext
         path = File.join(root, "package.json")
         return false unless File.exist?(path)
         File.read(path).include?("\"#{package}\"")
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] package_json_has? failed: #{e.message}" if ENV["DEBUG"]
         false
       end
     end

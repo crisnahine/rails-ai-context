@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.3] — 2026-04-02
+
+### Fixed
+- **100 bare rescue statements across 46 files** — all replaced with `rescue => e` + conditional debug logging (`$stderr.puts ... if ENV["DEBUG"]`); errors are now visible instead of silently swallowed
+- **database_stats introspector orphaned** — `DatabaseStatsIntrospector` was unreachable (not in any preset); added to `:full` preset (32 → 33 introspectors)
+- **CHANGELOG date errors** — v4.0.0 corrected from 2026-03-26 to 2026-03-27, v4.2.0 from 2026-03-26 to 2026-03-30 (verified against git commit timestamps)
+- **CHANGELOG missing v3.0.1 entry** — added (RubyGems republish, no code changes)
+- **CHANGELOG date separator inconsistency** — normalized all 61 version entries to em dash (`—`)
+- **Documentation preset counts** — CLAUDE.md, README, GUIDE all corrected: `:full` 32→33, `:standard` 14→19 (turbo, auth, accessibility, performance, i18n were added in v4.3.1 but docs not updated)
+- **GUIDE.md standard preset table** — added 5 missing introspectors (turbo, auth, accessibility, performance, i18n) to match `configuration.rb`
+
+### Changed
+- Full preset: 32 → 33 introspectors (added :database_stats)
+
 ## [4.3.2] — 2026-04-02
 
 ### Fixed
@@ -113,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Test count: 983 → 998
 
-## [4.2.0] — 2026-03-26
+## [4.2.0] — 2026-03-30
 
 ### Added
 - New `rails_search_docs` tool: bundled topic index with weighted keyword search, on-demand GitHub fetch for Rails documentation
@@ -169,7 +183,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test count: 817 → 893
 - Install generator always writes `config.ai_tools` and `config.tool_mode` uncommented for re-install detection
 
-## [4.0.0] — 2026-03-26
+## [4.0.0] — 2026-03-27
 
 ### Added
 
@@ -207,7 +221,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test count: 681 → 806 examples
 - Combustion test app expanded with Stimulus controllers, ViewComponents, accessible views, factories
 
-## [3.1.0] - 2026-03-26
+## [3.1.0] — 2026-03-26
 
 ### Fixed
 
@@ -223,7 +237,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **File path suggestions in validate** — `files=["cook.rb"]` now suggests `app/models/cook.rb` when the file isn't found at the given path.
 - **Empty parameter validation** — `edit_context` now returns friendly messages for empty `file` or `near` parameters instead of hard errors.
 
-## [3.0.0] - 2026-03-26
+## [3.0.1] — 2026-03-26
+
+### Changed
+- Patch for RubyGems publish — no code changes from v3.0.0.
+
+## [3.0.0] — 2026-03-26
 
 ### Removed
 
@@ -250,14 +269,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All CLI examples use zsh-safe quoting: `rails 'ai:tool[X]'` (brackets are glob patterns in zsh).
 - README rewritten with real-world workflow examples, categorized tool table, MCP vs CLI showcase.
 
-## [2.0.5] - 2026-03-25
+## [2.0.5] — 2026-03-25
 
 ### Changed
 
 - **Task-based MCP tool instructions** — all 6 serializers (Claude, Cursor, Copilot, Windsurf, OpenCode) rewritten from tool-first to task-first: "What are you trying to do?" → exact tool call. 7 task categories: understand a feature, trace a method, add a field, fix a controller, build a view, write tests, find code. Every AI agent now understands which tool to use for any task.
 - **Concern detail:"full" bug fix** — `\b` after `?`/`!` prevented 13 of 15 method bodies from being extracted. All methods now show source code.
 
-## [2.0.4] - 2026-03-25
+## [2.0.4] — 2026-03-25
 
 ### Added
 
@@ -268,14 +287,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **analyze_feature: service test gaps** — checks services for missing test files, not just models/controllers/jobs.
 - **All 6 serializers updated** — Claude, Cursor, Copilot, Windsurf, OpenCode all document trace mode, concern source, orphaned tables, inherited filters.
 
-## [2.0.3] - 2026-03-25
+## [2.0.3] — 2026-03-25
 
 ### Added
 
 - **Trace mode 100%** — `match_type:"trace"` now shows 7 sections: definition with class/module context, source code, internal calls, sibling methods (same file), app callers with route chain hints, and test coverage (separated from app code). Zero follow-up calls needed.
 - **README rewrite** — neuro marketing techniques: loss aversion hook, measured token savings table, trace output inline, architecture diagram. 456→261 lines.
 
-## [2.0.2] - 2026-03-25
+## [2.0.2] — 2026-03-25
 
 ### Added
 
@@ -293,7 +312,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Documentation audit** — fixed max_tool_response_chars reference (120K→200K), added missing search_code params to GUIDE, added config.ai_tools to config reference.
 
-## [2.0.1] - 2026-03-25
+## [2.0.1] — 2026-03-25
 
 ### Fixed
 
@@ -304,7 +323,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Issue #14** — `multi_db[:databases].keys` crash on Array fixed.
 - **Search code NON_CODE_GLOBS** — excludes lock files, docs, CI configs, generated context from all searches.
 
-## [2.0.0] - 2026-03-24
+## [2.0.0] — 2026-03-24
 
 ### Added
 
@@ -349,14 +368,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **JS fallback validator false-positives** — escaped backslashes before string-closing quotes (`"path\\"`) no longer cause false bracket mismatch errors. Replaced `prev_char` check with proper `escaped` toggle flag.
 
-## [1.3.1] - 2026-03-23
+## [1.3.1] — 2026-03-23
 
 ### Fixed
 
 - **Documentation audit** — updated tool count from 14 to 15 across README, GUIDE, CONTRIBUTING, server.json. Added `rails_get_design_system` documentation section to GUIDE.md. Updated SECURITY.md supported versions. Fixed spec count in CLAUDE.md. Added `rails_get_design_system` to README tool table. Updated `rails_analyze_feature` description to reflect full-stack discovery (services, jobs, views, Stimulus, tests, related models, env deps).
 - **analyze_feature crash on complex models** — added type guards (`is_a?(Hash)`, `is_a?(Array)`) to all data access points preventing `no implicit conversion of Symbol into Integer` errors on models with many associations or complex data.
 
-## [1.3.0] - 2026-03-23
+## [1.3.0] — 2026-03-23
 
 ### Added
 
@@ -378,7 +397,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Rules serializer methods cap raised to 20** (RS1) — uses introspector's pre-filtered methods directly instead of redundant re-filtering
 - **oklch token noise filtered** (DS21) — complex color values (oklch, calc, var) hidden from summary, only shown in `detail:"full"`
 
-## [1.2.1] - 2026-03-23
+## [1.2.1] — 2026-03-23
 
 ### Fixed
 
@@ -392,7 +411,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Column defaults shown in generated rules** — columns with non-nil defaults now show `(=value)` inline.
 - **`analyze_feature` matches models by table name and underscore form** — `feature:"share"` now finds `CookShare` (via `cook_shares` table and `cook_share` underscore form), not just exact model name substring.
 
-## [1.2.0] - 2026-03-23
+## [1.2.0] — 2026-03-23
 
 ### Added
 
@@ -406,7 +425,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **"UI Patterns" section renamed to "Design System"** — richer content with color palette, typography, components, spacing conventions, interactive states, and design rules.
 - **Design tokens consumed for the first time** — `context[:design_tokens]` data was previously extracted but never rendered. Now merged into design system output in all serializers and the new MCP tool.
 
-## [1.1.1] - 2026-03-23
+## [1.1.1] — 2026-03-23
 
 ### Added
 
@@ -417,13 +436,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Tool count corrected from 13 to 14** across all serializers to reflect `rails_analyze_feature` added in v1.0.0.
 
-## [1.1.0] - 2026-03-23
+## [1.1.0] — 2026-03-23
 
 ### Changed
 
 - **Default preset changed to `:full`** — all 28 introspectors now run by default, giving AI assistants richer context out of the box. Introspectors that don't find relevant data return empty hashes with zero overhead. Use `config.preset = :standard` for the previous 13-core default.
 
-## [1.0.0] - 2026-03-23
+## [1.0.0] — 2026-03-23
 
 ### Added
 
@@ -436,25 +455,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **LLM-optimized tool descriptions (all 14 tools)** — every description now follows "what it does / Use when: / key params" format so AI agents pick the right tool on first try.
 
-## [0.15.10] - 2026-03-23
+## [0.15.10] — 2026-03-23
 
 ### Changed
 
 - **Gemspec description rewritten** — repositioned from feature list to value proposition: mental model, semantic validation, cross-file error detection.
 
-## [0.15.9] - 2026-03-23
+## [0.15.9] — 2026-03-23
 
 ### Added
 
 - **Deep diagnostic checks in `rails ai:doctor`** — upgraded from 13 shallow file-existence checks to 20 deep checks: pending migrations, context file freshness, .mcp.json validation, introspector health (dry-runs each one), preset coverage (detects features not in preset), .env/.master.key gitignore check, auto_mount production warning, schema/view size vs limits.
 
-## [0.15.8] - 2026-03-23
+## [0.15.8] — 2026-03-23
 
 ### Added
 
 - **Semantic validation (`level:"rails"`)** — `rails_validate` now supports `level:"rails"` for deep semantic checks beyond syntax: partial existence, route helper validity, column references vs schema, strong params vs schema columns, callback method existence, route-action consistency, `has_many` dependent options, missing FK indexes, and Stimulus controller file existence.
 
-## [0.15.7] - 2026-03-22
+## [0.15.7] — 2026-03-22
 
 ### Improved
 
@@ -466,7 +485,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Concern test lookup** — `rails_get_test_info(model:"PlanLimitable")` searches concern test paths.
 - **Controller flexible matching** — underscore-based normalization handles CamelCase, snake_case, and slash notation consistently.
 
-## [0.15.6] - 2026-03-22
+## [0.15.6] — 2026-03-22
 
 ### Added
 
@@ -482,7 +501,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Concern methods inline** — shows public methods from concern source files (e.g. `PlanLimitable — can_cook?, increment_cook_count!`).
 - **MCP tool error messages** — all tools now show available values on error/not-found for AI self-correction.
 
-## [0.15.5] - 2026-03-22
+## [0.15.5] — 2026-03-22
 
 ### Fixed
 
@@ -495,7 +514,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Namespace test lookup** — supports `bonus/crises` format and flat test directories.
 - **Empty inputs** — `near:""` in edit_context and `pattern:""` in search return helpful errors.
 
-## [0.15.4] - 2026-03-22
+## [0.15.4] — 2026-03-22
 
 ### Fixed
 
@@ -512,7 +531,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Pagination on models, controllers, stimulus** — `limit`/`offset` params (default 50) with "end of results" hints. Prevents token bombs on large apps.
 
-## [0.15.3] - 2026-03-22
+## [0.15.3] — 2026-03-22
 
 ### Fixed
 
@@ -523,20 +542,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Documentation** — updated all docs (README, CLAUDE.md, GUIDE.md, SECURITY.md, CHANGELOG, server.json, install generator) to match v0.15.x codebase. Fixed spec counts, file counts, preset counts, config options, and supported versions.
 
-## [0.15.2] - 2026-03-22
+## [0.15.2] — 2026-03-22
 
 ### Fixed
 
 - **Test command detection** — Serializers now use detected test framework (minitest → `rails test`, rspec → `bundle exec rspec`) instead of hardcoding `bundle exec rspec`. Default is `rails test` (the Rails default). Contributed by @curi (PR #13).
 
-## [0.15.1] - 2026-03-22
+## [0.15.1] — 2026-03-22
 
 ### Fixed
 
 - **Copilot serializer** — Show all model associations (not capped at 3), use human-readable architecture/pattern labels.
 - **OpenCode rules serializer** — Filter framework controllers (Devise) from AGENTS.md output, show all associations, match `before_action` with `!`/`?` suffixes.
 
-## [0.15.0] - 2026-03-22
+## [0.15.0] — 2026-03-22
 
 ### Security
 
@@ -577,7 +596,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Strong params body** — Action detail now shows the actual `permit(...)` call.
 - **AR-generated methods** — Filter `build_*`, `*_ids=`, etc. from model instance methods.
 
-## [0.14.0] - 2026-03-20
+## [0.14.0] — 2026-03-20
 
 ### Fixed
 
@@ -595,7 +614,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stimulus dash/underscore normalization** — Both `weekly-chart` and `weekly_chart` work for controller lookup. Output shows HTML `data-controller` attribute.
 - **Model public method signatures** — `rails_get_model_details(model: "Cook")` shows method names with params from source, stopping at private boundary.
 
-## [0.13.1] - 2026-03-20
+## [0.13.1] — 2026-03-20
 
 ### Changed
 
@@ -603,7 +622,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model details** — shows method signatures (name + parameters) instead of just method names.
 - Removed unused demo files; fixed GUIDE.md preset tables.
 
-## [0.13.0] - 2026-03-20
+## [0.13.0] — 2026-03-20
 
 ### Added
 
@@ -624,7 +643,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ERB validation was broken due to shell quoting bug (backticks + nested quotes). Replaced with `Open3.capture2e("ruby", "-e", script, ARGV[0])`.
 - Rubocop offenses in validate.rb (18 spacing issues auto-corrected).
 
-## [0.12.0] - 2026-03-20
+## [0.12.0] — 2026-03-20
 
 ### Added
 
@@ -657,7 +676,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Progress bars misclassified as badges.
 - Input detection picking up alert divs instead of actual inputs.
 
-## [0.11.0] - 2026-03-20
+## [0.11.0] — 2026-03-20
 
 ### Added
 
@@ -665,20 +684,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **View partial structure** — `rails_get_view(detail: "standard")` shows model fields and helper methods used by each partial.
 - **Schema column names** — `.claude/rules/rails-schema.md` shows key column names with types, foreign keys, indexes, and enum values. Keeps polymorphic `_type`, STI `type`, and soft-delete `deleted_at` columns.
 
-## [0.10.2] - 2026-03-20
+## [0.10.2] — 2026-03-20
 
 ### Security
 
 - **ReDoS protection** — added regex timeout and converted greedy quantifiers to non-greedy across all pattern matching.
 - **File size limits** — added size caps on parsed files to prevent memory exhaustion from oversized inputs.
 
-## [0.10.1] - 2026-03-19
+## [0.10.1] — 2026-03-19
 
 ### Changed
 
 - Patch release for RubyGems republish (no code changes).
 
-## [0.10.0] - 2026-03-19
+## [0.10.0] — 2026-03-19
 
 ### Added
 
@@ -689,7 +708,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ViewTemplateIntrospector** — new introspector that reads view file contents and extracts partial references and Stimulus data attributes.
 - **Stimulus and view_templates in standard preset** — both introspectors now in `:standard` preset (11 introspectors, was 10).
 
-## [0.9.0] - 2026-03-19
+## [0.9.0] — 2026-03-19
 
 ### Added
 
@@ -702,7 +721,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Removed `.cursorrules` root file** — Cursor officially deprecated `.cursorrules` in favor of `.cursor/rules/`. The `:cursor` format now generates only `.cursor/rules/*.mdc` split rules. The `rails-project.mdc` split rule (with `alwaysApply: true`) already provides the project overview.
 - **License changed from AGPL-3.0 to MIT** — removes the copyleft blocker for SaaS and commercial projects.
 
-## [0.8.5] - 2026-03-19
+## [0.8.5] — 2026-03-19
 
 ### Fixed
 
@@ -715,27 +734,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Standalone CLI documented** — the `rails-ai-context` executable (serve, context, inspect, watch, doctor, version) is now documented in README, GUIDE, and CLAUDE.md.
 
-## [0.8.4] - 2026-03-19
+## [0.8.4] — 2026-03-19
 
 ### Added
 
 - **`structure.sql` support** — the schema introspector now parses `db/structure.sql` when no `db/schema.rb` exists and no database connection is available. Extracts tables, columns (with SQL type normalization), indexes, and foreign keys from PostgreSQL dump format. Prefers `schema.rb` when both exist.
 - **Fingerprinter watches `db/structure.sql`** — file changes to `structure.sql` now trigger cache invalidation and live reload.
 
-## [0.8.3] - 2026-03-19
+## [0.8.3] — 2026-03-19
 
 ### Changed
 
 - **License published to RubyGems** — v0.8.2 changed the license from MIT to AGPL-3.0 but the gem was not republished. This release ensures the AGPL-3.0 license is reflected on RubyGems.
 
-## [0.8.2] - 2026-03-19
+## [0.8.2] — 2026-03-19
 
 ### Changed
 
 - **License** — changed from MIT to AGPL-3.0 to protect against unauthorized clones and ensure derivative works remain open source.
 - **CI: auto-publish to MCP Registry** — the release workflow now automatically publishes to the MCP Registry via `mcp-publisher` with GitHub OIDC auth. No manual `mcp-publisher login` + `publish` needed.
 
-## [0.8.1] - 2026-03-19
+## [0.8.1] — 2026-03-19
 
 ### Added
 
@@ -746,14 +765,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Live reload LoadError in HTTP mode** — when `live_reload = true` and the `listen` gem was missing, the `start_http` method's rescue block (for rackup fallback) swallowed the live reload error, producing a confusing rack error instead of the correct "listen gem required" message. The rescue is now scoped to the rackup require only.
 - **Dangling @live_reload reference** — `@live_reload` was assigned before `start` was called. If `start` raised LoadError, the instance variable pointed to a non-functional object. Now only assigned after successful start.
 
-## [0.8.0] - 2026-03-19
+## [0.8.0] — 2026-03-19
 
 ### Added
 
 - **MCP Live Reload** — when running `rails ai:serve`, file changes automatically invalidate tool caches and send MCP notifications (`notifications/resources/list_changed`) to connected AI clients. The AI's context stays fresh without manual re-querying. Requires the `listen` gem (enabled by default when available). Configurable via `config.live_reload` (`:auto`, `true`, `false`) and `config.live_reload_debounce` (default: 1.5s).
 - **Live reload doctor check** — `rails ai:doctor` now warns when the `listen` gem is not installed.
 
-## [0.7.1] - 2026-03-19
+## [0.7.1] — 2026-03-19
 
 ### Added
 
@@ -765,7 +784,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Schema version parsing** — versions with underscores (e.g. `2024_01_15_123456`) were truncated to the first digit group. Now captures the full version string.
 - **Documentation** — updated README (detail levels, pagination, generated file tree, config options), SECURITY.md (supported versions), CONTRIBUTING.md (project structure), gemspec (post-install message), demo_script.sh (all 17 generated files).
 
-## [0.7.0] - 2026-03-19
+## [0.7.0] — 2026-03-19
 
 ### Added
 
@@ -788,7 +807,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All tools return pagination hints when results are truncated.
 - `.windsurfrules` now uses dedicated `WindsurfSerializer` instead of sharing `RulesSerializer` with Cursor.
 
-## [0.6.0] - 2026-03-18
+## [0.6.0] — 2026-03-18
 
 ### Added
 
@@ -809,7 +828,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Doctor checks expanded from 11 to 12
 - Static MCP resources expanded from 7 to 9
 
-## [0.5.2] - 2026-03-18
+## [0.5.2] — 2026-03-18
 
 ### Fixed
 
@@ -817,14 +836,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Zeitwerk dependency** — Changed from open-ended `>= 2.6` to pessimistic `~> 2.6` per RubyGems best practices
 - **Documentation** — Updated CONTRIBUTING.md, CHANGELOG.md, and CLAUDE.md to reflect Zeitwerk autoloading, introspector presets, and `.mcp.json` auto-discovery changes
 
-## [0.5.1] - 2026-03-18
+## [0.5.1] — 2026-03-18
 
 ### Fixed
 
 - Documentation updates and animated demo GIF added to README.
 - Zeitwerk autoloading fixes for edge cases.
 
-## [0.5.0] - 2026-03-18
+## [0.5.0] — 2026-03-18
 
 ### Added
 
@@ -845,7 +864,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default introspectors reduced from 21 to 8 (`:standard` preset) for faster boot; use `config.preset = :full` for all 21
 - New files auto-loaded by Zeitwerk — no manual `require_relative` needed when adding introspectors or tools
 
-## [0.4.0] - 2026-03-18
+## [0.4.0] — 2026-03-18
 
 ### Added
 
@@ -882,7 +901,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Doctor checks expanded from 7 to 11
 - Test suite expanded from 149 to 247 examples with exact value assertions
 
-## [0.3.0] - 2026-03-18
+## [0.3.0] — 2026-03-18
 
 ### Added
 
@@ -907,7 +926,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `generate_context` now returns `{ written: [], skipped: [] }` instead of flat array
 - Default introspectors now include `:stimulus`
 
-## [0.2.0] - 2026-03-18
+## [0.2.0] — 2026-03-18
 
 ### Added
 
@@ -921,7 +940,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rails ai:context_for[claude]` failing in zsh due to bracket glob interpretation
 - Double introspection in `ai:context` and `ai:context_for` tasks (removed unused `RailsAiContext.introspect` calls)
 
-## [0.1.0] - 2026-03-18
+## [0.1.0] — 2026-03-18
 
 ### Added
 

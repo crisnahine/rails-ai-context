@@ -71,7 +71,8 @@ module RailsAiContext
         spec = Bundler.rubygems.find_name("rails-ai-context").first
         return false unless spec
         spec.source.is_a?(Bundler::Source::Path)
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] local_gem_path? failed: #{e.message}" if ENV["DEBUG"]
         false
       end
 

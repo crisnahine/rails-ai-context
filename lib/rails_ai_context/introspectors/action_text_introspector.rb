@@ -40,7 +40,8 @@ module RailsAiContext
         end
 
         fields.sort_by { |f| [ f[:model], f[:field] ] }
-      rescue
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_rich_text_fields failed: #{e.message}" if ENV["DEBUG"]
         []
       end
     end
