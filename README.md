@@ -20,8 +20,6 @@
   <a href="#cli--works-everywhere-no-server-needed"><img src="https://img.shields.io/badge/Any_Terminal-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white" alt="Any Terminal"></a>
 </p>
 
-> Built by a Rails developer with 10+ years of production experience. AI assisted — the same way it assists me shipping features at work. I designed the architecture, made every decision, reviewed every line, and wrote 1529 tests. This gem exists because I understand Rails deeply enough to know exactly what AI agents get wrong and what context they need to get it right.
-
 ```bash
 gem "rails-ai-context", group: :development
 rails generate rails_ai_context:install
@@ -350,6 +348,10 @@ end
 - Optional: `brakeman` for security scanning, `listen` for watch mode, `ripgrep` for fast search
 
 ---
+
+## About
+
+Built by a Rails developer with 10+ years of production experience. AI assisted — the same way it assists me shipping features at work. I designed the architecture, made every decision, reviewed every line, and wrote 1529 tests. This gem exists because I understand Rails deeply enough to know exactly what AI agents get wrong and what context they need to get it right.
 
 ## Contributing
 
