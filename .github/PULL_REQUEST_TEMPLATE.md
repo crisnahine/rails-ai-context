@@ -1,8 +1,12 @@
-## What does this PR do?
+## What and why?
 
-<!-- 1-3 sentences. Link to issue if applicable. -->
+<!-- What does this change? Why is it needed? Link to issue if applicable. -->
 
-## Test plan
+## How to verify
+
+<!-- How can a reviewer confirm this works? E.g. "run tool X with param Y" -->
+
+## Checks
 
 - [ ] `bundle exec rspec` — 0 failures
 - [ ] `bundle exec rubocop` — 0 offenses
