@@ -88,6 +88,23 @@ Definition + source code + every caller grouped by type + what it calls internal
 
 ---
 
+## Measured token savings
+
+Real numbers from a production Rails app:
+
+| Scenario | Without (raw files) | With (tool call) | Saved |
+|----------|--------------------:|------------------:|------:|
+| Schema (one table) | 1,492 tokens | 335 tokens | **77%** |
+| Trace a method (5 files) | 10,818 tokens | 256 tokens | **97.6%** |
+| All controllers | 5,574 tokens | 242 tokens | **95.7%** |
+| All views | 38,289 tokens | 124 tokens | **99.7%** |
+| Stimulus controllers | 9,886 tokens | 620 tokens | **93.7%** |
+| **Total** | **66,059 tokens** | **1,577 tokens** | **97.6%** |
+
+> Without this gem, AI reads entire files to find what it needs. With it, one tool call returns exactly the right context — structured, cross-referenced, and ready to use.
+
+---
+
 ## Real-world examples
 
 ### "Add a subscription field to users"
