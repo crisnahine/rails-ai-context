@@ -50,6 +50,10 @@ module RailsAiContext
             type: "integer",
             description: "Skip this many results for pagination. Default: 0."
           },
+          limit: {
+            type: "integer",
+            description: "Max results to return. Default: auto-sized based on total matches."
+          },
           context_lines: {
             type: "integer",
             description: "Lines of context before and after each match (like grep -C). Default: 2, max: 5."
@@ -60,7 +64,7 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      def self.call(pattern:, path: nil, file_type: nil, match_type: "any", exact_match: false, exclude_tests: false, group_by_file: false, offset: 0, context_lines: 2, server_context: nil) # rubocop:disable Metrics
+      def self.call(pattern:, path: nil, file_type: nil, match_type: "any", exact_match: false, exclude_tests: false, group_by_file: false, offset: 0, limit: nil, context_lines: 2, server_context: nil) # rubocop:disable Metrics
         root = Rails.root.to_s
         original_pattern = pattern
 
@@ -144,31 +148,23 @@ module RailsAiContext
           return text_response("No results found for '#{original_pattern}' in #{path || 'app'}.")
         end
 
-        # Smart result limiting:
-        # <10 total → show all, 10-100 → show half, >100 → cap at 100
+        # Smart default limit: <10 → all, 10-100 → half, >100 → 100
         total = all_results.size
-        show_count = if total <= 10 then total
+        default_limit = if total <= 10 then total
         elsif total <= 100 then (total / 2.0).ceil
         else 100
         end
 
-        # Apply pagination
-        paginated = all_results.drop(offset).first(show_count)
+        page = paginate(all_results, offset: offset, limit: limit, default_limit: [ default_limit, 1 ].max)
+        paginated = page[:items]
 
         if paginated.empty? && total > 0
-          return text_response("No results at offset #{offset}. Total: #{total}. Use `offset:0`.")
+          return text_response(page[:hint])
         end
 
-        # Build header with total count and pagination info
-        showing = offset > 0 ? "#{offset + 1}-#{offset + paginated.size}" : "#{paginated.size}"
-        pagination = if offset + paginated.size < total
-          "\n_Showing #{showing} of #{total}. Use `offset:#{offset + paginated.size}` for more._"
-        elsif total > paginated.size
-          "\n_Showing #{showing} of #{total}._"
-        else
-          ""
-        end
+        pagination = page[:hint].empty? ? "" : "\n#{page[:hint]}"
 
+        showing = paginated.size.to_s
         header = "# Search: `#{original_pattern}`\n**#{total} total results**#{" in #{path}" if path}, showing #{showing}\n"
 
         if group_by_file

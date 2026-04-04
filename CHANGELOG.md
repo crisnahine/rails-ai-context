@@ -7,16 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.5.2] — 2026-04-04
 
-### Fixed
-- **Middleware crash protection** — MCP HTTP middleware now rescues exceptions and returns a proper JSON-RPC 2.0 error (`-32603 Internal error`) instead of crashing the Rails request pipeline
-- **File read size limits** — Added `SafeFile.read` helper with automatic size checks; replaced 150+ unguarded `File.read` calls across all introspectors and tools to prevent OOM on oversized files
-- **Cache race condition** — `BaseTool.cached_context` now returns a `deep_dup` of the shared cache, preventing concurrent MCP requests from mutating shared data structures
-- **Silent failure warnings** — Introspector failures now propagate as `_warnings` to serializer output; AI clients see a `## Warnings` section listing which sections were unavailable and why
-- **Markdown escaping** — Dynamic content (model names, table names, controller names) in generated markdown is now escaped to prevent formatting corruption from special characters
-
 ### Added
+- **Strong params permit list extraction** — Controller introspector now parses `params.require(:x).permit(...)` calls, returning structured hashes with `requires`, `permits`, `nested`, `arrays`, and `unrestricted` fields. Handles multi-line chains, hash rocket syntax, and `params.permit!` detection
+- **N+1 risk levels** — PerformanceCheck now classifies N+1 risks as `[HIGH]` (no preloading), `[MEDIUM]` (partial preloading), or `[low]` (already preloaded). Detects loop patterns in controller actions, recognizes `.includes`/`.eager_load`/`.preload`, and reports per-action context
+- **DependencyGraph polymorphic/through/cycles/STI** — `show_cycles` param detects circular dependencies via DFS. `show_sti` param groups STI hierarchies. Polymorphic associations resolve concrete types. Through associations render as two-hop edges. Mermaid: dashed arrows for polymorphic, double arrows for through, dotted for STI
+- **Query EXPLAIN support** — New `explain` boolean param wraps SELECT in adapter-specific EXPLAIN (PostgreSQL JSON ANALYZE, MySQL EXPLAIN, SQLite EXPLAIN QUERY PLAN). Parses scan types, indexes, and warnings. Skips row limits for metadata output
+- **GetConfig Rails API integration** — Assets detection now uses FrontendFrameworkIntrospector data instead of regex-parsing package.json. Action Cable uses Rails config API with YAML fallback. New Active Storage service and Action Mailer delivery method detection
+- **Standardized pagination** — `BaseTool.paginate(items, offset:, limit:, default_limit:)` returns `{ items:, hint:, total:, offset:, limit: }`. Adopted across 7 tools: GetControllers, GetModelDetails, GetRoutes, SearchCode, GetGems, GetHelperMethods, GetComponentCatalog. New `offset`/`limit` params added to GetGems, GetHelperMethods, GetComponentCatalog, SearchCode
 - `RailsAiContext::SafeFile` module — safe file reading with configurable size limits, encoding handling, and error suppression
 - `RailsAiContext::MarkdownEscape` module — escapes markdown special characters in dynamic content interpolated into headings and prose
+- **Provider API key redaction** — ReadLogs now redacts Stripe, SendGrid, Slack, GitHub, GitLab, and npm token patterns
+
+### Fixed
+- **Middleware crash protection** — MCP HTTP middleware now rescues exceptions and returns a proper JSON-RPC 2.0 error (`-32603 Internal error`) instead of crashing the Rails request pipeline
+- **File read size limits** — Replaced 150+ unguarded `File.read` calls across all introspectors and tools with `SafeFile.read` to prevent OOM on oversized files
+- **Cache race condition** — `BaseTool.cached_context` now returns a `deep_dup` of the shared cache, preventing concurrent MCP requests from mutating shared data structures
+- **Silent failure warnings** — Introspector failures now propagate as `_warnings` to serializer output; AI clients see a `## Warnings` section listing which sections were unavailable and why
+- **Markdown escaping** — Dynamic content in generated markdown is now escaped to prevent formatting corruption from special characters
+- **GetConcern nil crash** — Added nil guard for `SafeFile.read` return value
+- **GenerateTest type coercion** — Fixed `max + 1` crash when `maximum:` validation stored as string
+- **Standalone Bundler conflict** — Resolved gem activation conflict in standalone mode
+- **CLI error messages** — Clean error messages for all CLI error paths
+- **Rake/init parity** — `rake ai:context` and `init` command now match generator output
+
+### Changed
+- Test count: 1658 examples (76 new tests for Phase 2 features)
 
 ## [4.4.0] — 2026-04-03
 

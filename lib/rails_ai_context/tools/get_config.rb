@@ -27,20 +27,28 @@ module RailsAiContext
         auth = detect_auth_framework
         lines << "- **Auth:** #{auth}" if auth
 
-        # Assets/CSS — affects view development
+        # Assets/CSS — uses frontend framework introspector data when available
         assets = detect_assets_stack
         lines << "- **Assets:** #{assets}" if assets
 
-        # Action Cable
+        # Action Cable — uses Rails config API with YAML fallback
         cable = detect_action_cable
         lines << "- **Action Cable:** #{cable}" if cable
+
+        # Active Storage service
+        storage = detect_active_storage
+        lines << "- **Active Storage:** #{storage}" if storage
+
+        # Action Mailer delivery method
+        mailer_delivery = detect_mailer_delivery
+        lines << "- **Mailer delivery:** #{mailer_delivery}" if mailer_delivery
 
         lines << "- **Cache store:** #{data[:cache_store]}" if data[:cache_store]
         lines << "- **Session store:** #{data[:session_store]}" if data[:session_store]
         lines << "- **Timezone:** #{data[:timezone]}" if data[:timezone]
         lines << "- **Queue adapter:** #{data[:queue_adapter]}" if data[:queue_adapter]
         if data[:mailer].is_a?(Hash) && data[:mailer].any?
-          lines << "- **Mailer:** #{data[:mailer].map { |k, v| "#{k}: #{v}" }.join(', ')}"
+          lines << "- **Mailer config:** #{data[:mailer].map { |k, v| "#{k}: #{v}" }.join(', ')}"
         end
 
         if data[:middleware_stack]&.any?
@@ -109,34 +117,73 @@ module RailsAiContext
       private_class_method def self.detect_assets_stack
         parts = []
 
-        pkg = Rails.root.join("package.json")
-        if File.exist?(pkg)
-          content = RailsAiContext::SafeFile.read(pkg) || ""
-          parts << "Tailwind" if content.include?("tailwindcss")
-          parts << "Bootstrap" if content.include?("bootstrap")
-          parts << "esbuild" if content.include?("esbuild")
-          parts << "Vite" if content.include?("vite")
-          parts << "Webpack" if content.include?("webpack")
-          parts << "React" if content.include?("react")
-          parts << "Vue" if content.include?("vue")
+        # Use frontend framework introspector data when available
+        frontend = cached_context[:frontend_frameworks]
+        if frontend.is_a?(Hash) && !frontend[:error]
+          # Frameworks (React, Vue, etc.)
+          (frontend[:frameworks] || {}).each_key { |fw| parts << fw.to_s.capitalize }
+
+          # Build tool
+          build = frontend[:build_tool]
+          parts << build.to_s.capitalize if build && !build.to_s.empty?
+
+          # CSS/component libraries
+          (frontend[:component_libraries] || []).each do |lib|
+            lib_str = lib.to_s.downcase
+            parts << "Tailwind" if lib_str.include?("tailwind")
+            parts << "Bootstrap" if lib_str.include?("bootstrap")
+            parts << lib.to_s unless lib_str.include?("tailwind") || lib_str.include?("bootstrap")
+          end
         end
 
+        # Asset pipeline detection (always check — not from introspector)
         parts << "Propshaft" if defined?(Propshaft)
         parts << "Sprockets" if defined?(Sprockets) && !defined?(Propshaft)
         parts << "Import Maps" if File.exist?(Rails.root.join("config/importmap.rb"))
 
+        parts.uniq!
         parts.any? ? parts.join(", ") : nil
       end
 
       private_class_method def self.detect_action_cable
-        cable_config = Rails.root.join("config/cable.yml")
-        return nil unless File.exist?(cable_config)
+        # Try Rails config API first
+        if defined?(ActionCable) && Rails.application.config.respond_to?(:action_cable)
+          cable_config = Rails.application.config.action_cable
+          adapter = cable_config.adapter if cable_config.respond_to?(:adapter)
+          return adapter.to_s if adapter && !adapter.to_s.empty?
+        end
 
-        content = RailsAiContext::SafeFile.read(cable_config)
+        # YAML fallback for older Rails or when config API isn't available
+        cable_yml = Rails.root.join("config/cable.yml")
+        return nil unless File.exist?(cable_yml)
+
+        content = RailsAiContext::SafeFile.read(cable_yml)
         return nil unless content
 
         adapter = content.match(/adapter:\s*(\w+)/)&.captures&.first
         adapter || "configured"
+      rescue
+        nil
+      end
+
+      private_class_method def self.detect_active_storage
+        return nil unless defined?(ActiveStorage)
+
+        service_name = Rails.application.config.active_storage.service rescue nil
+        return nil unless service_name
+
+        service_name.to_s
+      rescue
+        nil
+      end
+
+      private_class_method def self.detect_mailer_delivery
+        method = Rails.application.config.action_mailer.delivery_method rescue nil
+        return nil unless method
+
+        method.to_s
+      rescue
+        nil
       end
     end
   end

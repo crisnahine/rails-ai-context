@@ -446,6 +446,72 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "EXPLAIN mode" do
+    it "returns EXPLAIN QUERY PLAN output for SELECT" do
+      result = described_class.call(sql: "SELECT 1 AS test", explain: true)
+      text = result.content.first[:text]
+      expect(text).to include("EXPLAIN Analysis")
+      expect(text).to include("Raw Plan")
+    end
+
+    it "returns EXPLAIN for a real table query" do
+      result = described_class.call(sql: "SELECT name FROM sqlite_master", explain: true)
+      text = result.content.first[:text]
+      expect(text).to include("EXPLAIN Analysis")
+      expect(text).to include("SCAN")
+    end
+
+    it "detects full table scan" do
+      result = described_class.call(sql: "SELECT name FROM sqlite_master", explain: true)
+      text = result.content.first[:text]
+      expect(text).to include("full table scan").or include("SCAN")
+    end
+
+    it "rejects non-SELECT queries with explain" do
+      result = described_class.call(sql: "SHOW tables", explain: true)
+      text = result.content.first[:text]
+      expect(text).to include("EXPLAIN only supports SELECT")
+    end
+
+    it "does not apply row limit to EXPLAIN output" do
+      result = described_class.call(sql: "SELECT 1 AS test", explain: true)
+      text = result.content.first[:text]
+      expect(text).not_to include("LIMIT")
+    end
+
+    it "shows query in the output" do
+      result = described_class.call(sql: "SELECT name FROM sqlite_master WHERE type = 'table'", explain: true)
+      text = result.content.first[:text]
+      expect(text).to include("SELECT name FROM sqlite_master")
+    end
+
+    it "standard query is unaffected when explain is false" do
+      result = described_class.call(sql: "SELECT 1 AS test", explain: false)
+      text = result.content.first[:text]
+      expect(text).to include("test")
+      expect(text).to include("1 row")
+      expect(text).not_to include("EXPLAIN Analysis")
+    end
+
+    it "parses SQLite EXPLAIN QUERY PLAN scan types" do
+      result = described_class.call(sql: "SELECT name FROM sqlite_master WHERE type = 'table'", explain: true)
+      text = result.content.first[:text]
+      expect(text).to include("Scan Summary").or include("Raw Plan")
+    end
+
+    it "handles WITH (CTE) query in explain mode" do
+      result = described_class.call(sql: "WITH t AS (SELECT 1 AS x) SELECT * FROM t", explain: true)
+      text = result.content.first[:text]
+      expect(text).to include("EXPLAIN Analysis")
+    end
+
+    it "rejects blocked SQL even with explain" do
+      result = described_class.call(sql: "INSERT INTO users (email) VALUES ('x')", explain: true)
+      text = result.content.first[:text]
+      expect(text).to include("Blocked")
+    end
+  end
+
   describe "CSV format" do
     it "escapes newlines in cell values" do
       columns = %w[id note]

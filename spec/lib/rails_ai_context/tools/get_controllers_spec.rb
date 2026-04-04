@@ -100,7 +100,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
     it "respects limit parameter" do
       result = described_class.call(limit: 1)
       text = result.content.first[:text]
-      expect(text).to include("Showing 1 of 3")
+      expect(text).to include("Showing 1-1 of 3")
     end
 
     it "respects offset parameter" do
@@ -113,7 +113,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
     it "returns empty-pagination message when offset exceeds total" do
       result = described_class.call(offset: 100)
       text = result.content.first[:text]
-      expect(text).to include("No controllers at offset 100")
+      expect(text).to include("No items at offset 100")
       expect(text).to include("Total: 3")
     end
 

@@ -329,7 +329,113 @@ module RailsAiContext
       def extract_strong_params(source)
         return [] if source.nil?
 
-        source.scan(/def\s+(\w+_params)\b/).flatten.uniq
+        method_names = source.scan(/def\s+(\w+_params)\b/).flatten.uniq
+        method_names.map { |name| extract_permit_details(source, name) }
+      end
+
+      def extract_permit_details(source, method_name)
+        result = { name: method_name }
+        body = extract_method_body(source, method_name)
+        return result unless body
+
+        # Detect params.permit! (unrestricted)
+        if body.match?(/params\s*\.permit!/)
+          result[:unrestricted] = true
+          return result
+        end
+
+        # Extract require(:model)
+        if (req = body.match(/params\s*\.require\(\s*:(\w+)\s*\)/))
+          result[:requires] = req[1]
+        end
+
+        # Extract permit(...) — join multi-line into single string
+        permit_match = body.match(/\.permit\((.*)\)/m)
+        return result unless permit_match
+
+        permit_body = permit_match[1].gsub(/\s*\n\s*/, " ").strip
+        result.merge(parse_permit_args(permit_body))
+      end
+
+      def extract_method_body(source, method_name)
+        lines = source.lines
+        start_idx = lines.index { |l| l.match?(/\bdef\s+#{Regexp.escape(method_name)}\b/) }
+        return nil unless start_idx
+
+        indent = lines[start_idx].match(/^(\s*)/)[1].length
+        body_lines = [ lines[start_idx] ]
+
+        (start_idx + 1...lines.size).each do |i|
+          body_lines << lines[i]
+          break if lines[i].match?(/^\s{#{indent}}end\b/)
+        end
+
+        body_lines.join
+      end
+
+      def parse_permit_args(permit_body)
+        permits = []
+        nested = {}
+        arrays = []
+
+        # Tokenize: split on commas but respect nested brackets
+        tokens = split_permit_tokens(permit_body)
+
+        tokens.each do |token|
+          token = token.strip
+          if (m = token.match(/\A:(\w+)\s*=>\s*\[([^\]]*)\]\z/))
+            # Hash rocket nested: :address => [:street, :city]
+            key = m[1]
+            vals = m[2].scan(/:(\w+)/).flatten
+            if vals.any?
+              nested[key] = vals
+            else
+              arrays << key
+            end
+          elsif (m = token.match(/\A(\w+):\s*\[([^\]]*)\]\z/))
+            # Ruby keyword nested: address: [:street, :city]
+            key = m[1]
+            vals = m[2].scan(/:(\w+)/).flatten
+            if vals.any?
+              nested[key] = vals
+            else
+              arrays << key
+            end
+          elsif (m = token.match(/\A:(\w+)\z/))
+            permits << m[1]
+          end
+        end
+
+        result = {}
+        result[:permits] = permits if permits.any?
+        result[:nested] = nested if nested.any?
+        result[:arrays] = arrays if arrays.any?
+        result
+      end
+
+      def split_permit_tokens(str)
+        tokens = []
+        current = +""
+        depth = 0
+
+        str.each_char do |ch|
+          case ch
+          when "[" then depth += 1; current << ch
+          when "]" then depth -= 1; current << ch
+          when ","
+            if depth == 0
+              tokens << current
+              current = +""
+            else
+              current << ch
+            end
+          else
+            current << ch
+          end
+        end
+
+        tokens << current unless current.strip.empty?
+        tokens
       end
 
       def extract_respond_to(source)

@@ -78,22 +78,20 @@ module RailsAiContext
         app_controllers = controllers.reject { |name, _| framework_controllers.include?(name) }
 
         # Pagination
-        total = app_controllers.size
-        offset = [ offset.to_i, 0 ].max
-        limit = limit.nil? ? 50 : [ limit.to_i, 1 ].max
         all_names = app_controllers.keys.sort
-        paginated_names = all_names.drop(offset).first(limit)
+        page = paginate(all_names, offset: offset, limit: limit, default_limit: 50)
+        paginated_names = page[:items]
 
-        if paginated_names.empty? && total > 0
-          return text_response("No controllers at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
+        if paginated_names.empty? && page[:total] > 0
+          return text_response(page[:hint])
         end
 
-        pagination_hint = offset + limit < total ? "\n_Showing #{paginated_names.size} of #{total}. Use `offset:#{offset + limit}` for more. cache_key: #{cache_key}_" : ""
+        pagination_hint = page[:hint].empty? ? "" : "\n#{page[:hint]}"
 
         # Listing mode
         case detail
         when "summary"
-          lines = [ "# Controllers (#{total})", "" ]
+          lines = [ "# Controllers (#{page[:total]})", "" ]
           paginated_names.each do |name|
             info = app_controllers[name]
             action_count = info[:actions]&.size || 0
@@ -103,7 +101,7 @@ module RailsAiContext
           text_response(lines.join("\n"))
 
         when "standard"
-          lines = [ "# Controllers (#{total})", "" ]
+          lines = [ "# Controllers (#{page[:total]})", "" ]
           paginated_names.each do |name|
             info = app_controllers[name]
             actions = info[:actions]&.join(", ") || "none"
@@ -113,7 +111,7 @@ module RailsAiContext
           text_response(lines.join("\n"))
 
         when "full"
-          lines = [ "# Controllers (#{total})", "" ]
+          lines = [ "# Controllers (#{page[:total]})", "" ]
 
           # Group sibling controllers that share the same parent and identical structure
           paginated_ctrl = app_controllers.select { |k, _| paginated_names.include?(k) }
@@ -166,7 +164,7 @@ module RailsAiContext
 
         else
           list = paginated_names.map { |c| "- #{c}" }.join("\n")
-          text_response("# Controllers (#{total})\n\n#{list}#{pagination_hint}")
+          text_response("# Controllers (#{page[:total]})\n\n#{list}#{pagination_hint}")
         end
       end
 
@@ -261,12 +259,28 @@ module RailsAiContext
 
         if info[:strong_params]&.any?
           lines << "" << "## Strong Params"
-          info[:strong_params].each do |param_method|
-            body = extract_method_with_lines(source_path, param_method)
-            if body
-              lines << "```ruby" << body[:code] << "```"
+          info[:strong_params].each do |sp|
+            if sp.is_a?(Hash)
+              lines << "### #{sp[:name]}"
+              if sp[:unrestricted]
+                lines << "- **WARNING:** `params.permit!` — all parameters allowed"
+              else
+                lines << "- requires: `:#{sp[:requires]}`" if sp[:requires]
+                lines << "- permits: #{sp[:permits].map { |p| "`:#{p}`" }.join(', ')}" if sp[:permits]&.any?
+                sp[:nested]&.each do |key, fields|
+                  lines << "- nested `#{key}:` #{fields.map { |f| "`:#{f}`" }.join(', ')}"
+                end
+                sp[:arrays]&.each { |a| lines << "- array: `#{a}: []`" }
+              end
+              body = extract_method_with_lines(source_path, sp[:name])
+              lines << "```ruby" << body[:code] << "```" if body
             else
-              lines << "- `#{param_method}`"
+              body = extract_method_with_lines(source_path, sp)
+              if body
+                lines << "```ruby" << body[:code] << "```"
+              else
+                lines << "- `#{sp}`"
+              end
             end
           end
         end
@@ -480,7 +494,14 @@ module RailsAiContext
 
         if info[:strong_params]&.any?
           lines << "" << "## Strong Params"
-          lines << info[:strong_params].map { |p| "- `#{p}`" }.join("\n")
+          info[:strong_params].each do |sp|
+            if sp.is_a?(Hash)
+              permits_summary = sp[:permits]&.map { |p| ":#{p}" }&.join(", ") || ""
+              lines << "- `#{sp[:name]}`#{sp[:requires] ? " (requires: :#{sp[:requires]})" : ""}#{permits_summary.empty? ? "" : " permits: #{permits_summary}"}"
+            else
+              lines << "- `#{sp}`"
+            end
+          end
         end
 
         # Rescue handlers

@@ -19,13 +19,21 @@ module RailsAiContext
             type: "string",
             enum: %w[summary standard full],
             description: "Level of detail: summary (names + types), standard (+ props + slots), full (+ sidecar assets + usage)"
+          },
+          offset: {
+            type: "integer",
+            description: "Skip this many components for pagination. Default: 0."
+          },
+          limit: {
+            type: "integer",
+            description: "Max components to return. Default: 50."
           }
         }
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      def self.call(component: nil, detail: "standard", server_context: nil)
+      def self.call(component: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)
         data = cached_context[:components]
 
         unless data.is_a?(Hash) && !data[:error]
@@ -62,14 +70,16 @@ module RailsAiContext
               "- `rails_get_design_system` — UI component patterns extracted from views"
             )
           end
-          text_response(render_catalog(components, data[:summary], detail))
+          text_response(render_catalog(components, data[:summary], detail, offset: offset, limit: limit))
         end
       end
 
       class << self
         private
 
-        def render_catalog(components, summary, detail)
+        def render_catalog(components, summary, detail, offset: 0, limit: nil)
+          page = paginate(components, offset: offset, limit: limit, default_limit: 50)
+
           lines = [ "# Component Catalog", "" ]
 
           if summary
@@ -79,7 +89,7 @@ module RailsAiContext
             lines << ""
           end
 
-          components.each do |comp|
+          page[:items].each do |comp|
             case detail
             when "summary"
               lines << "- **#{comp[:name]}** (#{comp[:type]}) — #{comp[:slots]&.size || 0} slots, #{comp[:props]&.size || 0} props"
@@ -90,6 +100,7 @@ module RailsAiContext
             end
           end
 
+          lines << "" << page[:hint] unless page[:hint].empty?
           lines.join("\n")
         end
 

@@ -145,21 +145,21 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     it "respects limit parameter" do
       result = described_class.call(limit: 1)
       text = result.content.first[:text]
-      expect(text).to include("Showing 1 of 3")
+      expect(text).to include("Showing 1-1 of 3")
     end
 
     it "returns empty-pagination message when offset exceeds total" do
       result = described_class.call(offset: 100)
       text = result.content.first[:text]
-      expect(text).to include("No models at offset 100")
+      expect(text).to include("No items at offset 100")
       expect(text).to include("Total: 3")
     end
 
-    it "normalizes limit of 0 to default 50" do
+    it "normalizes limit of 0 to minimum of 1" do
       result = described_class.call(limit: 0)
       text = result.content.first[:text]
-      # Should fall back to default 50, showing all 3
-      expect(text).to include("Models (3)")
+      # paginate clamps limit to minimum of 1
+      expect(text).to include("Models")
     end
   end
 

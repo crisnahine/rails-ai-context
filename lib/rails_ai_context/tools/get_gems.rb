@@ -14,6 +14,14 @@ module RailsAiContext
             type: "string",
             enum: %w[auth jobs frontend api database files testing deploy all],
             description: "Filter by category. Default: all."
+          },
+          offset: {
+            type: "integer",
+            description: "Skip this many gems for pagination. Default: 0."
+          },
+          limit: {
+            type: "integer",
+            description: "Max gems to return. Default: 50."
           }
         }
       )
@@ -40,19 +48,22 @@ module RailsAiContext
         "paper_trail" => "app/models/ (has_paper_trail)"
       }.freeze
 
-      def self.call(category: "all", server_context: nil)
+      def self.call(category: "all", offset: 0, limit: nil, server_context: nil)
         gems = cached_context[:gems]
         return text_response("Gem introspection not available. Add :gems to introspectors.") unless gems
         return text_response("Gem introspection failed: #{gems[:error]}") if gems[:error]
 
         notable = gems[:notable_gems] || []
         notable = notable.select { |g| g[:category] == category } unless category == "all"
+        sorted = notable.sort_by { |g| [ g[:category], g[:name] ] }
+
+        page = paginate(sorted, offset: offset, limit: limit, default_limit: 50)
 
         lines = [ "# Notable Gems" ]
 
-        if notable.any?
+        if page[:items].any?
           current_cat = nil
-          notable.sort_by { |g| [ g[:category], g[:name] ] }.each do |g|
+          page[:items].each do |g|
             if g[:category] != current_cat
               current_cat = g[:category]
               lines << "" << "## #{current_cat.capitalize}"
@@ -69,6 +80,7 @@ module RailsAiContext
           lines << "_No notable gems found#{" in category '#{category}'" unless category == 'all'}.#{hint}_"
         end
 
+        lines << "" << page[:hint] unless page[:hint].empty?
         text_response(lines.join("\n"))
       end
     end

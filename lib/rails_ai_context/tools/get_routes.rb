@@ -113,109 +113,68 @@ module RailsAiContext
           text_response(lines.join("\n"))
 
         when "standard"
-          limit ||= 150
-          # Separate app vs framework routes (unless user filtered by controller)
+          # Flatten all routes into a tagged array, then paginate
           app_routes = controller ? by_controller : by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
           framework_routes = controller ? {} : by_controller.select { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
 
+          flat_routes = app_routes.sort.flat_map { |ctrl, actions| actions.map { |r| r.merge(_ctrl: ctrl) } }
+          page = paginate(flat_routes, offset: offset, limit: limit, default_limit: 150)
+
           lines = [ "# Routes (#{filtered_total} routes)", "" ]
-          count = 0
+          current_ctrl = nil
 
-          # Group identical sibling route sets (e.g. bonus/*)
-          grouped = app_routes.sort.group_by do |ctrl, actions|
-            ns = ctrl.include?("/") ? ctrl.split("/").first : nil
-            if ns
-              sibling_count = app_routes.count { |k, v| k.start_with?("#{ns}/") && v.size == actions.size && v.map { |r| "#{r[:verb]}:#{r[:action]}" }.sort == actions.map { |r| "#{r[:verb]}:#{r[:action]}" }.sort }
-              sibling_count > 2 ? "#{ns}/*" : ctrl
-            else
-              ctrl
+          page[:items].each do |r|
+            ctrl = r[:_ctrl]
+            if ctrl != current_ctrl
+              current_ctrl = ctrl
+              ctrl_class = "#{ctrl.camelize}Controller"
+              ctrl_data = cached_context.dig(:controllers, :controllers, ctrl_class)
+              ctrl_summary = ""
+              if ctrl_data
+                filters = (ctrl_data[:filters] || []).map { |f| f[:name] }.first(3)
+                formats = ctrl_data[:respond_to_formats]
+                parts = []
+                parts << "filters: #{filters.join(', ')}" if filters.any?
+                parts << "formats: #{formats.join(', ')}" if formats&.any?
+                ctrl_summary = " (#{parts.join(' | ')})" if parts.any?
+              end
+              lines << "## #{ctrl}#{ctrl_summary}"
             end
-          end
 
-          grouped.each do |key, ctrl_groups|
-            if key.end_with?("/*") && ctrl_groups.size > 2
-              # Show one representative with all sibling names
-              ns = key.sub("/*", "")
-              names = ctrl_groups.map { |c, _| c.split("/").last }
-              _repr_ctrl, repr_actions = ctrl_groups.first
-              lines << "## #{ns}/* (#{names.join(', ')})"
-              repr_actions.each do |r|
-                count += 1
-                next if count <= offset
-                break if count > offset + limit
-                # Generalize paths: replace specific resource name with *
-                path = r[:path].sub(%r{/#{ns}/\w+}, "/#{ns}/*")
-                name_part = r[:name] ? " `#{r[:name].sub(/\w+$/, '*')}`" : ""
-                lines << "- `#{r[:verb]}` `#{path}` → #{r[:action]}#{name_part}"
-              end
-              lines << ""
+            params = r[:path].scan(/:(\w+)/).flatten
+            params_part = params.any? ? " [#{params.join(', ')}]" : ""
+            helper_part = if r[:name]
+              args = params.any? ? "(#{params.map { |p| p == 'id' ? '@record' : ":#{p}" }.join(', ')})" : ""
+              " `#{r[:name]}_path#{args}`"
             else
-              ctrl_groups.each do |ctrl, actions|
-                next if count >= offset + limit
-                ctrl_lines = []
-                actions.each do |r|
-                  count += 1
-                  next if count <= offset
-                  break if count > offset + limit
-                  params = r[:path].scan(/:(\w+)/).flatten
-                  params_part = params.any? ? " [#{params.join(', ')}]" : ""
-                  # Code-ready helper: cook_path(@cook) format
-                  helper_part = if r[:name]
-                    args = params.any? ? "(#{params.map { |p| p == 'id' ? '@record' : ":#{p}" }.join(', ')})" : ""
-                    " `#{r[:name]}_path#{args}`"
-                  else
-                    ""
-                  end
-                  ctrl_lines << "- `#{r[:verb]}` `#{r[:path]}` → #{r[:action]}#{helper_part}#{params_part}"
-                end
-                if ctrl_lines.any?
-                  # Inline controller summary so AI doesn't need a separate get_controllers call
-                  ctrl_class = "#{ctrl.camelize}Controller"
-                  ctrl_data = cached_context.dig(:controllers, :controllers, ctrl_class)
-                  ctrl_summary = ""
-                  if ctrl_data
-                    filters = (ctrl_data[:filters] || []).map { |f| f[:name] }.first(3)
-                    formats = ctrl_data[:respond_to_formats]
-                    parts = []
-                    parts << "filters: #{filters.join(', ')}" if filters.any?
-                    parts << "formats: #{formats.join(', ')}" if formats&.any?
-                    ctrl_summary = " (#{parts.join(' | ')})" if parts.any?
-                  end
-                  lines << "## #{ctrl}#{ctrl_summary}"
-                  lines.concat(ctrl_lines)
-                  lines << ""
-                end
-              end
+              ""
             end
+            lines << "- `#{r[:verb]}` `#{r[:path]}` → #{r[:action]}#{helper_part}#{params_part}"
           end
 
           if framework_routes.any?
             total_fw = framework_routes.values.sum(&:size)
             fw_names = framework_routes.keys.map { |k| k.split("/").first }.uniq.join(", ")
-            lines << "_#{fw_names} framework routes: #{total_fw} total (use `controller:\"devise/sessions\"` to see details)_"
+            lines << "" << "_#{fw_names} framework routes: #{total_fw} total (use `controller:\"devise/sessions\"` to see details)_"
           end
 
-          lines << "_Use `detail:\"summary\"` for overview, or `detail:\"full\"` for route names._" if routes[:total_routes] > limit
+          lines << "" << page[:hint] unless page[:hint].empty?
           text_response(lines.join("\n"))
 
         when "full"
-          # Existing full table behavior
-          limit ||= 200
+          flat_routes = by_controller.sort.flat_map { |ctrl, actions| actions.map { |r| r.merge(_ctrl: ctrl) } }
+          page = paginate(flat_routes, offset: offset, limit: limit, default_limit: 200)
+
           lines = [ "# Routes Full Detail (#{filtered_total} routes)", "" ]
           lines << "| Verb | Path | Controller#Action | Name |"
           lines << "|------|------|-------------------|------|"
-          count = 0
-          by_controller.sort.each do |ctrl, actions|
-            actions.each do |r|
-              count += 1
-              next if count <= offset
-              break if count > offset + limit
-              lines << "| #{r[:verb]} | `#{r[:path]}` | #{ctrl}##{r[:action]} | #{r[:name] || '-'} |"
-            end
+          page[:items].each do |r|
+            lines << "| #{r[:verb]} | `#{r[:path]}` | #{r[:_ctrl]}##{r[:action]} | #{r[:name] || '-'} |"
           end
           if routes[:api_namespaces]&.any?
             lines << "" << "## API namespaces: #{routes[:api_namespaces].join(', ')}"
           end
+          lines << "" << page[:hint] unless page[:hint].empty?
           text_response(lines.join("\n"))
         else
           text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")

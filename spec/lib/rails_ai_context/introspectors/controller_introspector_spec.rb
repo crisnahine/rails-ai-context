@@ -37,9 +37,15 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:controllers]["PostsController"][:parent_class]).to eq("ApplicationController")
     end
 
-    it "extracts strong params methods" do
+    it "extracts strong params with permit details" do
       params = result[:controllers]["PostsController"][:strong_params]
-      expect(params).to eq([ "post_params" ])
+      expect(params).to be_an(Array)
+      expect(params.size).to eq(1)
+
+      sp = params.first
+      expect(sp[:name]).to eq("post_params")
+      expect(sp[:requires]).to eq("post")
+      expect(sp[:permits]).to contain_exactly("title", "body", "user_id")
     end
 
     it "extracts respond_to formats from respond_to blocks" do
@@ -162,6 +168,102 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         formats = result[:controllers]["ItemsController"][:respond_to_formats]
         expect(formats).to contain_exactly("html", "json", "xml")
       end
+    end
+  end
+
+  describe "permit list extraction" do
+    let(:introspector) { described_class.new(Rails.application) }
+
+    it "parses simple permit list" do
+      source = <<~RUBY
+        def post_params
+          params.require(:post).permit(:title, :body)
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "post_params")
+      expect(result[:name]).to eq("post_params")
+      expect(result[:requires]).to eq("post")
+      expect(result[:permits]).to contain_exactly("title", "body")
+    end
+
+    it "parses nested permit" do
+      source = <<~RUBY
+        def user_params
+          params.require(:user).permit(:name, address: [:street, :city, :zip])
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "user_params")
+      expect(result[:requires]).to eq("user")
+      expect(result[:permits]).to eq([ "name" ])
+      expect(result[:nested]).to eq({ "address" => %w[street city zip] })
+    end
+
+    it "parses array permit" do
+      source = <<~RUBY
+        def post_params
+          params.require(:post).permit(:title, tag_ids: [])
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "post_params")
+      expect(result[:permits]).to eq([ "title" ])
+      expect(result[:arrays]).to eq([ "tag_ids" ])
+    end
+
+    it "parses multi-line permit call" do
+      source = <<~RUBY
+        def post_params
+          params.require(:post).permit(
+            :title,
+            :body,
+            :published
+          )
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "post_params")
+      expect(result[:permits]).to contain_exactly("title", "body", "published")
+    end
+
+    it "flags params.permit! as unrestricted" do
+      source = <<~RUBY
+        def post_params
+          params.permit!
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "post_params")
+      expect(result[:unrestricted]).to be true
+    end
+
+    it "returns name only when method has no permit call" do
+      source = <<~RUBY
+        def post_params
+          params[:post]
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "post_params")
+      expect(result[:name]).to eq("post_params")
+      expect(result).not_to have_key(:permits)
+    end
+
+    it "handles hash rocket nested syntax" do
+      source = <<~RUBY
+        def user_params
+          params.require(:user).permit(:name, :address => [:street, :city])
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "user_params")
+      expect(result[:nested]).to eq({ "address" => %w[street city] })
+    end
+
+    it "handles combined nested and array permits" do
+      source = <<~RUBY
+        def order_params
+          params.require(:order).permit(:total, item_ids: [], address: [:line1, :line2])
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "order_params")
+      expect(result[:permits]).to eq([ "total" ])
+      expect(result[:arrays]).to eq([ "item_ids" ])
+      expect(result[:nested]).to eq({ "address" => %w[line1 line2] })
     end
   end
 end

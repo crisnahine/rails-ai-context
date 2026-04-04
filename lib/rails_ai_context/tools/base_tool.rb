@@ -100,6 +100,25 @@ module RailsAiContext
           end
         end
 
+        # Standardized pagination: slice items with offset/limit and produce a consistent hint.
+        # Returns { items:, hint:, total:, offset:, limit: }
+        def paginate(items, offset:, limit:, default_limit: 50)
+          offset = [ offset.to_i, 0 ].max
+          limit  = limit.nil? ? default_limit : [ limit.to_i, 1 ].max
+          total  = items.size
+          sliced = items.drop(offset).first(limit)
+
+          hint = if sliced.empty? && total > 0
+            "_No items at offset #{offset}. Total: #{total}._"
+          elsif offset + limit < total
+            "_Showing #{offset + 1}-#{offset + sliced.size} of #{total}. Use offset:#{offset + limit} for next page._"
+          else
+            ""
+          end
+
+          { items: sliced, hint: hint, total: total, offset: offset, limit: limit }
+        end
+
         # Auto-compress: if text exceeds 85% of max, call the fallback lambda for a shorter version
         def auto_compress(full_text, &fallback)
           max = config.max_tool_response_chars

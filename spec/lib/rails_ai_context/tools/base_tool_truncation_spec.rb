@@ -75,6 +75,67 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
   end
 
+  describe ".paginate" do
+    let(:items) { (1..25).to_a }
+
+    it "applies default limit when limit is nil" do
+      result = described_class.paginate(items, offset: 0, limit: nil, default_limit: 10)
+      expect(result[:items]).to eq((1..10).to_a)
+      expect(result[:total]).to eq(25)
+      expect(result[:limit]).to eq(10)
+    end
+
+    it "slices items at the given offset" do
+      result = described_class.paginate(items, offset: 5, limit: 3)
+      expect(result[:items]).to eq([ 6, 7, 8 ])
+    end
+
+    it "includes pagination hint when more items remain" do
+      result = described_class.paginate(items, offset: 0, limit: 5)
+      expect(result[:hint]).to include("Showing 1-5 of 25")
+      expect(result[:hint]).to include("offset:5")
+    end
+
+    it "returns empty hint when all items are shown" do
+      result = described_class.paginate(items, offset: 0, limit: 50)
+      expect(result[:hint]).to eq("")
+    end
+
+    it "handles offset beyond total" do
+      result = described_class.paginate(items, offset: 100, limit: 10)
+      expect(result[:items]).to be_empty
+      expect(result[:hint]).to include("No items at offset 100")
+      expect(result[:hint]).to include("Total: 25")
+    end
+
+    it "respects custom default_limit" do
+      result = described_class.paginate(items, offset: 0, limit: nil, default_limit: 3)
+      expect(result[:items]).to eq([ 1, 2, 3 ])
+      expect(result[:limit]).to eq(3)
+    end
+
+    it "clamps limit to minimum of 1" do
+      result = described_class.paginate(items, offset: 0, limit: 0)
+      expect(result[:limit]).to eq(1)
+      expect(result[:items]).to eq([ 1 ])
+    end
+
+    it "clamps negative offset to 0" do
+      result = described_class.paginate(items, offset: -5, limit: 3)
+      expect(result[:offset]).to eq(0)
+      expect(result[:items]).to eq([ 1, 2, 3 ])
+    end
+
+    it "returns correct structure" do
+      result = described_class.paginate(items, offset: 2, limit: 5)
+      expect(result).to have_key(:items)
+      expect(result).to have_key(:hint)
+      expect(result).to have_key(:total)
+      expect(result).to have_key(:offset)
+      expect(result).to have_key(:limit)
+    end
+  end
+
   describe ".reset_all_caches!" do
     it "delegates to reset_cache! on BaseTool" do
       expect(described_class).to receive(:reset_cache!)

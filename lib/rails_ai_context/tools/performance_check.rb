@@ -75,14 +75,15 @@ module RailsAiContext
         lines << ""
 
         if detail == "summary"
-          lines << "- N+1 risks: #{filter_items(all_sections[:n_plus_one], model).size}"
+          n1_items = filter_items(all_sections[:n_plus_one], model)
+          lines << "- N+1 risks: #{n1_items.size}#{risk_summary_counts(n1_items)}"
           lines << "- Missing counter_cache: #{filter_items(all_sections[:counter_cache], model).size}"
           lines << "- Missing FK indexes: #{filter_items(all_sections[:indexes], model).size}"
           lines << "- Model.all in controllers: #{filter_items(all_sections[:model_all], model).size}"
           lines << "- Eager load candidates: #{filter_items(all_sections[:eager_load], model).size}"
         else
           if category == "all" || category == "n_plus_one"
-            lines.concat(render_section("N+1 Query Risks", data[:n_plus_one_risks], model, detail))
+            lines.concat(render_n_plus_one_section(data[:n_plus_one_risks], model, detail))
           end
           if category == "all" || category == "counter_cache"
             lines.concat(render_section("Missing counter_cache", data[:missing_counter_cache], model, detail))
@@ -127,6 +128,34 @@ module RailsAiContext
           }
         end
 
+        RISK_ORDER = { "high" => 0, "medium" => 1, "low" => 2 }.freeze
+        RISK_BADGES = { "high" => "[HIGH]", "medium" => "[MEDIUM]", "low" => "[low]" }.freeze
+
+        def render_n_plus_one_section(items, model_filter, detail)
+          return [] unless items&.any?
+
+          filtered = filter_items(items, model_filter)
+          return [] if filtered.empty?
+
+          # Sort by risk: high → medium → low
+          sorted = filtered.sort_by { |i| RISK_ORDER[i[:risk].to_s] || 99 }
+
+          lines = [ "## N+1 Query Risks (#{sorted.size})#{risk_summary_counts(sorted)}", "" ]
+
+          sorted.each do |item|
+            badge = RISK_BADGES[item[:risk].to_s] || ""
+            lines << "- #{badge} **#{item[:model] || "Unknown"}**.#{item[:association]}"
+            lines << "  #{item[:suggestion]}" if item[:suggestion]
+            if detail == "full"
+              lines << "  Controller: #{item[:controller]}" if item[:controller]
+              lines << "  Action: #{item[:action]}" if item[:action]
+            end
+            lines << ""
+          end
+
+          lines
+        end
+
         def render_section(title, items, model_filter, detail)
           return [] unless items&.any?
 
@@ -148,6 +177,16 @@ module RailsAiContext
           end
 
           lines
+        end
+
+        def risk_summary_counts(items)
+          return "" unless items&.any? { |i| i[:risk] }
+          counts = items.group_by { |i| i[:risk].to_s }
+          parts = []
+          parts << "#{counts["high"]&.size || 0} high" if counts["high"]
+          parts << "#{counts["medium"]&.size || 0} medium" if counts["medium"]
+          parts << "#{counts["low"]&.size || 0} low" if counts["low"]
+          parts.any? ? " (#{parts.join(", ")})" : ""
         end
       end
     end

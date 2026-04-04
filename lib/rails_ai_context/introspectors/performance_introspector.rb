@@ -98,47 +98,31 @@ module RailsAiContext
         end
       end
 
+      LOOP_METHODS = %w[each map flat_map find_each each_with_object collect select reject
+                        sort_by group_by each_slice each_with_index each_cons].freeze
+      PRELOAD_METHODS = %w[includes eager_load preload].freeze
+      QUERY_METHODS = %w[all where order limit find_each find_by_sql select joins left_joins].freeze
+
       def detect_n_plus_one(model_data)
         risks = []
 
-        # Check controllers for patterns like @model.association without includes
         controllers_dir = File.join(root, "app/controllers")
         return risks unless Dir.exist?(controllers_dir)
 
-        # Pre-scan all view files once to avoid O(n*m*k) glob inside nested loop
         view_contents = preload_view_contents
+        model_lookup = model_data.each_with_object({}) { |m, h| h[m[:name]] = m }
 
         Dir.glob(File.join(controllers_dir, "**/*.rb")).each do |path|
           content = RailsAiContext::SafeFile.read(path)
           next unless content
           relative = path.sub("#{root}/", "")
 
-          model_data.each do |model|
-            model[:has_many].each do |assoc|
-              model_ref = Regexp.escape(model[:name])
-              pattern = /#{model_ref}\.(all|where|order|limit|find_each)\b/
-              next unless content.match?(pattern)
-
-              includes_pattern = /\.includes\(.*:#{Regexp.escape(assoc[:name])}/
-              next if content.match?(includes_pattern)
-
-              # Check pre-loaded views for association access
-              assoc_pattern = /\.#{Regexp.escape(assoc[:name])}\b/
-              next unless view_contents.any? { |vc| vc.match?(assoc_pattern) }
-
-              risks << {
-                model: model[:name],
-                association: assoc[:name],
-                controller: relative,
-                suggestion: "Add .includes(:#{assoc[:name]}) to the query"
-              }
-            end
-          end
+          analyze_controller_n_plus_one(content, relative, model_lookup, view_contents, risks)
         rescue StandardError
           next
         end
 
-        risks.uniq { |r| [ r[:model], r[:association], r[:controller] ] }
+        risks.uniq { |r| [ r[:model], r[:association], r[:controller], r[:action] ] }
       end
 
       def preload_view_contents
@@ -147,6 +131,140 @@ module RailsAiContext
 
         Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim}")).filter_map do |path|
           RailsAiContext::SafeFile.read(path)
+        end
+      end
+
+      # Analyze a single controller file for N+1 risks with risk classification.
+      def analyze_controller_n_plus_one(content, controller_path, model_lookup, view_contents, risks)
+        actions = extract_controller_actions(content)
+
+        actions.each do |action_name, action_body|
+          # Match @ivar = Model.chain where chain contains a query method anywhere
+          # Handles Post.all, Post.includes(:user).all, Post.where(...).order(...), etc.
+          action_body.scan(/@(\w+)\s*=\s*(\w+)\.[^\n]+/) do |ivar, model_name|
+            chain = Regexp.last_match[0]
+            query_re = /\.(#{QUERY_METHODS.map { |m| Regexp.escape(m) }.join("|")})\b/
+            next unless chain.match?(query_re)
+            model = model_lookup[model_name]
+            next unless model
+
+            full_chain = extract_query_chain(action_body, ivar)
+
+            all_assocs = (model[:has_many] || []) + (model[:belongs_to] || [])
+            all_assocs.each do |assoc|
+              assoc_name = assoc[:name]
+              # Skip polymorphic belongs_to — can't preload generically
+              next if assoc[:options]&.match?(/polymorphic/)
+              next unless association_accessed?(ivar, assoc_name, action_body, view_contents)
+
+              risk = classify_n_plus_one_risk(full_chain, action_body, assoc_name)
+
+              risks << {
+                model: model_name,
+                association: assoc_name,
+                controller: controller_path,
+                action: action_name,
+                risk: risk.to_s,
+                suggestion: n_plus_one_suggestion(risk, model_name, assoc_name)
+              }
+            end
+          end
+        end
+      end
+
+      # Extract public action methods from controller source.
+      # Returns Hash { "index" => "body...", "show" => "body..." }
+      def extract_controller_actions(source)
+        actions = {}
+        current_action = nil
+        current_lines = []
+        in_private = false
+
+        source.each_line do |line|
+          if line.match?(/^\s*(private|protected)\s*$/)
+            actions[current_action] = current_lines.join if current_action && !in_private
+            current_action = nil
+            current_lines = []
+            in_private = true
+            next
+          end
+
+          if (m = line.match(/^\s+def\s+(\w+)/))
+            actions[current_action] = current_lines.join if current_action && !in_private
+            current_action = m[1]
+            current_lines = [ line ]
+          elsif current_action
+            current_lines << line
+          end
+        end
+
+        actions[current_action] = current_lines.join if current_action && !in_private
+        actions
+      end
+
+      # Extract the full query chain for an instance variable assignment.
+      # Captures multi-line chains like:
+      #   @posts = Post.where(published: true)
+      #                .includes(:comments)
+      #                .order(:created_at)
+      def extract_query_chain(source, ivar)
+        lines = source.lines
+        result = +""
+        capturing = false
+
+        lines.each do |line|
+          if line.match?(/@#{Regexp.escape(ivar)}\s*=/)
+            capturing = true
+            result << line
+          elsif capturing
+            # Continue capturing chained method calls (lines starting with .)
+            if line.match?(/^\s*\./)
+              result << line
+            else
+              break
+            end
+          end
+        end
+
+        result
+      end
+
+      # Check if an association is likely accessed in iteration context.
+      def association_accessed?(ivar, assoc_name, action_body, view_contents)
+        assoc_re = /\.#{Regexp.escape(assoc_name)}\b/
+
+        # Controller: loop over collection + association access in the loop
+        loop_re = /@#{Regexp.escape(ivar)}\.(#{LOOP_METHODS.join("|")})\b/
+        return true if action_body.match?(loop_re) && action_body.match?(assoc_re)
+
+        # Views: association accessed (render @collection implies iteration)
+        view_contents.any? { |vc| vc.match?(assoc_re) }
+      end
+
+      # Classify risk based on preloading status in the query chain and action body.
+      def classify_n_plus_one_risk(query_chain, action_body, assoc_name)
+        combined = "#{query_chain}\n#{action_body}"
+        preload_re = /\.(#{PRELOAD_METHODS.join("|")})\(/
+        # Match both :assoc_name (symbol) and assoc_name: (hash key for nested includes)
+        specific_re = /\.(#{PRELOAD_METHODS.join("|")})\(.*(:#{Regexp.escape(assoc_name)}\b|#{Regexp.escape(assoc_name)}:)/
+
+        if combined.match?(specific_re)
+          :low
+        elsif combined.match?(preload_re)
+          :medium
+        else
+          :high
+        end
+      end
+
+      def n_plus_one_suggestion(risk, model_name, assoc_name)
+        case risk
+        when :high
+          "Add .includes(:#{assoc_name}) to the #{model_name} query to avoid N+1 queries"
+        when :medium
+          "#{model_name} query has preloading but missing :#{assoc_name} — add it to the includes list"
+        when :low
+          "#{assoc_name} is preloaded — no action needed"
         end
       end
 

@@ -68,7 +68,7 @@ structure to AI assistants via the Model Context Protocol (MCP).
 ## Testing
 
 ```bash
-bundle exec rspec           # Run specs (1582 examples)
+bundle exec rspec           # Run specs (1658 examples)
 bundle exec rubocop         # Lint
 ```
 

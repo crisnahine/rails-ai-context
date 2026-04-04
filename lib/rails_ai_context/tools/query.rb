@@ -24,6 +24,10 @@ module RailsAiContext
             type: "string",
             enum: %w[table csv],
             description: "Output format. table: markdown table (default). csv: comma-separated values."
+          },
+          explain: {
+            type: "boolean",
+            description: "Run EXPLAIN on the query. Returns execution plan analysis instead of data. SELECT only."
           }
         },
         required: [ "sql" ]
@@ -56,7 +60,7 @@ module RailsAiContext
 
       HARD_ROW_CAP = 1000
 
-      def self.call(sql: nil, limit: nil, format: "table", server_context: nil, **_extra)
+      def self.call(sql: nil, limit: nil, format: "table", explain: false, server_context: nil, **_extra)
         set_call_params(sql: sql&.truncate(60))
         # ── Environment guard ───────────────────────────────────────
         unless config.allow_query_in_production || !Rails.env.production?
@@ -69,6 +73,11 @@ module RailsAiContext
         # ── Layer 1: SQL validation ─────────────────────────────────
         valid, error = validate_sql(sql)
         return text_response(error) unless valid
+
+        # ── EXPLAIN mode ────────────────────────────────────────────
+        if explain
+          return execute_explain(sql.strip, config.query_timeout)
+        end
 
         # Resolve row limit
         row_limit = limit ? [ limit.to_i, HARD_ROW_CAP ].min : config.query_row_limit
@@ -213,6 +222,163 @@ module RailsAiContext
           conn.execute("PRAGMA query_only = OFF")
         end
         result
+      end
+
+      # ── EXPLAIN execution ────────────────────────────────────────────
+      private_class_method def self.execute_explain(sql, timeout)
+        cleaned = strip_sql_comments(sql)
+        unless cleaned.match?(/\A\s*(SELECT|WITH)\b/i)
+          return text_response("EXPLAIN only supports SELECT queries.")
+        end
+
+        conn = ActiveRecord::Base.connection
+        adapter = conn.adapter_name.downcase
+
+        explain_sql, parser = case adapter
+        when /postgresql/
+          [ "EXPLAIN (FORMAT JSON, ANALYZE) #{sql}", :parse_pg_explain ]
+        when /mysql/
+          [ "EXPLAIN #{sql}", :parse_mysql_explain ]
+        when /sqlite/
+          [ "EXPLAIN QUERY PLAN #{sql}", :parse_sqlite_explain ]
+        else
+          [ "EXPLAIN #{sql}", :parse_generic_explain ]
+        end
+
+        result = conn.select_all(explain_sql)
+        parsed = send(parser, result)
+
+        lines = [ "# EXPLAIN Analysis", "" ]
+        lines << "**Query:** `#{sql.truncate(120)}`"
+        lines << ""
+
+        # Summary
+        if parsed[:scan_types]&.any?
+          lines << "## Scan Summary"
+          parsed[:scan_types].each do |scan|
+            lines << "- **#{scan[:table] || "?"}**: #{scan[:type]}#{scan[:index] ? " using #{scan[:index]}" : ""}"
+          end
+          lines << ""
+        end
+
+        # Warnings
+        if parsed[:warnings]&.any?
+          lines << "## Warnings"
+          parsed[:warnings].each { |w| lines << "- #{w}" }
+          lines << ""
+        end
+
+        # Raw plan
+        lines << "## Raw Plan"
+        lines << "```"
+        lines << parsed[:raw]
+        lines << "```"
+
+        text_response(lines.join("\n"))
+      rescue ActiveRecord::StatementInvalid => e
+        text_response("EXPLAIN failed: #{clean_error_message(e.message)}")
+      end
+
+      private_class_method def self.parse_sqlite_explain(result)
+        scans = []
+        warnings = []
+        raw_lines = []
+
+        result.rows.each do |row|
+          # SQLite EXPLAIN QUERY PLAN columns: id, parent, notused, detail
+          detail = row.last.to_s
+          raw_lines << detail
+
+          if detail.match?(/SCAN\b/i)
+            table = detail.match(/SCAN\s+(?:TABLE\s+)?(\w+)/i)&.captures&.first
+            scan_type = detail.match?(/USING.*INDEX/i) ? "index scan" : "full table scan"
+            index = detail.match(/USING.*INDEX\s+(\w+)/i)&.captures&.first
+            scans << { table: table, type: scan_type, index: index }
+            warnings << "Full table scan on #{table}" if scan_type == "full table scan" && table
+          elsif detail.match?(/SEARCH\b/i)
+            table = detail.match(/SEARCH\s+(?:TABLE\s+)?(\w+)/i)&.captures&.first
+            index = detail.match(/USING.*INDEX\s+(\w+)/i)&.captures&.first
+            scans << { table: table, type: "index search", index: index }
+          end
+        end
+
+        { scan_types: scans, warnings: warnings, raw: raw_lines.join("\n") }
+      end
+
+      private_class_method def self.parse_pg_explain(result)
+        scans = []
+        warnings = []
+
+        raw = result.rows.map { |r| r.first.to_s }.join("\n")
+
+        # PostgreSQL JSON format returns plan as JSON
+        begin
+          plan_data = JSON.parse(raw) rescue nil
+          if plan_data.is_a?(Array) && plan_data.first.is_a?(Hash)
+            plan = plan_data.first["Plan"]
+            extract_pg_nodes(plan, scans, warnings) if plan
+          end
+        rescue
+          # Fall through to raw output
+        end
+
+        { scan_types: scans, warnings: warnings, raw: raw }
+      end
+
+      private_class_method def self.extract_pg_nodes(node, scans, warnings)
+        return unless node.is_a?(Hash)
+
+        node_type = node["Node Type"].to_s
+        table = node["Relation Name"]
+        index = node["Index Name"]
+        rows = node["Actual Rows"] || node["Plan Rows"]
+
+        if node_type.include?("Seq Scan")
+          scans << { table: table, type: "sequential scan", index: nil }
+          warnings << "Sequential scan on #{table} (#{rows} rows)" if rows.to_i > 1000
+        elsif node_type.include?("Index")
+          scans << { table: table, type: node_type.downcase, index: index }
+        end
+
+        (node["Plans"] || []).each { |child| extract_pg_nodes(child, scans, warnings) }
+      end
+
+      private_class_method def self.parse_mysql_explain(result)
+        scans = []
+        warnings = []
+        raw_lines = []
+
+        result.rows.each do |row|
+          cols = result.columns.zip(row).to_h
+          raw_lines << cols.map { |k, v| "#{k}: #{v}" }.join(", ")
+
+          table = cols["table"]
+          scan_type = cols["type"]
+          key = cols["key"]
+          rows = cols["rows"].to_i
+          extra = cols["Extra"].to_s
+
+          type_label = case scan_type
+          when "ALL" then "full table scan"
+          when "index" then "full index scan"
+          when "range" then "index range scan"
+          when "ref", "eq_ref" then "index lookup"
+          when "const", "system" then "constant lookup"
+          else scan_type.to_s
+          end
+
+          scans << { table: table, type: type_label, index: key }
+          warnings << "Full table scan on #{table} (#{rows} rows)" if scan_type == "ALL" && rows > 1000
+          warnings << "Using filesort on #{table}" if extra.include?("filesort")
+          warnings << "Using temporary table on #{table}" if extra.include?("temporary")
+        end
+
+        { scan_types: scans, warnings: warnings, raw: raw_lines.join("\n") }
+      end
+
+      private_class_method def self.parse_generic_explain(result)
+        raw = result.rows.map { |r| r.join(" | ") }.join("\n")
+        { scan_types: [], warnings: [], raw: raw }
       end
 
       # ── Row limit enforcement (Layer 3) ─────────────────────────────

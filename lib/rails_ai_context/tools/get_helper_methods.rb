@@ -33,13 +33,21 @@ module RailsAiContext
             type: "string",
             enum: %w[summary standard full],
             description: "Detail level. summary: names + method counts. standard: names + method signatures (default). full: method signatures + view cross-references + framework helpers."
+          },
+          offset: {
+            type: "integer",
+            description: "Skip this many helpers for pagination. Default: 0."
+          },
+          limit: {
+            type: "integer",
+            description: "Max helpers to return. Default: 50."
           }
         }
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      def self.call(helper: nil, detail: "standard", server_context: nil)
+      def self.call(helper: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)
         root = rails_app.root.to_s
         helpers_dir = File.join(root, "app", "helpers")
         max_size = RailsAiContext.configuration.max_file_size
@@ -60,7 +68,7 @@ module RailsAiContext
         end
 
         # List all helpers
-        list_helpers(helper_files, helpers_dir, root, max_size, detail)
+        list_helpers(helper_files, helpers_dir, root, max_size, detail, offset: offset, limit: limit)
       end
 
       private_class_method def self.show_helper(name, helper_files, helpers_dir, root, max_size, detail)
@@ -134,7 +142,7 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.list_helpers(helper_files, helpers_dir, root, max_size, detail)
+      private_class_method def self.list_helpers(helper_files, helpers_dir, root, max_size, detail, offset: 0, limit: nil)
         helpers_data = helper_files.filter_map do |file_path|
           relative = file_path.sub("#{root}/", "")
           module_name = File.basename(file_path, ".rb").camelize
@@ -154,17 +162,20 @@ module RailsAiContext
           }
         end
 
+        sorted = helpers_data.sort_by { |h| -h[:method_count] }
+        page = paginate(sorted, offset: offset, limit: limit, default_limit: 50)
+
         lines = [ "# Helpers (#{helpers_data.size})", "" ]
 
         case detail
         when "summary"
-          helpers_data.sort_by { |h| -h[:method_count] }.each do |h|
+          page[:items].each do |h|
             lines << "- **#{h[:name]}** — #{h[:method_count]} methods"
           end
           lines << "" << "_Use `helper:\"Name\"` for method signatures._"
 
         when "standard"
-          helpers_data.sort_by { |h| -h[:method_count] }.each do |h|
+          page[:items].each do |h|
             lines << "## #{h[:name]} (`#{h[:path]}`)"
             if h[:methods].any?
               h[:methods].each { |m| lines << "- `#{m}`" }
@@ -178,7 +189,7 @@ module RailsAiContext
           # Include framework helpers detection
           framework = detect_framework_helpers(root, max_size)
 
-          helpers_data.sort_by { |h| -h[:method_count] }.each do |h|
+          page[:items].each do |h|
             lines << "## #{h[:name]} (`#{h[:path]}`)"
             if h[:methods].any?
               h[:methods].each { |m| lines << "- `#{m}`" }
@@ -202,6 +213,7 @@ module RailsAiContext
           return text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
 
+        lines << "" << page[:hint] unless page[:hint].empty?
         text_response(lines.join("\n"))
       end
 

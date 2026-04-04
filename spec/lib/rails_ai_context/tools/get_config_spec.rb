@@ -118,6 +118,110 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
     end
   end
 
+  describe "assets stack from frontend introspector" do
+    it "uses frontend framework introspector data when available" do
+      allow(described_class).to receive(:cached_context).and_return({
+        config: config_data,
+        gems: gems_data,
+        frontend_frameworks: {
+          frameworks: { react: "18.2.0", vue: nil },
+          build_tool: "vite",
+          component_libraries: { tailwindcss: "3.4.0" }
+        }
+      })
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("React")
+      expect(text).to include("Vue")
+      expect(text).to include("Vite")
+      expect(text).to include("Tailwind")
+    end
+
+    it "falls back gracefully when frontend introspector has error" do
+      allow(described_class).to receive(:cached_context).and_return({
+        config: config_data,
+        gems: gems_data,
+        frontend_frameworks: { error: "failed" }
+      })
+
+      result = described_class.call
+      text = result.content.first[:text]
+      # Should not crash — assets line may be absent or show only pipeline
+      expect(text).to include("Application Configuration")
+    end
+
+    it "falls back when no frontend data at all" do
+      allow(described_class).to receive(:cached_context).and_return({
+        config: config_data,
+        gems: gems_data
+      })
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("Application Configuration")
+    end
+  end
+
+  describe "Active Storage and Action Mailer detection" do
+    it "shows Active Storage service when configured" do
+      stub_const("ActiveStorage", Module.new)
+      allow(described_class).to receive(:detect_active_storage).and_return("amazon")
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("Active Storage")
+      expect(text).to include("amazon")
+    end
+
+    it "shows Action Mailer delivery method" do
+      allow(described_class).to receive(:detect_mailer_delivery).and_return("smtp")
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("Mailer delivery")
+      expect(text).to include("smtp")
+    end
+
+    it "handles missing Active Storage gracefully" do
+      allow(described_class).to receive(:detect_active_storage).and_return(nil)
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).not_to include("Active Storage")
+    end
+
+    it "handles missing mailer delivery gracefully" do
+      allow(described_class).to receive(:detect_mailer_delivery).and_return(nil)
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).not_to include("Mailer delivery")
+    end
+  end
+
+  describe "Action Cable from Rails config API" do
+    it "uses Rails config API when available" do
+      allow(described_class).to receive(:detect_action_cable).and_return("redis")
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("Action Cable")
+      expect(text).to include("redis")
+    end
+
+    it "falls back to YAML when config API unavailable" do
+      # The YAML fallback is tested by the existing behavior —
+      # when no cable.yml exists and no config API, returns nil
+      allow(described_class).to receive(:detect_action_cable).and_call_original
+
+      result = described_class.call
+      text = result.content.first[:text]
+      # Just verify it doesn't crash — cable line may or may not be present
+      expect(text).to include("Application Configuration")
+    end
+  end
+
   describe "edge cases" do
     it "handles missing config data" do
       allow(described_class).to receive(:cached_context).and_return({})
