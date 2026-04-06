@@ -427,10 +427,12 @@ Both paths ask which AI tools you use and whether you want MCP or CLI mode. `.mc
 
 ```ruby
 # config/initializers/rails_ai_context.rb
-RailsAiContext.configure do |config|
-  config.ai_tools   = %i[claude cursor]   # Which AI tools to generate for
-  config.tool_mode   = :mcp               # :mcp (default) or :cli
-  config.preset      = :full              # :full (31 introspectors) or :standard (17)
+if defined?(RailsAiContext)
+  RailsAiContext.configure do |config|
+    config.ai_tools   = %i[claude cursor] # Which AI tools to generate for
+    config.tool_mode  = :mcp              # :mcp (default) or :cli
+    config.preset     = :full             # :full (31 introspectors) or :standard (17)
+  end
 end
 ```
 

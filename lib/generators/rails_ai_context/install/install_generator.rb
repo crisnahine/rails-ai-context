@@ -310,6 +310,7 @@ module RailsAiContext
         end
 
         content += "end\n"
+        content, = ensure_initializer_guard(content)
 
         create_file path, content
         say "Created #{path} with all #{CONFIG_SECTIONS.size} config sections", :green
@@ -332,12 +333,15 @@ module RailsAiContext
           marker = "── #{name}"
           next if existing.include?(marker)
 
-          insert_point = existing.rindex(/^end\b/)
+          insert_point = configure_block_end_index(existing)
           if insert_point
             existing = existing.insert(insert_point, "\n#{section_content}\n")
             changes << "section: #{name}"
           end
         end
+
+        existing, changed = ensure_initializer_guard(existing)
+        changes << "guard" if changed
 
         if changes.any?
           File.write(full_path, existing)
@@ -358,6 +362,40 @@ module RailsAiContext
           # Key not found at all — don't add (it's in a section that will be added)
           [ content, false ]
         end
+      end
+
+      def configure_block_end_index(content)
+        end_positions = []
+        content.to_enum(:scan, /^[ \t]*end\b/).each do
+          end_positions << Regexp.last_match.begin(0)
+        end
+        return nil if end_positions.empty?
+
+        if guarded_initializer?(content) && end_positions.size >= 2
+          end_positions[-2]
+        else
+          end_positions[-1]
+        end
+      end
+
+      def ensure_initializer_guard(content)
+        return [ content, false ] if guarded_initializer?(content)
+
+        header_match = content.match(/\A# frozen_string_literal: true\n(?:\n)?/)
+        header = header_match ? "# frozen_string_literal: true\n\n" : ""
+        body = header_match ? content.delete_prefix(header_match[0]) : content
+        body = "#{body}\n" unless body.end_with?("\n")
+
+        wrapped = "#{header}if defined?(RailsAiContext)\n#{indent_content(body)}end\n"
+        [ wrapped, wrapped != content ]
+      end
+
+      def guarded_initializer?(content)
+        content.match?(/^[ \t]*if defined\?\(RailsAiContext\)$/)
+      end
+
+      def indent_content(content)
+        content.lines.map { |line| line == "\n" ? line : "  #{line}" }.join
       end
 
       def build_ai_tools_line
