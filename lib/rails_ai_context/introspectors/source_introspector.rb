@@ -46,6 +46,9 @@ module RailsAiContext
         dispatcher.dispatch(parse_result.value)
 
         listeners.transform_values(&:results)
+      rescue => e
+        $stderr.puts "[rails-ai-context] SourceIntrospector dispatch failed: #{e.message}" if ENV["DEBUG"]
+        LISTENER_MAP.keys.each_with_object({}) { |key, h| h[key] = [] }
       end
       private_class_method :dispatch
 

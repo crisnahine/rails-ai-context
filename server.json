@@ -12,7 +12,7 @@
     {
       "registryType": "mcpb",
       "identifier": "https://github.com/crisnahine/rails-ai-context/releases/download/v5.2.0/rails-ai-context-mcp.mcpb",
-      "fileSha256": "dd711a0ad6c4de943ae4da94eaf59a6dc9494b9d57f726e24649ed4e2f156990",
+      "fileSha256": "PENDING_RELEASE_BUILD",
       "transport": {
         "type": "stdio"
       }

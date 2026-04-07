@@ -44,6 +44,19 @@ lib/rails_ai_context/
 4. Register in `Server::TOOLS`
 5. Write specs in `spec/lib/rails_ai_context/tools/your_tool_spec.rb`
 
+## Adding a Prism Listener
+
+Listeners extract specific concerns (associations, validations, etc.) from the AST via `Prism::Dispatcher` events.
+
+1. Create `lib/rails_ai_context/introspectors/listeners/your_listener.rb` inheriting from `BaseListener`
+2. Implement `on_call_node_enter(node)` and/or `on_def_node_enter(node)` — only the events your concern needs
+3. Use `confidence_for(node)` from `BaseListener` to tag results `[VERIFIED]` or `[INFERRED]`
+4. Store results in `@results` (accessed via `#results`)
+5. Register the key/class pair in `SourceIntrospector::LISTENER_MAP`
+6. Write specs in `spec/lib/rails_ai_context/introspectors/listeners/your_listener_spec.rb`
+
+See existing listeners in `lib/rails_ai_context/introspectors/listeners/` for reference patterns.
+
 ## Adding a CLI Tool Interface
 
 The `ToolRunner` (`lib/rails_ai_context/cli/tool_runner.rb`) handles CLI execution of all MCP tools. It is tested in `spec/lib/rails_ai_context/cli/tool_runner_spec.rb`. If you add a new MCP tool, it is automatically available via CLI — no extra registration needed. Tool name resolution (`schema` → `get_schema` → `rails_get_schema`) works for all tools.

@@ -114,21 +114,7 @@ module RailsAiContext
 
         output = results.join("\n")
         output += "\n\n#{passed}/#{total} files passed"
-        output += " _(Prism unavailable — using fallback parser, some semantic checks skipped)_" unless prism_available?
         text_response(output)
-      end
-
-      # ── Prism detection ──────────────────────────────────────────────
-
-      private_class_method def self.prism_available?
-        return @prism_available unless @prism_available.nil?
-
-        @prism_available = begin
-          require "prism"
-          true
-        rescue LoadError
-          false
-        end
       end
 
       # ── Ruby validation ──────────────────────────────────────────────
@@ -153,7 +139,7 @@ module RailsAiContext
       end
 
       private_class_method def self.validate_ruby(full_path)
-        prism_available? ? validate_ruby_prism(full_path) : validate_ruby_subprocess(full_path)
+        validate_ruby_prism(full_path)
       end
 
       private_class_method def self.validate_ruby_prism(full_path)
@@ -200,27 +186,14 @@ module RailsAiContext
         erb_src.force_encoding("UTF-8")
         compiled = "# encoding: utf-8\ndef __erb_syntax_check\n#{erb_src}\nend"
 
-        if prism_available?
-          result = Prism.parse(compiled)
-          if result.success?
-            [ true, nil, [] ]
-          else
-            error = result.errors.first(5).map do |e|
-              "line #{[ e.location.start_line - 2, 1 ].max}: #{e.message}"
-            end.join("\n")
-            [ false, error, [] ]
-          end
+        result = Prism.parse(compiled)
+        if result.success?
+          [ true, nil, [] ]
         else
-          check_result, check_status = Open3.capture2e("ruby", "-c", "-", stdin_data: compiled)
-          if check_status.success?
-            [ true, nil, [] ]
-          else
-            error = check_result.lines
-              .reject { |l| l.strip.empty? || l.include?("Syntax OK") }
-              .first(5)
-              .map { |l| l.strip.sub(/-:(\d+):/) { "ruby: -:#{$1.to_i - 2}:" } }
-            [ false, error.any? ? error.join("\n") : "ERB syntax error", [] ]
-          end
+          error = result.errors.first(5).map do |e|
+            "line #{[ e.location.start_line - 2, 1 ].max}: #{e.message}"
+          end.join("\n")
+          [ false, error, [] ]
         end
       rescue => e
         [ false, "ERB check error: #{e.message}", [] ]
@@ -448,8 +421,6 @@ module RailsAiContext
       end
 
       private_class_method def self.parse_and_visit(file, content)
-        return nil unless prism_available?
-
         source = if file.end_with?(".html.erb", ".erb")
           processed = content.gsub("<%=", "<%")
           erb_src = +ERB.new(processed).src
