@@ -121,8 +121,10 @@ CONTEXT_MODE=full rails ai:context:copilot
 
 ```ruby
 # config/initializers/rails_ai_context.rb
-RailsAiContext.configure do |config|
-  config.context_mode = :full  # or :compact (default)
+if defined?(RailsAiContext)
+  RailsAiContext.configure do |config|
+    config.context_mode = :full # or :compact (default)
+  end
 end
 ```
 
@@ -306,10 +308,12 @@ Short names are resolved automatically:
 The `tool_mode` config controls how tool references appear in generated context files:
 
 ```ruby
-RailsAiContext.configure do |config|
-  # :mcp (default) — MCP primary, CLI as fallback
-  # :cli — CLI only, no MCP server needed
-  config.tool_mode = :mcp
+if defined?(RailsAiContext)
+  RailsAiContext.configure do |config|
+    # :mcp (default) — MCP primary, CLI as fallback
+    # :cli — CLI only, no MCP server needed
+    config.tool_mode = :mcp
+  end
 end
 ```
 
@@ -1110,11 +1114,13 @@ rails ai:serve_http
 Or auto-mount inside your Rails app (no separate process):
 
 ```ruby
-RailsAiContext.configure do |config|
-  config.auto_mount = true
-  config.http_path  = "/mcp"   # default
-  config.http_port  = 6029     # default
-  config.http_bind  = "127.0.0.1"  # default (localhost only)
+if defined?(RailsAiContext)
+  RailsAiContext.configure do |config|
+    config.auto_mount = true
+    config.http_path  = "/mcp"       # default
+    config.http_port  = 6029          # default
+    config.http_bind  = "127.0.0.1"  # default (localhost only)
+  end
 end
 ```
 
@@ -1126,116 +1132,118 @@ Both transports are **read-only** — they expose the same 38 tools and never mo
 
 ```ruby
 # config/initializers/rails_ai_context.rb
-RailsAiContext.configure do |config|
-  # --- Introspectors ---
+if defined?(RailsAiContext)
+  RailsAiContext.configure do |config|
+    # --- Introspectors ---
 
-  # Presets: :full (31 introspectors, default) or :standard (17)
-  config.preset = :full
+    # Presets: :full (31 introspectors, default) or :standard (17)
+    config.preset = :full
 
-  # Cherry-pick on top of a preset
-  config.introspectors += %i[views turbo auth api]
+    # Cherry-pick on top of a preset
+    config.introspectors += %i[views turbo auth api]
 
-  # --- Context files ---
+    # --- Context files ---
 
-  # Context mode: :compact (default) or :full
-  config.context_mode = :compact
+    # Context mode: :compact (default) or :full
+    config.context_mode = :compact
 
-  # Max lines for CLAUDE.md in compact mode
-  config.claude_max_lines = 150
+    # Max lines for CLAUDE.md in compact mode
+    config.claude_max_lines = 150
 
-  # Output directory for context files (default: Rails.root)
-  # config.output_dir = "/custom/path"
+    # Output directory for context files (default: Rails.root)
+    # config.output_dir = "/custom/path"
 
-  # --- MCP tools ---
+    # --- MCP tools ---
 
-  # Tool mode: :mcp (MCP primary + CLI fallback) or :cli (CLI only)
-  config.tool_mode = :mcp
+    # Tool mode: :mcp (MCP primary + CLI fallback) or :cli (CLI only)
+    config.tool_mode = :mcp
 
-  # Max response size for tool results (safety net)
-  config.max_tool_response_chars = 200_000
+    # Max response size for tool results (safety net)
+    config.max_tool_response_chars = 200_000
 
-  # Cache TTL for introspection results (seconds)
-  config.cache_ttl = 60
+    # Cache TTL for introspection results (seconds)
+    config.cache_ttl = 60
 
-  # Additional MCP tool classes to register alongside built-in tools
-  # config.custom_tools = [MyApp::Tools::CustomTool]
+    # Additional MCP tool classes to register alongside built-in tools
+    # config.custom_tools = [MyApp::Tools::CustomTool]
 
-  # Exclude specific built-in tools (e.g. if you don't use Brakeman)
-  # config.skip_tools = %w[rails_security_scan]
+    # Exclude specific built-in tools (e.g. if you don't use Brakeman)
+    # config.skip_tools = %w[rails_security_scan]
 
-  # --- Exclusions ---
+    # --- Exclusions ---
 
-  # Models to skip during introspection
-  config.excluded_models += %w[AdminUser InternalAuditLog]
+    # Models to skip during introspection
+    config.excluded_models += %w[AdminUser InternalAuditLog]
 
-  # Paths to exclude from code search
-  config.excluded_paths += %w[vendor/bundle]
+    # Paths to exclude from code search
+    config.excluded_paths += %w[vendor/bundle]
 
-  # Sensitive file patterns blocked from search and read tools
-  # config.sensitive_patterns += %w[config/my_secret.yml]
+    # Sensitive file patterns blocked from search and read tools
+    # config.sensitive_patterns += %w[config/my_secret.yml]
 
-  # Controllers hidden from listings (e.g. Devise internals)
-  # config.excluded_controllers += %w[MyInternalController]
+    # Controllers hidden from listings (e.g. Devise internals)
+    # config.excluded_controllers += %w[MyInternalController]
 
-  # Route prefixes hidden with app_only (e.g. admin frameworks)
-  # config.excluded_route_prefixes += %w[admin/]
+    # Route prefixes hidden with app_only (e.g. admin frameworks)
+    # config.excluded_route_prefixes += %w[admin/]
 
-  # Regex patterns for concerns to hide from model output
-  # config.excluded_concerns += [/MyInternal::/]
+    # Regex patterns for concerns to hide from model output
+    # config.excluded_concerns += [/MyInternal::/]
 
-  # Framework filter names hidden from controller output
-  # config.excluded_filters += %w[my_internal_filter]
+    # Framework filter names hidden from controller output
+    # config.excluded_filters += %w[my_internal_filter]
 
-  # Default middleware hidden from config output
-  # config.excluded_middleware += %w[MyMiddleware]
+    # Default middleware hidden from config output
+    # config.excluded_middleware += %w[MyMiddleware]
 
-  # --- File size limits ---
+    # --- File size limits ---
 
-  # Per-file read limit for tools (default: 5MB)
-  # config.max_file_size = 5_000_000
+    # Per-file read limit for tools (default: 5MB)
+    # config.max_file_size = 5_000_000
 
-  # Test file read limit (default: 1MB)
-  # config.max_test_file_size = 1_000_000
+    # Test file read limit (default: 1MB)
+    # config.max_test_file_size = 1_000_000
 
-  # schema.rb / structure.sql parse limit (default: 10MB)
-  # config.max_schema_file_size = 10_000_000
+    # schema.rb / structure.sql parse limit (default: 10MB)
+    # config.max_schema_file_size = 10_000_000
 
-  # Total aggregated view content for UI patterns (default: 10MB)
-  # config.max_view_total_size = 10_000_000
+    # Total aggregated view content for UI patterns (default: 10MB)
+    # config.max_view_total_size = 10_000_000
 
-  # Per-view file during aggregation (default: 1MB)
-  # config.max_view_file_size = 1_000_000
+    # Per-view file during aggregation (default: 1MB)
+    # config.max_view_file_size = 1_000_000
 
-  # Max search results per call (default: 200)
-  # config.max_search_results = 200
+    # Max search results per call (default: 200)
+    # config.max_search_results = 200
 
-  # Max files per validate call (default: 50)
-  # config.max_validate_files = 50
+    # Max files per validate call (default: 50)
+    # config.max_validate_files = 50
 
-  # --- Search and file discovery ---
+    # --- Search and file discovery ---
 
-  # File extensions for Ruby fallback search
-  # config.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
+    # File extensions for Ruby fallback search
+    # config.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
 
-  # Where to look for concern source files
-  # config.concern_paths = %w[app/models/concerns app/controllers/concerns]
+    # Where to look for concern source files
+    # config.concern_paths = %w[app/models/concerns app/controllers/concerns]
 
-  # --- Live reload ---
+    # --- Live reload ---
 
-  # Auto-invalidate MCP tool caches on file changes
-  # :auto — enable if `listen` gem is available (default)
-  # true  — enable, raise if `listen` is missing
-  # false — disable entirely
-  config.live_reload = :auto
-  config.live_reload_debounce = 1.5  # seconds
+    # Auto-invalidate MCP tool caches on file changes
+    # :auto — enable if `listen` gem is available (default)
+    # true  — enable, raise if `listen` is missing
+    # false — disable entirely
+    config.live_reload = :auto
+    config.live_reload_debounce = 1.5  # seconds
 
-  # --- HTTP MCP endpoint ---
+    # --- HTTP MCP endpoint ---
 
-  # Auto-mount Rack middleware for HTTP MCP
-  config.auto_mount = false
-  config.http_path  = "/mcp"
-  config.http_bind  = "127.0.0.1"
-  config.http_port  = 6029
+    # Auto-mount Rack middleware for HTTP MCP
+    config.auto_mount = false
+    config.http_path  = "/mcp"
+    config.http_bind  = "127.0.0.1"
+    config.http_port  = 6029
+  end
 end
 ```
 
@@ -1291,8 +1299,10 @@ By default, `rails ai:context` generates root files (CLAUDE.md, AGENTS.md, etc.)
 **Skip root files:** If you prefer to maintain root files yourself and only want split rules (`.claude/rules/`, `.cursor/rules/`, `.github/instructions/`):
 
 ```ruby
-RailsAiContext.configure do |config|
-  config.generate_root_files = false
+if defined?(RailsAiContext)
+  RailsAiContext.configure do |config|
+    config.generate_root_files = false
+  end
 end
 ```
 
@@ -1543,14 +1553,16 @@ Live reload is **enabled by default** when the `listen` gem is available. No con
 ### Configuration
 
 ```ruby
-RailsAiContext.configure do |config|
-  # :auto (default) — enable if `listen` gem is available, skip silently otherwise
-  # true  — enable, raise if `listen` gem is missing
-  # false — disable entirely
-  config.live_reload = :auto
+if defined?(RailsAiContext)
+  RailsAiContext.configure do |config|
+    # :auto (default) — enable if `listen` gem is available, skip silently otherwise
+    # true  — enable, raise if `listen` gem is missing
+    # false — disable entirely
+    config.live_reload = :auto
 
-  # Debounce interval in seconds (default: 1.5)
-  config.live_reload_debounce = 1.5
+    # Debounce interval in seconds (default: 1.5)
+    config.live_reload_debounce = 1.5
+  end
 end
 ```
 
