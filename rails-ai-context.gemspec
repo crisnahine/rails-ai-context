@@ -64,6 +64,10 @@ Gem::Specification.new do |spec|
   spec.add_dependency "thor", ">= 1.0", "< 3.0"
   spec.add_dependency "zeitwerk", "~> 2.6"         # Autoloading
 
+  # AST foundation (Phase 1: Ground Truth Engine)
+  spec.add_dependency "prism", ">= 0.28"           # Ruby parser — stdlib in 3.3+, gem for 3.2
+  spec.add_dependency "concurrent-ruby", ">= 1.2"  # Thread-safe AST cache via Concurrent::Map
+
   # Dev dependencies
   spec.add_development_dependency "rspec", "~> 3.13"
   spec.add_development_dependency "rake", "~> 13.0"

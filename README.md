@@ -19,7 +19,7 @@
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green)](https://registry.modelcontextprotocol.io)
 [![Ruby](https://img.shields.io/badge/Ruby-3.2%20%7C%203.3%20%7C%203.4-CC342D)](https://github.com/crisnahine/rails-ai-context)
 [![Rails](https://img.shields.io/badge/Rails-7.1%20%7C%207.2%20%7C%208.0-CC0000)](https://github.com/crisnahine/rails-ai-context)
-[![Tests](https://img.shields.io/badge/Tests-1565%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
+[![Tests](https://img.shields.io/badge/Tests-1668%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -66,7 +66,7 @@ rails-ai-context serve    # start MCP server
 
 </div>
 
-Now your AI doesn't guess — it **asks your app directly.** 38 tools that query your schema, models, routes, controllers, views, and conventions on demand. It gets the right answer the first time.
+Now your AI doesn't guess — it **asks your app directly.** 38 tools that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing — every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
 
 <br>
 
@@ -263,7 +263,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 | Tool | What it does |
 |:-----|:------------|
 | `get_schema` | Columns with indexed/unique/encrypted/default hints |
-| `get_model_details` | Associations, validations, scopes, enums, macros, delegations |
+| `get_model_details` | AST-parsed associations, validations, scopes, enums, macros — each result tagged `[VERIFIED]` or `[INFERRED]` |
 | `get_callbacks` | Callbacks in Rails execution order with source |
 | `get_concern` | Concern methods + source + which models include it |
 
@@ -375,7 +375,7 @@ Enabled by default. Disable with `config.anti_hallucination_rules = false` if yo
                          ▼
 ┌─────────────────────────────────────────────────────────┐
 │  rails-ai-context                                        │
-│  Parses everything. Caches results. Sensible defaults.    │
+│  Prism AST parsing. Cached. Confidence-tagged results.    │
 └────────┬──────────────────┬──────────────┬──────────────┘
          │                  │              │
          ▼                  ▼              ▼
@@ -472,7 +472,7 @@ end
 ## About
 
 Built by a Rails developer with 10+ years of production experience.<br>
-1565 tests. 38 tools. 31 introspectors. Standalone or in-Gemfile.<br>
+1668 tests. 38 tools. 31 introspectors. Standalone or in-Gemfile.<br>
 MIT licensed. [Contributions welcome.](CONTRIBUTING.md)
 
 <br>
