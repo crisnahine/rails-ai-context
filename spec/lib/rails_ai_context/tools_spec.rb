@@ -20,6 +20,15 @@ RSpec.describe "MCP Tool Integration" do
           expect(annotations.read_only_hint).to eq(true)
           expect(annotations.destructive_hint).to eq(false)
         end
+
+        it "has an output_schema defined" do
+          schema = tool_class.instance_variable_get(:@output_schema_value)
+          expect(schema).not_to be_nil
+          expect(schema).to be_a(MCP::Tool::OutputSchema)
+
+          h = tool_class.to_h
+          expect(h).to have_key(:outputSchema)
+        end
       end
     end
   end

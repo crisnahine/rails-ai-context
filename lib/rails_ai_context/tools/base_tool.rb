@@ -8,6 +8,32 @@ module RailsAiContext
     # Inherits from the official MCP::Tool to get schema validation,
     # annotations, and protocol compliance for free.
     class BaseTool < MCP::Tool
+      # Default output schema for all tools. MCP::Tool.inherited resets
+      # @output_schema_value to nil on each subclass, so we re-set it
+      # via our own inherited hook.
+      DEFAULT_OUTPUT_SCHEMA = MCP::Tool::OutputSchema.new(
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: [ "text" ] },
+                text: { type: "string", description: "Tool response as Markdown-formatted text" }
+              },
+              required: [ "type", "text" ]
+            }
+          }
+        },
+        required: [ "content" ]
+      ).freeze
+
+      def self.inherited(subclass)
+        super
+        subclass.instance_variable_set(:@output_schema_value, DEFAULT_OUTPUT_SCHEMA)
+      end
+
       # Shared cache across all tool subclasses, protected by a Mutex
       # for thread safety in multi-threaded servers (e.g., Puma).
       SHARED_CACHE = { mutex: Mutex.new }

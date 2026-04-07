@@ -17,9 +17,10 @@
 [![Downloads](https://img.shields.io/gem/dt/rails-ai-context?color=blue)](https://rubygems.org/gems/rails-ai-context)
 [![CI](https://github.com/crisnahine/rails-ai-context/actions/workflows/ci.yml/badge.svg)](https://github.com/crisnahine/rails-ai-context/actions)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green)](https://registry.modelcontextprotocol.io)
+<br>
 [![Ruby](https://img.shields.io/badge/Ruby-3.2%20%7C%203.3%20%7C%203.4-CC342D)](https://github.com/crisnahine/rails-ai-context)
 [![Rails](https://img.shields.io/badge/Rails-7.1%20%7C%207.2%20%7C%208.0-CC0000)](https://github.com/crisnahine/rails-ai-context)
-[![Tests](https://img.shields.io/badge/Tests-1731%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
+[![Tests](https://img.shields.io/badge/Tests-1813%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -66,7 +67,7 @@ rails-ai-context serve    # start MCP server
 
 </div>
 
-Now your AI doesn't guess — it **asks your app directly.** 38 tools that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing — every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
+Now your AI doesn't guess — it **asks your app directly.** 38 tools and 5 resource templates that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing — every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
 
 <br>
 
@@ -122,13 +123,13 @@ Compare what AI outputs with and without these tools wired in. The difference is
 
 <br>
 
-## Two ways to use it
+## Three ways to use it
 
 <table>
 <tr>
-<td width="50%">
+<td width="33%">
 
-### MCP Server
+### MCP Server (stdio)
 
 AI calls tools directly via the protocol. Auto-discovered through `.mcp.json`.
 
@@ -143,7 +144,21 @@ rails ai:serve
 ```
 
 </td>
-<td width="50%">
+<td width="33%">
+
+### MCP Server (HTTP)
+
+Mount inside your Rails app — inherits routing, auth, and middleware.
+
+```ruby
+# config/routes.rb
+mount RailsAiContext::Engine, at: "/mcp"
+```
+
+Native Rails controller transport. No separate process needed.
+
+</td>
+<td width="33%">
 
 ### CLI
 
@@ -342,6 +357,22 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 <br>
 
+## Live Resources (VFS)
+
+AI clients can also read structured data through **resource templates** — `rails-ai-context://` URIs that introspect fresh on every request. Zero stale data.
+
+| Resource Template | What it returns |
+|:------------------|:---------------|
+| `rails-ai-context://controllers/{name}` | Actions, inherited filters, strong params |
+| `rails-ai-context://controllers/{name}/{action}` | Action source code with applicable filters |
+| `rails-ai-context://views/{path}` | View template content (path traversal protected) |
+| `rails-ai-context://routes/{controller}` | Live route map filtered by controller |
+| `rails://models/{name}` | Per-model details: associations, validations, schema |
+
+Plus 9 static resources (schema, routes, conventions, gems, controllers, config, tests, migrations, engines) that AI clients read directly.
+
+<br>
+
 ## Anti-Hallucination Protocol
 
 Every generated context file ships with **6 rules that force AI verification** before writing code. The protocol targets the exact cognitive failures that produce confident-wrong code: statistical priors overriding observed facts, pattern completion beating verification, stale context lies.
@@ -376,14 +407,15 @@ Enabled by default. Disable with `config.anti_hallucination_rules = false` if yo
 ┌─────────────────────────────────────────────────────────┐
 │  rails-ai-context                                        │
 │  Prism AST parsing. Cached. Confidence-tagged results.    │
+│  VFS: rails-ai-context:// URIs introspected fresh.        │
 └────────┬──────────────────┬──────────────┬──────────────┘
          │                  │              │
          ▼                  ▼              ▼
 ┌──────────────────┐ ┌────────────┐ ┌────────────────────┐
 │  Static Files     │ │  MCP Server │ │  CLI Tools          │
 │  CLAUDE.md        │ │  38 tools   │ │  Same 38 tools      │
-│  .cursor/rules/   │ │  stdio/HTTP │ │  No server needed   │
-│  .github/instr... │ │  .mcp.json  │ │  rails 'ai:tool[X]' │
+│  .cursor/rules/   │ │  5 templates│ │  No server needed   │
+│  .github/instr... │ │  stdio/HTTP │ │  rails 'ai:tool[X]' │
 └──────────────────┘ └────────────┘ └────────────────────┘
 ```
 
@@ -458,6 +490,20 @@ end
 
 <br>
 
+## Observability
+
+Every MCP tool call and resource read fires an `ActiveSupport::Notifications` event. Subscribe with standard Rails patterns:
+
+```ruby
+ActiveSupport::Notifications.subscribe("rails_ai_context.tools.call") do |event|
+  Rails.logger.info "[MCP] #{event.payload[:method]} — #{event.duration}ms"
+end
+```
+
+Events: `rails_ai_context.tools.call`, `rails_ai_context.resources.read`, and more. All 38 tools declare `output_schema` in the MCP protocol, so clients know the response format before calling.
+
+<br>
+
 ## Requirements
 
 - **Ruby** >= 3.2 &nbsp;&nbsp; **Rails** >= 7.1
@@ -472,7 +518,7 @@ end
 ## About
 
 Built by a Rails developer with 10+ years of production experience.<br>
-1731 tests. 38 tools. 31 introspectors. Standalone or in-Gemfile.<br>
+1813 tests. 38 tools. 5 resource templates. 31 introspectors. Standalone or in-Gemfile.<br>
 MIT licensed. [Contributions welcome.](CONTRIBUTING.md)
 
 <br>

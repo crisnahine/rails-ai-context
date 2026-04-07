@@ -1010,6 +1010,17 @@ In addition to tools, the gem registers static MCP resources that AI clients can
 | `rails://engines` | Mounted engines with paths and descriptions (JSON) |
 | `rails://models/{name}` | Per-model details (resource template) |
 
+### Dynamic Resource Templates (VFS)
+
+Live resources introspected fresh on every request — zero stale data:
+
+| Resource Template | Description |
+|-------------------|-------------|
+| `rails-ai-context://controllers/{name}` | Controller details with actions, filters, strong params |
+| `rails-ai-context://controllers/{name}/{action}` | Specific action source code and applicable filters |
+| `rails-ai-context://views/{path}` | View template content (path traversal protected) |
+| `rails-ai-context://routes` | Live route map (optionally filter by controller) |
+
 ---
 
 ## MCP Server Setup
@@ -1125,6 +1136,17 @@ end
 ```
 
 Both transports are **read-only** — they expose the same 38 tools and never modify your app.
+
+### Controller Transport (Alternative)
+
+For tighter Rails integration (authentication, routing, middleware stack), mount the engine instead of using Rack middleware:
+
+```ruby
+# config/routes.rb
+mount RailsAiContext::Engine, at: "/mcp"
+```
+
+This provides a native Rails controller (`RailsAiContext::McpController`) that delegates to the Streamable HTTP transport.
 
 ---
 

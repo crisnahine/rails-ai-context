@@ -57,10 +57,43 @@ RSpec.describe RailsAiContext::Resources do
     end
   end
 
+  describe "CONTROLLER_TEMPLATE" do
+    it "is a frozen MCP::ResourceTemplate" do
+      expect(described_class::CONTROLLER_TEMPLATE).to be_a(MCP::ResourceTemplate)
+      expect(described_class::CONTROLLER_TEMPLATE).to be_frozen
+    end
+
+    it "has a URI template for controllers" do
+      expect(described_class::CONTROLLER_TEMPLATE.uri_template).to eq("rails-ai-context://controllers/{name}")
+    end
+  end
+
+  describe "CONTROLLER_ACTION_TEMPLATE" do
+    it "has a URI template for controller actions" do
+      expect(described_class::CONTROLLER_ACTION_TEMPLATE.uri_template).to eq("rails-ai-context://controllers/{name}/{action}")
+    end
+  end
+
+  describe "VIEW_TEMPLATE" do
+    it "has a URI template for views" do
+      expect(described_class::VIEW_TEMPLATE.uri_template).to eq("rails-ai-context://views/{path}")
+    end
+  end
+
+  describe "ROUTES_TEMPLATE" do
+    it "has a URI template for routes with controller variable" do
+      expect(described_class::ROUTES_TEMPLATE.uri_template).to eq("rails-ai-context://routes/{controller}")
+    end
+  end
+
   describe ".resource_templates" do
-    it "returns an array containing the MODEL_TEMPLATE" do
+    it "returns 5 templates" do
       templates = described_class.resource_templates
-      expect(templates).to eq([ described_class::MODEL_TEMPLATE ])
+      expect(templates.size).to eq(5)
+      expect(templates).to include(described_class::MODEL_TEMPLATE)
+      expect(templates).to include(described_class::CONTROLLER_TEMPLATE)
+      expect(templates).to include(described_class::VIEW_TEMPLATE)
+      expect(templates).to include(described_class::ROUTES_TEMPLATE)
     end
   end
 
@@ -131,6 +164,20 @@ RSpec.describe RailsAiContext::Resources do
 
     it "raises for a completely unknown URI" do
       expect { read_handler.call(uri: "rails://unknown_resource") }.to raise_error(/Unknown resource/)
+    end
+
+    it "delegates rails-ai-context:// URIs to VFS" do
+      vfs_result = [ { uri: "rails-ai-context://models/User", mime_type: "application/json", text: '{"ok":true}' } ]
+      allow(RailsAiContext::VFS).to receive(:resolve).and_return(vfs_result)
+
+      result = read_handler.call(uri: "rails-ai-context://models/User")
+      expect(result).to eq(vfs_result)
+      expect(RailsAiContext::VFS).to have_received(:resolve).with("rails-ai-context://models/User")
+    end
+
+    it "still handles legacy rails:// URIs" do
+      result = read_handler.call(uri: "rails://schema")
+      expect(result.first[:uri]).to eq("rails://schema")
     end
   end
 end

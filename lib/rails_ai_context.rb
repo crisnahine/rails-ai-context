@@ -3,7 +3,7 @@
 require "zeitwerk"
 
 loader = Zeitwerk::Loader.for_gem(warn_on_extra_files: false)
-loader.inflector.inflect("devops_introspector" => "DevOpsIntrospector", "cli" => "CLI")
+loader.inflector.inflect("devops_introspector" => "DevOpsIntrospector", "cli" => "CLI", "vfs" => "VFS")
 loader.ignore("#{__dir__}/generators")
 loader.ignore("#{__dir__}/rails-ai-context.rb")
 loader.setup

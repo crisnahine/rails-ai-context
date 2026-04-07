@@ -70,6 +70,34 @@ module RailsAiContext
       mime_type: "application/json"
     ).freeze
 
+    CONTROLLER_TEMPLATE = MCP::ResourceTemplate.new(
+      uri_template: "rails-ai-context://controllers/{name}",
+      name: "Controller Details",
+      description: "Controller with actions, filters, strong params, and schema hints",
+      mime_type: "application/json"
+    ).freeze
+
+    CONTROLLER_ACTION_TEMPLATE = MCP::ResourceTemplate.new(
+      uri_template: "rails-ai-context://controllers/{name}/{action}",
+      name: "Controller Action",
+      description: "Source code and metadata for a specific controller action",
+      mime_type: "application/json"
+    ).freeze
+
+    VIEW_TEMPLATE = MCP::ResourceTemplate.new(
+      uri_template: "rails-ai-context://views/{path}",
+      name: "View Template",
+      description: "View template content for a specific path relative to app/views",
+      mime_type: "text/html"
+    ).freeze
+
+    ROUTES_TEMPLATE = MCP::ResourceTemplate.new(
+      uri_template: "rails-ai-context://routes/{controller}",
+      name: "Live Routes",
+      description: "Application routes introspected fresh on each request, optionally filtered by controller name",
+      mime_type: "application/json"
+    ).freeze
+
     class << self
       def static_resources
         STATIC_RESOURCES.map do |uri, meta|
@@ -83,7 +111,7 @@ module RailsAiContext
       end
 
       def resource_templates
-        [ MODEL_TEMPLATE ]
+        [ MODEL_TEMPLATE, CONTROLLER_TEMPLATE, CONTROLLER_ACTION_TEMPLATE, VIEW_TEMPLATE, ROUTES_TEMPLATE ]
       end
 
       def register(server)
@@ -100,6 +128,11 @@ module RailsAiContext
 
       def handle_read(params)
         uri = params[:uri]
+
+        # Delegate rails-ai-context:// URIs to the VFS dispatcher
+        return VFS.resolve(uri) if uri.start_with?("#{VFS::SCHEME}://")
+
+        # Legacy rails:// URI handling
         context = RailsAiContext.introspect
 
         if STATIC_RESOURCES.key?(uri)

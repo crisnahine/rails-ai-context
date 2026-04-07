@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.4.0] — 2026-04-08
+
+### Added — Phase 3: Dynamic VFS & Live Resource Architecture (Ground Truth Engine Blueprint #39)
+
+Live Virtual File System replaces static resource handling. Every MCP resource is introspected fresh on every request — zero stale data.
+
+- **VFS URI Dispatcher** (`lib/rails_ai_context/vfs.rb`) — Pattern-matched routing for `rails-ai-context://` URIs. Resolves models, controllers, controller actions, views, and routes. Each call introspects fresh. Path traversal protection for view reads.
+
+- **4 new MCP Resource Templates:**
+  - `rails-ai-context://controllers/{name}` — controller details with actions, filters, strong params
+  - `rails-ai-context://controllers/{name}/{action}` — action source code and applicable filters
+  - `rails-ai-context://views/{path}` — view template content (path traversal protected)
+  - `rails-ai-context://routes/{controller}` — live route map filtered by controller name
+
+- **MCP Controller** (`app/controllers/rails_ai_context/mcp_controller.rb`) — Native Rails controller for Streamable HTTP transport. Alternative to Rack middleware — integrates with Rails routing, authentication, and middleware stack. Mount via `mount RailsAiContext::Engine, at: "/mcp"`.
+
+- **output_schema on all 38 tools** — Default `MCP::Tool::OutputSchema` set via `BaseTool.inherited` hook. Every tool now declares its output format in the MCP protocol. Individual tools can override with custom schemas.
+
+- **Instrumentation** (`lib/rails_ai_context/instrumentation.rb`) — Bridges MCP gem instrumentation to `ActiveSupport::Notifications`. Events: `rails_ai_context.tools.call`, `rails_ai_context.resources.read`, etc. Subscribe with standard Rails notification patterns.
+
+- **Server instructions** — MCP server now includes `instructions:` field describing the ground truth engine capabilities.
+
+- **Enhanced LiveReload** — Full cache sweep on file changes via `reset_all_caches!` (includes AST, tool, and fingerprint caches).
+
+- **82 new specs** covering VFS resolution (models, controllers, actions, views, routes), instrumentation callback, McpController (thread safety, delegation, subclass isolation), resource templates (5 total), output_schema on all 38 tools, and server configuration.
+
 ## [5.3.0] — 2026-04-07
 
 ### Added — Phase 2: Cross-Tool Semantic Hydration (Ground Truth Engine Blueprint #38)

@@ -67,11 +67,17 @@ module RailsAiContext
         end
       end
 
+      mcp_config = MCP::Configuration.new(
+        instrumentation_callback: Instrumentation.callback
+      )
+
       server = MCP::Server.new(
         name: config.server_name,
         version: config.server_version,
+        instructions: "Ground truth engine for Rails apps. Live Prism AST introspection. Zero stale data.",
         tools: active_tools(config) + validated_custom_tools,
-        resource_templates: Resources.resource_templates
+        resource_templates: Resources.resource_templates,
+        configuration: mcp_config
       )
 
       Resources.register(server)

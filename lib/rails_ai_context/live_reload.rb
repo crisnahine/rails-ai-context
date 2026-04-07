@@ -53,7 +53,7 @@ module RailsAiContext
 
       @last_fingerprint = Fingerprinter.compute(app)
 
-      # Invalidate all tool caches
+      # Invalidate all tool caches (includes AstCache.clear)
       Tools::BaseTool.reset_all_caches!
 
       # Build a human-readable change summary

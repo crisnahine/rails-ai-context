@@ -50,6 +50,22 @@ RSpec.describe RailsAiContext::Server do
       expect(mcp_server).to be_a(MCP::Server)
     end
 
+    it "passes instrumentation callback in configuration" do
+      mcp_server = server.build
+      expect(mcp_server.configuration.instrumentation_callback).to be_a(Proc)
+    end
+
+    it "sets instructions on the server" do
+      mcp_server = server.build
+      expect(mcp_server.instructions).to include("Ground truth engine")
+    end
+
+    it "registers 5 resource templates" do
+      mcp_server = server.build
+      templates = mcp_server.instance_variable_get(:@resource_templates)
+      expect(templates.size).to eq(5)
+    end
+
     it "uses configured server name" do
       RailsAiContext.configuration.server_name = "test-server"
       mcp_server = server.build

@@ -31,7 +31,7 @@ RSpec.describe RailsAiContext::LiveReload do
         allow($stderr).to receive(:puts)
       end
 
-      it "invalidates all tool caches" do
+      it "invalidates all tool caches (which includes AstCache.clear)" do
         expect(RailsAiContext::Tools::BaseTool).to receive(:reset_all_caches!)
         live_reload.handle_change(changed_paths)
       end
