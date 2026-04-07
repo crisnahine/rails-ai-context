@@ -125,13 +125,21 @@ jobs:
       - name: Login via GitHub OIDC
         run: mcp-publisher login github-oidc
 
-      - name: Update server.json version and mcpb URL
+      - name: Update server.json version, mcpb URL, and fileSha256
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
           TAG="${GITHUB_REF#refs/tags/}"
           MCPB_URL="https://github.com/crisnahine/rails-ai-context/releases/download/${TAG}/rails-ai-context-mcp.mcpb"
-          jq --arg v "$VERSION" --arg url "$MCPB_URL" \
-            '.version = $v | .packages[0].identifier = $url' \
+
+          # Download mcpb from the release and compute its SHA256
+          gh release download "$TAG" --pattern "rails-ai-context-mcp.mcpb" --dir /tmp
+          SHA256=$(sha256sum /tmp/rails-ai-context-mcp.mcpb | awk '{print $1}')
+          echo "Computed fileSha256: $SHA256"
+
+          jq --arg v "$VERSION" --arg url "$MCPB_URL" --arg sha "$SHA256" \
+            '.version = $v | .packages[0].identifier = $url | .packages[0].fileSha256 = $sha' \
             server.json > server.tmp && mv server.tmp server.json
           echo "Publishing version $VERSION to MCP Registry"
           cat server.json
