@@ -104,8 +104,7 @@ module RailsAiContext
 
           type_arg = args[1]
           type = case type_arg
-                 when Prism::SymbolNode then type_arg.value
-                 else nil
+          when Prism::SymbolNode then type_arg.value
           end
 
           options = extract_keyword_options(node)
