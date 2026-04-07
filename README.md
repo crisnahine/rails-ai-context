@@ -62,7 +62,7 @@ rails-ai-context serve    # start MCP server
 
 <div align="center">
 
-![Install demo](demo.gif)
+![Install demo](demo/demo.gif)
 
 </div>
 
@@ -74,7 +74,7 @@ Now your AI doesn't guess — it **asks your app directly.** 38 tools that query
 
 <div align="center">
 
-![Trace demo](demo-trace.gif)
+![Trace demo](demo/demo-trace.gif)
 
 </div>
 
