@@ -45,7 +45,7 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
-    name: Publish to RubyGems
+    name: Publish to RubyGems + GitHub Release
 
     steps:
       - uses: actions/checkout@v6
@@ -69,13 +69,25 @@ jobs:
           fi
           echo "Version verified: $GEM_VERSION"
 
+      - name: Check if gem version already published
+        id: check_gem
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          if gem search rails-ai-context --exact --versions | grep -q "$VERSION"; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Gem v$VERSION already on RubyGems — skipping push"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Push to RubyGems
+        if: steps.check_gem.outputs.already_published == 'false'
         uses: rubygems/release-gem@v1
 
       - name: Build gem for release asset
         run: gem build rails-ai-context.gemspec
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
