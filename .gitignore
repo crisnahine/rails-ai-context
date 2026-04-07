@@ -11,6 +11,10 @@
 Gemfile.lock
 spec/internal/log/
 
+# AI assistant configuration (local only)
+.claude/
+CLAUDE.md
+
 # MCP Registry auth tokens
 .mcpregistry_*
 
