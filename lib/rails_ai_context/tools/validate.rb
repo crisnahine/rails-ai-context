@@ -3,6 +3,7 @@
 require "open3"
 require "erb"
 require "set"
+require "prism"
 
 module RailsAiContext
   module Tools
