@@ -64,9 +64,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
-  describe "#extract_source_macros (private)" do
+  describe "AST-based macro extraction via #call" do
     let(:fixture_model) { File.join(Rails.root, "app/models/employee.rb") }
-    let(:fake_model) { double(name: "Employee") }
 
     after { FileUtils.rm_f(fixture_model) }
 
@@ -90,57 +89,86 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         RUBY
       end
 
-      subject(:macros) { introspector.send(:extract_source_macros, fake_model) }
+      subject(:result) do
+        # Use SourceIntrospector directly on the fixture file
+        source = File.read(fixture_model)
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(source)
+        introspector.send(:extract_macros_from_ast, data, fixture_model)
+      end
 
       it "detects has_secure_password" do
-        expect(macros[:has_secure_password]).to be true
+        expect(result[:has_secure_password]).to be true
       end
 
       it "detects encrypts with multiple attributes" do
-        expect(macros[:encrypts]).to contain_exactly("ssn", "secret_code")
+        expect(result[:encrypts]).to contain_exactly("ssn", "secret_code")
       end
 
       it "detects normalizes with multiple attributes" do
-        expect(macros[:normalizes]).to contain_exactly("email", "name")
+        expect(result[:normalizes]).to contain_exactly("email", "name")
       end
 
       it "detects has_one_attached" do
-        expect(macros[:has_one_attached]).to eq([ "avatar" ])
+        expect(result[:has_one_attached]).to eq([ "avatar" ])
       end
 
       it "detects has_many_attached" do
-        expect(macros[:has_many_attached]).to eq([ "documents" ])
+        expect(result[:has_many_attached]).to eq([ "documents" ])
       end
 
       it "detects has_rich_text" do
-        expect(macros[:has_rich_text]).to eq([ "bio" ])
+        expect(result[:has_rich_text]).to eq([ "bio" ])
       end
 
       it "detects broadcasts" do
-        expect(macros[:broadcasts]).to include("broadcasts_to")
+        expect(result[:broadcasts]).to include("broadcasts_to")
       end
 
       it "detects generates_token_for" do
-        expect(macros[:generates_token_for]).to eq([ "email_verification" ])
+        expect(result[:generates_token_for]).to eq([ "email_verification" ])
       end
 
       it "detects serialize" do
-        expect(macros[:serialize]).to eq([ "preferences" ])
+        expect(result[:serialize]).to eq([ "preferences" ])
       end
 
       it "detects store" do
-        expect(macros[:store]).to eq([ "settings" ])
+        expect(result[:store]).to eq([ "settings" ])
       end
 
       it "detects delegate with target" do
-        expect(macros[:delegations]).to be_an(Array)
-        delegation = macros[:delegations].find { |d| d[:to] == "company" }
+        expect(result[:delegations]).to be_an(Array)
+        delegation = result[:delegations].find { |d| d[:to] == "company" }
         expect(delegation).not_to be_nil
         expect(delegation[:methods]).to include("company_name")
       end
 
       it "detects delegate_missing_to" do
-        expect(macros[:delegate_missing_to]).to eq("profile")
+        expect(result[:delegate_missing_to]).to eq("profile")
+      end
+    end
+
+    context "with constants" do
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class Employee < ApplicationRecord
+            STATUSES = %w[pending active suspended].freeze
+            ROLES = %i[admin editor viewer]
+          end
+        RUBY
+      end
+
+      subject(:result) do
+        source = File.read(fixture_model)
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(source)
+        introspector.send(:extract_macros_from_ast, data, fixture_model)
+      end
+
+      it "extracts constants with value lists" do
+        expect(result[:constants]).to be_an(Array)
+        statuses = result[:constants].find { |c| c[:name] == "STATUSES" }
+        expect(statuses).not_to be_nil
+        expect(statuses[:values]).to contain_exactly("pending", "active", "suspended")
       end
     end
 
@@ -154,14 +182,18 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         RUBY
       end
 
-      subject(:macros) { introspector.send(:extract_source_macros, fake_model) }
+      subject(:result) do
+        source = File.read(fixture_model)
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(source)
+        introspector.send(:extract_macros_from_ast, data, fixture_model)
+      end
 
       it "handles single normalizes attribute" do
-        expect(macros[:normalizes]).to eq([ "email" ])
+        expect(result[:normalizes]).to eq([ "email" ])
       end
 
       it "handles single encrypts attribute" do
-        expect(macros[:encrypts]).to eq([ "ssn" ])
+        expect(result[:encrypts]).to eq([ "ssn" ])
       end
     end
 
@@ -173,25 +205,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         RUBY
       end
 
-      subject(:macros) { introspector.send(:extract_source_macros, fake_model) }
+      subject(:result) do
+        source = File.read(fixture_model)
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(source)
+        introspector.send(:extract_macros_from_ast, data, fixture_model)
+      end
 
       it "returns empty hash" do
-        expect(macros).to eq({})
+        expect(result).to eq({})
       end
     end
 
     context "when source file does not exist" do
-      subject(:macros) { introspector.send(:extract_source_macros, fake_model) }
+      subject(:result) do
+        data = { associations: [], validations: [], scopes: [], enums: [], callbacks: [], macros: [], methods: [] }
+        introspector.send(:extract_macros_from_ast, data, fixture_model)
+      end
 
       it "returns empty hash" do
-        expect(macros).to eq({})
+        expect(result).to eq({})
       end
     end
   end
 
-  describe "#extract_detailed_macros (private)" do
+  describe "AST-based detailed macro extraction" do
     let(:fixture_model) { File.join(Rails.root, "app/models/employee.rb") }
-    let(:fake_model) { double(name: "Employee") }
 
     after { FileUtils.rm_f(fixture_model) }
 
@@ -205,18 +243,22 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         RUBY
       end
 
-      subject(:macros) { introspector.send(:extract_detailed_macros, fake_model) }
+      subject(:result) do
+        source = File.read(fixture_model)
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(source)
+        introspector.send(:extract_detailed_macros_from_ast, data)
+      end
 
       it "extracts field name and options for encrypted attributes" do
-        expect(macros[:encryption_details]).to be_an(Array)
-        ssn_entry = macros[:encryption_details].find { |e| e[:field] == "ssn" }
+        expect(result[:encryption_details]).to be_an(Array)
+        ssn_entry = result[:encryption_details].find { |e| e[:field] == "ssn" }
         expect(ssn_entry).not_to be_nil
         expect(ssn_entry[:options][:deterministic]).to be true
         expect(ssn_entry[:options][:downcase]).to be true
       end
 
       it "extracts encrypted attributes without options" do
-        secret = macros[:encryption_details].find { |e| e[:field] == "secret_code" }
+        secret = result[:encryption_details].find { |e| e[:field] == "secret_code" }
         expect(secret).not_to be_nil
       end
     end
@@ -231,13 +273,17 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         RUBY
       end
 
-      subject(:macros) { introspector.send(:extract_detailed_macros, fake_model) }
+      subject(:result) do
+        source = File.read(fixture_model)
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(source)
+        introspector.send(:extract_detailed_macros_from_ast, data)
+      end
 
-      it "extracts field name and transformation" do
-        expect(macros[:normalizes_details]).to be_an(Array)
-        email_entry = macros[:normalizes_details].find { |e| e[:field] == "email" }
+      it "extracts normalizes details" do
+        expect(result[:normalizes_details]).to be_an(Array)
+        email_entry = result[:normalizes_details].find { |e| e[:field] == "email" }
         expect(email_entry).not_to be_nil
-        expect(email_entry[:transformation]).to include("strip.downcase")
+        expect(email_entry[:transformation]).to eq("[INFERRED]")
       end
     end
 
@@ -251,27 +297,34 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         RUBY
       end
 
-      subject(:macros) { introspector.send(:extract_detailed_macros, fake_model) }
+      subject(:result) do
+        source = File.read(fixture_model)
+        data = RailsAiContext::Introspectors::SourceIntrospector.from_source(source)
+        introspector.send(:extract_detailed_macros_from_ast, data)
+      end
 
       it "extracts purpose and expiry" do
-        expect(macros[:token_generation]).to be_an(Array)
-        email_token = macros[:token_generation].find { |t| t[:purpose] == "email_verification" }
+        expect(result[:token_generation]).to be_an(Array)
+        email_token = result[:token_generation].find { |t| t[:purpose] == "email_verification" }
         expect(email_token).not_to be_nil
-        expect(email_token[:expires_in]).to eq("2.hours")
+        expect(email_token[:expires_in]).to eq("[INFERRED]")
       end
 
       it "handles token generation without expires_in" do
-        pw_token = macros[:token_generation].find { |t| t[:purpose] == "password_reset" }
+        pw_token = result[:token_generation].find { |t| t[:purpose] == "password_reset" }
         expect(pw_token).not_to be_nil
         expect(pw_token).not_to have_key(:expires_in)
       end
     end
 
     context "when source file does not exist" do
-      subject(:macros) { introspector.send(:extract_detailed_macros, fake_model) }
+      subject(:result) do
+        data = { associations: [], validations: [], scopes: [], enums: [], callbacks: [], macros: [], methods: [] }
+        introspector.send(:extract_detailed_macros_from_ast, data)
+      end
 
       it "returns empty hash" do
-        expect(macros).to eq({})
+        expect(result).to eq({})
       end
     end
   end

@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.2.0] — 2026-04-07
+
+### Added — Phase 1: Prism AST Foundation (Ground Truth Engine Blueprint #36)
+
+System-wide AST migration replacing all regex-based Ruby source parsing with Prism AST visitors. This is the foundation layer for the Ground Truth Engine transformation (#37).
+
+- **AstCache** (`lib/rails_ai_context/ast_cache.rb`) — Thread-safe Prism parse cache backed by `Concurrent::Map`. Keyed by path + SHA256 content hash + mtime. Invalidates automatically on file change. Shared by all AST-based introspectors.
+
+- **VERIFIED/INFERRED confidence contract** — `Confidence.for_node(node)` determines whether an AST node's arguments are all static literals (`[VERIFIED]`) or contain dynamic expressions (`[INFERRED]`). Called from listeners via `BaseListener#confidence_for(node)`. Every source-level introspection result now carries a confidence tag.
+
+- **7 Prism Listener classes** (`lib/rails_ai_context/introspectors/listeners/`):
+  - `AssociationsListener` — `belongs_to`, `has_many`, `has_one`, `has_and_belongs_to_many`
+  - `ValidationsListener` — `validates`, `validates_*_of`, custom `validate :method`
+  - `ScopesListener` — `scope :name, -> { ... }`
+  - `EnumsListener` — Rails 7+ and legacy enum syntax with prefix/suffix options
+  - `CallbacksListener` — all AR callback types including `after_commit` with `on:` resolution
+  - `MacrosListener` — `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` API
+  - `MethodsListener` — `def`/`def self.` with visibility tracking, parameter extraction, `class << self` support
+
+- **SourceIntrospector** (`lib/rails_ai_context/introspectors/source_introspector.rb`) — Single-pass Prism Dispatcher that walks the AST once and feeds events to all 7 listeners simultaneously. Available as `SourceIntrospector.call(path)` for file-based introspection or `SourceIntrospector.from_source(string)` for in-memory parsing.
+
+- **73 new specs** covering AstCache, SourceIntrospector integration, and all 7 listener classes with edge cases (multi-line associations, legacy enums, visibility tracking, parameter extraction).
+
+### Changed
+
+- **ModelIntrospector** rewritten to use AST-based source parsing via `SourceIntrospector` instead of regex. Reflection-based extraction (associations via AR, validations via AR, enums via AR) preserved where it provides runtime accuracy. All `source.scan(...)`, `source.each_line`, and `line.match?(...)` patterns in model introspection eliminated.
+
+- **Install generator** now wraps `config/initializers/rails_ai_context.rb` in `if defined?(RailsAiContext)` so apps with the gem in `group :development` only don't crash in test/production. Re-install upgrades existing unguarded initializers and preserves indentation. All README and GUIDE initializer examples updated to the guarded form (#35).
+
+### Dependencies
+
+- Added `prism >= 0.28` (stdlib in Ruby 3.3+, gem for 3.2)
+- Added `concurrent-ruby >= 1.2` (thread-safe AST cache; already transitive via Rails)
+
+### Why
+
+Regex-based Ruby source parsing was the #3 critical finding in the architecture audit: it breaks on heredocs, multi-line DSL calls, `class << self` blocks, and metaprogrammed constructs. Prism AST provides 100% syntax-level accuracy. The single-pass Dispatcher pattern means parsing a 500-line model file runs all 7 listeners in one tree walk — no repeated I/O or re-parsing. The confidence tagging gives AI agents explicit signal about what data is ground truth vs. what requires runtime verification.
+
 ## [5.1.0] — 2026-04-06
 
 ### Fixed

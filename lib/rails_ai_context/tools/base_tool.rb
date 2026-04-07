@@ -58,6 +58,7 @@ module RailsAiContext
         def reset_all_caches!
           reset_cache!
           session_reset!
+          AstCache.clear
         end
 
         # ── Session context helpers ──────────────────────────────────────

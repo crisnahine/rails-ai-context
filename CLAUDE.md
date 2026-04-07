@@ -7,8 +7,12 @@ structure to AI assistants via the Model Context Protocol (MCP).
 
 - `lib/rails_ai_context.rb` — Main entry point, public API (Zeitwerk autoloaded)
 - `lib/rails_ai_context/configuration.rb` — User-facing config with presets (:standard, :full)
+- `lib/rails_ai_context/confidence.rb` — Shared VERIFIED/INFERRED confidence tagging for AST results
+- `lib/rails_ai_context/ast_cache.rb` — Thread-safe Prism AST cache (Concurrent::Map, SHA256 fingerprint)
 - `lib/rails_ai_context/introspector.rb` — Orchestrates sub-introspectors
 - `lib/rails_ai_context/introspectors/` — 31 introspectors (schema, models, routes, jobs, gems, conventions, stimulus, database_stats, controllers, views, view_templates, turbo, i18n, config, active_storage, action_text, auth, api, tests, rake_tasks, assets, devops, action_mailbox, migrations, seeds, middleware, engines, multi_database, components, performance, frontend_frameworks)
+- `lib/rails_ai_context/introspectors/source_introspector.rb` — Single-pass Prism Dispatcher for AST-based model introspection
+- `lib/rails_ai_context/introspectors/listeners/` — 7 Prism Dispatcher listeners (associations, validations, scopes, enums, callbacks, macros, methods)
 - `lib/rails_ai_context/tools/` — 38 MCP tools using the official mcp SDK
 - `lib/rails_ai_context/cli/` — CLI tool runner (`tool_runner.rb`) — executes MCP tools from rake/Thor
 - `lib/rails_ai_context/serializers/` — Output formatters (claude, claude_rules, opencode, opencode_rules, cursor_rules, copilot, copilot_instructions, markdown, JSON, context_file_serializer, compact_serializer_helper, test_command_detection, tool_guide_helper, stack_overview_helper)
@@ -64,11 +68,12 @@ structure to AI assistants via the Model Context Protocol (MCP).
 35. **Config auto-loading** — `Configuration.auto_load!` checks `configured_via_block?` flag. If initializer ran, YAML is skipped. Corrupted YAML degrades gracefully with a warning.
 36. **Three install paths** — In-Gemfile (`rails generate rails_ai_context:install`), Standalone (`rails-ai-context init`), Zero config (just run `rails-ai-context serve` with defaults). Users can switch between paths freely; `.mcp.json` command is updated on re-init/re-install.
 37. **Anti-Hallucination Protocol** — 6-rule verification section embedded in every generated context file (CLAUDE.md, AGENTS.md, .claude/rules/, .cursor/rules/, .github/instructions/). Targets AI failure modes: statistical priors overriding facts, pattern completion beating verification, stale context. Toggleable via `config.anti_hallucination_rules` (default: true). Rendered by `tools_anti_hallucination_section` in `tool_guide_helper.rb`, placed between intro and detail_guidance in both full and compact render methods.
+38. **Prism AST introspection** — All source-level model parsing (scopes, callbacks, macros, methods) uses Prism AST visitors via SourceIntrospector. Single-pass Dispatcher pattern. Thread-safe AstCache with SHA256 fingerprinting. Every result carries `[VERIFIED]` or `[INFERRED]` confidence tag.
 
 ## Testing
 
 ```bash
-bundle exec rspec           # Run specs (1563 examples)
+bundle exec rspec           # Run specs (1668 examples)
 bundle exec rubocop         # Lint
 ```
 
@@ -83,3 +88,4 @@ Uses combustion gem for testing Rails engine behavior in isolation.
 - All tools prefixed with `rails_` per MCP naming best practices
 - `generate_context` returns `{ written: [], skipped: [] }` hash
 - Zeitwerk autoloads all files — no `require_relative` needed for new classes
+- AST introspection results carry `confidence:` field (`[VERIFIED]` or `[INFERRED]`)

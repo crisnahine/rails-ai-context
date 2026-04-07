@@ -363,7 +363,7 @@ rails_get_schema(detail: "full", format: "json")
 
 ### rails_get_model_details
 
-Returns model details: associations, validations, scopes, enums, callbacks, concerns.
+Returns model details: associations, validations, scopes, enums, callbacks, concerns. Source parsing uses Prism AST — every result carries a `[VERIFIED]` (static literal arguments) or `[INFERRED]` (dynamic expressions) confidence tag.
 
 **Parameters:**
 
@@ -1319,7 +1319,7 @@ Core Rails structure only. Use `config.preset = :standard` for a lighter footpri
 | Introspector | What it discovers |
 |-------------|-------------------|
 | `schema` | Tables, columns, types, indexes, foreign keys, primary keys. Falls back to `db/schema.rb` parsing when no DB connected. |
-| `models` | Associations, validations, scopes, enums, callbacks, concerns, instance methods, class methods. Source-level macros: `has_secure_password`, `encrypts`, `normalizes`, `delegate`, `serialize`, `store`, `generates_token_for`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `broadcasts_to`. |
+| `models` | Associations, validations, scopes, enums, callbacks, concerns, instance methods, class methods. Source-level macros via Prism AST (single-pass, 7 listeners): `has_secure_password`, `encrypts`, `normalizes`, `delegate`, `serialize`, `store`, `generates_token_for`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `broadcasts_to`. Every result tagged `[VERIFIED]` or `[INFERRED]`. |
 | `routes` | All routes with HTTP verbs, paths, controller actions, route names, API namespaces, mounted engines. |
 | `jobs` | ActiveJob classes with queue names. Mailers with action methods. Action Cable channels. |
 | `gems` | 70+ notable gems categorized: auth, background_jobs, admin, monitoring, search, pagination, forms, file_upload, testing, linting, security, api, frontend, utilities. |
