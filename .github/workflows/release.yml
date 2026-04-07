@@ -101,10 +101,10 @@ jobs:
             NOTES="Release ${TAG}. See [CHANGELOG.md](CHANGELOG.md) for details."
           fi
 
-          # Check if release already exists (e.g., manually created)
+          # Check if release already exists (e.g., re-tag or manually created)
           if gh release view "$TAG" &>/dev/null; then
-            echo "Release $TAG already exists, updating body"
-            gh release edit "$TAG" --notes "$NOTES"
+            echo "Release $TAG already exists, updating"
+            gh release edit "$TAG" --notes "$NOTES" --draft=false
           else
             gh release create "$TAG" \
               --title "$TAG" \
