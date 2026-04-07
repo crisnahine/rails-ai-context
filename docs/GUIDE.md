@@ -431,7 +431,7 @@ rails_get_routes(detail: "standard", limit: 20, offset: 100)
 
 ### rails_get_controllers
 
-Returns controller details: actions, filters, strong params, concerns.
+Returns controller details: actions, filters, strong params, concerns. Automatically includes **Schema Hints** for models referenced in the controller (via Prism AST detection).
 
 **Parameters:**
 
@@ -549,7 +549,7 @@ rails_get_stimulus(detail: "full")
 
 ### rails_get_view
 
-Returns view template contents, partials, and Stimulus controller references.
+Returns view template contents, partials, and Stimulus controller references. In standard detail, includes **Schema Hints** for models inferred from instance variables.
 
 **Parameters:**
 
@@ -946,7 +946,7 @@ rails_get_turbo_map(controller: "messages", detail: "full")
 
 ### rails_get_context
 
-Get cross-layer context in a single call — combines schema, model, controller, routes, views, stimulus, and tests. Use when you need full context for implementing a feature or modifying an action.
+Get cross-layer context in a single call — combines schema, model, controller, routes, views, stimulus, and tests. Automatically includes **Schema Hints** for models referenced in controller/view code. Use when you need full context for implementing a feature or modifying an action.
 
 **Parameters:**
 
@@ -1275,6 +1275,8 @@ end
 | `server_version` | String | gem version | MCP server version |
 | `generate_root_files` | Boolean | `true` | Generate root files (CLAUDE.md, etc.) — set `false` for split rules only |
 | `anti_hallucination_rules` | Boolean | `true` | Embed 6-rule Anti-Hallucination Protocol in generated context files — set `false` to skip |
+| `hydration_enabled` | Boolean | `true` | Inject schema hints into controller/view tool responses |
+| `hydration_max_hints` | Integer | `5` | Max schema hints per tool response |
 | `max_file_size` | Integer | `5_000_000` | Per-file read limit for tools (5MB) |
 | `max_test_file_size` | Integer | `1_000_000` | Test file read limit (1MB) |
 | `max_schema_file_size` | Integer | `10_000_000` | schema.rb / structure.sql parse limit (10MB) |

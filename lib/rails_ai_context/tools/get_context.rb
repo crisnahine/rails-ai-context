@@ -109,6 +109,17 @@ module RailsAiContext
         ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates)
         lines << "" << ivar_check if ivar_check
 
+        # Hydrate: inject schema hints for models referenced in controller + view ivars
+        if RailsAiContext.configuration.hydration_enabled
+          all_ivars = (ctrl_ivars | view_ivars).to_a
+          hydration = Hydrators::ViewHydrator.call(all_ivars, context: cached_context)
+          hydration_text = Hydrators::HydrationFormatter.format(hydration)
+          # Skip if get_controllers already injected schema hints
+          unless hydration_text.empty? || lines.any? { |l| l.include?("## Schema Hints") }
+            lines << "" << hydration_text
+          end
+        end
+
         text_response(lines.join("\n"))
       rescue => e
         text_response("Error assembling context: #{e.message}")

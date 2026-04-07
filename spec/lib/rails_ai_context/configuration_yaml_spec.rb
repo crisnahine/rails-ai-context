@@ -219,6 +219,33 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
       end
     end
 
+    it "loads hydration config from YAML" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({
+          "hydration_enabled" => false,
+          "hydration_max_hints" => 10
+        }))
+
+        RailsAiContext::Configuration.load_from_yaml(yaml_path)
+
+        expect(config.hydration_enabled).to eq(false)
+        expect(config.hydration_max_hints).to eq(10)
+      end
+    end
+
+    it "preserves hydration defaults when not specified in YAML" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({ "cache_ttl" => 120 }))
+
+        RailsAiContext::Configuration.load_from_yaml(yaml_path)
+
+        expect(config.hydration_enabled).to eq(true)
+        expect(config.hydration_max_hints).to eq(5)
+      end
+    end
+
     it "converts introspectors array to symbols" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")

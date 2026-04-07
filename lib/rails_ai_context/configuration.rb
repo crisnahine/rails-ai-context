@@ -23,6 +23,7 @@ module RailsAiContext
       max_view_file_size max_search_results max_validate_files
       query_timeout query_row_limit query_redacted_columns allow_query_in_production
       log_lines introspectors
+      hydration_enabled hydration_max_hints
     ].freeze
 
     # Load configuration from a YAML file, applying values to the current config instance.
@@ -211,6 +212,10 @@ module RailsAiContext
     # Log reading settings (rails_read_logs)
     attr_accessor :log_lines                  # Default lines to tail (default: 50)
 
+    # Hydration: inject schema hints into controller/view tool responses
+    attr_accessor :hydration_enabled          # Enable/disable hydration (default: true)
+    attr_accessor :hydration_max_hints        # Max schema hints per response (default: 5)
+
     def initialize
       @server_name         = "rails-ai-context"
       @introspectors       = PRESETS[:full].dup
@@ -267,6 +272,8 @@ module RailsAiContext
       ]
       @allow_query_in_production = false
       @log_lines                = 50
+      @hydration_enabled        = true
+      @hydration_max_hints      = 5
     end
 
     def preset=(name)

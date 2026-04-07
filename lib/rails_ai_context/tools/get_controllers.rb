@@ -285,6 +285,13 @@ module RailsAiContext
           end
         end
 
+        # Hydrate with schema hints for models referenced in this action
+        if RailsAiContext.configuration.hydration_enabled
+          hydration = Hydrators::ControllerHydrator.call(source_path.to_s, context: cached_context)
+          hydration_text = Hydrators::HydrationFormatter.format(hydration)
+          lines << "" << hydration_text unless hydration_text.empty?
+        end
+
         lines.join("\n")
       end
 
@@ -517,6 +524,14 @@ module RailsAiContext
         if info[:turbo_stream_actions]&.any?
           lines << "" << "## Turbo Stream Actions"
           info[:turbo_stream_actions].each { |a| lines << "- `#{a}`" }
+        end
+
+        # Hydrate with schema hints for models referenced in this controller
+        if RailsAiContext.configuration.hydration_enabled
+          source_path = Rails.root.join("app", "controllers", "#{name.underscore}.rb")
+          hydration = Hydrators::ControllerHydrator.call(source_path.to_s, context: cached_context)
+          hydration_text = Hydrators::HydrationFormatter.format(hydration)
+          lines << "" << hydration_text unless hydration_text.empty?
         end
 
         # Cross-reference hints

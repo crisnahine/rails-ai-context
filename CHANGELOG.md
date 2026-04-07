@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.3.0] — 2026-04-07
+
+### Added — Phase 2: Cross-Tool Semantic Hydration (Ground Truth Engine Blueprint #38)
+
+Controller and view tools now automatically inject schema hints for referenced models, eliminating the need for follow-up tool calls.
+
+- **SchemaHint** (`lib/rails_ai_context/schema_hint.rb`) — Immutable `Data.define` value object carrying model ground truth: table, columns, associations, validations, primary key, and `[VERIFIED]`/`[INFERRED]` confidence tag.
+
+- **HydrationResult** — Wraps hints + warnings for downstream formatting.
+
+- **SchemaHintBuilder** (`lib/rails_ai_context/hydrators/schema_hint_builder.rb`) — Resolves model names to `SchemaHint` objects from cached introspection context. Case-insensitive lookup, batch builder with configurable cap.
+
+- **HydrationFormatter** (`lib/rails_ai_context/hydrators/hydration_formatter.rb`) — Renders `SchemaHint` objects as compact Markdown `## Schema Hints` sections with columns (capped at 10), associations, and validations.
+
+- **ControllerHydrator** (`lib/rails_ai_context/hydrators/controller_hydrator.rb`) — Parses controller source via Prism AST to detect model references (constant receivers, `params.require` keys, ivar writes), then builds schema hints.
+
+- **ViewHydrator** (`lib/rails_ai_context/hydrators/view_hydrator.rb`) — Maps instance variable names to models by convention (`@post` → `Post`, `@posts` → `Post`). Filters framework ivars (page, query, flash, etc.).
+
+- **ModelReferenceListener** (`lib/rails_ai_context/introspectors/listeners/model_reference_listener.rb`) — Prism Dispatcher listener for controller-specific model detection. Not registered in `LISTENER_MAP` — used standalone by `ControllerHydrator`.
+
+- **Tool integrations:**
+  - `GetControllers` — schema hints injected into both action source and controller overview
+  - `GetContext` — hydrates combined controller+view ivars in action context mode
+  - `GetView` — hydrates instance variables from view templates in standard detail
+
+- **Configuration:** `hydration_enabled` (default: true), `hydration_max_hints` (default: 5). Both YAML-configurable.
+
+- **65 new specs** covering SchemaHint, HydrationResult, SchemaHintBuilder, HydrationFormatter, ModelReferenceListener, ControllerHydrator, ViewHydrator, tool-level hydration integration (GetControllers, GetView), and configuration (defaults, YAML loading, max_hints propagation).
+
 ## [5.2.0] — 2026-04-07
 
 ### Added — Phase 1: Prism AST Foundation (Ground Truth Engine Blueprint #36)

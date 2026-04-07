@@ -17,6 +17,8 @@ RSpec.describe RailsAiContext::Configuration do
     expect(config.live_reload).to eq(:auto)
     expect(config.live_reload_debounce).to eq(1.5)
     expect(config.anti_hallucination_rules).to eq(true)
+    expect(config.hydration_enabled).to eq(true)
+    expect(config.hydration_max_hints).to eq(5)
   end
 
   it "defaults to full preset" do

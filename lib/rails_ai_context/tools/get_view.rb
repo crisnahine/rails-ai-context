@@ -153,6 +153,20 @@ module RailsAiContext
             end
             lines << ""
           end
+
+          # Hydrate: inject schema hints for models inferred from view instance variables
+          if RailsAiContext.configuration.hydration_enabled && controller
+            all_ivars = []
+            templates.each do |path, _meta|
+              content = read_view_content(path)
+              content.scan(/@(\w+)/).flatten.each { |v| all_ivars << v }
+            end
+            all_ivars.uniq!
+            hydration = Hydrators::ViewHydrator.call(all_ivars, context: cached_context)
+            hydration_text = Hydrators::HydrationFormatter.format(hydration)
+            lines << hydration_text << "" unless hydration_text.empty?
+          end
+
           text_response(lines.join("\n"))
 
         when "full"
