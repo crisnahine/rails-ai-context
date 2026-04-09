@@ -94,6 +94,7 @@ preset: full
 | `excluded_filters` | Array | 3 framework filters | Controller filters to skip |
 | `excluded_middleware` | Array | 24 framework middleware | Middleware to skip in listing |
 | `excluded_paths` | Array | `["node_modules", "tmp", "log", "vendor", ".git", "doc", "docs"]` | Paths excluded from search |
+| `excluded_association_names` | Array | 7 framework associations | Association names to hide from model output |
 | `excluded_concerns` | Array of Regex | Framework concerns | Concerns to skip (supports regex) |
 
 ### File Size Limits

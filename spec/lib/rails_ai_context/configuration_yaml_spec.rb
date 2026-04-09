@@ -96,6 +96,19 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
       end
     end
 
+    it "sets excluded_association_names from YAML" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({
+          "excluded_association_names" => %w[custom_assoc other_assoc]
+        }))
+
+        RailsAiContext::Configuration.load_from_yaml(yaml_path)
+
+        expect(config.excluded_association_names).to eq(%w[custom_assoc other_assoc])
+      end
+    end
+
     it "ignores unknown keys" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")

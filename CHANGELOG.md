@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — Framework Association Noise Filter
+
+- **`excluded_association_names` config option** — filters framework-generated associations (ActiveStorage, ActionText, ActionMailbox, Noticed) from model introspection output. 7 association names excluded by default. Configurable via initializer (`config.excluded_association_names += %w[...]`) or YAML. Closes #57.
+
 ## [5.7.1] — 2026-04-09
 
 ### Changed — SLOP Cleanup

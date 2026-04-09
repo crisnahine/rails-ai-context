@@ -28,6 +28,17 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(assocs).to include(a_hash_including(name: "user", type: "belongs_to"))
     end
 
+    it "filters associations listed in excluded_association_names" do
+      RailsAiContext.configuration.excluded_association_names += %w[comments]
+
+      filtered = introspector.call
+      user_assoc_names = filtered["User"][:associations].map { |a| a[:name] }
+      expect(user_assoc_names).to include("posts")
+      expect(user_assoc_names).not_to include("comments")
+    ensure
+      RailsAiContext.configuration = RailsAiContext::Configuration.new
+    end
+
     it "extracts validations" do
       vals = result["User"][:validations]
       expect(vals).to include(a_hash_including(kind: "presence", attributes: [ "email" ]))

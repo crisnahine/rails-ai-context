@@ -135,7 +135,8 @@ module RailsAiContext
       # ── Reflection-based extraction (unchanged) ─────────────────────
 
       def extract_associations(model)
-        model.reflect_on_all_associations.map do |assoc|
+        excluded = config.excluded_association_names
+        model.reflect_on_all_associations.reject { |assoc| excluded.include?(assoc.name.to_s) }.map do |assoc|
           detail = {
             name: assoc.name.to_s,
             type: assoc.macro.to_s,

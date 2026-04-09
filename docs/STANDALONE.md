@@ -77,6 +77,9 @@ allow_query_in_production: false
 # Filtering
 excluded_models:
   - ApplicationRecord
+excluded_association_names:
+  - active_storage_attachments
+  - active_storage_blobs
 excluded_paths:
   - node_modules
   - tmp

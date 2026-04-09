@@ -17,7 +17,7 @@ module RailsAiContext
       server_name cache_ttl max_tool_response_chars
       live_reload live_reload_debounce auto_mount http_path http_bind http_port
       output_dir skip_tools excluded_models excluded_controllers
-      excluded_route_prefixes excluded_filters excluded_middleware excluded_paths
+      excluded_route_prefixes excluded_filters excluded_middleware excluded_association_names excluded_paths
       sensitive_patterns search_extensions concern_paths frontend_paths
       max_file_size max_test_file_size max_schema_file_size max_view_total_size
       max_view_file_size max_search_results max_validate_files
@@ -189,12 +189,20 @@ module RailsAiContext
       /\A(Devise::Models|Devise::Orm|Bullet::|Turbo::|GlobalID::|Rolify::)/
     ].freeze
 
+    DEFAULT_EXCLUDED_ASSOCIATION_NAMES = %w[
+      active_storage_attachments active_storage_blobs
+      rich_text_body rich_text_content
+      action_mailbox_inbound_emails
+      noticed_events noticed_notifications
+    ].freeze
+
     # Filtering — customize what's hidden from AI output
     attr_accessor :excluded_controllers   # Controller classes hidden from listings (e.g. DeviseController)
     attr_accessor :excluded_route_prefixes # Route controller prefixes hidden with app_only (e.g. action_mailbox/)
     attr_accessor :excluded_concerns      # Regex patterns for concerns to hide (e.g. /Devise::Models/)
     attr_accessor :excluded_filters       # Framework filter names hidden from controller output
     attr_accessor :excluded_middleware     # Default middleware hidden from config output
+    attr_accessor :excluded_association_names # Framework association names hidden from model output
 
     # Search and file discovery
     attr_accessor :search_extensions      # File extensions for Ruby fallback search (default: rb,js,erb,yml,yaml,json)
@@ -255,6 +263,7 @@ module RailsAiContext
       @excluded_concerns        = DEFAULT_EXCLUDED_CONCERNS.dup
       @excluded_filters         = DEFAULT_EXCLUDED_FILTERS.dup
       @excluded_middleware      = DEFAULT_EXCLUDED_MIDDLEWARE.dup
+      @excluded_association_names = DEFAULT_EXCLUDED_ASSOCIATION_NAMES.dup
       @custom_tools             = []
       @skip_tools               = []
       @ai_tools                 = nil

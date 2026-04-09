@@ -30,6 +30,22 @@ RSpec.describe RailsAiContext::Configuration do
     expect(config.excluded_models).to include("ActiveStorage::Blob")
   end
 
+  it "excludes framework association names by default" do
+    expect(config.excluded_association_names).to include("active_storage_attachments")
+    expect(config.excluded_association_names).to include("active_storage_blobs")
+    expect(config.excluded_association_names).to include("rich_text_body")
+    expect(config.excluded_association_names).to include("rich_text_content")
+    expect(config.excluded_association_names).to include("action_mailbox_inbound_emails")
+    expect(config.excluded_association_names).to include("noticed_events")
+    expect(config.excluded_association_names).to include("noticed_notifications")
+  end
+
+  it "allows adding custom excluded association names" do
+    config.excluded_association_names += %w[custom_assoc]
+    expect(config.excluded_association_names).to include("custom_assoc")
+    expect(config.excluded_association_names).to include("active_storage_attachments")
+  end
+
   it "is configurable" do
     config.server_name = "my-app"
     config.http_port = 8080

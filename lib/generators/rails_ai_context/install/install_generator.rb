@@ -203,6 +203,10 @@ module RailsAiContext
             # Models to exclude from introspection
             # config.excluded_models += %w[AdminUser InternalThing]
 
+            # Framework association names hidden from model output
+            # (ActiveStorage, ActionText, ActionMailbox, Noticed associations are excluded by default)
+            # config.excluded_association_names += %w[my_custom_framework_assoc]
+
             # Controllers to exclude from listings
             # config.excluded_controllers += %w[Admin::BaseController]
 

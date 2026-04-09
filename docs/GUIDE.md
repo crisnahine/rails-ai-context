@@ -1243,6 +1243,9 @@ if defined?(RailsAiContext)
     # Route prefixes hidden with app_only (e.g. admin frameworks)
     # config.excluded_route_prefixes += %w[admin/]
 
+    # Framework association names hidden from model output (ActiveStorage, ActionText, etc.)
+    # config.excluded_association_names += %w[my_custom_framework_assoc]
+
     # Regex patterns for concerns to hide from model output
     # config.excluded_concerns += [/MyInternal::/]
 
@@ -1342,6 +1345,7 @@ end
 | `max_validate_files` | Integer | `50` | Max files per validate call |
 | `excluded_controllers` | Array | `DeviseController`, etc. | Controller classes hidden from listings |
 | `excluded_route_prefixes` | Array | `action_mailbox/`, `active_storage/`, etc. | Route controller prefixes hidden with `app_only` |
+| `excluded_association_names` | Array | 7 framework associations | Framework association names hidden from model output |
 | `excluded_concerns` | Array | framework regex patterns | Regex patterns for concerns to hide from model output |
 | `excluded_filters` | Array | `verify_authenticity_token`, etc. | Framework filter names hidden from controller output |
 | `excluded_middleware` | Array | standard Rails middleware | Default middleware hidden from config output |
