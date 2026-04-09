@@ -1,0 +1,15 @@
+title: rails-ai-context
+description: 38 MCP tools that give AI agents live access to your Rails schema, models, routes & conventions.
+theme: jekyll-theme-minimal
+plugins:
+  - jekyll-relative-links
+
+relative_links:
+  enabled: true
+  collections: true
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default

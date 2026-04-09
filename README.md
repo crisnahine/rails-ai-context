@@ -10,7 +10,7 @@
 <a href="https://github.com/features/copilot"><img src="https://img.shields.io/badge/GitHub_Copilot-000000?style=for-the-badge&logo=githubcopilot&logoColor=white" alt="GitHub Copilot"></a>
 <a href="https://opencode.ai"><img src="https://img.shields.io/badge/OpenCode-4285F4?style=for-the-badge&logoColor=white" alt="OpenCode"></a>
 <a href="https://codex.openai.com"><img src="https://img.shields.io/badge/Codex_CLI-412991?style=for-the-badge&logo=openai&logoColor=white" alt="Codex CLI"></a>
-<a href="#-cli--works-everywhere"><img src="https://img.shields.io/badge/Any_Terminal-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white" alt="Any Terminal"></a>
+<a href="docs/CLI.md"><img src="https://img.shields.io/badge/Any_Terminal-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white" alt="Any Terminal"></a>
 
 
 
@@ -187,20 +187,18 @@ rails 'ai:tool[analyze_feature]' feature=billing
 <br>
 
 ```bash
-# Step 1: Check what exists
 rails 'ai:tool[schema]' table=users
-# → 20 columns, types, indexes, encrypted hints, defaults
-
-# Step 2: Understand the model
-rails 'ai:tool[model_details]' model=User
-# → associations, validations, scopes, enums, callbacks, Devise modules
-
-# Step 3: See the full feature
-rails 'ai:tool[analyze_feature]' feature=subscription
-# → models + controllers + routes + services + jobs + views + tests in one shot
+```
+```
+## Table: users
+| Column              | Type    | Null | Default |
+|---------------------|---------|------|---------|
+| email               | string  | NO   | [unique] |
+| subscription_status | string  | yes  | "free"   |
+| created_at          | datetime| NO   |          |
 ```
 
-AI writes a correct migration, model change, and controller update on the **first attempt**.
+AI sees `subscription_status` already exists. Checks the model, then generates a correct migration — **first attempt**.
 
 </details>
 
@@ -210,18 +208,17 @@ AI writes a correct migration, model change, and controller update on the **firs
 <br>
 
 ```bash
-# Trace what happens
 rails 'ai:tool[controllers]' controller=CooksController action=create
-# → source code + inherited filters + strong params + render map + side effects
-
-# Check the routes
-rails 'ai:tool[routes]' controller=cooks
-# → code-ready helpers (cook_path(@record)) + required params
-
-# Validate after fixing
-rails 'ai:tool[validate]' files=app/controllers/cooks_controller.rb level=rails
-# → syntax + semantics + Brakeman security scan
 ```
+```
+# CooksController#create
+
+Filters: before_action :authenticate_user!, before_action :set_cook (only: show, edit)
+Strong params: cook_params → name, specialty, bio
+Renders: redirect_to @cook | render :new
+```
+
+AI sees the inherited `authenticate_user!` filter, the actual strong params, and the render paths. No guessing.
 
 </details>
 
@@ -252,7 +249,7 @@ rails 'ai:tool[stimulus]' controller=chart
 
 Every tool is **read-only** and returns data verified against your actual app — not guesses, not training data.
 
-<details>
+<details open>
 <summary><strong>Search & Trace</strong></summary>
 
 | Tool | What it does |
@@ -262,7 +259,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 </details>
 
-<details>
+<details open>
 <summary><strong>Understand</strong></summary>
 
 | Tool | What it does |
@@ -273,7 +270,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 </details>
 
-<details>
+<details open>
 <summary><strong>Schema & Models</strong></summary>
 
 | Tool | What it does |
@@ -285,7 +282,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 </details>
 
-<details>
+<details open>
 <summary><strong>Controllers & Routes</strong></summary>
 
 | Tool | What it does |
@@ -295,7 +292,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 </details>
 
-<details>
+<details open>
 <summary><strong>Views & Frontend</strong></summary>
 
 | Tool | What it does |
@@ -308,7 +305,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 </details>
 
-<details>
+<details open>
 <summary><strong>Testing & Quality</strong></summary>
 
 | Tool | What it does |
@@ -321,7 +318,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 </details>
 
-<details>
+<details open>
 <summary><strong>App Config & Services</strong></summary>
 
 | Tool | What it does |
@@ -337,7 +334,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 </details>
 
-<details>
+<details open>
 <summary><strong>Data & Debugging</strong></summary>
 
 | Tool | What it does |
@@ -354,7 +351,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 </details>
 
-> **[Full parameter docs →](docs/GUIDE.md)**
+> **[All 38 tools with parameters →](docs/TOOLS.md)** &nbsp;|&nbsp; **[Real-world recipes →](docs/RECIPES.md)**
 
 <br>
 
@@ -398,26 +395,21 @@ Enabled by default. Disable with `config.anti_hallucination_rules = false` if yo
 
 ## How it works
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Your Rails App                                          │
-│  models + schema + routes + controllers + views + jobs   │
-└────────────────────────┬────────────────────────────────┘
-                         │ introspects (31 introspectors)
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│  rails-ai-context                                        │
-│  Prism AST parsing. Cached. Confidence-tagged results.    │
-│  VFS: rails-ai-context:// URIs introspected fresh.        │
-└────────┬──────────────────┬──────────────┬──────────────┘
-         │                  │              │
-         ▼                  ▼              ▼
-┌──────────────────┐ ┌────────────┐ ┌────────────────────┐
-│  Static Files     │ │  MCP Server │ │  CLI Tools          │
-│  CLAUDE.md        │ │  38 tools   │ │  Same 38 tools      │
-│  .cursor/rules/   │ │  5 templates│ │  No server needed   │
-│  .github/instr... │ │  stdio/HTTP │ │  rails 'ai:tool[X]' │
-└──────────────────┘ └────────────┘ └────────────────────┘
+```mermaid
+graph TD
+    A["Your Rails App\nmodels + schema + routes + controllers + views + jobs"] -->|"31 introspectors"| B
+
+    B["rails-ai-context\nPrism AST parsing · Cached · Confidence-tagged\nVFS: rails-ai-context:// URIs introspected fresh"]
+
+    B --> C["MCP Server\nstdio / HTTP\n38 tools · 5 templates"]
+    B --> D["CLI Tools\nRake / Thor\nSame 38 tools"]
+    B --> E["Static Files\nCLAUDE.md · .cursor/rules/\n.github/instructions/"]
+
+    style A fill:#4a9eff,stroke:#2d7ad4,color:#fff
+    style B fill:#2d2d2d,stroke:#555,color:#fff
+    style C fill:#0984e3,stroke:#0770c2,color:#fff
+    style D fill:#00cec9,stroke:#00b5b0,color:#fff
+    style E fill:#a29bfe,stroke:#8c83f0,color:#fff
 ```
 
 <br>
@@ -456,6 +448,58 @@ Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, Open
 
 <br>
 
+## Documentation
+
+| | |
+|:------|:------------|
+| **[Quickstart](docs/QUICKSTART.md)** | 5-minute getting started |
+| **[Tools Reference](docs/TOOLS.md)** | All 38 tools with every parameter |
+| **[Recipes](docs/RECIPES.md)** | Real-world workflows and examples |
+| **[Custom Tools](docs/CUSTOM_TOOLS.md)** | Build and test your own MCP tools |
+| **[Configuration](docs/CONFIGURATION.md)** | 40+ config options with defaults |
+| **[AI Tool Setup](docs/SETUP.md)** | Claude, Cursor, Copilot, OpenCode, Codex |
+| **[Architecture](docs/ARCHITECTURE.md)** | System design and internals |
+| **[Introspectors](docs/INTROSPECTORS.md)** | All 31 introspectors and AST engine |
+| **[Security](docs/SECURITY.md)** | 4-layer SQL safety and file blocking |
+| **[CLI Reference](docs/CLI.md)** | Commands and argument syntax |
+| **[Standalone](docs/STANDALONE.md)** | Use without Gemfile entry |
+| **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and fixes |
+| **[FAQ](docs/FAQ.md)** | Frequently asked questions |
+
+<br>
+
+## Build your own tools
+
+Register custom MCP tools alongside the 38 built-in ones:
+
+```ruby
+# app/mcp_tools/rails_get_business_metrics.rb
+class RailsGetBusinessMetrics < MCP::Tool
+  tool_name "rails_get_business_metrics"
+  description "Key business metrics for this app"
+
+  def call(period: "week")
+    MCP::Tool::Response.new([{ type: "text", text: "Users this #{period}: #{User.recent.count}" }])
+  end
+end
+
+# config/initializers/rails_ai_context.rb
+config.custom_tools = [RailsGetBusinessMetrics]
+```
+
+Test with the built-in `TestHelper` (works with RSpec and Minitest):
+
+```ruby
+include RailsAiContext::TestHelper
+
+response = execute_tool("business_metrics", period: "month")
+assert_tool_response_includes(response, "Users")
+```
+
+> **[Custom Tools Guide →](docs/CUSTOM_TOOLS.md)**
+
+<br>
+
 ## Configuration
 
 ```ruby
@@ -469,39 +513,19 @@ if defined?(RailsAiContext)
 end
 ```
 
-<details>
-<summary><strong>All configuration options</strong></summary>
-
-<br>
-
-| Option | Default | Description |
-|:-------|:--------|:------------|
-| `preset` | `:full` | `:full` (31 introspectors) or `:standard` (17) |
-| `context_mode` | `:compact` | `:compact` (150 lines) or `:full` |
-| `generate_root_files` | `true` | Set `false` for split rules only |
-| `anti_hallucination_rules` | `true` | Embed 6-rule verification protocol in generated context files |
-| `cache_ttl` | `60` | Cache TTL in seconds |
-| `max_tool_response_chars` | `200_000` | Safety cap for tool responses |
-| `live_reload` | `:auto` | `:auto`, `true`, or `false` |
-| `custom_tools` | `[]` | Additional MCP tool classes |
-| `skip_tools` | `[]` | Built-in tools to exclude |
-| `excluded_models` | `[]` | Models to skip during introspection |
-
-</details>
+> **[All 40+ configuration options →](docs/CONFIGURATION.md)**
 
 <br>
 
 ## Observability
 
-Every MCP tool call and resource read fires an `ActiveSupport::Notifications` event. Subscribe with standard Rails patterns:
+Every MCP tool call fires an `ActiveSupport::Notifications` event:
 
 ```ruby
 ActiveSupport::Notifications.subscribe("rails_ai_context.tools.call") do |event|
   Rails.logger.info "[MCP] #{event.payload[:method]} — #{event.duration}ms"
 end
 ```
-
-Events: `rails_ai_context.tools.call`, `rails_ai_context.resources.read`, and more. All 38 tools declare `output_schema` in the MCP protocol, so clients know the response format before calling.
 
 <br>
 

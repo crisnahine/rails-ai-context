@@ -1,13 +1,35 @@
+<div align="center">
+
 # rails-ai-context — Complete Guide
 
-> Full documentation for [rails-ai-context](https://github.com/crisnahine/rails-ai-context).
-> For a quick overview, see the [README](../README.md).
->
-> **Why this gem exists:** AI coding assistants guess your Rails app. They invent columns,
-> use wrong association names, miss inherited filters, and scaffold tests that don't match
-> your patterns. This gem turns your running app into the source of truth — so agents query
-> real schema, real associations, and real conventions on demand, and write correct code
-> on the first try.
+**The all-in-one reference. Everything in one file.**
+
+[Quickstart](QUICKSTART.md) · [Tools](TOOLS.md) · [Recipes](RECIPES.md) · [FAQ](FAQ.md)
+
+</div>
+
+---
+
+> [!NOTE]
+> This is the comprehensive single-file reference. For focused guides, see the docs below. For a quick overview, see the [README](../README.md).
+
+## Focused guides
+
+| Guide | Description |
+|:------|:------------|
+| [Quickstart](QUICKSTART.md) | Get running in 5 minutes |
+| [Tools Reference](TOOLS.md) | All 38 MCP tools with parameters |
+| [Recipes](RECIPES.md) | Real-world workflows and examples |
+| [Custom Tools](CUSTOM_TOOLS.md) | Build your own MCP tools |
+| [Configuration](CONFIGURATION.md) | Every config option |
+| [AI Tool Setup](SETUP.md) | Per-editor setup |
+| [Architecture](ARCHITECTURE.md) | System design and internals |
+| [Introspectors](INTROSPECTORS.md) | All 31 introspectors |
+| [Security](SECURITY.md) | Security model and SQL safety |
+| [CLI Reference](CLI.md) | All commands and argument syntax |
+| [Standalone Mode](STANDALONE.md) | Use without Gemfile |
+| [Troubleshooting](TROUBLESHOOTING.md) | Common issues and fixes |
+| [FAQ](FAQ.md) | Frequently asked questions |
 
 ---
 
