@@ -471,10 +471,6 @@ module RailsAiContext
         nil
       end
 
-      def self.max_file_size
-        RailsAiContext.configuration.max_file_size
-      end
-
       private_class_method def self.extract_model_structure(model_name)
         path = "app/models/#{model_name.underscore}.rb"
         full_path = Rails.root.join(path)

@@ -153,7 +153,7 @@ module RailsAiContext
         gems = context[:gems]
         return if gems[:error]
 
-        notable = gems[:notable_gems] || []
+        notable = notable_gems_list(gems)
         return if notable.empty?
 
         lines = [ "## Notable Gems" ]
@@ -526,6 +526,33 @@ module RailsAiContext
       def escape_markdown(text)
         return "" if text.nil?
         text.to_s.gsub(MARKDOWN_SPECIAL_CHARS, '\\\\\1')
+      end
+    end
+
+    # Shared behavior for full-mode serializers (FullClaudeSerializer, FullOpencodeSerializer).
+    # Provides behavioral rules footer and architecture summary.
+    module FullSerializerBehavior
+      private
+
+      def footer
+        rules = []
+        rules << "## Behavioral Rules"
+        rules << ""
+        rules << "When working in this codebase:"
+        rules << "- Follow existing patterns and conventions detected above"
+        rules << "- Use the database schema as the source of truth for column names and types"
+        rules << "- Respect existing associations and validations when modifying models"
+        rules << "- Match the project's architecture style (#{architecture_summary})" if architecture_summary
+        test_cmd = detect_test_command
+        rules << "- Run `#{test_cmd}` after making changes to verify correctness"
+        rules << ""
+        rules << super
+        rules.join("\n")
+      end
+
+      def architecture_summary
+        arch = context.dig(:conventions, :architecture)
+        arch&.any? ? arch.join(", ") : nil
       end
     end
   end

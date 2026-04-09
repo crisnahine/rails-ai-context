@@ -680,14 +680,6 @@ module RailsAiContext
         $stderr.puts "[rails-ai-context] extract_class_name failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
-
-      private_class_method def self.safe_read(path)
-        RailsAiContext::SafeFile.read(path)
-      end
-
-      private_class_method def self.max_file_size
-        RailsAiContext.configuration.max_file_size
-      end
     end
   end
 end

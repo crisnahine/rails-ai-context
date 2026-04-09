@@ -162,7 +162,7 @@ module RailsAiContext
 
         adapter = content.match(/adapter:\s*(\w+)/)&.captures&.first
         adapter || "configured"
-      rescue
+      rescue StandardError
         nil
       end
 
@@ -173,7 +173,7 @@ module RailsAiContext
         return nil unless service_name
 
         service_name.to_s
-      rescue
+      rescue StandardError
         nil
       end
 
@@ -182,7 +182,7 @@ module RailsAiContext
         return nil unless method
 
         method.to_s
-      rescue
+      rescue StandardError
         nil
       end
     end

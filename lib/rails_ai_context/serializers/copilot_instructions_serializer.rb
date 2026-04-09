@@ -56,7 +56,7 @@ module RailsAiContext
 
         gems = context[:gems]
         if gems.is_a?(Hash) && !gems[:error]
-          notable = gems[:notable_gems] || []
+          notable = notable_gems_list(gems)
           notable.group_by { |g| g[:category]&.to_s || "other" }.first(6).each do |cat, gem_list|
             lines << "- #{cat}: #{gem_list.map { |g| g[:name] }.join(', ')}"
           end

@@ -8,10 +8,6 @@ module RailsAiContext
         "Use when: you need to edit a specific method or section without reading the entire file. " \
         "Requires file:\"app/models/user.rb\" and near:\"def activate\" to locate the code region."
 
-      def self.max_file_size
-        RailsAiContext.configuration.max_file_size
-      end
-
       input_schema(
         properties: {
           file: {
@@ -31,9 +27,6 @@ module RailsAiContext
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
-
-      # Sensitive file patterns that should not be readable
-      SENSITIVE_PATTERNS = nil # uses configuration.sensitive_patterns
 
       def self.call(file:, near:, context_lines: 5, server_context: nil)
         # Reject empty parameters
@@ -143,15 +136,6 @@ module RailsAiContext
         text_response(output.join("\n"))
       end
 
-      private_class_method def self.sensitive_file?(relative_path)
-        patterns = RailsAiContext.configuration.sensitive_patterns
-        basename = File.basename(relative_path)
-        flags = File::FNM_DOTMATCH | File::FNM_CASEFOLD
-        patterns.any? do |pattern|
-          File.fnmatch(pattern, relative_path, flags) ||
-            File.fnmatch(pattern, basename, flags)
-        end
-      end
 
       private_class_method def self.extract_methods(source_lines)
         methods = []

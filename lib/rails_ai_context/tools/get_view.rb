@@ -223,10 +223,6 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      def self.max_file_size
-        RailsAiContext.configuration.max_file_size
-      end
-
       private_class_method def self.read_view_file(path)
         # Reject path traversal attempts before any filesystem operation
         if path.include?("..") || path.start_with?("/")

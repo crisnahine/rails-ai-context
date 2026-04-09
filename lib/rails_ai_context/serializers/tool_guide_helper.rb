@@ -289,22 +289,9 @@ module RailsAiContext
         lines
       end
 
-      # Dense one-line-per-tool listing — fits in compact mode without the table overhead
+      # Dense one-line-per-tool listing — derived from TOOL_ROWS (single source of truth)
       def tools_name_list
-        all_tools = %w[
-          rails_get_context rails_analyze_feature rails_search_code rails_get_controllers
-          rails_validate rails_get_schema rails_get_model_details rails_get_routes
-          rails_get_view rails_get_stimulus rails_get_test_info
-          rails_get_concern rails_get_callbacks rails_get_edit_context
-          rails_get_service_pattern rails_get_job_pattern rails_get_env
-          rails_get_partial_interface rails_get_turbo_map rails_get_helper_methods
-          rails_get_config rails_get_gems rails_get_conventions rails_security_scan
-          rails_get_component_catalog rails_performance_check rails_dependency_graph
-          rails_migration_advisor rails_get_frontend_stack rails_search_docs
-          rails_query rails_read_logs rails_generate_test rails_diagnose
-          rails_review_changes rails_onboard
-          rails_runtime_info rails_session_context
-        ]
+        all_tools = TOOL_ROWS.map { |row| row[0][/^(rails_\w+)/, 1] }
         [
           "### All #{all_tools.size} tools",
           "`#{all_tools.join('` `')}`",

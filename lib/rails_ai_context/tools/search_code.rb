@@ -233,10 +233,9 @@ module RailsAiContext
         cmd << pattern
         cmd << search_path
 
-        sensitive = RailsAiContext.configuration.sensitive_patterns
         output, _status = Open3.capture2(*cmd, err: File::NULL)
         parse_rg_output(output, root)
-          .reject { |r| sensitive_file?(r[:file], sensitive) }
+          .reject { |r| sensitive_file?(r[:file]) }
           .first(max_results)
       rescue => e
         [ { file: "error", line_number: 0, content: e.message } ]
@@ -252,14 +251,13 @@ module RailsAiContext
         extensions = RailsAiContext.configuration.search_extensions.join(",")
         glob = file_type ? "**/*.#{file_type}" : "**/*.{#{extensions}}"
         excluded = RailsAiContext.configuration.excluded_paths
-        sensitive = RailsAiContext.configuration.sensitive_patterns
         test_dirs = %w[test/ spec/ features/]
         ai_context_files = %w[CLAUDE.md AGENTS.md .claude/ .cursor/ .cursorrules .github/copilot-instructions.md .github/instructions/ .vscode/mcp.json .codex/ .mcp.json opencode.json .ai-context.json]
 
         Dir.glob(File.join(search_path, glob)).each do |file|
           relative = file.sub("#{root}/", "")
           next if excluded.any? { |ex| relative.start_with?(ex) }
-          next if sensitive_file?(relative, sensitive)
+          next if sensitive_file?(relative)
           next if ai_context_files.any? { |p| relative.start_with?(p) || relative == p }
           next if exclude_tests && test_dirs.any? { |td| relative.start_with?(td) }
 
@@ -276,14 +274,6 @@ module RailsAiContext
         results
       end
 
-      private_class_method def self.sensitive_file?(relative_path, patterns)
-        basename = File.basename(relative_path)
-        flags = File::FNM_DOTMATCH | File::FNM_CASEFOLD
-        patterns.any? do |pattern|
-          File.fnmatch(pattern, relative_path, flags) ||
-            File.fnmatch(pattern, basename, flags)
-        end
-      end
 
       # Group results by file for cleaner output
       private_class_method def self.format_grouped(results)

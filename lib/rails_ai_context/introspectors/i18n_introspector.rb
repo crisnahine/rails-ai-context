@@ -100,7 +100,7 @@ module RailsAiContext
           next 0 unless content
           data = YAML.safe_load(content, permitted_classes: [ Symbol ])
           count_nested_keys(data)
-        rescue
+        rescue StandardError
           0
         end
       rescue => e

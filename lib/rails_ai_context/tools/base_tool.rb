@@ -336,6 +336,27 @@ module RailsAiContext
           param_str = params.is_a?(Hash) ? params.sort_by { |k, _| k.to_s }.map { |k, v| "#{k}:#{v}" }.join(",") : params.to_s
           "#{normalized}:#{param_str}"
         end
+
+        # Shared utility: safe file reading with size limits.
+        def safe_read(path)
+          RailsAiContext::SafeFile.read(path)
+        end
+
+        # Shared utility: max file size from configuration.
+        def max_file_size
+          RailsAiContext.configuration.max_file_size
+        end
+
+        # Shared utility: check if a relative path matches sensitive file patterns.
+        def sensitive_file?(relative_path)
+          patterns = RailsAiContext.configuration.sensitive_patterns
+          basename = File.basename(relative_path)
+          flags = File::FNM_DOTMATCH | File::FNM_CASEFOLD
+          patterns.any? do |pattern|
+            File.fnmatch(pattern, relative_path, flags) ||
+              File.fnmatch(pattern, basename, flags)
+          end
+        end
       end
     end
   end

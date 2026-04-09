@@ -246,7 +246,7 @@ module RailsAiContext
           next unless Dir.exist?(dir)
           Dir.glob(File.join(dir, "**", "*.rb")).each do |file|
             next if File.size(file) > max_file_size
-            next if sensitive_file?(file, root)
+            next if sensitive_file?(file.sub("#{root}/", ""))
 
             source = safe_read(file)
             next unless source
@@ -626,26 +626,6 @@ module RailsAiContext
         else
           stripped
         end
-      end
-
-      private_class_method def self.sensitive_file?(file, root)
-        relative = file.sub("#{root}/", "")
-        basename = File.basename(relative)
-        patterns = RailsAiContext.configuration.sensitive_patterns
-        flags = File::FNM_DOTMATCH | File::FNM_CASEFOLD
-
-        patterns.any? do |pattern|
-          File.fnmatch(pattern, relative, flags) ||
-            File.fnmatch(pattern, basename, flags)
-        end
-      end
-
-      private_class_method def self.safe_read(path)
-        RailsAiContext::SafeFile.read(path)
-      end
-
-      private_class_method def self.max_file_size
-        RailsAiContext.configuration.max_file_size
       end
     end
   end

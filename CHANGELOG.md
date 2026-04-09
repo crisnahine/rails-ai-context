@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.7.1] — 2026-04-09
+
+### Changed — SLOP Cleanup
+
+Internal code quality improvements — no API changes, no new features.
+
+- **Extract `safe_read`, `max_file_size`, `sensitive_file?` to BaseTool** — removed 16 duplicate one-liner methods across 8 tool files (get_env, get_job_pattern, get_service_pattern, get_turbo_map, get_partial_interface, get_view, get_edit_context, get_model_details, search_code)
+- **Extract `FullSerializerBehavior` module** — deduplicated identical `footer` and `architecture_summary` methods from FullClaudeSerializer and FullOpencodeSerializer
+- **Derive `tools_name_list` from `TOOL_ROWS`** — replaced hardcoded 38-tool name array with derivation from single source of truth in ToolGuideHelper
+- **Fix `notable_gems_list` bypass** — copilot_instructions_serializer and markdown_serializer now use the triple-fallback helper instead of raw hash access
+- **Narrow bare `rescue` to `rescue StandardError`** — 4 sites in get_config and i18n_introspector no longer catch `SignalException`/`NoMemoryError`
+- **Delete dead `SENSITIVE_PATTERNS = nil` constant** — vestigial from get_edit_context
+
 ## [5.7.0] — 2026-04-09
 
 ### Quickstart — Two commands. Problem gone.
