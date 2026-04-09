@@ -241,7 +241,7 @@ module RailsAiContext
         SECTION
         "Extensibility" => <<~SECTION,
             # ── Extensibility ─────────────────────────────────────────────────
-            # Register additional MCP tool classes alongside the #{RailsAiContext::Server::TOOLS.size} built-in tools
+            # Register additional MCP tool classes alongside the #{RailsAiContext::Server.builtin_tools.size} built-in tools
             # config.custom_tools = [MyApp::CustomTool]
 
             # Exclude specific built-in tools by name
@@ -520,7 +520,7 @@ module RailsAiContext
         say ""
         say "Commands:", :yellow
         say "  rails ai:context         # Regenerate context files"
-        tool_count = RailsAiContext::Server::TOOLS.size
+        tool_count = RailsAiContext::Server.builtin_tools.size
         say "  rails 'ai:tool[schema]'    # Run any of the #{tool_count} tools from CLI"
         if @tool_mode == :mcp
           say "  rails ai:serve           # Start MCP server (#{tool_count} live tools)"

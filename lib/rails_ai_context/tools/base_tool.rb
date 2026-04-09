@@ -29,9 +29,78 @@ module RailsAiContext
         required: [ "content" ]
       ).freeze
 
+      # ── Auto-registration ────────────────────────────────────────────
+      # Every subclass is tracked automatically via inherited.
+      # BaseTool itself is abstract — only concrete tools are registered.
+      # Thread-safe: Mutex guards @descendants and @eager_loaded.
+      @descendants = []
+      @abstract = true
+      @registry_mutex = Mutex.new
+
       def self.inherited(subclass)
         super
         subclass.instance_variable_set(:@output_schema_value, DEFAULT_OUTPUT_SCHEMA)
+        subclass.instance_variable_set(:@abstract, false)
+        # Thread-safe append. Mutex is NOT held during eager_load!'s const_get
+        # (which triggers inherited), so no recursive locking risk here.
+        BaseTool.registry_mutex.synchronize { BaseTool.descendants << subclass }
+      end
+
+      class << self
+        attr_reader :descendants, :registry_mutex
+
+        # Mark a tool class as abstract (excluded from registration).
+        def abstract!
+          @abstract = true
+          registry_mutex.synchronize { descendants.delete(self) }
+        end
+
+        def abstract?
+          @abstract == true
+        end
+
+        # All non-abstract tool classes. Triggers eager loading first.
+        def registered_tools
+          eager_load!
+          registry_mutex.synchronize { descendants.reject(&:abstract?) }
+        end
+
+        private
+
+        def eager_load!
+          # Double-checked locking: fast path avoids mutex for common case.
+          return if @eager_loaded
+
+          # Collect constants to load OUTSIDE the mutex, then load them.
+          # const_get triggers Zeitwerk autoload → inherited → mutex.synchronize,
+          # so we must NOT hold the mutex during const_get (avoids deadlock).
+          consts_to_load = registry_mutex.synchronize do
+            return if @eager_loaded # re-check inside mutex
+
+            Dir[File.join(__dir__, "*.rb")].filter_map do |path|
+              basename = File.basename(path, ".rb")
+              next if basename == "base_tool"
+              basename.split("_").map(&:capitalize).join.to_sym
+            end
+          end
+
+          # Load outside mutex — inherited callbacks acquire the mutex individually.
+          # Use inherit: false so top-level constants (Set, Hash, etc.) don't
+          # shadow tool classes that Zeitwerk hasn't autoloaded yet.
+          consts_to_load.each do |const|
+            RailsAiContext::Tools.const_get(const, false)
+          rescue NameError => e
+            # Only skip if the constant itself doesn't exist (filename/constant mismatch).
+            # Re-raise if the error came from inside the loaded file (a real bug).
+            if e.name == const && !RailsAiContext::Tools.const_defined?(const, false)
+              $stderr.puts "[rails-ai-context] eager_load! skipped #{const}: #{e.message}" if ENV["DEBUG"]
+            else
+              raise
+            end
+          end
+
+          registry_mutex.synchronize { @eager_loaded = true }
+        end
       end
 
       # Shared cache across all tool subclasses, protected by a Mutex

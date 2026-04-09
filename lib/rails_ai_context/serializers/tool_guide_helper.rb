@@ -23,9 +23,9 @@ module RailsAiContext
         RailsAiContext.configuration.tool_mode
       end
 
-      # Derived from Server::TOOLS — the single source of truth for tool count.
+      # Derived from BaseTool.registered_tools — the single source of truth for tool count.
       def tool_count
-        RailsAiContext::Server::TOOLS.size
+        RailsAiContext::Server.builtin_tools.size
       end
 
       def tools_header

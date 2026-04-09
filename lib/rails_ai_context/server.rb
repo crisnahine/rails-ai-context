@@ -8,46 +8,26 @@ module RailsAiContext
   class Server
     attr_reader :app, :transport_type
 
-    TOOLS = [
-      Tools::GetSchema,
-      Tools::GetRoutes,
-      Tools::GetModelDetails,
-      Tools::GetGems,
-      Tools::SearchCode,
-      Tools::GetConventions,
-      Tools::GetControllers,
-      Tools::GetConfig,
-      Tools::GetTestInfo,
-      Tools::GetView,
-      Tools::GetStimulus,
-      Tools::GetEditContext,
-      Tools::Validate,
-      Tools::AnalyzeFeature,
-      Tools::SecurityScan,
-      Tools::GetConcern,
-      Tools::GetCallbacks,
-      Tools::GetHelperMethods,
-      Tools::GetServicePattern,
-      Tools::GetJobPattern,
-      Tools::GetEnv,
-      Tools::GetPartialInterface,
-      Tools::GetTurboMap,
-      Tools::GetContext,
-      Tools::GetComponentCatalog,
-      Tools::PerformanceCheck,
-      Tools::DependencyGraph,
-      Tools::MigrationAdvisor,
-      Tools::GetFrontendStack,
-      Tools::SearchDocs,
-      Tools::Query,
-      Tools::ReadLogs,
-      Tools::GenerateTest,
-      Tools::Diagnose,
-      Tools::ReviewChanges,
-      Tools::Onboard,
-      Tools::RuntimeInfo,
-      Tools::SessionContext
-    ].freeze
+    # All built-in tools, auto-discovered from Tools::BaseTool subclasses.
+    # Kept as a class method (not a constant) so auto-registration works.
+    # Legacy constant accessor preserved for backwards compatibility.
+    def self.builtin_tools
+      Tools::BaseTool.registered_tools
+    end
+
+    # Backwards-compatible constant — delegates to the registry.
+    # Existing code referencing Server::TOOLS continues to work.
+    # Emits a deprecation notice once to guide migration.
+    def self.const_missing(name)
+      if name == :TOOLS
+        unless @tools_deprecation_warned
+          @tools_deprecation_warned = true
+          $stderr.puts "[rails-ai-context] DEPRECATION: Server::TOOLS is deprecated, use Server.builtin_tools instead" if ENV["DEBUG"]
+        end
+        return builtin_tools
+      end
+      super
+    end
 
     def initialize(app, transport: :stdio)
       @app = app
@@ -102,10 +82,11 @@ module RailsAiContext
     private
 
     def active_tools(config)
+      tools = self.class.builtin_tools
       skip = config.skip_tools
-      return TOOLS if skip.empty?
+      return tools if skip.empty?
 
-      TOOLS.reject { |t| skip.include?(t.tool_name) }
+      tools.reject { |t| skip.include?(t.tool_name) }
     end
 
     def start_stdio(server)

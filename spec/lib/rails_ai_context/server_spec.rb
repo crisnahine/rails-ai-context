@@ -26,21 +26,21 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
-  describe "TOOLS" do
-    it "is a frozen array of tool classes" do
-      expect(described_class::TOOLS).to be_frozen
-      expect(described_class::TOOLS).to be_an(Array)
+  describe ".builtin_tools" do
+    it "returns an array of tool classes" do
+      expect(described_class.builtin_tools).to be_an(Array)
+      expect(described_class.builtin_tools).not_to be_empty
     end
 
     it "contains only MCP::Tool subclasses" do
-      described_class::TOOLS.each do |tool|
+      described_class.builtin_tools.each do |tool|
         expect(tool).to be < MCP::Tool
       end
     end
 
     it "includes core tools like GetSchema and GetRoutes" do
-      expect(described_class::TOOLS).to include(RailsAiContext::Tools::GetSchema)
-      expect(described_class::TOOLS).to include(RailsAiContext::Tools::GetRoutes)
+      expect(described_class.builtin_tools).to include(RailsAiContext::Tools::GetSchema)
+      expect(described_class.builtin_tools).to include(RailsAiContext::Tools::GetRoutes)
     end
   end
 
@@ -115,7 +115,7 @@ RSpec.describe RailsAiContext::Server do
       it "includes all tools when skip_tools is empty" do
         RailsAiContext.configuration.skip_tools = []
         mcp_server = server.build
-        described_class::TOOLS.each do |tool|
+        described_class.builtin_tools.each do |tool|
           expect(mcp_server.tools.values).to include(tool)
         end
       end

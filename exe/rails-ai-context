@@ -403,7 +403,7 @@ class RailsAiContextCLI < Thor
 
     def tool_count_str
       if defined?(::RailsAiContext::Server)
-        ::RailsAiContext::Server::TOOLS.size.to_s
+        ::RailsAiContext::Server.builtin_tools.size.to_s
       else
         "38"
       end

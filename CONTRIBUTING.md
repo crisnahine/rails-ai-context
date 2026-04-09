@@ -41,7 +41,7 @@ lib/rails_ai_context/
 1. Create `lib/rails_ai_context/tools/your_tool.rb` inheriting from `BaseTool` (auto-loaded by Zeitwerk)
 2. Define `tool_name`, `description`, `input_schema`, and `annotations`
 3. Implement `def self.call(...)` returning `text_response(string)`
-4. Register in `Server::TOOLS`
+4. Auto-registered — no manual list to update (BaseTool.inherited tracks it)
 5. Write specs in `spec/lib/rails_ai_context/tools/your_tool_spec.rb`
 
 ## Adding a Prism Listener

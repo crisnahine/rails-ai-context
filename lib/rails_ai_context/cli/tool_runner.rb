@@ -48,7 +48,7 @@ module RailsAiContext
       # Filtered tool list respecting skip_tools config.
       def self.available_tools
         skip = RailsAiContext.configuration.skip_tools
-        tools = Server::TOOLS
+        tools = Server.builtin_tools
         tools += RailsAiContext.configuration.custom_tools
         return tools if skip.empty?
         tools.reject { |t| skip.include?(t.tool_name) }
