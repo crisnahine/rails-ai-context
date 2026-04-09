@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # Custom Tools
 
@@ -205,7 +205,7 @@ end
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Recipes](RECIPES.md)** · **[Configuration →](CONFIGURATION.md)**
 

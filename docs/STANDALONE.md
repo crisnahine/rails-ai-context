@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # Standalone Mode
 
@@ -160,7 +160,7 @@ The `serve` command waits for stdio input by design. Use `doctor` or `tool --lis
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← CLI Reference](CLI.md)** · **[Troubleshooting →](TROUBLESHOOTING.md)**
 

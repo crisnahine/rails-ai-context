@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # Architecture
 
@@ -235,7 +235,7 @@ SHA256-based change detection:
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← AI Tool Setup](SETUP.md)** · **[Introspectors →](INTROSPECTORS.md)**
 

@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # Quickstart
 
@@ -109,7 +109,7 @@ rails 'ai:tool[conventions]'
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **Next:** [Tools Reference →](TOOLS.md)
 

@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # Introspectors
 
@@ -202,7 +202,7 @@ The **Fingerprinter** computes a composite SHA256 from all watched directories (
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Architecture](ARCHITECTURE.md)** · **[Security →](SECURITY.md)**
 

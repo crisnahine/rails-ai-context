@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # CLI Reference
 
@@ -225,7 +225,7 @@ rails ai:context
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Security](SECURITY.md)** · **[Standalone Mode →](STANDALONE.md)**
 

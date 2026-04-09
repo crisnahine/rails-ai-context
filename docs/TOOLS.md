@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # MCP Tools Reference
 
@@ -486,7 +486,7 @@ Plus 9 static resources (schema, routes, conventions, gems, controllers, config,
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Quickstart](QUICKSTART.md)** · **[Recipes →](RECIPES.md)**
 

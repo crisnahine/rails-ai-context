@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # Recipes
 
@@ -381,7 +381,7 @@ Your custom rules (coding style, PR conventions, team preferences) stay. The gem
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Tools Reference](TOOLS.md)** · **[Custom Tools →](CUSTOM_TOOLS.md)**
 

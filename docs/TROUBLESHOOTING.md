@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # Troubleshooting
 
@@ -276,7 +276,7 @@ config.live_reload = false
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Standalone](STANDALONE.md)** · **[FAQ →](FAQ.md)**
 

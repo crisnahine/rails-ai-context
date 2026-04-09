@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # FAQ
 
@@ -231,7 +231,7 @@ config.generate_root_files = false
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Troubleshooting](TROUBLESHOOTING.md)** · **[Full Guide →](GUIDE.md)**
 

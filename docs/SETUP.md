@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # AI Tool Setup
 
@@ -350,7 +350,7 @@ rails ai:watch
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Configuration](CONFIGURATION.md)** · **[Architecture →](ARCHITECTURE.md)**
 

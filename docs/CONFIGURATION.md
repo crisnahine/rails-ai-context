@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # Configuration
 
@@ -226,7 +226,7 @@ end
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Custom Tools](CUSTOM_TOOLS.md)** · **[AI Tool Setup →](SETUP.md)**
 

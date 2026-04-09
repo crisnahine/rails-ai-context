@@ -1,4 +1,4 @@
-<div align="center">
+<div align="center" markdown="1">
 
 # Security Model
 
@@ -229,7 +229,7 @@ Supported versions: 4.0.x and later (4.2.1+ includes security hardening). See th
 
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 **[← Introspectors](INTROSPECTORS.md)** · **[CLI Reference →](CLI.md)**
 
