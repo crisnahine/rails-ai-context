@@ -75,15 +75,19 @@ module RailsAiContext
 
       def tools_detail_guidance
         detail_param = tool_mode == :cli ? "detail=summary" : "detail:\"summary\""
+        context_tool = tool_mode == :cli ? cli_cmd("context") : "rails_get_context"
+        analyze_tool = tool_mode == :cli ? cli_cmd("analyze_feature") : "rails_analyze_feature"
         [
           "### detail parameter — ALWAYS start with summary",
           "",
-          "Most tools accept `#{detail_param}`. Use the right level:",
+          "Individual lookup tools accept `#{detail_param}`. Use the right level:",
           "- **summary** — first call, orient yourself (table list, model names, route overview)",
           "- **standard** — working detail (columns with types, associations, action source) — DEFAULT",
           "- **full** — only when you need indexes, foreign keys, code snippets, or complete content",
           "",
           "Pattern: summary to find the target → standard to understand it → full only if needed.",
+          "",
+          "**Do NOT pass `detail` to composite tools** — `#{context_tool}` and `#{analyze_tool}` do not accept it and will return an error.",
           ""
         ]
       end
