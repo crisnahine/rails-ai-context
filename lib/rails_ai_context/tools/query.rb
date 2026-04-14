@@ -70,6 +70,20 @@ module RailsAiContext
           )
         end
 
+        # ── ActiveRecord guard (api-only apps) ──────────────────────
+        # Must come BEFORE any code that rescues ActiveRecord::* — Ruby
+        # resolves rescue class constants at raise time, and `rescue
+        # ActiveRecord::ConnectionNotEstablished` crashes with NameError
+        # on apps where ActiveRecord is not loaded (e.g.
+        # `rails new --api --skip-active-record`).
+        unless defined?(ActiveRecord::Base)
+          return text_response(
+            "Database queries are unavailable: ActiveRecord is not loaded in this app. " \
+            "This happens on API-only apps created with `rails new --api --skip-active-record`. " \
+            "rails_query requires a database connection to function."
+          )
+        end
+
         # ── Layer 1: SQL validation ─────────────────────────────────
         valid, error = validate_sql(sql)
         return text_response(error) unless valid

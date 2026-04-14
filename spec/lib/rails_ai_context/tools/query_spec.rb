@@ -542,4 +542,28 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text).to include('"line1')
     end
   end
+
+  describe "graceful degradation when ActiveRecord is not loaded" do
+    # Simulates `rails new --api --skip-active-record` where Ruby cannot
+    # resolve `ActiveRecord::*` rescue constants at raise time, causing a
+    # NameError unless the tool guards the entry point. See the edge-case
+    # verification report from v5.8.0 pre-release E2E.
+    it "returns a friendly message instead of crashing with NameError" do
+      result = with_activerecord_hidden { described_class.call(sql: "SELECT 1") }
+      text = result.content.first[:text]
+      expect(text).to include("Database queries are unavailable")
+      expect(text).to include("ActiveRecord is not loaded")
+      expect(text).to include("--skip-active-record")
+    end
+
+    # Temporarily hides the top-level `ActiveRecord` constant so
+    # `defined?(ActiveRecord::Base)` returns nil inside the block. Restores
+    # it in an ensure regardless of exceptions raised by the block.
+    def with_activerecord_hidden
+      saved = Object.send(:remove_const, :ActiveRecord) if Object.const_defined?(:ActiveRecord)
+      yield
+    ensure
+      Object.const_set(:ActiveRecord, saved) if saved
+    end
+  end
 end
