@@ -36,10 +36,9 @@ module RailsAiContext
         devise_models = scan_models_for(/devise\s+(.+)$/)
         auth[:devise] = devise_models if devise_models.any?
 
-        # Rails 8 built-in auth
-        if file_exists?("app/models/session.rb") && file_exists?("app/models/current.rb")
-          auth[:rails_auth] = true
-        end
+        # Rails 8 built-in auth (`bin/rails generate authentication`)
+        rails_auth = detect_rails_auth
+        auth[:rails_auth] = rails_auth if rails_auth
 
         # has_secure_password
         secure_pw = scan_models_for(/has_secure_password/)
@@ -54,6 +53,53 @@ module RailsAiContext
         auth[:devise_settings] = devise_settings unless devise_settings.empty?
 
         auth
+      end
+
+      # Rails 8's `bin/rails generate authentication` produces a Session model,
+      # a Current attributes model, an Authentication concern in app/controllers/concerns,
+      # a SessionsController, and a PasswordsController. AI agents need to know:
+      #
+      #   1. that this app uses the built-in pattern (not Devise / not custom)
+      #   2. which controllers opt out via `allow_unauthenticated_access`
+      #   3. where the Authentication concern lives so they can find before_actions
+      def detect_rails_auth
+        return nil unless file_exists?("app/models/session.rb") && file_exists?("app/models/current.rb")
+
+        result = { detected: true }
+
+        result[:authentication_concern] = "app/controllers/concerns/authentication.rb" if file_exists?("app/controllers/concerns/authentication.rb")
+        result[:sessions_controller]    = "app/controllers/sessions_controller.rb"     if file_exists?("app/controllers/sessions_controller.rb")
+        result[:passwords_controller]   = "app/controllers/passwords_controller.rb"    if file_exists?("app/controllers/passwords_controller.rb")
+
+        unauth = scan_allow_unauthenticated_access
+        result[:allow_unauthenticated_access] = unauth if unauth.any?
+
+        result
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_rails_auth failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      def scan_allow_unauthenticated_access
+        controllers_dir = File.join(root, "app/controllers")
+        return [] unless Dir.exist?(controllers_dir)
+
+        Dir.glob(File.join(controllers_dir, "**/*.rb")).filter_map do |path|
+          content = RailsAiContext::SafeFile.read(path) or next
+          next unless content.match?(/\ballow_unauthenticated_access\b/)
+
+          relative = path.sub("#{root}/", "")
+          # Try to capture the `only:` or `except:` filter so AI knows scope
+          scope_match = content.match(/allow_unauthenticated_access\s+(only|except):\s*(\[?[^\n]+)/)
+          if scope_match
+            { file: relative, scope: "#{scope_match[1]}: #{scope_match[2].strip}" }
+          else
+            { file: relative, scope: "all actions" }
+          end
+        end.sort_by { |h| h[:file] }
+      rescue => e
+        $stderr.puts "[rails-ai-context] scan_allow_unauthenticated_access failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
       def detect_authorization

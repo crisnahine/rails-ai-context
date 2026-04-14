@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.7.2] — 2026-04-14
+## [5.8.0] — 2026-04-14
+
+### Added — Modern Rails Coverage Pass
+
+Five targeted gaps in modern Rails introspection, identified by an audit of the introspectors against current Rails 7/8 patterns. Net result: the gem now surfaces what AI agents need to know about Rails 8 built-in auth, Solid Errors, async query usage, strong_migrations safety, and Action Cable channel detail.
+
+- **Rails 8 built-in auth depth.** `auth_introspector#detect_authentication` previously detected `bin/rails generate authentication` only as a boolean. Now returns a hash with the Authentication concern path, the Sessions/Passwords controller paths, and a per-controller list of `allow_unauthenticated_access` filters with their `only:`/`except:` scope. AI agents can answer "which controllers are public?" in one tool call.
+- **Solid Errors gem detection.** Added `solid_errors` (Rails 8 database-backed error tracking, by @fractaledmind) to `gem_introspector.rb`'s `NOTABLE_GEMS` map under the `:monitoring` category. Was the only Solid-* gem missing from the list (`solid_queue`, `solid_cache`, `solid_cable` were already covered). `solid_health` is NOT a real published gem — Rails 8 ships a built-in `/up` healthcheck endpoint with no gem needed.
+- **Async query pattern detection.** `convention_introspector#detect_patterns` now adds `async_queries` to the patterns array when it finds `load_async` or any of the `async_count`/`async_sum`/`async_minimum`/`async_maximum`/`async_average`/`async_pluck`/`async_ids`/`async_exists`/`async_find_by`/`async_find`/`async_first`/`async_last`/`async_take` calls in `app/controllers`, `app/services`, `app/jobs`, or `app/models`. AI agents can recognize the perf optimization is in use without re-scanning.
+- **Strong Migrations integration.** `migration_advisor` now emits a `## Strong Migrations Warnings` section when the `strong_migrations` gem is in `Gemfile.lock`. Catalog covers the most common breaking-change patterns: `remove_column` (needs `safety_assured` + `ignored_columns` first), `rename_column` (unsafe under load, two-step pattern), `change_column` type change (table rewrite), `add_index` without `algorithm: :concurrently` (Postgres write lock), `add_foreign_key` without `validate: false` (lock validation), and `add_column` with `null: false` but no default (table rewrite). Each warning includes the safer pattern. Fires only when the gem is detected — zero noise for projects that don't use it.
+- **Action Cable channel detail.** `job_introspector#extract_channels` was returning `{ name, stream_methods }` only. Enriched to also extract `identified_by` attributes, `stream_from`/`stream_for` targets, `periodically` timers with intervals, RPC action methods (excluding subscribed/unsubscribed/stream_*), and the source file path. AI agents can now build a full picture of a channel's contract without reading its source.
 
 ### Fixed — MCP Tool Responses Rejected by Strict Clients (#69)
 

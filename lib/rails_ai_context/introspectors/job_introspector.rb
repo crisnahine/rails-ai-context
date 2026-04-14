@@ -153,16 +153,83 @@ module RailsAiContext
         ActionCable::Channel::Base.descendants.filter_map do |channel|
           next if channel.name.nil? || channel.name == "ApplicationCable::Channel"
 
+          source = channel_source(channel)
+
           {
-            name: channel.name,
+            name:           channel.name,
+            file:           channel_relative_path(channel),
             stream_methods: channel.instance_methods(false)
               .select { |m| m.to_s.start_with?("stream_") || m == :subscribed }
-              .map(&:to_s)
-          }
+              .map(&:to_s),
+            identified_by:  extract_identified_by(source),
+            streams:        extract_channel_streams(source),
+            periodic:       extract_channel_periodic(source),
+            actions:        extract_channel_actions(channel)
+          }.compact
         end.sort_by { |c| c[:name] }
       rescue => e
         $stderr.puts "[rails-ai-context] extract_channels failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      def channel_source(channel)
+        path = channel_absolute_path(channel)
+        return nil unless path && File.exist?(path)
+        RailsAiContext::SafeFile.read(path)
+      end
+
+      def channel_absolute_path(channel)
+        method_source = channel.instance_methods(false).first
+        return nil unless method_source
+        location = channel.instance_method(method_source).source_location
+        location&.first
+      rescue
+        nil
+      end
+
+      def channel_relative_path(channel)
+        path = channel_absolute_path(channel)
+        return nil unless path
+        rails_root = app.root.to_s
+        path.start_with?(rails_root) ? path.sub("#{rails_root}/", "") : path
+      end
+
+      # `identified_by :current_user, :tenant` — declared on ApplicationCable::Connection,
+      # but channels can also use it. Returns array of attribute names.
+      def extract_identified_by(source)
+        return nil unless source
+        matches = source.scan(/\bidentified_by\s+([^\n]+)/)
+        return nil if matches.empty?
+        matches.flat_map { |m| m.first.scan(/:(\w+)/).flatten }.uniq
+      end
+
+      # `stream_from "channel_name"` and `stream_for object` — what the channel broadcasts.
+      def extract_channel_streams(source)
+        return nil unless source
+        from_targets = source.scan(/\bstream_from\s+["']([^"']+)["']/).flatten
+        for_targets  = source.scan(/\bstream_for\s+([^\s\n,]+)/).flatten
+        result = {}
+        result[:stream_from] = from_targets.uniq if from_targets.any?
+        result[:stream_for]  = for_targets.uniq  if for_targets.any?
+        result.empty? ? nil : result
+      end
+
+      # `periodically :method_name, every: 3.seconds`
+      def extract_channel_periodic(source)
+        return nil unless source
+        timers = source.scan(/\bperiodically\s+:(\w+),\s*every:\s*([^\n]+)/).map do |method_name, interval|
+          { method: method_name, every: interval.strip.sub(/[,\s].*$/, "") }
+        end
+        timers.any? ? timers : nil
+      end
+
+      # RPC actions = public instance methods that aren't lifecycle hooks or stream helpers.
+      def extract_channel_actions(channel)
+        ignored = %i[subscribed unsubscribed]
+        actions = channel.instance_methods(false).reject do |m|
+          ignored.include?(m) || m.to_s.start_with?("stream_")
+        end
+        actions.empty? ? nil : actions.map(&:to_s).sort
       end
     end
   end

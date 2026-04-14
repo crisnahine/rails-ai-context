@@ -97,6 +97,7 @@ module RailsAiContext
         "scout_apm"       => { category: :monitoring, note: "APM via Scout." },
         "newrelic_rpm"    => { category: :monitoring, note: "APM via New Relic." },
         "skylight"        => { category: :monitoring, note: "Performance monitoring via Skylight." },
+        "solid_errors"    => { category: :monitoring, note: "Database-backed error tracking via Solid Errors. Mounted at /solid_errors by default." },
 
         # Admin
         "activeadmin"     => { category: :admin, note: "Admin interface via ActiveAdmin." },

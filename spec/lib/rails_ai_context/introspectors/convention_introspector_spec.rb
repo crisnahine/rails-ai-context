@@ -81,5 +81,34 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
         expect(result[:custom_directories]).to include("services")
       end
     end
+
+    context "with async query usage in a controller" do
+      let(:controller_dir) { File.join(Rails.root, "app/controllers") }
+      let(:controller_path) { File.join(controller_dir, "async_demo_controller.rb") }
+
+      before do
+        FileUtils.mkdir_p(controller_dir)
+        File.write(controller_path, <<~RUBY)
+          class AsyncDemoController < ApplicationController
+            def index
+              @users  = User.all.load_async
+              @count  = User.async_count
+            end
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f(controller_path) }
+
+      it "detects async_queries pattern" do
+        expect(result[:patterns]).to include("async_queries")
+      end
+    end
+
+    context "without async query usage anywhere" do
+      it "does not include async_queries in patterns" do
+        expect(result[:patterns]).not_to include("async_queries")
+      end
+    end
   end
 end

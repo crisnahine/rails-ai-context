@@ -101,6 +101,9 @@ module RailsAiContext
         # Show affected models
         lines.concat(show_affected_models(table, models))
 
+        # Strong Migrations warnings (only when the gem is present in the project)
+        lines.concat(strong_migrations_warnings(action, table, column, options)) if strong_migrations_gem_present?
+
         text_response(lines.join("\n"))
       end
 
@@ -336,6 +339,71 @@ module RailsAiContext
           lines << ""
           lines << "**Reversible:** Yes"
           lines
+        end
+
+        # Strong Migrations integration — surfaces the same warnings the gem would raise
+        # at migration runtime, so AI agents see them at code-generation time. Only fires
+        # when the gem is actually present in the project's Gemfile.lock.
+        #
+        # Catalog covers the most common breaking-change patterns (columns, indexes, FKs).
+        # Not exhaustive — see https://github.com/ankane/strong_migrations#checks for the full list.
+        def strong_migrations_warnings(action, table, column, options)
+          warnings = case action
+          when "remove_column"
+            [
+              "**`remove_column` is unsafe under load.** strong_migrations requires:",
+              "  1. Add the column to `self.ignored_columns += %w[#{column}]` in `app/models/#{table.singularize}.rb` first.",
+              "  2. Deploy that change.",
+              "  3. THEN run the migration in a separate deploy.",
+              "  Or wrap in `safety_assured do ... end` if you accept the risk."
+            ]
+          when "rename_column"
+            [
+              "**`rename_column` is unsafe under load.** Old code references the old name and breaks during the deploy window.",
+              "Safer pattern: add a new column, backfill, dual-write, deploy, then remove the old column in a later release."
+            ]
+          when "change_type"
+            [
+              "**`change_column` (type change) blocks writes** on Postgres for the duration of the table rewrite, which can be hours on large tables.",
+              "Safer pattern: add a new column with the new type, backfill, dual-write, swap, drop the old column."
+            ]
+          when "add_index"
+            unless options.to_s.include?("concurrently")
+              [
+                "**`add_index` without `algorithm: :concurrently`** acquires an `ACCESS EXCLUSIVE` lock on Postgres and blocks writes.",
+                "Use `add_index :#{table}, :#{column}, algorithm: :concurrently` and add `disable_ddl_transaction!` at the top of the migration."
+              ]
+            end
+          when "add_association"
+            [
+              "**`add_foreign_key` validates existing rows by default**, which acquires a `SHARE ROW EXCLUSIVE` lock on both tables.",
+              "Safer two-step pattern:",
+              "  1. `add_foreign_key :#{table}, :other_table, validate: false` (lock-free)",
+              "  2. In a separate migration: `validate_foreign_key :#{table}, :other_table`"
+            ]
+          when "add_column"
+            if options.to_s.match?(/null:\s*false/) && !options.to_s.include?("default:")
+              [
+                "**Adding a `NOT NULL` column without a default rewrites the table** on older Postgres and fails on existing rows.",
+                "Safer pattern: add the column nullable, backfill in batches, then add the NOT NULL constraint with `change_column_null`."
+              ]
+            end
+          end
+
+          return [] unless warnings&.any?
+
+          [ "", "## Strong Migrations Warnings", "", "_The `strong_migrations` gem is in your Gemfile — these warnings match what it would raise at migration runtime._", "" ] + warnings
+        end
+
+        def strong_migrations_gem_present?
+          lock_path = File.join(rails_app.root.to_s, "Gemfile.lock")
+          return false unless File.exist?(lock_path)
+          content = RailsAiContext::SafeFile.read(lock_path)
+          return false unless content
+          content.include?("    strong_migrations (")
+        rescue => e
+          $stderr.puts "[rails-ai-context] strong_migrations_gem_present? failed: #{e.message}" if ENV["DEBUG"]
+          false
         end
 
         def show_affected_models(table, models)

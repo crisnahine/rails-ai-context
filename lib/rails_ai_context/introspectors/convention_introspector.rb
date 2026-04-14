@@ -105,8 +105,26 @@ module RailsAiContext
 
         patterns << "view_components" if dir_exists?("app/components")
         patterns << "phlex" if gem_present?("phlex-rails")
+        patterns << "async_queries" if uses_async_queries?
 
         patterns
+      end
+
+      ASYNC_QUERY_PATTERN = /\bload_async\b|\.async_(count|sum|minimum|maximum|average|pluck|ids|exists|find_by|find|first|last|take)\b/
+
+      def uses_async_queries?
+        %w[app/controllers app/services app/jobs app/models].any? do |rel_dir|
+          dir = File.join(root, rel_dir)
+          next false unless Dir.exist?(dir)
+
+          Dir.glob(File.join(dir, "**/*.rb")).first(500).any? do |f|
+            content = RailsAiContext::SafeFile.read(f) or next false
+            content.match?(ASYNC_QUERY_PATTERN)
+          end
+        end
+      rescue => e
+        $stderr.puts "[rails-ai-context] uses_async_queries? failed: #{e.message}" if ENV["DEBUG"]
+        false
       end
 
       def scan_directory_structure

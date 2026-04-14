@@ -248,5 +248,52 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
         end
       end
     end
+
+    describe "Rails 8 built-in auth depth" do
+      let(:session_model)         { File.join(Rails.root, "app/models/session.rb") }
+      let(:current_model)         { File.join(Rails.root, "app/models/current.rb") }
+      let(:auth_concern)          { File.join(Rails.root, "app/controllers/concerns/authentication.rb") }
+      let(:sessions_controller)   { File.join(Rails.root, "app/controllers/sessions_controller.rb") }
+      let(:passwords_controller)  { File.join(Rails.root, "app/controllers/passwords_controller.rb") }
+      let(:public_controller)     { File.join(Rails.root, "app/controllers/public_controller.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(auth_concern))
+        File.write(session_model, "class Session < ApplicationRecord; end")
+        File.write(current_model, "class Current < ActiveSupport::CurrentAttributes; end")
+        File.write(auth_concern, "module Authentication; extend ActiveSupport::Concern; end")
+        File.write(sessions_controller, "class SessionsController < ApplicationController; end")
+        File.write(passwords_controller, "class PasswordsController < ApplicationController; end")
+        File.write(public_controller, <<~RUBY)
+          class PublicController < ApplicationController
+            allow_unauthenticated_access only: %i[index show]
+          end
+        RUBY
+      end
+
+      after do
+        [ session_model, current_model, auth_concern, sessions_controller, passwords_controller, public_controller ].each do |f|
+          FileUtils.rm_f(f)
+        end
+      end
+
+      it "detects Rails 8 auth as a hash with full depth" do
+        rails_auth = result[:authentication][:rails_auth]
+        expect(rails_auth).to be_a(Hash)
+        expect(rails_auth[:detected]).to eq(true)
+        expect(rails_auth[:authentication_concern]).to eq("app/controllers/concerns/authentication.rb")
+        expect(rails_auth[:sessions_controller]).to eq("app/controllers/sessions_controller.rb")
+        expect(rails_auth[:passwords_controller]).to eq("app/controllers/passwords_controller.rb")
+      end
+
+      it "lists controllers with allow_unauthenticated_access including scope" do
+        unauth = result[:authentication][:rails_auth][:allow_unauthenticated_access]
+        expect(unauth).to be_an(Array)
+        public_entry = unauth.find { |h| h[:file] == "app/controllers/public_controller.rb" }
+        expect(public_entry).not_to be_nil
+        expect(public_entry[:scope]).to include("only:")
+        expect(public_entry[:scope]).to include("index")
+      end
+    end
   end
 end

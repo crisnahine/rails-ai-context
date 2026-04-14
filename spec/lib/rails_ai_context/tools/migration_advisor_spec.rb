@@ -154,4 +154,83 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).to include("t.string :name")
     end
   end
+
+  describe "Strong Migrations integration" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } },
+        models: {}
+      })
+    end
+
+    context "when strong_migrations gem is absent" do
+      before { allow(described_class).to receive(:strong_migrations_gem_present?).and_return(false) }
+
+      it "does not include the warnings section for remove_column" do
+        response = described_class.call(action: "remove_column", table: "users", column: "email")
+        text = response.content.first[:text]
+        expect(text).not_to include("Strong Migrations Warnings")
+      end
+    end
+
+    context "when strong_migrations gem is present" do
+      before { allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true) }
+
+      it "warns about remove_column needing safety_assured + ignored_columns" do
+        response = described_class.call(action: "remove_column", table: "users", column: "email")
+        text = response.content.first[:text]
+        expect(text).to include("Strong Migrations Warnings")
+        expect(text).to include("ignored_columns")
+        expect(text).to include("safety_assured")
+      end
+
+      it "warns about rename_column being unsafe under load" do
+        response = described_class.call(action: "rename_column", table: "users", column: "email", new_name: "email_address")
+        text = response.content.first[:text]
+        expect(text).to include("Strong Migrations Warnings")
+        expect(text).to include("unsafe under load")
+      end
+
+      it "warns about change_type blocking writes" do
+        response = described_class.call(action: "change_type", table: "users", column: "email", type: "text")
+        text = response.content.first[:text]
+        expect(text).to include("Strong Migrations Warnings")
+        expect(text).to include("blocks writes")
+      end
+
+      it "warns about add_index without :concurrently" do
+        response = described_class.call(action: "add_index", table: "users", column: "email")
+        text = response.content.first[:text]
+        expect(text).to include("Strong Migrations Warnings")
+        expect(text).to include("algorithm: :concurrently")
+      end
+
+      it "does not warn about add_index when :concurrently is already specified" do
+        response = described_class.call(action: "add_index", table: "users", column: "email", options: "algorithm: :concurrently")
+        text = response.content.first[:text]
+        expect(text).not_to include("Strong Migrations Warnings")
+      end
+
+      it "warns about add_association needing two-step foreign key validation" do
+        response = described_class.call(action: "add_association", table: "users", column: "tenant")
+        text = response.content.first[:text]
+        expect(text).to include("Strong Migrations Warnings")
+        expect(text).to include("validate: false")
+        expect(text).to include("validate_foreign_key")
+      end
+
+      it "warns about NOT NULL add_column without default" do
+        response = described_class.call(action: "add_column", table: "users", column: "phone", type: "string", options: "null: false")
+        text = response.content.first[:text]
+        expect(text).to include("Strong Migrations Warnings")
+        expect(text).to include("NOT NULL")
+      end
+
+      it "does not warn about add_column when nullable" do
+        response = described_class.call(action: "add_column", table: "users", column: "phone", type: "string")
+        text = response.content.first[:text]
+        expect(text).not_to include("Strong Migrations Warnings")
+      end
+    end
+  end
 end

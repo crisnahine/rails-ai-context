@@ -153,5 +153,11 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
         expect(info[:note]).not_to be_empty, "Empty note for #{gem_name}"
       end
     end
+
+    it "includes solid_errors under monitoring" do
+      entry = described_class::NOTABLE_GEMS["solid_errors"]
+      expect(entry).not_to be_nil
+      expect(entry[:category]).to eq(:monitoring)
+    end
   end
 end
