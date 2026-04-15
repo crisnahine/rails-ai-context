@@ -95,4 +95,21 @@ RSpec.describe RailsAiContext::Fingerprinter do
       expect(described_class.changed?(Rails.application, "stale")).to be true
     end
   end
+
+  describe ".reset_gem_lib_fingerprint!" do
+    after { described_class.reset_gem_lib_fingerprint! }
+
+    it "clears the memoized ivar so the next compute recomputes it" do
+      described_class.compute(Rails.application)
+      described_class.reset_gem_lib_fingerprint!
+      expect(described_class.instance_variable_get(:@gem_lib_fingerprint)).to be_nil
+    end
+
+    it "allows a successful compute after reset" do
+      described_class.compute(Rails.application)
+      described_class.reset_gem_lib_fingerprint!
+      result = described_class.compute(Rails.application)
+      expect(result).to match(/\A[a-f0-9]{64}\z/)
+    end
+  end
 end

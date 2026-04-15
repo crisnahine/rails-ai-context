@@ -45,6 +45,14 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:note]).to include("no migrations have been run yet")
         expect(result[:note]).to include("bin/rails db:migrate")
       end
+
+      it "returns the empty-schema state for a genuinely 0-byte schema.rb" do
+        File.write(File.join(fixture_path, "db", "schema.rb"), "")
+        result = introspector.call
+        expect(result[:error]).to be_nil
+        expect(result[:total_tables]).to eq(0)
+        expect(result[:note]).to include("no migrations have been run yet")
+      end
     end
 
     context "with a valid schema.rb fixture" do

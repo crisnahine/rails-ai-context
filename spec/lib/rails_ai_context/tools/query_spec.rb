@@ -451,6 +451,18 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(error).to match(/load_file/i)
       end
 
+      it "blocks MySQL LOAD DATA INFILE" do
+        valid, error = described_class.validate_sql("LOAD DATA INFILE '/etc/passwd' INTO TABLE users")
+        expect(valid).to be false
+        expect(error).to match(/LOAD.*DATA/i)
+      end
+
+      it "blocks MySQL LOAD DATA LOCAL INFILE" do
+        valid, error = described_class.validate_sql("LOAD DATA LOCAL INFILE '/etc/passwd' INTO TABLE users")
+        expect(valid).to be false
+        expect(error).to match(/LOAD.*DATA/i)
+      end
+
       it "blocks SQLite load_extension" do
         valid, error = described_class.validate_sql("SELECT load_extension('/tmp/lib.so')")
         expect(valid).to be false

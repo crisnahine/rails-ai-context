@@ -229,28 +229,47 @@ module RailsAiContext
           return text_response("Path not allowed: #{path}")
         end
 
+        # Block sensitive files on the caller-supplied string before any
+        # filesystem stat — closes the existence-oracle side channel.
+        if sensitive_file?(path)
+          return text_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
+        end
+
         views_dir = Rails.root.join("app", "views")
         full_path = views_dir.join(path)
 
-        # Path traversal protection (resolves symlinks)
         unless File.exist?(full_path)
           dir = File.dirname(path)
           siblings = Dir.glob(File.join(views_dir, dir, "*")).map { |f| "#{dir}/#{File.basename(f)}" }.sort.first(10)
           hint = siblings.any? ? " Files in #{dir}/: #{siblings.join(', ')}" : ""
           return text_response("View not found: #{path}.#{hint}")
         end
+        # Containment check with separator + post-realpath sensitive recheck.
+        # Mirrors the v5.8.1 fix in vfs.rb / get_edit_context.rb. Without
+        # `File::SEPARATOR`, `start_with?` matches sibling directories like
+        # `app/views_backup/secret` against `app/views`. Without the
+        # post-realpath sensitive recheck, a symlink at
+        # `app/views/leak.key → ../../config/master.key` would slip through
+        # and read the secret.
+        real = nil
         begin
-          unless File.realpath(full_path).start_with?(File.realpath(views_dir))
+          real = File.realpath(full_path).to_s
+          real_base = File.realpath(views_dir).to_s
+          unless real == real_base || real.start_with?(real_base + File::SEPARATOR)
             return text_response("Path not allowed: #{path}")
+          end
+          relative_real = real.sub("#{real_base}/", "")
+          if sensitive_file?(relative_real)
+            return text_response("Access denied: #{path} resolves to a sensitive file (secrets/keys/credentials).")
           end
         rescue Errno::ENOENT
           return text_response("View not found: #{path}")
         end
-        if File.size(full_path) > max_file_size
-          return text_response("File too large: #{path} (#{File.size(full_path)} bytes, max: #{max_file_size})")
+        if File.size(real) > max_file_size
+          return text_response("File too large: #{path} (#{File.size(real)} bytes, max: #{max_file_size})")
         end
 
-        content = RailsAiContext::SafeFile.read(full_path)
+        content = RailsAiContext::SafeFile.read(real)
         return text_response("Could not read file: #{path}") unless content
         content = compress_tailwind(strip_svg(content))
         text_response("# #{path}\n\n```erb\n#{content}\n```")

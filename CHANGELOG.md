@@ -51,9 +51,23 @@ Four exploitable vulnerabilities across `rails_query`, the VFS URI dispatcher, a
 
 - `.github/workflows/release.yml` test matrix was still on the old Ruby `3.2/3.3/3.4` × Rails `7.1/7.2/8.0` grid even though `ci.yml` was expanded to cover Ruby 4.0 and Rails 8.1 in v5.8.0. Now synced — release-time testing matches PR-time testing across all 12 combos, including the #69 reporter's environment (Ruby 4.0.2 + Rails 8.1.3).
 
+### Fixed — Pre-release review pass (rounds 2–3)
+
+Five additional issues found during multi-round cold-eyes security and correctness review after the initial hardening pass.
+
+- **`search_code` sibling-directory path traversal.** `rails_search_code`'s `path` parameter used `real_search.start_with?(real_root)` without a `File::SEPARATOR` suffix — the same bypass class as the original VFS C1 bug. A Rails root of `/app/myapp` would accept a search path whose realpath is `/app/myapp_evil`. **Fix:** changed to `real_search == real_root || real_search.start_with?(real_root + File::SEPARATOR)`. Spec added.
+
+- **Instrumentation callback: `data[:method]` extraction outside `begin/rescue`.** Two lines before the `begin` block (`method = data[:method]` and `event_name = ...`) were not covered by the rescue. A non-Hash `data` argument from the MCP SDK would raise `NoMethodError` which would propagate into the SDK's `ensure` context and overwrite the tool's return value. **Fix:** moved `begin` to wrap the full lambda body after the early-exit guard.
+
+- **`get_partial_interface` TOCTOU gap (residual from initial hardening).** `resolve_partial_path` performed the `File.realpath` security check internally but returned the original glob `found` path to the caller. The caller then called `File.size(found)` and `safe_read(found)` — creating a sub-millisecond race window where a symlink swap could read from a path that bypassed the check. **Fix:** `resolve_partial_path` now returns `real_found`. All file operations in the caller use the pre-checked realpath.
+
+- **`validate` tool passed pre-realpath path to validators.** `validate_ruby`, `validate_erb`, `validate_javascript`, and `check_rails_semantics` all received `full_path` (pre-realpath) after the security check resolved `real`. **Fix:** all four now receive `Pathname.new(real)`.
+
+- **`rails_query` `LOAD DATA INFILE` not explicitly blocked.** Added `LOAD\s+DATA` to `BLOCKED_FUNCTIONS`. Belt-and-suspenders: `ALLOWED_PREFIX` already blocks it at statement level, but the explicit entry makes intent self-documenting. Two specs added (`LOAD DATA INFILE` and `LOAD DATA LOCAL INFILE`).
+
 ### Test coverage
 
-- **1989 examples, 0 failures** (was 1928 in v5.8.0, +61 new regression tests across the security + hardening + empty-schema + VFS + instrumentation fixes).
+- **2004 examples, 0 failures** (was 1928 in v5.8.0, +76 new regression tests across the security + hardening + empty-schema + VFS + instrumentation + review-pass fixes).
 
 ## [5.8.0] — 2026-04-14
 

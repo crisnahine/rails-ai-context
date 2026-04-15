@@ -115,5 +115,54 @@ RSpec.describe RailsAiContext::Tools::GetView do
         expect(text).to include("view_template")
       end
     end
+
+    context "C1 symlink hardening (v5.8.1 round 2)" do
+      let(:views_dir) { Rails.root.join("app", "views") }
+
+      it "blocks sibling-directory traversal via symlink" do
+        sibling_dir = Rails.root.join("app", "views_spec_gv_#{Process.pid}")
+        FileUtils.mkdir_p(sibling_dir)
+        secret_file = sibling_dir.join("secret.html.erb")
+        File.write(secret_file, "<h1>SIBLING SECRET</h1>")
+
+        symlink = views_dir.join("gv_leak_#{Process.pid}.html.erb")
+        File.symlink(secret_file, symlink)
+
+        result = described_class.call(path: "gv_leak_#{Process.pid}.html.erb")
+        text = result.content.first[:text]
+        expect(text).to match(/not allowed/)
+        expect(text).not_to include("SIBLING SECRET")
+      ensure
+        FileUtils.rm_f(symlink) if defined?(symlink)
+        FileUtils.rm_rf(sibling_dir) if defined?(sibling_dir)
+      end
+
+      it "blocks sensitive files resolved via symlink (post-realpath recheck)" do
+        # The caller-supplied path uses an .html.erb extension so the EARLY
+        # `sensitive_file?(path)` guard does NOT fire. The block has to come
+        # from the post-realpath recheck (line ~262 of get_view.rb), which
+        # canonicalizes the symlink target and then re-runs sensitive_file?
+        # against the relative real path. This isolates that defense from
+        # the early-guard layer.
+        secret = Rails.root.join("config", "_gv_test_master_#{Process.pid}.key")
+        File.write(secret, "should-never-leak")
+        symlink = views_dir.join("gv_leak_secret_#{Process.pid}.html.erb")
+        File.symlink(secret, symlink)
+
+        result = described_class.call(path: "gv_leak_secret_#{Process.pid}.html.erb")
+        text = result.content.first[:text]
+        expect(text).to match(/sensitive|not allowed|denied/)
+        expect(text).not_to include("should-never-leak")
+      ensure
+        FileUtils.rm_f(symlink) if defined?(symlink)
+        FileUtils.rm_f(secret) if defined?(secret)
+      end
+
+      it "rejects sensitive caller-supplied paths before any filesystem stat" do
+        result = described_class.call(path: "../../config/master.key")
+        text = result.content.first[:text]
+        expect(text).to match(/not allowed|denied|sensitive/)
+      end
+    end
   end
 end

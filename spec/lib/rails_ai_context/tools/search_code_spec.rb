@@ -29,6 +29,16 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       expect(text).to match(/Path not (found|allowed)/)
     end
 
+    it "blocks sibling-directory escape via File::SEPARATOR-aware containment" do
+      # A realpath like /app/myapp_evil would pass start_with?("/app/myapp") without
+      # the separator suffix — the fix adds File::SEPARATOR to close this gap.
+      Dir.mktmpdir("rac_sibling_") do |sibling_dir|
+        result = described_class.call(pattern: "test", path: sibling_dir)
+        text = result.content.first[:text]
+        expect(text).to match(/Path not (found|allowed)/)
+      end
+    end
+
     it "returns results for a valid search" do
       result = described_class.call(pattern: "ActiveRecord::Schema")
       text = result.content.first[:text]

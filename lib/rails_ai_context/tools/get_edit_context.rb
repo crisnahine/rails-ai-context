@@ -59,9 +59,13 @@ module RailsAiContext
           return text_response("File not found: #{file}.#{hint}")
         end
         begin
-          real = File.realpath(full_path)
-          rails_root_real = File.realpath(Rails.root)
-          unless real.start_with?(rails_root_real)
+          real = File.realpath(full_path).to_s
+          rails_root_real = File.realpath(Rails.root).to_s
+          # Separator-aware containment — matches the v5.8.1-r2 hardening in
+          # get_view.rb / vfs.rb. Without `+ File::SEPARATOR`, a sibling-dir
+          # like `/app/rails_evil/...` would prefix-match a Rails root at
+          # `/app/rails`. Same bug class as the original C1.
+          unless real == rails_root_real || real.start_with?(rails_root_real + File::SEPARATOR)
             return text_response("Path not allowed: #{file}")
           end
           # Re-run the sensitive_file? check on the realpath. Defense against
@@ -76,11 +80,11 @@ module RailsAiContext
         rescue Errno::ENOENT
           return text_response("File not found: #{file}")
         end
-        if File.size(full_path) > max_file_size
+        if File.size(real) > max_file_size
           return text_response("File too large: #{file}")
         end
 
-        source_lines = (RailsAiContext::SafeFile.read(full_path) || "").lines
+        source_lines = (RailsAiContext::SafeFile.read(real) || "").lines
         context_lines = [ context_lines.to_i, 0 ].max
 
         # Find all matching lines

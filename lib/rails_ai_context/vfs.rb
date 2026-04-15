@@ -151,13 +151,16 @@ module RailsAiContext
           raise RailsAiContext::Error, "Path not allowed: #{path} (sensitive file)"
         end
 
+        # Use the canonicalized realpath for size + read to eliminate the TOCTOU
+        # window between the containment/sensitive check and the actual file
+        # access. Mirrors the pattern in get_view.rb and get_edit_context.rb.
         max_size = RailsAiContext.configuration.max_file_size
-        if File.size(full_path) > max_size
-          content = JSON.pretty_generate(error: "File too large: #{path} (#{File.size(full_path)} bytes)")
+        if File.size(real_view) > max_size
+          content = JSON.pretty_generate(error: "File too large: #{path} (#{File.size(real_view)} bytes)")
           return [ { uri: uri, mime_type: "application/json", text: content } ]
         end
 
-        view_content = RailsAiContext::SafeFile.read(full_path) || ""
+        view_content = RailsAiContext::SafeFile.read(real_view) || ""
         mime = path.end_with?(".rb") ? "text/x-ruby" : "text/html"
         [ { uri: uri, mime_type: mime, text: view_content } ]
       end

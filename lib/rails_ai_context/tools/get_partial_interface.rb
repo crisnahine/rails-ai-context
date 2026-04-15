@@ -52,6 +52,11 @@ module RailsAiContext
             recovery_tool: "Call rails_get_view(detail:\"summary\") to see all views and partials")
         end
 
+        # Derive display-string bases from the realpath that resolve_partial_path
+        # already computed internally — keeps all path operations on realpaths.
+        real_root = File.realpath(root)
+        real_views_dir = File.realpath(views_dir)
+
         if File.size(file_path) > max_file_size
           return text_response("Partial file too large: #{file_path} (#{File.size(file_path)} bytes, max: #{max_file_size})")
         end
@@ -59,8 +64,8 @@ module RailsAiContext
         source = safe_read(file_path)
         return text_response("Could not read partial file.") unless source
 
-        relative_path = file_path.sub("#{root}/", "")
-        partial_name = file_path.sub("#{views_dir}/", "")
+        relative_path = file_path.sub("#{real_root}/", "")
+        partial_name = file_path.sub("#{real_views_dir}/", "")
 
         # Parse the partial's interface
         magic_locals = extract_magic_comment_locals(source)
@@ -245,16 +250,22 @@ module RailsAiContext
 
         return nil unless found
 
-        # Path traversal protection
+        # Path traversal protection: separator-aware containment + post-realpath
+        # sensitive recheck. Returns real_found (the resolved realpath) so the
+        # caller reads from the same path that was security-checked — TOCTOU closed.
         begin
-          unless File.realpath(found).start_with?(File.realpath(views_dir))
+          real_found = File.realpath(found).to_s
+          real_base = File.realpath(views_dir).to_s
+          unless real_found == real_base || real_found.start_with?(real_base + File::SEPARATOR)
             return nil
           end
+          relative_real = real_found.sub("#{real_base}/", "")
+          return nil if sensitive_file?(relative_real) || sensitive_file?(partial)
         rescue Errno::ENOENT
           return nil
         end
 
-        found
+        real_found
       end
 
       # Extract locals declared via Rails 7.1+ magic comment: <%# locals: (name:, title: "default") %>

@@ -25,12 +25,14 @@ module RailsAiContext
       ->(data) {
         return unless defined?(ActiveSupport::Notifications)
 
-        method = data[:method] || "unknown"
-        event_name = "#{EVENT_PREFIX}.#{method.to_s.tr("/", ".")}"
-
-        payload = build_payload(data)
-
         begin
+          method = data[:method] || "unknown"
+          event_name = "#{EVENT_PREFIX}.#{method.to_s.tr("/", ".")}"
+
+          # build_payload reads configuration — wrap it in the rescue so a
+          # broken/nil configuration doesn't propagate out of the lambda and
+          # crash the MCP SDK's ensure block. v5.8.1-r3 hardening.
+          payload = build_payload(data)
           ActiveSupport::Notifications.instrument(event_name, payload)
         rescue => e
           # The MCP SDK's instrument_call invokes this callback from an `ensure`

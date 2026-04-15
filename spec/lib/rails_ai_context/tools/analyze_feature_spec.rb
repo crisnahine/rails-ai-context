@@ -178,5 +178,97 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).to include("### PostsController")
       expect(text).to include("`GET` `/posts`")
     end
+
+    context "DoS cap (v5.8.1 round 2)" do
+      it "caps discover_services at MAX_SCAN_FILES and emits truncation note" do
+        Dir.mktmpdir("rac_dos_services") do |tmp|
+          services_dir = File.join(tmp, "app", "services")
+          FileUtils.mkdir_p(services_dir)
+          (described_class::MAX_SCAN_FILES + 50).times do |i|
+            File.write(File.join(services_dir, "dos_service_#{i}.rb"),
+                       "class DosService#{i}\n  def call; end\nend\n")
+          end
+
+          allow(described_class).to receive(:cached_context).and_return({})
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+
+          result = described_class.call(feature: "dos_service")
+          text = result.content.first[:text]
+
+          expect(text).to include("first #{described_class::MAX_SCAN_FILES} scanned")
+          expect(text).to include("## Services")
+          # Listed body is bounded by the cap (each candidate is also a match here).
+          listed = text.scan(/`app\/services\/dos_service_\d+\.rb`/).size
+          expect(listed).to be <= described_class::MAX_SCAN_FILES
+        end
+      end
+
+      it "caps discover_jobs at MAX_SCAN_FILES" do
+        Dir.mktmpdir("rac_dos_jobs") do |tmp|
+          jobs_dir = File.join(tmp, "app", "jobs")
+          FileUtils.mkdir_p(jobs_dir)
+          (described_class::MAX_SCAN_FILES + 25).times do |i|
+            File.write(File.join(jobs_dir, "dos_job_#{i}.rb"),
+                       "class DosJob#{i}\n  queue_as :default\nend\n")
+          end
+
+          allow(described_class).to receive(:cached_context).and_return({})
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+
+          result = described_class.call(feature: "dos_job")
+          text = result.content.first[:text]
+
+          expect(text).to include("first #{described_class::MAX_SCAN_FILES} scanned")
+          expect(text).to include("## Jobs")
+        end
+      end
+
+      it "caps discover_mailers, discover_channels, discover_env_dependencies independently" do
+        Dir.mktmpdir("rac_dos_mixed") do |tmp|
+          %w[app/mailers app/channels app/services].each do |sub|
+            dir = File.join(tmp, sub)
+            FileUtils.mkdir_p(dir)
+            (described_class::MAX_SCAN_FILES + 10).times do |i|
+              File.write(File.join(dir, "dos_thing_#{i}.rb"),
+                         "class DosThing#{i}\n  def deliver; ENV['DOS_THING_KEY']; end\nend\n")
+            end
+          end
+
+          allow(described_class).to receive(:cached_context).and_return({})
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+
+          result = described_class.call(feature: "dos_thing")
+          text = result.content.first[:text]
+
+          # Each section asserted independently — a regression in any single
+          # discover_* method would now fail the spec on its own line.
+          expect(text).to include("## Mailers (#{described_class::MAX_SCAN_FILES} — first #{described_class::MAX_SCAN_FILES} scanned)")
+          expect(text).to include("## Channels (#{described_class::MAX_SCAN_FILES} — first #{described_class::MAX_SCAN_FILES} scanned)")
+          expect(text).to include("## Environment Dependencies (first #{described_class::MAX_SCAN_FILES} per dir scanned)")
+        end
+      end
+
+      it "does NOT emit a truncation note when file count is below the cap" do
+        Dir.mktmpdir("rac_below_cap") do |tmp|
+          services_dir = File.join(tmp, "app", "services")
+          FileUtils.mkdir_p(services_dir)
+          # Strictly below MAX_SCAN_FILES — guard against a `>= cap` off-by-one
+          # that would falsely emit the truncation note.
+          (described_class::MAX_SCAN_FILES - 50).times do |i|
+            File.write(File.join(services_dir, "small_service_#{i}.rb"),
+                       "class SmallService#{i}\n  def call; end\nend\n")
+          end
+
+          allow(described_class).to receive(:cached_context).and_return({})
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+
+          result = described_class.call(feature: "small_service")
+          text = result.content.first[:text]
+
+          expect(text).to include("## Services")
+          expect(text).not_to include("first #{described_class::MAX_SCAN_FILES} scanned")
+        end
+      end
+    end
   end
 end

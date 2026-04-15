@@ -54,6 +54,17 @@ module RailsAiContext
             next
           end
 
+          # Block sensitive files on the caller-supplied string BEFORE any
+          # filesystem stat. Closes the existence-oracle side channel where
+          # an attacker could distinguish "file not found" from "access denied"
+          # for a path like config/master.key. Mirrors get_edit_context.rb
+          # ordering. v5.8.1 round 2 hardening.
+          if sensitive_file?(file)
+            results << "\u2717 #{file} \u2014 access denied (sensitive file)"
+            total += 1
+            next
+          end
+
           full_path = Rails.root.join(file)
 
           unless File.exist?(full_path)
@@ -65,19 +76,24 @@ module RailsAiContext
           end
 
           begin
-            real = File.realpath(full_path)
-            rails_root_real = File.realpath(Rails.root)
-            unless real.start_with?(rails_root_real)
+            real = File.realpath(full_path).to_s
+            rails_root_real = File.realpath(Rails.root).to_s
+            # Separator-aware containment — matches the v5.8.1-r2 hardening in
+            # get_view.rb / vfs.rb. Without `+ File::SEPARATOR`, a sibling-dir
+            # like `/app/rails_evil/...` would prefix-match a Rails root at
+            # `/app/rails`. Same bug class as the original C1.
+            unless real == rails_root_real || real.start_with?(rails_root_real + File::SEPARATOR)
               results << "\u2717 #{file} \u2014 path not allowed (outside Rails root)"
               total += 1
               next
             end
-            # Reject validation on sensitive files — no need to let the
-            # caller probe existence/size of secrets via validation errors.
-            # Added in v5.8.1 (matches the defense already in get_edit_context).
+            # Defense-in-depth: re-run sensitive_file? on the resolved path.
+            # Catches symlinks pointing into sensitive territory from a
+            # non-sensitive caller string (e.g. app/views/leak.html.erb →
+            # ../../config/master.key).
             relative_real = real.sub("#{rails_root_real}/", "")
-            if sensitive_file?(file) || sensitive_file?(relative_real)
-              results << "\u2717 #{file} \u2014 access denied (sensitive file)"
+            if sensitive_file?(relative_real)
+              results << "\u2717 #{file} \u2014 access denied (resolves to sensitive file)"
               total += 1
               next
             end
@@ -89,12 +105,13 @@ module RailsAiContext
 
           total += 1
 
+          real_path = Pathname.new(real)
           ok, msg, warnings = if file.end_with?(".rb")
-            validate_ruby(full_path)
+            validate_ruby(real_path)
           elsif file.end_with?(".html.erb") || file.end_with?(".erb")
-            validate_erb(full_path)
+            validate_erb(real_path)
           elsif file.end_with?(".js")
-            validate_javascript(full_path)
+            validate_javascript(real_path)
           else
             results << "- #{file} \u2014 skipped (unsupported file type)"
             total -= 1
@@ -111,7 +128,7 @@ module RailsAiContext
           (warnings || []).each { |w| results << "  \u26A0 #{w}" }
 
           if level == "rails" && ok
-            rails_warnings = check_rails_semantics(file, full_path)
+            rails_warnings = check_rails_semantics(file, real_path)
             rails_warnings.each { |w| results << "  \u26A0 #{w}" }
           end
         end

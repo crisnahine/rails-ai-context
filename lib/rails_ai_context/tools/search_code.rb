@@ -126,7 +126,7 @@ module RailsAiContext
         begin
           real_search = File.realpath(search_path)
           real_root = File.realpath(root)
-          unless real_search.start_with?(real_root)
+          unless real_search == real_root || real_search.start_with?(real_root + File::SEPARATOR)
             return text_response("Path not allowed: #{path}")
           end
         rescue Errno::ENOENT

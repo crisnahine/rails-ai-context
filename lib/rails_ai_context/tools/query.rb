@@ -67,6 +67,7 @@ module RailsAiContext
         pg_stat_file | pg_file_settings | pg_current_logfile |
         lo_import | lo_export |
         dblink[a-z_]* |
+        LOAD\s+DATA |
         load_file | load_extension
       )\b/ix
 

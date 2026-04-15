@@ -24,10 +24,12 @@ module RailsAiContext
       # Map well-known feature keywords to gem-based patterns
       AUTH_KEYWORDS = %w[auth authentication login signup signin session devise omniauth].freeze
 
-      # Cap per-directory file scans to avoid unbounded Dir.glob + SafeFile.read
-      # on large monorepos. Matches the pattern used by discover_tests. Tool
-      # output notes when the cap is hit so the AI agent knows to narrow its
-      # feature keyword. v5.8.1 hardening.
+      # Cap per-directory file scans to avoid unbounded work on large monorepos.
+      # Note: Dir.glob materialises the full path array before .first() truncates —
+      # the directory walk itself is unbounded; only per-file reading and processing
+      # is capped at MAX_SCAN_FILES. Applied to every discover_* method that walks
+      # the filesystem. Tool output notes when the cap is hit so the AI agent knows
+      # to narrow its feature keyword. v5.8.1 hardening; all glob sites in r2.
       MAX_SCAN_FILES = 500
       AUTH_GEM_NAMES = %w[devise omniauth rodauth sorcery clearance authlogic warden jwt].freeze
 
@@ -313,20 +315,26 @@ module RailsAiContext
         def discover_tests(root, pattern, lines)
           test_dirs = [ File.join(root, "spec"), File.join(root, "test") ]
           found = []
+          truncated = false
 
           test_dirs.each do |dir|
             next unless Dir.exist?(dir)
-            Dir.glob(File.join(dir, "**", "*_{test,spec}.rb")).each do |path|
+            suffix_glob = Dir.glob(File.join(dir, "**", "*_{test,spec}.rb")).first(MAX_SCAN_FILES)
+            truncated = true if suffix_glob.size == MAX_SCAN_FILES
+            suffix_glob.each do |path|
               found << path if File.basename(path, ".rb").include?(pattern)
             end
-            Dir.glob(File.join(dir, "**", "{test,spec}_*.rb")).each do |path|
+            prefix_glob = Dir.glob(File.join(dir, "**", "{test,spec}_*.rb")).first(MAX_SCAN_FILES)
+            truncated = true if prefix_glob.size == MAX_SCAN_FILES
+            prefix_glob.each do |path|
               found << path if File.basename(path, ".rb").include?(pattern)
             end
           end
           found.uniq!
           return found if found.empty?
 
-          lines << "## Tests (#{found.size})"
+          header = "## Tests (#{found.size}#{truncated ? " — first #{MAX_SCAN_FILES} per glob scanned" : ""})"
+          lines << header
           found.each do |path|
             relative = path.sub("#{root}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
@@ -366,7 +374,7 @@ module RailsAiContext
           # Check jobs
           job_dir = File.join(root, "app", "jobs")
           if Dir.exist?(job_dir)
-            Dir.glob(File.join(job_dir, "**", "*.rb")).each do |path|
+            Dir.glob(File.join(job_dir, "**", "*.rb")).first(MAX_SCAN_FILES).each do |path|
               next unless File.basename(path, ".rb").include?(pattern)
               snake = File.basename(path, ".rb")
               unless test_basenames.any? { |t| t.include?(snake) }
@@ -378,7 +386,7 @@ module RailsAiContext
           # Check services
           service_dir = File.join(root, "app", "services")
           if Dir.exist?(service_dir)
-            Dir.glob(File.join(service_dir, "**", "*.rb")).each do |path|
+            Dir.glob(File.join(service_dir, "**", "*.rb")).first(MAX_SCAN_FILES).each do |path|
               next unless File.basename(path, ".rb").include?(pattern)
               snake = File.basename(path, ".rb")
               unless test_basenames.any? { |t| t.include?(snake) }
@@ -490,10 +498,11 @@ module RailsAiContext
           dir = File.join(root, "app", "channels")
           return unless Dir.exist?(dir)
 
-          found = Dir.glob(File.join(dir, "**", "*.rb")).select { |p| File.basename(p, ".rb").include?(pattern) }
+          candidates = Dir.glob(File.join(dir, "**", "*.rb")).first(MAX_SCAN_FILES)
+          found = candidates.select { |p| File.basename(p, ".rb").include?(pattern) }
           return if found.empty?
 
-          lines << "## Channels (#{found.size})"
+          lines << "## Channels (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " — first #{MAX_SCAN_FILES} scanned" : ""})"
           found.each do |path|
             relative = path.sub("#{root}/", "")
             lines << "- `#{relative}`"
@@ -509,10 +518,11 @@ module RailsAiContext
           dir = File.join(root, "app", "mailers")
           return unless Dir.exist?(dir)
 
-          found = Dir.glob(File.join(dir, "**", "*.rb")).select { |p| File.basename(p, ".rb").include?(pattern) }
+          candidates = Dir.glob(File.join(dir, "**", "*.rb")).first(MAX_SCAN_FILES)
+          found = candidates.select { |p| File.basename(p, ".rb").include?(pattern) }
           return if found.empty?
 
-          lines << "## Mailers (#{found.size})"
+          lines << "## Mailers (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " — first #{MAX_SCAN_FILES} scanned" : ""})"
           found.each do |path|
             relative = path.sub("#{root}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
@@ -555,9 +565,12 @@ module RailsAiContext
           # Scan services, jobs, and model files for ENV references
           dirs = %w[app/services app/jobs].map { |d| File.join(root, d) }.select { |d| Dir.exist?(d) }
           env_vars = Set.new
+          truncated = false
 
           dirs.each do |dir|
-            Dir.glob(File.join(dir, "**", "*.rb")).each do |path|
+            candidates = Dir.glob(File.join(dir, "**", "*.rb")).first(MAX_SCAN_FILES)
+            truncated = true if candidates.size == MAX_SCAN_FILES
+            candidates.each do |path|
               next unless File.basename(path, ".rb").include?(pattern) || path.downcase.include?(pattern)
               source = RailsAiContext::SafeFile.read(path) or next
               source.scan(/ENV\[["']([^"']+)["']\]|ENV\.fetch\(["']([^"']+)["']\)/).each do |m|
@@ -567,7 +580,8 @@ module RailsAiContext
           end
           return if env_vars.empty?
 
-          lines << "## Environment Dependencies"
+          header = "## Environment Dependencies#{truncated ? " (first #{MAX_SCAN_FILES} per dir scanned)" : ""}"
+          lines << header
           env_vars.sort.each { |v| lines << "- `#{v}`" }
           lines << ""
         rescue => e
