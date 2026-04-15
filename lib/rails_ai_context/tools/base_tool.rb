@@ -108,7 +108,22 @@ module RailsAiContext
             now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
             ttl = RailsAiContext.configuration.cache_ttl
 
-            if SHARED_CACHE[:context] && (now - SHARED_CACHE[:timestamp]) < ttl && !Fingerprinter.changed?(rails_app, SHARED_CACHE[:fingerprint])
+            # Fast path: within TTL window, trust the cache and skip the
+            # fingerprint walk entirely. Fingerprinter stats every *.rb file
+            # in WATCHED_DIRS (plus, in dev-mode path: installs, every file
+            # in the gem's own lib/ tree) — measured at ~12ms per call in
+            # dev mode, ~0.5ms in production. Since LiveReload fires
+            # reset_all_caches! on actual file-change events, stale-cache
+            # risk during a short TTL window is already covered.
+            if SHARED_CACHE[:context] && (now - SHARED_CACHE[:timestamp]) < ttl
+              return SHARED_CACHE[:context].deep_dup
+            end
+
+            # TTL expired: re-validate via fingerprint before re-introspecting.
+            # If fingerprint is unchanged, bump the timestamp and reuse the
+            # cached context — saves re-running all 31 introspectors.
+            if SHARED_CACHE[:context] && !Fingerprinter.changed?(rails_app, SHARED_CACHE[:fingerprint])
+              SHARED_CACHE[:timestamp] = now
               return SHARED_CACHE[:context].deep_dup
             end
 
@@ -125,6 +140,10 @@ module RailsAiContext
             SHARED_CACHE.delete(:timestamp)
             SHARED_CACHE.delete(:fingerprint)
           end
+          # Also invalidate the memoized gem-lib fingerprint so active gem
+          # development sees a fresh scan on next call without a process
+          # restart. No-op for production installs.
+          Fingerprinter.reset_gem_lib_fingerprint!
         end
 
         # Reset the shared cache. Used by LiveReload to invalidate on file change.

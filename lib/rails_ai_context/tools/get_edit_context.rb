@@ -59,8 +59,19 @@ module RailsAiContext
           return text_response("File not found: #{file}.#{hint}")
         end
         begin
-          unless File.realpath(full_path).start_with?(File.realpath(Rails.root))
+          real = File.realpath(full_path)
+          rails_root_real = File.realpath(Rails.root)
+          unless real.start_with?(rails_root_real)
             return text_response("Path not allowed: #{file}")
+          end
+          # Re-run the sensitive_file? check on the realpath. Defense against
+          # symlinks that point at sensitive files from a non-sensitive path
+          # (e.g. app/models/notes.rb -> ../../config/master.key). The initial
+          # check above runs on the caller-supplied string, not the resolved
+          # target. See v5.8.1 security review.
+          relative_real = real.sub("#{rails_root_real}/", "")
+          if sensitive_file?(relative_real)
+            return text_response("Access denied: #{file} resolves to a sensitive file (secrets/keys/credentials).")
           end
         rescue Errno::ENOENT
           return text_response("File not found: #{file}")

@@ -47,6 +47,27 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
       expect(text).to include("Access denied")
     end
 
+    it "blocks access via symlink target (v5.8.1 realpath sensitive check)" do
+      # Simulates the case where app/models/evil.rb is a symlink pointing
+      # at config/master.key. The basename/path initial check passes (evil.rb
+      # isn't in the sensitive list), but the realpath resolves to a sensitive
+      # file and the second check should catch it.
+      secret = File.join(Rails.root, "config", "master.key")
+      symlink = File.join(Rails.root, "app", "models", "evil.rb")
+      begin
+        File.write(secret, "test-master-key-value")
+        File.symlink(secret, symlink)
+        result = described_class.call(file: "app/models/evil.rb", near: "anything")
+        text = result.content.first[:text]
+        expect(text).to include("Access denied")
+        expect(text).to include("sensitive")
+        expect(text).not_to include("test-master-key-value")
+      ensure
+        FileUtils.rm_f(symlink)
+        FileUtils.rm_f(secret)
+      end
+    end
+
     it "prevents path traversal" do
       result = described_class.call(file: "../../etc/passwd", near: "root")
       text = result.content.first[:text]

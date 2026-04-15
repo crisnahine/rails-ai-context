@@ -342,22 +342,125 @@ RSpec.describe RailsAiContext::Tools::Query do
       end
     end
 
-    context "column redaction" do
-      it "redacts sensitive columns in results" do
-        # Create a mock result with a password_digest column
-        columns = %w[id email password_digest]
-        rows = [ [ 1, "user@example.com", "$2a$12$secrethash" ] ]
-        mock_result = ActiveRecord::Result.new(columns, rows)
+    context "sensitive column reference rejection (pre-execution)" do
+      # v5.8.1 replaced post-execution redaction with pre-execution rejection.
+      # Post-execution redaction runs on `result.columns`, which the caller
+      # controls via aliases and expressions — trivially bypassable by
+      # `SELECT password_digest AS x FROM users`. Reject at validate_sql instead.
 
-        allow(ActiveRecord::Base.connection).to receive(:select_all).and_return(mock_result)
-        # Skip the PRAGMA calls for this mock test
-        allow(ActiveRecord::Base.connection).to receive(:execute)
+      it "rejects a direct reference to a sensitive column" do
+        valid, error = described_class.validate_sql("SELECT id, email, password_digest FROM users")
+        expect(valid).to be false
+        expect(error).to include("sensitive column")
+        expect(error).to include("password_digest")
+      end
 
-        result = described_class.call(sql: "SELECT id, email, password_digest FROM users")
-        text = result.content.first[:text]
-        expect(text).to include("[REDACTED]")
-        expect(text).to include("user@example.com")
-        expect(text).not_to include("$2a$12$secrethash")
+      it "rejects an aliased reference (SELECT password_digest AS x)" do
+        valid, error = described_class.validate_sql("SELECT password_digest AS x FROM users LIMIT 50")
+        expect(valid).to be false
+        expect(error).to include("password_digest")
+      end
+
+      it "rejects a function-wrapped reference (substring)" do
+        valid, error = described_class.validate_sql("SELECT substring(password_digest, 1, 60) FROM users")
+        expect(valid).to be false
+        expect(error).to include("password_digest")
+      end
+
+      it "rejects an md5() reference on encrypted/session data" do
+        valid, error = described_class.validate_sql("SELECT md5(session_data) FROM sessions")
+        expect(valid).to be false
+        expect(error).to include("session_data")
+      end
+
+      it "rejects a subquery that projects the sensitive column" do
+        valid, error = described_class.validate_sql("SELECT v FROM (SELECT password_digest AS v FROM users) sub")
+        expect(valid).to be false
+        expect(error).to include("password_digest")
+      end
+
+      it "rejects CASE expressions that project the sensitive column" do
+        valid, error = described_class.validate_sql("SELECT CASE WHEN id > 0 THEN password_digest END FROM users")
+        expect(valid).to be false
+        expect(error).to include("password_digest")
+      end
+
+      it "rejects references to configured query_redacted_columns" do
+        RailsAiContext.configuration.query_redacted_columns = %w[custom_secret_field]
+        valid, error = described_class.validate_sql("SELECT custom_secret_field AS y FROM tenants")
+        expect(valid).to be false
+        expect(error).to include("custom_secret_field")
+      ensure
+        RailsAiContext.configuration.query_redacted_columns = %w[
+          password_digest encrypted_password password_hash
+          reset_password_token confirmation_token unlock_token
+          otp_secret session_data secret_key
+          api_key api_secret access_token refresh_token jti
+        ]
+      end
+
+      it "does not false-positive on unrelated columns containing a substring" do
+        # `keyword` contains "key" as a substring but the match is word-bounded
+        # so this should pass. `description` contains "script" — fine.
+        valid, error = described_class.validate_sql("SELECT id, keyword, description FROM tags")
+        expect(valid).to be true
+        expect(error).to be_nil
+      end
+    end
+
+    context "blocked dangerous functions (filesystem/network primitives)" do
+      it "blocks pg_read_file" do
+        valid, error = described_class.validate_sql("SELECT pg_read_file('/etc/passwd')")
+        expect(valid).to be false
+        expect(error).to include("pg_read_file")
+      end
+
+      it "blocks pg_read_binary_file" do
+        valid, error = described_class.validate_sql("SELECT pg_read_binary_file('/etc/shadow')")
+        expect(valid).to be false
+        expect(error).to include("pg_read_binary_file")
+      end
+
+      it "blocks pg_ls_dir" do
+        valid, error = described_class.validate_sql("SELECT pg_ls_dir('/home/dev/.ssh')")
+        expect(valid).to be false
+        expect(error).to include("pg_ls_dir")
+      end
+
+      it "blocks pg_stat_file" do
+        valid, error = described_class.validate_sql("SELECT pg_stat_file('/etc/passwd')")
+        expect(valid).to be false
+        expect(error).to include("pg_stat_file")
+      end
+
+      it "blocks lo_import" do
+        valid, error = described_class.validate_sql("SELECT lo_import('/etc/passwd')")
+        expect(valid).to be false
+        expect(error).to include("lo_import")
+      end
+
+      it "blocks dblink" do
+        valid, error = described_class.validate_sql("SELECT * FROM dblink('host=evil.com', 'SELECT 1') AS t(a int)")
+        expect(valid).to be false
+        expect(error).to include("dblink")
+      end
+
+      it "blocks MySQL LOAD_FILE" do
+        valid, error = described_class.validate_sql("SELECT LOAD_FILE('/etc/passwd')")
+        expect(valid).to be false
+        expect(error).to match(/load_file/i)
+      end
+
+      it "blocks SQLite load_extension" do
+        valid, error = described_class.validate_sql("SELECT load_extension('/tmp/lib.so')")
+        expect(valid).to be false
+        expect(error).to include("load_extension")
+      end
+
+      it "blocks SELECT INTO OUTFILE (MySQL)" do
+        valid, error = described_class.validate_sql("SELECT 1 INTO OUTFILE '/tmp/leak.txt'")
+        expect(valid).to be false
+        expect(error).to match(/OUTFILE|SELECT INTO/)
       end
     end
 

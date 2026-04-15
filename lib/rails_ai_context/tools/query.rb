@@ -48,6 +48,53 @@ module RailsAiContext
       MULTI_STATEMENT  = /;\s*\S/
       ALLOWED_PREFIX   = /\A\s*(SELECT|WITH|SHOW|EXPLAIN|DESCRIBE|DESC)\b/i
 
+      # SELECT-callable functions that give the caller a filesystem / network
+      # exfiltration primitive even though the query is technically a SELECT.
+      # These pass `SET TRANSACTION READ ONLY` because they're reads from the
+      # DB engine's perspective, but they bypass the gem's `sensitive_patterns`
+      # file allowlist entirely by pivoting through the database process.
+      #
+      # Postgres: pg_read_file / pg_read_binary_file / pg_ls_dir / pg_stat_file
+      #           (file read), lo_import / lo_export (large-object I/O),
+      #           dblink* (cross-db exfiltration), COPY ... FROM/TO PROGRAM
+      #           (arbitrary command execution when COPY permissions permit).
+      # MySQL:    LOAD_FILE (scalar file read outside SELECT INTO contexts).
+      # SQLite:   load_extension (shared-library load — disabled by default
+      #           but harden in defense).
+      BLOCKED_FUNCTIONS = /\b(
+        pg_read_binary_file | pg_read_file |
+        pg_ls_dir | pg_ls_logdir | pg_ls_tmpdir | pg_ls_waldir | pg_ls_archive_statusdir |
+        pg_stat_file | pg_file_settings | pg_current_logfile |
+        lo_import | lo_export |
+        dblink[a-z_]* |
+        load_file | load_extension
+      )\b/ix
+
+      # MySQL `SELECT ... INTO OUTFILE 'path'` / `INTO DUMPFILE 'path'`
+      # are caught by SELECT_INTO already, but make an explicit pattern so
+      # the error message is accurate.
+      BLOCKED_OUTPUT = /\bINTO\s+(OUTFILE|DUMPFILE)\b/i
+
+      # Defense against the column-aliasing redaction bypass:
+      #
+      #   SELECT password_digest AS x FROM users       -- bypasses result.columns redaction
+      #   SELECT substring(password_digest, 1, 60) ... -- column name becomes "substring"
+      #   SELECT md5(session_data) FROM sessions       -- column name becomes "md5"
+      #
+      # Post-execution redaction operates on the column names the DB returns,
+      # which the caller controls via aliases and expressions. The only
+      # defense that works is to reject queries that TEXTUALLY reference
+      # any sensitive column, before execution. Users who need to query
+      # non-sensitive columns with a similar name can subtract from
+      # `config.query_redacted_columns` in an initializer.
+      SENSITIVE_COLUMN_SUFFIXES = %w[
+        password_digest password_hash encrypted_password
+        password_reset_token confirmation_token unlock_token
+        remember_token reset_password_token api_key api_secret
+        access_token refresh_token jti otp_secret session_data
+        secret_key secret private_key
+      ].freeze
+
       # SQL injection tautology patterns: OR 1=1, OR true, OR ''='', UNION SELECT, etc.
       TAUTOLOGY_PATTERNS = [
         /\bOR\s+1\s*=\s*1\b/i,
@@ -148,6 +195,14 @@ module RailsAiContext
         return [ false, "Blocked: FOR UPDATE/SHARE clause" ] if cleaned.match?(BLOCKED_CLAUSES)
         return [ false, "Blocked: sensitive SHOW command" ] if cleaned.match?(BLOCKED_SHOWS)
         return [ false, "Blocked: SELECT INTO creates a table" ] if cleaned.match?(SELECT_INTO)
+        return [ false, "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" ] if cleaned.match?(BLOCKED_OUTPUT)
+
+        # Block database functions that give a filesystem/network primitive —
+        # pg_read_file, lo_import, dblink, LOAD_FILE, load_extension, etc.
+        # These pass SET TRANSACTION READ ONLY but bypass sensitive_patterns.
+        if (m = cleaned.match(BLOCKED_FUNCTIONS))
+          return [ false, "Blocked: dangerous function #{m[0]} (filesystem/network primitive)" ]
+        end
 
         # Check for SQL injection tautology patterns (OR 1=1, UNION SELECT, etc.)
         tautology = TAUTOLOGY_PATTERNS.find { |p| cleaned.match?(p) }
@@ -162,7 +217,37 @@ module RailsAiContext
 
         return [ false, "Only SELECT, WITH, SHOW, EXPLAIN, DESCRIBE allowed" ] unless cleaned.match?(ALLOWED_PREFIX)
 
+        # Column-aliasing redaction bypass defense: reject any query that
+        # textually references a sensitive column name. See the comment on
+        # SENSITIVE_COLUMN_SUFFIXES above — post-execution redaction cannot
+        # survive `SELECT password_digest AS x`.
+        if (offending = references_sensitive_column?(cleaned))
+          return [ false,
+            "Blocked: query references sensitive column `#{offending}`. " \
+            "Post-execution redaction cannot survive aliases / expressions, so " \
+            "the entire query is rejected. Remove the reference or subtract " \
+            "from config.query_redacted_columns in an initializer if this " \
+            "column is not actually sensitive in your app." ]
+        end
+
         [ true, nil ]
+      end
+
+      # Returns the first sensitive column name referenced by the SQL, or nil.
+      # Checks both the user's configured redacted columns (config.query_redacted_columns)
+      # AND the hard-coded suffix list (SENSITIVE_COLUMN_SUFFIXES). The match is
+      # case-insensitive and word-bounded so unrelated identifiers containing
+      # a sensitive substring are not false-positives.
+      def self.references_sensitive_column?(cleaned_sql)
+        down = cleaned_sql.downcase
+        # Build the combined list ONCE per call and dedupe.
+        configured = Array(config.query_redacted_columns).map { |c| c.to_s.downcase }
+        suffixed   = SENSITIVE_COLUMN_SUFFIXES.map(&:downcase)
+        (configured + suffixed).uniq.each do |col|
+          next if col.empty?
+          return col if down.match?(/\b#{Regexp.escape(col)}\b/)
+        end
+        nil
       end
 
       # ── Database-level execution (Layer 2) ──────────────────────────

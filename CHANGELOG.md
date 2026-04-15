@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.1] — 2026-04-15
+
+### Fixed — Security Hardening
+
+Two exploitable vulnerabilities in `rails_query` and four defense-in-depth hardening issues. All discovered by an adversarial security review conducted during v5.8.1 pre-release verification. None were known at the v5.8.0 release — users should upgrade immediately.
+
+- **SQL column-aliasing redaction bypass (exploitable).** Post-execution redaction in `rails_query` operated on `result.columns` (the DB-returned column names), which the caller controls via aliases and expressions. `SELECT password_digest AS x FROM users` returned raw bcrypt hashes. Same for `SELECT substring(password_digest, 1, 60) FROM users` (column named `substring`), `SELECT md5(session_data) FROM sessions`, `SELECT CASE WHEN id > 0 THEN password_digest END FROM users`, and subqueries that re-project the sensitive column. **Fix:** moved enforcement to pre-execution in `validate_sql`. Any query that textually references a column name in `config.query_redacted_columns` OR the hard-coded `SENSITIVE_COLUMN_SUFFIXES` list (password_digest, encrypted_password, password_hash, reset_password_token, api_key, refresh_token, otp_secret, session_data, secret_key, private_key, etc.) is now rejected. Users with a legitimately non-sensitive column matching one of these names can subtract from `config.query_redacted_columns` in an initializer. **8 bypass scenarios covered by new specs.**
+
+- **Arbitrary filesystem read via database functions (exploitable).** `rails_query` did not block PostgreSQL's `pg_read_file`, `pg_read_binary_file`, `pg_ls_dir`, `pg_stat_file`, `lo_import`/`lo_export`, `dblink`, MySQL's `LOAD_FILE`, `SELECT ... INTO OUTFILE/DUMPFILE`, or SQLite's `load_extension`. These are SELECT-callable (so they pass the `BLOCKED_KEYWORDS` scanner and `SET TRANSACTION READ ONLY`) but give the caller a filesystem and shared-library-load primitive — completely bypassing the gem's `sensitive_patterns` allowlist by pivoting through the database process. PoC: `SELECT pg_read_file('/etc/passwd')`, `SELECT pg_read_file('config/master.key')`. **Fix:** added a `BLOCKED_FUNCTIONS` regex and `BLOCKED_OUTPUT` pattern that reject any query referencing these built-ins. **10 function-specific specs added.**
+
+- **`sensitive_patterns` default list expanded.** The v5.8.0 default list covered `.env`, `.env.*`, `config/master.key`, `config/credentials*.yml.enc`, `*.pem`, `*.key` but missed common secret locations. v5.8.1 adds `config/database.yml`, `config/secrets.yml`, `config/cable.yml`, `config/storage.yml`, `config/mongoid.yml`, `config/redis.yml`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `**/id_rsa`, `**/id_ed25519`, `**/id_ecdsa`, `**/id_dsa`, `.ssh/*`, `.aws/credentials`, `.aws/config`, `.netrc`, `.pgpass`, `.my.cnf`.
+
+- **`get_edit_context` now re-checks `sensitive_file?` after realpath resolution.** The initial check ran on the caller-supplied string; a symlink inside `app/models/` pointing at `config/master.key` previously passed the basename check and fell through to `File.read`. The post-realpath check blocks this.
+
+- **`validate` now enforces `sensitive_file?`.** The validate tool had no sensitive-file check at all. Even though its output is limited to error messages (not raw content), it still leaked file existence/size and ran readers on secret files. Now denied with an `access denied (sensitive file)` error.
+
+- **`BaseTool.sensitive_file?` has direct spec coverage for the first time.** The security boundary behind every file-accepting tool had zero direct tests in v5.8.0 — 36 new specs added covering the Rails secret locations, the v5.8.1 expanded pattern list, private keys and certificates, case-insensitivity, basename-only matching, and custom pattern configurations.
+
+### Performance — Hot-Path Optimization
+
+- **`cached_context` TTL short-circuit.** The hot path of every tool call ran `Fingerprinter.changed?` on every hit, which walks every `*.{rb,rake,js,ts,erb,haml,slim,yml}` file in `WATCHED_DIRS` plus (for path:-installed users) every file in the gem's own lib/ tree — doing an `mtime` stat per file. Measured at ~12ms per call in dev-mode path installs, ~0.5ms in production. Since LiveReload fires `reset_all_caches!` on actual file-change events, stale-cache risk during a short TTL window is already covered. **Fix:** skip the fingerprint check entirely when within the TTL window. When TTL expires, re-fingerprint; if unchanged, bump the timestamp and reuse the cached context (avoiding a 31-introspector re-run).
+
+- **Fingerprinter gem-lib scan memoized.** For users who install the gem via `path:` (common for gem contributors, monorepos, the standalone dev workflow), the fingerprinter was walking 123 gem-lib files on every tool call. Memoized at class level with a `reset_gem_lib_fingerprint!` hook that `BaseTool.reset_cache!` and LiveReload invoke.
+
+- **Measured result:** `cached_context` hot-path benchmark dropped from **11.77ms to 0.199ms** per call — a **~59x speedup** on dev-mode path installs. In-Gemfile / production users see a smaller but still meaningful improvement (0.77ms → 0.199ms).
+
+### Fixed — schema.rb empty-file wrinkle
+
+- `SchemaIntrospector#static_schema_parse` returned `{ error: "No db/schema.rb, db/structure.sql, or migrations found" }` when `db/schema.rb` existed but contained zero `create_table` calls (common on freshly-created Rails apps between `db:create` and the first migration). Now returns `{ total_tables: 0, tables: {}, note: "Schema file exists but is empty — no migrations have been run yet..." }`.
+
+### Changed — CI release matrix synced to PR matrix
+
+- `.github/workflows/release.yml` test matrix was still on the old Ruby `3.2/3.3/3.4` × Rails `7.1/7.2/8.0` grid even though `ci.yml` was expanded to cover Ruby 4.0 and Rails 8.1 in v5.8.0. Now synced — release-time testing matches PR-time testing across all 12 combos, including the #69 reporter's environment (Ruby 4.0.2 + Rails 8.1.3).
+
+### Test coverage
+
+- **1982 examples, 0 failures** (was 1928 in v5.8.0, +54 new regression tests across the security + hardening + empty-schema fixes).
+
 ## [5.8.0] — 2026-04-14
 
 ### Added — Modern Rails Coverage Pass

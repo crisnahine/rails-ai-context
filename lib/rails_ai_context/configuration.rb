@@ -229,8 +229,15 @@ module RailsAiContext
       @introspectors       = PRESETS[:full].dup
       @excluded_paths      = %w[node_modules tmp log vendor .git doc docs]
       @sensitive_patterns  = %w[
-        .env .env.* config/master.key config/credentials.yml.enc
-        config/credentials/*.yml.enc *.pem *.key
+        .env .env.*
+        config/master.key
+        config/credentials.yml.enc config/credentials/*.yml.enc
+        config/database.yml config/secrets.yml
+        config/cable.yml config/storage.yml
+        config/mongoid.yml config/redis.yml
+        *.pem *.key *.p12 *.pfx *.jks *.keystore
+        **/id_rsa **/id_ed25519 **/id_ecdsa **/id_dsa
+        .ssh/* .aws/credentials .aws/config .netrc .pgpass .my.cnf
       ]
       @auto_mount          = false
       @http_path           = "/mcp"

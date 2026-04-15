@@ -66,8 +66,18 @@ module RailsAiContext
 
           begin
             real = File.realpath(full_path)
-            unless real.start_with?(File.realpath(Rails.root))
+            rails_root_real = File.realpath(Rails.root)
+            unless real.start_with?(rails_root_real)
               results << "\u2717 #{file} \u2014 path not allowed (outside Rails root)"
+              total += 1
+              next
+            end
+            # Reject validation on sensitive files — no need to let the
+            # caller probe existence/size of secrets via validation errors.
+            # Added in v5.8.1 (matches the defense already in get_edit_context).
+            relative_real = real.sub("#{rails_root_real}/", "")
+            if sensitive_file?(file) || sensitive_file?(relative_real)
+              results << "\u2717 #{file} \u2014 access denied (sensitive file)"
               total += 1
               next
             end

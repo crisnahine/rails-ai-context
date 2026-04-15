@@ -47,9 +47,24 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
 
     it "skips unsupported file types" do
-      result = described_class.call(files: [ "config/database.yml" ])
+      # package.json is neither sensitive nor a validatable language — it
+      # should be skipped, not denied. (Previously this test used
+      # config/database.yml which is now blocked by the v5.8.1 expanded
+      # sensitive_patterns list.)
+      result = described_class.call(files: [ "package.json" ])
       text = result.content.first[:text]
       expect(text).to include("skipped")
+    end
+
+    it "denies access to sensitive files (v5.8.1)" do
+      # config/database.yml, .env, config/master.key — all blocked by the
+      # v5.8.1 sensitive_patterns expansion. validate.rb previously had no
+      # sensitive_file? check at all, so these would be read + probed via
+      # error messages.
+      result = described_class.call(files: [ "config/database.yml" ])
+      text = result.content.first[:text]
+      expect(text).to include("access denied")
+      expect(text).to include("sensitive file")
     end
 
     it "returns empty message for no files" do
