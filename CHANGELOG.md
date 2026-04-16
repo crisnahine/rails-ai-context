@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.9.0] — 2026-04-16
 
+### Fixed — Cursor chat agent didn't detect rules
+
+Real user report during release QA: the Cursor IDE's chat agent didn't pick up rules written only as `.cursor/rules/*.mdc`, even when the rule declared `alwaysApply: true`. Cursor has **two** rule systems and the chat-agent composition path still consults the legacy `.cursorrules` file in many current builds.
+
+`CursorRulesSerializer` now writes **both**: `.cursor/rules/*.mdc` (newer format with frontmatter / glob scoping / agent-requested triggers) AND a plain-text `.cursorrules` at the project root (legacy fallback, parsed verbatim by every Cursor build). Newer clients read the mdc files; older / chat-mode clients read `.cursorrules`. No behavior change for users who already relied on the mdc format.
+
+`FORMAT_PATHS[:cursor]` in the install generator now includes `.cursorrules` so re-install cleanup covers both files when a user removes Cursor from their selection. Regression specs added in `cursor_rules_serializer_spec.rb` and `in_gemfile_install_spec.rb` (e2e) verify both files are produced and the legacy file is plain text without frontmatter.
+
 ### Added
 
 - **`preset` command** — composite multi-tool workflows from CLI and rake. `rails ai:preset[architecture]` runs `analyze_feature` + `dependency_graph` + `performance_check` in one call. Also: `debugging` (logs + review + validate) and `migration` (schema + migration_advisor + validate). Available via both `rails-ai-context preset architecture` and `rails 'ai:preset[architecture]'`.

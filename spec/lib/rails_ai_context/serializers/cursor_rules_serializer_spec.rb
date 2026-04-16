@@ -84,4 +84,27 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
       expect(second[:skipped].size).to eq(first[:written].size)
     end
   end
+
+  # v5.9.0 regression: real user report during release QA — Cursor chat
+  # agent didn't detect rules written only as .cursor/rules/*.mdc. Writing
+  # .cursorrules alongside (legacy format) fixed it. Ensure both are
+  # produced so neither older Cursor builds nor newer ones miss the rules.
+  it "also writes a legacy .cursorrules at the project root" do
+    Dir.mktmpdir do |dir|
+      result = described_class.new(context).call(dir)
+      cursorrules_path = File.join(dir, ".cursorrules")
+      expect(result[:written]).to include(cursorrules_path)
+      expect(File.exist?(cursorrules_path)).to be true
+
+      content = File.read(cursorrules_path)
+      # Plain text — no frontmatter — so every Cursor build reads it.
+      expect(content).not_to start_with("---")
+      # Must surface the gem's presence + name a couple of the MCP tools
+      # so the chat agent knows to use them rather than guess.
+      expect(content).to include("rails-ai-context")
+      expect(content).to include("rails_get_schema")
+      expect(content).to include("rails_get_routes")
+      expect(content).to include("App")  # app name from context
+    end
+  end
 end
