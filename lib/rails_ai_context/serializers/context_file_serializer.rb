@@ -29,8 +29,10 @@ module RailsAiContext
 
       ALL_FORMATS = (FORMAT_MAP.keys + SPLIT_ONLY_FORMATS).freeze
 
-      BEGIN_MARKER = "<!-- BEGIN rails-ai-context -->"
-      END_MARKER   = "<!-- END rails-ai-context -->"
+      # Re-exported from SectionMarkerWriter so existing code that referenced
+      # ContextFileSerializer::BEGIN_MARKER / END_MARKER keeps working.
+      BEGIN_MARKER = SectionMarkerWriter::BEGIN_MARKER
+      END_MARKER   = SectionMarkerWriter::END_MARKER
 
       def initialize(context, format: :all)
         @context = context
@@ -103,42 +105,22 @@ module RailsAiContext
         end
       end
 
-      # Wrap content in section markers so user content is preserved
+      # Wrap content in section markers so user content is preserved.
+      # Delegates to SectionMarkerWriter (also used by CursorRulesSerializer
+      # for .cursorrules) so the marker contract is implemented in exactly
+      # one place.
       def write_with_markers(filepath, content, written, skipped)
-        marked_content = "#{BEGIN_MARKER}\n#{content}\n#{END_MARKER}\n"
-
-        if File.exist?(filepath)
-          existing = File.read(filepath)
-
-          new_content = if existing.include?(BEGIN_MARKER) && existing.include?(END_MARKER)
-            existing.sub(
-              /#{Regexp.escape(BEGIN_MARKER)}.*?#{Regexp.escape(END_MARKER)}\n?/m,
-              marked_content
-            )
-          else
-            # File exists without markers — prepend our section so AI reads it first
-            "#{marked_content}\n#{existing}"
-          end
-
-          if new_content == existing
-            skipped << filepath
-          else
-            atomic_write(filepath, new_content)
-            written << filepath
-          end
-        else
-          atomic_write(filepath, marked_content)
-          written << filepath
+        case SectionMarkerWriter.write_with_markers(filepath, content)
+        when :written then written << filepath
+        when :skipped then skipped << filepath
         end
       end
 
-      # Write via temp file + rename to avoid partial writes from concurrent processes
+      # Atomic write — same temp-file + rename pattern as
+      # SectionMarkerWriter.atomic_write. Kept here because write_plain
+      # (JSON path) calls it directly without the marker layer.
       def atomic_write(filepath, content)
-        dir = File.dirname(filepath)
-        FileUtils.mkdir_p(dir)
-        tmp = File.join(dir, ".#{File.basename(filepath)}.#{SecureRandom.hex(4)}.tmp")
-        File.write(tmp, content)
-        File.rename(tmp, filepath)
+        SectionMarkerWriter.atomic_write(filepath, content)
       end
 
       def generate_split_rules(formats, output_dir, written, skipped)

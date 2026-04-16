@@ -130,4 +130,58 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
       end
     end
   end
+
+  # Real user concern: pre-existing .cursorrules content must not be
+  # destroyed on first install. The gem now wraps its block in
+  # `<!-- BEGIN/END rails-ai-context -->` markers (same convention as
+  # CLAUDE.md / AGENTS.md / .github/copilot-instructions.md) so user-
+  # added content above or below the gem block survives regeneration.
+  describe ".cursorrules section markers" do
+    it "wraps generated content in BEGIN/END markers so user content is preserved" do
+      Dir.mktmpdir do |dir|
+        described_class.new(context).call(dir)
+        content = File.read(File.join(dir, ".cursorrules"))
+        expect(content).to include("<!-- BEGIN rails-ai-context -->")
+        expect(content).to include("<!-- END rails-ai-context -->")
+      end
+    end
+
+    it "preserves user content above the marker block on first install" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, ".cursorrules")
+        user_content = "# My hand-written rules\n- Always use 2-space indent\n- Prefer guard clauses\n"
+        File.write(path, user_content)
+
+        described_class.new(context).call(dir)
+
+        new_content = File.read(path)
+        expect(new_content).to include(user_content),
+          "user-written .cursorrules content was destroyed by the install"
+        expect(new_content).to include("<!-- BEGIN rails-ai-context -->")
+      end
+    end
+
+    it "preserves user content above and below the markers on regeneration" do
+      Dir.mktmpdir do |dir|
+        # First write — gem creates the marker block.
+        described_class.new(context).call(dir)
+        path = File.join(dir, ".cursorrules")
+
+        # User adds content above and below the gem block.
+        gem_block = File.read(path)
+        File.write(path, "# Above the gem\n#{gem_block}\n# Below the gem\n")
+
+        # Regenerate — gem must replace ONLY its own block.
+        described_class.new(context).call(dir)
+
+        final = File.read(path)
+        expect(final).to include("# Above the gem")
+        expect(final).to include("# Below the gem")
+        expect(final).to include("<!-- BEGIN rails-ai-context -->")
+        expect(final).to include("<!-- END rails-ai-context -->")
+        # Marker block appears exactly once.
+        expect(final.scan("<!-- BEGIN rails-ai-context -->").size).to eq(1)
+      end
+    end
+  end
 end
