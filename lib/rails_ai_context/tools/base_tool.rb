@@ -368,7 +368,13 @@ module RailsAiContext
           relative = real.sub("#{real_root}/", "")
           return nil if sensitive_file?(relative)
           real
-        rescue Errno::ENOENT, Errno::EACCES
+        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
+          # ENOENT: dangling symlink or path deleted between glob and realpath.
+          # EACCES: filesystem permission blocks resolution.
+          # ELOOP:  circular symlink chain (a → b → a, or node_modules cycles).
+          # ENAMETOOLONG: a path component exceeds NAME_MAX.
+          # Any of these mean "skip this entry"; surfacing as exception
+          # would crash the calling tool.
           nil
         end
 
