@@ -55,7 +55,7 @@ The install generator created:
 | File | Purpose |
 |:-----|:--------|
 | `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` / `opencode.json` / `.codex/config.toml` | MCP auto-discovery — your AI tool detects these on project open |
-| `CLAUDE.md` / `.cursor/rules/` / `.github/instructions/` | Static context rules your AI reads |
+| `CLAUDE.md` / `.cursor/rules/` / `.cursorrules` / `.github/instructions/` / `AGENTS.md` | Static context rules your AI reads |
 | `config/initializers/rails_ai_context.rb` | All configuration options |
 | `.rails-ai-context.yml` | Config for standalone mode |
 

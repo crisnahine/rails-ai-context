@@ -168,8 +168,11 @@ module RailsAiContext
 
     # ── Context file checks ───────────────────────────────────────────
 
-    # Per-tool context paths — root files or split rule directories.
-    # Some tools (cursor) produce only split rules, no root file.
+    # Per-tool context path — sentinel checked for the freshness check.
+    # Other files generated alongside are assumed in-sync (they're written
+    # atomically by the same serializer). For Cursor, `.cursor/rules/` is
+    # the sentinel; `.cursorrules` (v5.9.0 legacy fallback) is generated
+    # atomically next to it, so checking either proves both are fresh.
     CONTEXT_FILES = {
       claude:   "CLAUDE.md",
       cursor:   ".cursor/rules",

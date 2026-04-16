@@ -5,7 +5,7 @@ ASSISTANT_TABLE = <<~TABLE unless defined?(ASSISTANT_TABLE)
   --                 --                                    --
   Claude Code        CLAUDE.md + .claude/rules/            rails ai:context:claude
   OpenCode           AGENTS.md                             rails ai:context:opencode
-  Cursor             .cursor/rules/                        rails ai:context:cursor
+  Cursor             .cursor/rules/ + .cursorrules         rails ai:context:cursor
   GitHub Copilot     .github/copilot-instructions.md       rails ai:context:copilot
   Codex CLI          AGENTS.md + .codex/config.toml        rails ai:context:codex
   JSON (generic)     .ai-context.json                      rails ai:context:json
@@ -166,7 +166,7 @@ end unless defined?(save_yaml_config)
 # McpConfigGenerator.remove to preserve other servers' entries.
 FORMAT_PATHS = {
   claude:   %w[CLAUDE.md .claude/rules],
-  cursor:   %w[.cursor/rules],
+  cursor:   %w[.cursor/rules .cursorrules],
   copilot:  %w[.github/copilot-instructions.md .github/instructions],
   opencode: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
   codex:    %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md]
@@ -423,7 +423,7 @@ namespace :ai do
 
   namespace :context do
     { claude: "CLAUDE.md", opencode: "AGENTS.md", codex: "AGENTS.md",
-      cursor: ".cursor/rules/", copilot: ".github/copilot-instructions.md",
+      cursor: ".cursor/rules/ + .cursorrules", copilot: ".github/copilot-instructions.md",
       json: ".ai-context.json" }.each do |fmt, file|
       desc "Generate #{file} context file"
       task fmt => :environment do

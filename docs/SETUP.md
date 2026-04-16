@@ -107,10 +107,11 @@ rails generate rails_ai_context:install  # Select "Cursor"
 
 This creates:
 - `.cursor/mcp.json` — MCP auto-discovery config
-- `.cursor/rules/rails-project.mdc` — Project overview
-- `.cursor/rules/rails-models.mdc` — Model rules
-- `.cursor/rules/rails-controllers.mdc` — Controller rules
-- `.cursor/rules/rails-mcp-tools.mdc` — Tool reference (agent-requested, Type 3)
+- `.cursor/rules/rails-project.mdc` — Project overview (Type 1: alwaysApply)
+- `.cursor/rules/rails-models.mdc` — Model rules (Type 2: glob `app/models/**/*.rb`)
+- `.cursor/rules/rails-controllers.mdc` — Controller rules (Type 2: glob `app/controllers/**/*.rb`)
+- `.cursor/rules/rails-mcp-tools.mdc` — Tool reference (Type 3: agent-requested)
+- `.cursorrules` — **legacy single-file fallback** at the project root. Cursor's chat agent doesn't always detect `.cursor/rules/*.mdc` (reported in v5.9.0 release QA); this file is parsed verbatim by every Cursor build and contains the same compact project context as `CLAUDE.md`.
 
 ### Manual MCP config
 

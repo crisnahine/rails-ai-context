@@ -333,7 +333,7 @@ class RailsAiContextCLI < Thor
 
     AI_TOOL_OPTIONS = {
       "1" => { key: :claude,   name: "Claude Code",    files: "CLAUDE.md + .claude/rules/" },
-      "2" => { key: :cursor,   name: "Cursor",         files: ".cursor/rules/" },
+      "2" => { key: :cursor,   name: "Cursor",         files: ".cursor/rules/ + .cursorrules (legacy fallback)" },
       "3" => { key: :copilot,  name: "GitHub Copilot", files: ".github/copilot-instructions.md + .github/instructions/" },
       "4" => { key: :opencode, name: "OpenCode",       files: "AGENTS.md" },
       "5" => { key: :codex,   name: "Codex CLI",      files: "AGENTS.md + .codex/config.toml" }
@@ -386,7 +386,7 @@ class RailsAiContextCLI < Thor
     # McpConfigGenerator.remove to preserve other servers' entries.
     FORMAT_PATHS = {
       claude:   %w[CLAUDE.md .claude/rules],
-      cursor:   %w[.cursor/rules],
+      cursor:   %w[.cursor/rules .cursorrules],
       copilot:  %w[.github/copilot-instructions.md .github/instructions],
       opencode: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
       codex:    %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md]

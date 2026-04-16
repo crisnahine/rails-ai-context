@@ -53,7 +53,7 @@ Yes, freely. Both generate identical context files and provide the same 38 tools
 
 **Yes, commit these:**
 - `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml` — so teammates get MCP auto-discovery
-- `CLAUDE.md`, `.cursor/rules/`, `.github/instructions/`, `AGENTS.md` — so AI has context
+- `CLAUDE.md`, `.cursor/rules/`, `.cursorrules`, `.github/instructions/`, `AGENTS.md` — so AI has context
 - `config/initializers/rails_ai_context.rb`, `.rails-ai-context.yml` — so config is shared
 
 **Don't commit:**
@@ -126,7 +126,7 @@ Depends on your `ai_tools` config. For all tools:
 | AI Tool | Files |
 |:--------|:------|
 | Claude | CLAUDE.md, .claude/rules/*.md |
-| Cursor | .cursor/rules/*.mdc |
+| Cursor | .cursor/rules/*.mdc AND .cursorrules (legacy fallback for chat agent) |
 | Copilot | .github/copilot-instructions.md, .github/instructions/*.instructions.md |
 | OpenCode | AGENTS.md, app/*/AGENTS.md |
 | Codex | Shares AGENTS.md and OpenCode rules |

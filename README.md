@@ -376,7 +376,7 @@ Plus 9 static resources (schema, routes, conventions, gems, controllers, config,
 Every generated context file ships with **6 rules that force AI verification** before writing code. The protocol targets the exact cognitive failures that produce confident-wrong code: statistical priors overriding observed facts, pattern completion beating verification, stale context lies.
 
 <details>
-<summary><strong>The 6 rules (shown to AI in every CLAUDE.md / .cursor/rules / .github/instructions)</strong></summary>
+<summary><strong>The 6 rules (shown to AI in every CLAUDE.md / .cursor/rules / .cursorrules / .github/instructions)</strong></summary>
 
 <br>
 
@@ -403,7 +403,7 @@ graph TD
 
     B --> C["MCP Server\nstdio / HTTP\n38 tools · 5 templates"]
     B --> D["CLI Tools\nRake / Thor\nSame 38 tools"]
-    B --> E["Static Files\nCLAUDE.md · .cursor/rules/\n.github/instructions/"]
+    B --> E["Static Files\nCLAUDE.md · .cursor/rules/ · .cursorrules\n.github/instructions/"]
 
     style A fill:#4a9eff,stroke:#2d7ad4,color:#fff
     style B fill:#2d2d2d,stroke:#555,color:#fff

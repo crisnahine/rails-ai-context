@@ -173,7 +173,7 @@ Result: controller and view tools automatically include relevant schema informat
 |:-----------|:-------|
 | `ClaudeSerializer` | `CLAUDE.md` |
 | `ClaudeRulesSerializer` | `.claude/rules/*.md` |
-| `CursorRulesSerializer` | `.cursor/rules/*.mdc` |
+| `CursorRulesSerializer` | `.cursor/rules/*.mdc` AND `.cursorrules` (legacy chat-agent fallback) |
 | `CopilotSerializer` | `.github/copilot-instructions.md` |
 | `CopilotInstructionsSerializer` | `.github/instructions/*.instructions.md` |
 | `OpencodeSerializer` | `AGENTS.md` (root) |
