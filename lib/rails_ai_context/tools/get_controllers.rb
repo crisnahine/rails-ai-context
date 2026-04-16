@@ -48,9 +48,9 @@ module RailsAiContext
         app_controller_names = controllers.keys.reject { |name| framework_controllers.include?(name) }.sort
 
         # Specific controller — always full detail (searches ALL controllers including framework)
-        # Flexible matching: "cooks", "CooksController", "cookscontroller" all work
+        # Flexible matching: "posts", "PostsController", "postscontroller" all work
         if controller
-          # Accept multiple formats: "CooksController", "cooks", "bonus/crises", "Bonus::CrisesController"
+          # Accept multiple formats: "PostsController", "posts", "admin/posts", "Admin::PostsController"
           # Use underscore for CamelCase→snake_case: "OmniauthCallbacks" → "omniauth_callbacks"
           # Also match on plain downcase to handle "userscontroller" → "users"
           input_snake = controller.gsub("/", "::").underscore.delete_suffix("_controller")

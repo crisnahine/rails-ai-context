@@ -164,5 +164,46 @@ RSpec.describe RailsAiContext::Tools::GetView do
         expect(text).to match(/not allowed|denied|sensitive/)
       end
     end
+
+    context "list_layouts hardening" do
+      let(:views_dir) { Rails.root.join("app", "views") }
+      let(:layouts_dir) { views_dir.join("layouts") }
+
+      it "does not reveal content of a symlink inside layouts/ that escapes layouts_dir" do
+        # Put a secret outside layouts/, symlink it in, and confirm
+        # list_layouts(detail:"full") does NOT embed the secret content.
+        # The fix applies separator-aware realpath containment per file.
+        FileUtils.mkdir_p(layouts_dir)
+        secret_dir = Rails.root.join("tmp", "_gv_layout_escape_#{Process.pid}")
+        FileUtils.mkdir_p(secret_dir)
+        secret_file = secret_dir.join("secret.html.erb")
+        File.write(secret_file, "<!-- LAYOUT ESCAPE SECRET -->")
+
+        symlink = layouts_dir.join("gv_escape_#{Process.pid}.html.erb")
+        File.symlink(secret_file, symlink)
+
+        result = described_class.call(controller: "layouts", detail: "full")
+        text = result.content.first[:text]
+        expect(text).not_to include("LAYOUT ESCAPE SECRET")
+      ensure
+        FileUtils.rm_f(symlink) if defined?(symlink)
+        FileUtils.rm_rf(secret_dir) if defined?(secret_dir)
+      end
+
+      it "does not read a symlinked sensitive file inside layouts/" do
+        FileUtils.mkdir_p(layouts_dir)
+        secret = Rails.root.join("config", "_gv_layout_master_#{Process.pid}.key")
+        File.write(secret, "should-never-leak-as-layout")
+        symlink = layouts_dir.join("gv_layout_key_#{Process.pid}.key")
+        File.symlink(secret, symlink)
+
+        result = described_class.call(controller: "layouts", detail: "full")
+        text = result.content.first[:text]
+        expect(text).not_to include("should-never-leak-as-layout")
+      ensure
+        FileUtils.rm_f(symlink) if defined?(symlink)
+        FileUtils.rm_f(secret) if defined?(secret)
+      end
+    end
   end
 end

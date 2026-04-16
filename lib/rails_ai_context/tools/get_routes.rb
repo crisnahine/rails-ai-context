@@ -53,7 +53,7 @@ module RailsAiContext
           by_controller = by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
         end
 
-        # Filter by controller — accepts "cooks", "CooksController", "cooks_controller", "Api::V1::Posts"
+        # Filter by controller — accepts "posts", "PostsController", "posts_controller", "Api::V1::Posts"
         if controller
           normalized = controller.underscore.delete_suffix("_controller")
           normalized_alt = controller.downcase.delete_suffix("_controller").delete_suffix("controller")

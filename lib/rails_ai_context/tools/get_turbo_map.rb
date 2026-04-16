@@ -497,14 +497,14 @@ module RailsAiContext
 
       # Extract stream name from broadcast_*_to call
       private_class_method def self.extract_stream_from_broadcast(line, method)
-        # Try string interpolation first: "cook_#{cook.id}" → "cook_#{id}"
+        # Try string interpolation first: "post_#{post.id}" → "post_#{id}"
         interp_pattern = /#{Regexp.escape(method)}\s*\(?\s*["']([^"']*#\{[^}]+\}[^"']*)["']/
         interp_match = line.match(interp_pattern)
         if interp_match
-          # Normalize: "cook_#{cook.id}" → "cook_{id}", "cook_#{@cook.id}" → "cook_{id}"
+          # Normalize: "post_#{post.id}" → "post_{id}", "post_#{@post.id}" → "post_{id}"
           return interp_match[1].gsub(/#\{(.+?)\}/) { |_|
             expr = $1.strip
-            # Extract the last method call: "@cook.id" → "id", "cook.id" → "id", "id" → "id"
+            # Extract the last method call: "@post.id" → "id", "post.id" → "id", "id" → "id"
             last_method = expr.split(".").last
             "{#{last_method}}"
           }
@@ -545,13 +545,13 @@ module RailsAiContext
         # turbo_stream_from "notifications"
         # turbo_stream_from @room
         # turbo_stream_from current_user, :notifications
-        # turbo_stream_from "cook_#{@cook.id}"
+        # turbo_stream_from "post_#{@post.id}"
         match = line.match(/turbo_stream_from\s+(.+?)(?:\s*%>|\s*$|\s*do\b)/)
         return "(dynamic)" unless match
 
         args = match[1].strip
 
-        # Handle string interpolation: "cook_#{@cook.id}" → "cook_{id}"
+        # Handle string interpolation: "post_#{@post.id}" → "post_{id}"
         if args.include?("#")
           normalized = args.gsub(/["']/, "").gsub(/#\{(.+?)\}/) { |_|
             expr = $1.strip
@@ -630,8 +630,8 @@ module RailsAiContext
         []
       end
 
-      # Fuzzy-match stream names: "cook_{id}" matches "cook_{id}",
-      # and static prefixes match (e.g., "cook_" prefix in both)
+      # Fuzzy-match stream names: "post_{id}" matches "post_{id}",
+      # and static prefixes match (e.g., "post_" prefix in both)
       private_class_method def self.streams_match?(a, b)
         return true if a == b
 

@@ -73,18 +73,59 @@ module RailsAiContext
       end
 
       private_class_method def self.show_concern(name, concern_dirs, root, max_size, detail = "standard")
+        # Rule 1 (security conventions): reject path traversal and sensitive
+        # names on the caller-supplied string BEFORE any filesystem stat.
+        # `String#underscore` only maps CamelCase → snake_case; it does NOT
+        # sanitize `../` or slashes, so a bare `File.join + File.exist?` on
+        # `name.underscore` would resolve `name: "../../config/initializers/devise"`
+        # and read arbitrary .rb files under Rails.root.
+        if name.nil? || name.to_s.empty?
+          return text_response("The `name` parameter is required.")
+        end
+        if name.to_s.include?("..") || name.to_s.include?("\0") || name.to_s.start_with?("/")
+          return text_response("Path not allowed: #{name}")
+        end
+        if sensitive_file?(name.to_s)
+          return text_response("Path not allowed: #{name} (sensitive file)")
+        end
+
         # Find the concern file — try underscore variants and nested paths
         underscore = name.underscore
+        # Re-check traversal on the post-underscore string in case `underscore`
+        # introduces unexpected transformations on future AS versions.
+        if underscore.include?("..") || underscore.start_with?("/")
+          return text_response("Path not allowed: #{name}")
+        end
+
         file_path = nil
         concern_type = nil
 
         concern_dirs.each do |dir|
           candidate = File.join(dir, "#{underscore}.rb")
-          if File.exist?(candidate)
-            file_path = candidate
-            concern_type = dir.include?("models") ? "model" : "controller"
-            break
-          end
+          next unless File.exist?(candidate)
+
+          # Rules 2-5: realpath + separator-aware containment under the
+          # concern dir, post-realpath sensitive recheck, then use the
+          # realpath for all subsequent file operations. A symlink inside
+          # app/models/concerns/ pointing at config/master.key would pass
+          # the bare existence check without this.
+          real =
+            begin
+              File.realpath(candidate).to_s
+            rescue Errno::ENOENT
+              nil
+            end
+          next unless real
+
+          real_dir = File.realpath(dir).to_s
+          next unless real == real_dir || real.start_with?(real_dir + File::SEPARATOR)
+
+          relative_real = real.sub("#{File.realpath(root)}/", "")
+          next if sensitive_file?(relative_real)
+
+          file_path = real
+          concern_type = dir.include?("models") ? "model" : "controller"
+          break
         end
 
         unless file_path
@@ -100,7 +141,7 @@ module RailsAiContext
 
         source = RailsAiContext::SafeFile.read(file_path)
         return text_response("Could not read concern file: #{file_path}") unless source
-        relative_path = file_path.sub("#{root}/", "")
+        relative_path = file_path.sub("#{File.realpath(root)}/", "")
 
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{source.lines.size} lines)"
@@ -199,16 +240,34 @@ module RailsAiContext
 
       private_class_method def self.list_concerns(concern_dirs, root, max_size)
         all_concerns = []
+        real_root = File.realpath(root).to_s
 
         concern_dirs.each do |dir|
           concern_type = dir.include?("models") ? "model" : "controller"
+          real_dir = File.realpath(dir).to_s
           Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file_path|
-            relative = file_path.sub("#{root}/", "")
-            concern_name = file_path.sub("#{dir}/", "").sub(/\.rb$/, "").camelize
+            # Apply the 5-rule file-reading pattern per CLAUDE.md. Even though
+            # file_path comes from Dir.glob (not caller-supplied), a symlink
+            # planted inside `app/models/concerns/` pointing at
+            # `config/master.key` would otherwise be silently read.
+            real =
+              begin
+                File.realpath(file_path).to_s
+              rescue Errno::ENOENT
+                nil
+              end
+            next unless real
+            next unless real == real_dir || real.start_with?(real_dir + File::SEPARATOR)
+
+            relative_real = real.sub("#{real_root}/", "")
+            next if sensitive_file?(relative_real)
+
+            relative = real.sub("#{real_root}/", "")
+            concern_name = real.sub("#{real_dir}/", "").sub(/\.rb$/, "").camelize
 
             method_count = 0
-            if File.size(file_path) <= max_size
-              source = RailsAiContext::SafeFile.read(file_path)
+            if File.size(real) <= max_size
+              source = RailsAiContext::SafeFile.read(real)
               if source
                 public_methods = parse_public_methods(source)
                 class_methods = parse_class_methods(source)

@@ -529,6 +529,139 @@ namespace :ai do
     RailsAiContext::Watcher.new.start
   end
 
+  desc "Run a multi-tool preset: rails ai:preset[architecture], rails ai:preset[debugging], rails ai:preset[migration]"
+  task :preset, [ :name ] => :environment do |_t, args|
+    require "rails_ai_context"
+
+    presets = {
+      "architecture" => {
+        desc: "Full feature analysis across all layers",
+        tools: [
+          { name: "analyze_feature", params: { feature: ENV["feature"] || ENV["FEATURE"] || Rails.application.class.module_parent_name.underscore } },
+          { name: "dependency_graph", params: {} },
+          { name: "performance_check", params: {} }
+        ]
+      },
+      "debugging" => {
+        desc: "Diagnose recent issues and validate current state",
+        tools: [
+          { name: "read_logs", params: { level: "ERROR", lines: 100 } },
+          { name: "review_changes", params: {} },
+          { name: "validate", params: {} }
+        ]
+      },
+      "migration" => {
+        desc: "Schema overview with migration advice and validation",
+        tools: [
+          { name: "get_schema", params: { detail: "summary" } },
+          { name: "migration_advisor", params: { action: ENV["action"] || "status" } },
+          { name: "validate", params: {} }
+        ]
+      }
+    }
+
+    name = args[:name]&.strip&.downcase
+    unless name && presets.key?(name)
+      puts "Available presets:"
+      puts ""
+      presets.each do |key, info|
+        puts "  rails 'ai:preset[#{key}]'".ljust(38) + "# #{info[:desc]}"
+      end
+      puts ""
+      puts "Pass feature= or action= via ENV for context-specific presets."
+      next
+    end
+
+    preset = presets[name]
+    puts "=" * 60
+    puts " Preset: #{name} — #{preset[:desc]}"
+    puts "=" * 60
+    puts ""
+
+    preset[:tools].each do |tool_spec|
+      begin
+        puts "-" * 40
+        puts "Running: #{tool_spec[:name]}"
+        puts "-" * 40
+        runner = RailsAiContext::CLI::ToolRunner.new(
+          tool_spec[:name],
+          tool_spec[:params]
+        )
+        puts runner.run
+        puts ""
+      rescue => e
+        $stderr.puts "  [error] #{tool_spec[:name]}: #{e.message}"
+      end
+    end
+  end
+
+  desc "Print a concise schema facts summary (tables, columns, indexes, associations, dependencies)"
+  task facts: :environment do
+    require "rails_ai_context"
+
+    context = RailsAiContext.introspect
+    app_name = context[:app_name] || Rails.application.class.module_parent_name
+
+    puts "# #{app_name} — Schema Facts"
+    puts "# Generated: #{Time.now.strftime('%Y-%m-%d %H:%M')}"
+    puts ""
+
+    # Tables overview
+    if context[:schema] && !context[:schema][:error]
+      tables = context[:schema][:tables] || {}
+      puts "## Tables (#{tables.size})"
+      tables.each do |name, meta|
+        cols = meta[:columns]&.size || 0
+        indexes = meta[:indexes]&.size || 0
+        fks = meta[:foreign_keys]&.size || 0
+        puts "- #{name} (#{cols} cols, #{indexes} indexes, #{fks} FKs)"
+      end
+      puts ""
+    end
+
+    # Associations
+    if context[:models] && !context[:models][:error]
+      puts "## Associations"
+      context[:models].each do |model_name, meta|
+        next if meta[:error]
+        assocs = meta[:associations] || []
+        next if assocs.empty?
+        grouped = assocs.group_by { |a| a[:type] || a["type"] }
+        parts = grouped.map do |type, list|
+          names = list.map { |a| a[:name] || a["name"] }
+          "#{type} :#{names.join(', :')}"
+        end
+        puts "- #{model_name}: #{parts.join(' | ')}"
+      end
+      puts ""
+    end
+
+    # Gems / dependencies
+    if context[:gems] && !context[:gems][:error]
+      notable = context[:gems][:gems]&.select { |g| g[:category] != "other" }&.first(15)
+      if notable&.any?
+        puts "## Key Dependencies"
+        notable.each do |g|
+          puts "- #{g[:name]} (#{g[:category]})"
+        end
+        puts ""
+      end
+    end
+
+    # Architecture
+    if context[:conventions] && !context[:conventions][:error]
+      arch = context[:conventions][:architecture] || []
+      if arch.any?
+        puts "## Architecture"
+        arch.each { |a| puts "- #{a}" }
+        puts ""
+      end
+    end
+
+    puts "---"
+    puts "Run `rails ai:inspect` for full JSON introspection."
+  end
+
   desc "Run diagnostic checks and report AI readiness score"
   task doctor: :environment do
     require "rails_ai_context"

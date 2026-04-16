@@ -19,7 +19,7 @@ module RailsAiContext
           },
           file: {
             type: "string",
-            description: "File where error occurs, relative to Rails root (e.g. 'app/controllers/cooks_controller.rb')."
+            description: "File where error occurs, relative to Rails root (e.g. 'app/controllers/posts_controller.rb')."
           },
           line: {
             type: "integer",
@@ -27,7 +27,7 @@ module RailsAiContext
           },
           action: {
             type: "string",
-            description: "Controller#action format (e.g. 'cooks#create'). Pulls full action context."
+            description: "Controller#action format (e.g. 'posts#create'). Pulls full action context."
           }
         },
         required: %w[error]

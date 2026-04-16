@@ -188,6 +188,141 @@ class RailsAiContextCLI < Thor
       show_standalone_instructions(ai_tools, tool_mode)
     end
 
+    desc "preset NAME", "Run a multi-tool preset (architecture, debugging, migration)"
+    def preset(name = nil)
+      presets = {
+        "architecture" => {
+          desc: "Full feature analysis across all layers",
+          tools: [
+            { name: "analyze_feature", params: {} },
+            { name: "dependency_graph", params: {} },
+            { name: "performance_check", params: {} }
+          ]
+        },
+        "debugging" => {
+          desc: "Diagnose recent issues and validate current state",
+          tools: [
+            { name: "read_logs", params: { level: "ERROR", lines: 100 } },
+            { name: "review_changes", params: {} },
+            { name: "validate", params: {} }
+          ]
+        },
+        "migration" => {
+          desc: "Schema overview with migration advice and validation",
+          tools: [
+            { name: "get_schema", params: { detail: "summary" } },
+            { name: "migration_advisor", params: { action: "status" } },
+            { name: "validate", params: {} }
+          ]
+        }
+      }
+
+      unless name && presets.key?(name)
+        $stderr.puts "Available presets:"
+        $stderr.puts ""
+        presets.each do |key, info|
+          $stderr.puts "  rails-ai-context preset #{key}".ljust(45) + "# #{info[:desc]}"
+        end
+        return
+      end
+
+      boot_rails!
+
+      preset = presets[name]
+      $stderr.puts "=" * 60
+      $stderr.puts " Preset: #{name} — #{preset[:desc]}"
+      $stderr.puts "=" * 60
+      $stderr.puts ""
+
+      preset[:tools].each do |tool_spec|
+        begin
+          $stderr.puts "-" * 40
+          $stderr.puts "Running: #{tool_spec[:name]}"
+          $stderr.puts "-" * 40
+          runner = ::RailsAiContext::CLI::ToolRunner.new(
+            tool_spec[:name],
+            tool_spec[:params]
+          )
+          puts runner.run
+          puts ""
+        rescue => e
+          $stderr.puts "  [error] #{tool_spec[:name]}: #{e.message}"
+        end
+      end
+    rescue SystemExit
+      raise
+    rescue => e
+      $stderr.puts "Error: #{e.message}"
+      exit 1
+    end
+
+    desc "facts", "Print concise schema facts summary (tables, associations, dependencies)"
+    def facts
+      boot_rails!
+      require "json"
+
+      context = ::RailsAiContext.introspect
+      app_name = context[:app_name] || "Rails App"
+
+      puts "# #{app_name} — Schema Facts"
+      puts "# Generated: #{Time.now.strftime('%Y-%m-%d %H:%M')}"
+      puts ""
+
+      if context[:schema] && !context[:schema][:error]
+        tables = context[:schema][:tables] || {}
+        puts "## Tables (#{tables.size})"
+        tables.each do |name, meta|
+          cols = meta[:columns]&.size || 0
+          indexes = meta[:indexes]&.size || 0
+          fks = meta[:foreign_keys]&.size || 0
+          puts "- #{name} (#{cols} cols, #{indexes} indexes, #{fks} FKs)"
+        end
+        puts ""
+      end
+
+      if context[:models] && !context[:models][:error]
+        puts "## Associations"
+        context[:models].each do |model_name, meta|
+          next if meta[:error]
+          assocs = meta[:associations] || []
+          next if assocs.empty?
+          grouped = assocs.group_by { |a| a[:type] || a["type"] }
+          parts = grouped.map do |type, list|
+            names = list.map { |a| a[:name] || a["name"] }
+            "#{type} :#{names.join(', :')}"
+          end
+          puts "- #{model_name}: #{parts.join(' | ')}"
+        end
+        puts ""
+      end
+
+      if context[:gems] && !context[:gems][:error]
+        notable = context[:gems][:gems]&.select { |g| g[:category] != "other" }&.first(15)
+        if notable&.any?
+          puts "## Key Dependencies"
+          notable.each { |g| puts "- #{g[:name]} (#{g[:category]})" }
+          puts ""
+        end
+      end
+
+      if context[:conventions] && !context[:conventions][:error]
+        arch = context[:conventions][:architecture] || []
+        if arch.any?
+          puts "## Architecture"
+          arch.each { |a| puts "- #{a}" }
+          puts ""
+        end
+      end
+
+      puts "---"
+      puts "Run `rails-ai-context inspect` for full JSON introspection."
+    rescue SystemExit
+      raise
+    rescue => e
+      $stderr.puts "Error: #{e.message}"
+      exit 1
+    end
+
     desc "version", "Print version"
     def version
       require_relative "../lib/rails_ai_context/version"

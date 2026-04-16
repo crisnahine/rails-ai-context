@@ -61,7 +61,7 @@ module RailsAiContext
         # Accepts: "users", "Users", "User" (model name → pluralized+underscored table)
         if table
           table_down = table.downcase
-          table_as_table = table.underscore.pluralize # Cook → cooks, BrandProfile → brand_profiles
+          table_as_table = table.underscore.pluralize # Post → posts, UserProfile → user_profiles
           table_key = tables.keys.find { |k|
             k.downcase == table_down || k == table_as_table || k == table.underscore
           } || table

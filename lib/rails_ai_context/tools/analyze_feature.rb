@@ -35,7 +35,7 @@ module RailsAiContext
 
       def self.call(feature:, server_context: nil) # rubocop:disable Metrics
         feature = feature.to_s.strip
-        return text_response("Please provide a feature keyword (e.g. 'cook', 'payment', 'authentication').") if feature.empty?
+        return text_response("Please provide a feature keyword (e.g. 'post', 'payment', 'authentication').") if feature.empty?
         set_call_params(feature: feature)
 
         ctx = cached_context

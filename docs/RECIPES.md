@@ -75,19 +75,19 @@ AI sees `subscription_status` already exists — asks before proceeding instead 
 
 ## Fixing a broken controller action
 
-**Ask your AI:** "The create action in CooksController is failing"
+**Ask your AI:** "The create action in PostsController is failing"
 
 ```bash
-rails_get_controllers(controller: "CooksController", action: "create")
+rails_get_controllers(controller: "PostsController", action: "create")
 # → Source code + inherited before_action filters + strong params + render paths
 
-rails_get_routes(controller: "cooks")
-# → Code-ready helpers: cook_path(@record), new_cook_path
+rails_get_routes(controller: "posts")
+# → Code-ready helpers: post_path(@record), new_post_path
 
-rails_get_schema(table: "cooks")
+rails_get_schema(table: "posts")
 # → Actual column names, types, constraints
 
-rails_diagnose(error: "ActiveRecord::RecordInvalid", file: "app/controllers/cooks_controller.rb")
+rails_diagnose(error: "ActiveRecord::RecordInvalid", file: "app/controllers/posts_controller.rb")
 # → Classification + context + git blame + log correlation
 ```
 
@@ -148,35 +148,35 @@ AI scaffolds the feature matching your app's actual patterns — not generic Rai
 > [!TIP]
 > `search_code` with `match_type: "trace"` is the single most powerful tool. Use it first when investigating anything.
 
-**Ask your AI:** "Where is `can_cook?` used?"
+**Ask your AI:** "Where is `publishable?` used?"
 
 ```
-→ rails_search_code(pattern: "can_cook?", match_type: "trace")
+→ rails_search_code(pattern: "publishable?", match_type: "trace")
 ```
 
 <details open>
 <summary>Example output</summary>
 
 ```
-# Trace: can_cook?
+# Trace: publishable?
 
 ## Definition
-app/models/user.rb:45 in User
-  def can_cook?
-    role.in?(%w[chef sous_chef]) && active?
+app/models/post.rb:45 in Post
+  def publishable?
+    title.present? && body.present? && approved?
   end
 
 ## Called from (4 sites)
 
 **Controllers** (2)
-  app/controllers/cooks_controller.rb:12  before_action :ensure_can_cook
-  app/controllers/recipes_controller.rb:8  if current_user.can_cook?
+  app/controllers/posts_controller.rb:12  before_action :ensure_publishable
+  app/controllers/admin/posts_controller.rb:8  if @post.publishable?
 
 **Views** (1)
-  app/views/cooks/show.html.erb:8  <% if @user.can_cook? %>
+  app/views/posts/show.html.erb:8  <% if @post.publishable? %>
 
 **Tests** (1)
-  spec/models/user_spec.rb:92  expect(chef.can_cook?).to be true
+  spec/models/post_spec.rb:92  expect(post.publishable?).to be true
 ```
 
 </details>

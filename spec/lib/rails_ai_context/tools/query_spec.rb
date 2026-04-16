@@ -566,6 +566,20 @@ RSpec.describe RailsAiContext::Tools::Query do
       result = described_class.strip_sql_comments(sql)
       expect(result).to include("#>>")
     end
+
+    it "unwraps MySQL version-conditional comments so their content is visible to validation" do
+      # MySQL executes /*!version ... */ content even though it looks like a comment.
+      # strip_sql_comments must expose the inside or BLOCKED_FUNCTIONS will miss it.
+      sql = "SELECT /*!50000 LOAD_FILE('/etc/passwd') */ AS x"
+      result = described_class.strip_sql_comments(sql)
+      expect(result).to include("LOAD_FILE")
+    end
+
+    it "unwraps bare executable comments without version digits" do
+      sql = "SELECT /*! pg_read_file('foo') */ 1"
+      result = described_class.strip_sql_comments(sql)
+      expect(result).to include("pg_read_file")
+    end
   end
 
   describe "SQL validation with hash in string literals" do
@@ -573,6 +587,31 @@ RSpec.describe RailsAiContext::Tools::Query do
       valid, error = described_class.validate_sql("SELECT '#'; DROP TABLE users")
       expect(valid).to be false
       expect(error).to include("Blocked")
+    end
+  end
+
+  describe "MySQL executable-comment bypass defense" do
+    it "blocks LOAD_FILE hidden inside /*!50000 ... */" do
+      valid, error = described_class.validate_sql("SELECT /*!50000 LOAD_FILE('/etc/passwd') */ AS x")
+      expect(valid).to be false
+      expect(error).to include("Blocked").and include("load_file").or include("LOAD_FILE")
+    end
+
+    it "blocks pg_read_file hidden inside /*! ... */" do
+      valid, error = described_class.validate_sql("SELECT /*! pg_read_file('/etc/passwd') */ AS x")
+      expect(valid).to be false
+      expect(error).to include("Blocked")
+    end
+
+    it "blocks dblink hidden inside /*!80000 ... */" do
+      valid, error = described_class.validate_sql("SELECT /*!80000 dblink('host=evil', 'SELECT * FROM users') */ 1")
+      expect(valid).to be false
+      expect(error).to include("Blocked")
+    end
+
+    it "allows normal queries that happen to contain /* ... */ comments" do
+      valid, _error = described_class.validate_sql("SELECT /* author: alice */ 1 AS x")
+      expect(valid).to be true
     end
   end
 
@@ -621,6 +660,17 @@ RSpec.describe RailsAiContext::Tools::Query do
       expect(text).to include("test")
       expect(text).to include("1 row")
       expect(text).not_to include("EXPLAIN Analysis")
+    end
+
+    it "routes through the adapter safety wrapper (READ ONLY + timeout)" do
+      # Load-bearing: PostgreSQL `EXPLAIN (FORMAT JSON, ANALYZE) ...` actually
+      # executes the query plan. Without routing through execute_postgresql /
+      # execute_mysql / execute_sqlite, EXPLAIN bypasses SET TRANSACTION READ
+      # ONLY + statement_timeout / PRAGMA query_only. This spy confirms the
+      # adapter wrapper is called on the SQLite test connection — for PG/MySQL
+      # the same routing logic applies via the `case adapter` branch.
+      expect(described_class).to receive(:execute_sqlite).once.and_call_original
+      described_class.call(sql: "SELECT 1 AS test", explain: true)
     end
 
     it "parses SQLite EXPLAIN QUERY PLAN scan types" do

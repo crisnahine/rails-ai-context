@@ -202,6 +202,53 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       end
     end
 
+    context "path traversal defense" do
+      it "rejects `..` components in the name parameter" do
+        # String#underscore does NOT sanitize path separators. Without the
+        # early path-traversal guard, `name: "../../config/initializers/devise"`
+        # would resolve through File.join and read arbitrary .rb files
+        # under Rails.root. This test writes a file at that relative offset
+        # so File.exist? would match and proves the block fires first.
+        devise_file = File.join(tmpdir, "config", "initializers")
+        FileUtils.mkdir_p(devise_file)
+        File.write(File.join(devise_file, "devise.rb"), "# SECRET_TOKEN = 'should-never-leak-from-traversal'")
+
+        result = described_class.call(name: "../../config/initializers/devise")
+        text = result.content.first[:text]
+        expect(text).to match(/not allowed/)
+        expect(text).not_to include("should-never-leak-from-traversal")
+      end
+
+      it "rejects absolute paths in the name parameter" do
+        result = described_class.call(name: "/etc/passwd")
+        text = result.content.first[:text]
+        expect(text).to match(/not allowed/)
+      end
+
+      it "rejects null bytes in the name parameter" do
+        result = described_class.call(name: "searchable\0.rb")
+        text = result.content.first[:text]
+        expect(text).to match(/not allowed/)
+      end
+
+      it "blocks symlinks inside concerns dir that escape to sensitive files" do
+        # A symlink at app/models/concerns/sneaky.rb -> config/master.key
+        # passes the bare File.exist? check and, without the post-realpath
+        # recheck, would leak the secret. Fix: realpath containment +
+        # sensitive_file? recheck.
+        secret = File.join(tmpdir, "config", "master.key")
+        FileUtils.mkdir_p(File.dirname(secret))
+        File.write(secret, "should-never-leak-as-concern")
+
+        symlink = File.join(model_concerns_dir, "sneaky.rb")
+        File.symlink(secret, symlink)
+
+        result = described_class.call(name: "Sneaky")
+        text = result.content.first[:text]
+        expect(text).not_to include("should-never-leak-as-concern")
+      end
+    end
+
     context "class_methods block closing" do
       before do
         File.write(File.join(model_concerns_dir, "mixed_methods.rb"), <<~RUBY)

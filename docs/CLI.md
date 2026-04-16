@@ -45,12 +45,12 @@ Run any of the 38 MCP tools from the terminal.
 ```bash
 # Rake syntax
 rails 'ai:tool[schema]' table=users detail=full
-rails 'ai:tool[search_code]' pattern="can_cook?" match_type=trace
+rails 'ai:tool[search_code]' pattern="publishable?" match_type=trace
 rails 'ai:tool[model_details]' model=User
 
 # Thor syntax
 rails-ai-context tool schema --table users --detail full
-rails-ai-context tool search_code --pattern "can_cook?" --match-type trace
+rails-ai-context tool search_code --pattern "publishable?" --match-type trace
 rails-ai-context tool model_details --model User
 ```
 

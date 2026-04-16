@@ -50,7 +50,7 @@ module RailsAiContext
         table = table.to_s.strip
         column = column.to_s.strip.presence if column
 
-        # Normalize model names to table names: "Cook" → "cooks", "BrandProfile" → "brand_profiles"
+        # Normalize model names to table names: "Post" → "posts", "UserProfile" → "user_profiles"
         table = table.underscore.pluralize if table.match?(/\A[A-Z]/)
 
         return text_response("**Error:** `action` is required. Valid actions: #{VALID_ACTIONS.join(', ')}") if action.empty?

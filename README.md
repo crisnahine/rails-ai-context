@@ -95,7 +95,7 @@ Real scenarios where AI goes sideways — and what it does instead with ground t
 | Write tests for a new model | Scaffolds with FactoryBot | Detects your fixture-based suite and matches it |
 | Fix a failing create action | Misses inherited `before_action :authenticate_user!` | Returns parent-controller filters inline with the action source |
 | Build a dashboard page | Invents Tailwind classes from memory | Returns your actual button/card/alert patterns, copy-paste ready |
-| Trace where `can_cook?` is used | Reads 6 files sequentially, still misses callers | Single call: definition + source + every caller + tests |
+| Trace where `publishable?` is used | Reads 6 files sequentially, still misses callers | Single call: definition + source + every caller + tests |
 
 <details>
 <summary><strong>Verify it on your own app</strong></summary>
@@ -139,7 +139,7 @@ rails ai:serve
 ```
 
 ```
-→ rails_search_code(pattern: "can_cook?", match_type: "trace")
+→ rails_search_code(pattern: "publishable?", match_type: "trace")
 → rails_get_schema(table: "users")
 → rails_analyze_feature(feature: "billing")
 ```
@@ -166,7 +166,7 @@ Native Rails controller transport. No separate process needed.
 Same 38 tools, no server needed. Works in any terminal, any AI tool.
 
 ```bash
-rails 'ai:tool[search_code]' pattern="can_cook?" match_type=trace
+rails 'ai:tool[search_code]' pattern="publishable?" match_type=trace
 rails 'ai:tool[schema]' table=users
 rails 'ai:tool[analyze_feature]' feature=billing
 ```
@@ -203,19 +203,19 @@ AI sees `subscription_status` already exists. Checks the model, then generates a
 </details>
 
 <details>
-<summary><strong>"Fix the broken cook creation flow"</strong></summary>
+<summary><strong>"Fix the broken post creation flow"</strong></summary>
 
 <br>
 
 ```bash
-rails 'ai:tool[controllers]' controller=CooksController action=create
+rails 'ai:tool[controllers]' controller=PostsController action=create
 ```
 ```
-# CooksController#create
+# PostsController#create
 
-Filters: before_action :authenticate_user!, before_action :set_cook (only: show, edit)
-Strong params: cook_params → name, specialty, bio
-Renders: redirect_to @cook | render :new
+Filters: before_action :authenticate_user!, before_action :set_post (only: show, edit)
+Strong params: post_params → title, body, published_at
+Renders: redirect_to @post | render :new
 ```
 
 AI sees the inherited `authenticate_user!` filter, the actual strong params, and the render paths. No guessing.
@@ -288,7 +288,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 | Tool | What it does |
 |:-----|:------------|
 | `get_controllers` | Actions + inherited filters + render map + strong params |
-| `get_routes` | Code-ready helpers (`cook_path(@record)`) + required params |
+| `get_routes` | Code-ready helpers (`post_path(@record)`) + required params |
 
 </details>
 

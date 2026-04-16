@@ -36,6 +36,14 @@ module RailsAiContext
           return text_response("Path not allowed: #{partial}")
         end
 
+        # Rule 1 (security conventions): reject sensitive-file names on the
+        # caller-supplied string BEFORE any filesystem stat. Without this,
+        # the "not found" vs "access denied" distinction leaks whether
+        # `app/views/.env` / `app/views/master.key` exists.
+        if sensitive_file?(partial)
+          return text_response("Path not allowed: #{partial} (sensitive file)")
+        end
+
         root = Rails.root.to_s
         views_dir = File.join(root, "app", "views")
 

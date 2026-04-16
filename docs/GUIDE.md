@@ -460,7 +460,7 @@ Returns controller details: actions, filters, strong params, concerns. Automatic
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `controller` | string | Specific controller name (e.g. `UsersController`, `cooks`, `bonus/crises`). Case-insensitive, flexible format. |
+| `controller` | string | Specific controller name (e.g. `UsersController`, `posts`, `admin/posts`). Case-insensitive, flexible format. |
 | `action` | string | Specific action (e.g. `index`). Requires controller. Returns source code with applicable filters. |
 | `detail` | string | `summary` / `standard` (default) / `full`. Ignored when controller is specified. |
 | `limit` | integer | Max controllers to return when listing. Default: 50. |
@@ -502,7 +502,7 @@ Returns test infrastructure details. Optionally filter by model or controller to
 | Param | Type | Description |
 |-------|------|-------------|
 | `model` | string | Show tests for a specific model (e.g. `User`). Also searches concern test paths (`spec/models/concerns/`, `test/models/concerns/`). |
-| `controller` | string | Show tests for a specific controller (e.g. `Cooks`). |
+| `controller` | string | Show tests for a specific controller (e.g. `Posts`). |
 | `detail` | string | `summary` / `standard` (default) / `full`. |
 
 ```
@@ -578,8 +578,8 @@ Returns view template contents, partials, and Stimulus controller references. In
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `controller` | string | Filter views by controller name (e.g. `cooks`, `brand_profiles`). Use `layouts` for layout files. |
-| `path` | string | Specific view path relative to `app/views` (e.g. `cooks/index.html.erb`). Returns full content. |
+| `controller` | string | Filter views by controller name (e.g. `posts`, `comments`). Use `layouts` for layout files. |
+| `path` | string | Specific view path relative to `app/views` (e.g. `posts/index.html.erb`). Returns full content. |
 | `detail` | string | `summary` / `standard` (default) / `full` |
 
 **Examples:**
@@ -588,17 +588,17 @@ Returns view template contents, partials, and Stimulus controller references. In
 rails_get_view()
   → Standard: all view files with partial/stimulus refs
 
-rails_get_view(controller: "cooks")
-  → All templates and partials for CooksController
+rails_get_view(controller: "posts")
+  → All templates and partials for PostsController
 
-rails_get_view(path: "cooks/index.html.erb")
+rails_get_view(path: "posts/index.html.erb")
   → Full template content
 
 rails_get_view(controller: "layouts")
   → Layout files
 
-rails_get_view(controller: "cooks", detail: "full")
-  → Full template content for all cooks views
+rails_get_view(controller: "posts", detail: "full")
+  → Full template content for all posts views
 ```
 
 ### rails_get_edit_context
@@ -609,17 +609,17 @@ Returns just enough context to make a surgical Edit to a file. Returns the targe
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `file` | string | **Required.** File path relative to Rails root (e.g. `app/models/cook.rb`). |
+| `file` | string | **Required.** File path relative to Rails root (e.g. `app/models/post.rb`). |
 | `near` | string | **Required.** What to find — a method name, keyword, or string to locate (e.g. `scope`, `def index`). |
 | `context_lines` | integer | Lines of context above and below the match. Default: 5. |
 
 **Examples:**
 
 ```
-rails_get_edit_context(file: "app/models/cook.rb", near: "scope")
+rails_get_edit_context(file: "app/models/post.rb", near: "scope")
   → Code around the first scope with line numbers, expanded to full method
 
-rails_get_edit_context(file: "app/controllers/cooks_controller.rb", near: "def index")
+rails_get_edit_context(file: "app/controllers/posts_controller.rb", near: "def index")
   → The index action source with surrounding context
 ```
 
@@ -631,22 +631,22 @@ Validates syntax of multiple files at once (Ruby, ERB, JavaScript). Optionally r
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `files` | array | **Required.** File paths relative to Rails root (e.g. `["app/models/cook.rb", "app/views/cooks/index.html.erb"]`). |
+| `files` | array | **Required.** File paths relative to Rails root (e.g. `["app/models/post.rb", "app/views/posts/index.html.erb"]`). |
 | `level` | string | `syntax` (default) — check syntax only (fast). `rails` — syntax + semantic checks (partial existence, route helpers, column references, strong params vs schema, callback methods, route-action consistency, has_many dependent, FK indexes, Stimulus controllers). |
 
 **Examples:**
 
 ```
-rails_validate(files: ["app/models/cook.rb"])
-  → ✓ app/models/cook.rb — syntax OK
+rails_validate(files: ["app/models/post.rb"])
+  → ✓ app/models/post.rb — syntax OK
 
-rails_validate(files: ["app/models/cook.rb", "app/controllers/cooks_controller.rb", "app/views/cooks/index.html.erb"])
+rails_validate(files: ["app/models/post.rb", "app/controllers/posts_controller.rb", "app/views/posts/index.html.erb"])
   → Checks all three files, reports pass/fail for each
 
-rails_validate(files: ["app/models/cook.rb"], level: "rails")
+rails_validate(files: ["app/models/post.rb"], level: "rails")
   → Syntax check + semantic warnings (e.g. validates :nonexistent_column, has_many without :dependent)
 
-rails_validate(files: ["app/views/cooks/index.html.erb"], level: "rails")
+rails_validate(files: ["app/views/posts/index.html.erb"], level: "rails")
   → Syntax check + partial existence, route helper validity, Stimulus controller existence
 ```
 
@@ -673,14 +673,14 @@ Smart result limiting: <10 results shows all, 10-100 shows half, >100 caps at 10
 **Examples:**
 
 ```
-rails_search_code(pattern: "can_cook?", match_type: "trace")
+rails_search_code(pattern: "publishable?", match_type: "trace")
   → FULL PICTURE: definition with class context + source code + internal calls
     + sibling methods + app callers with route chain + test coverage (separated)
 
 rails_search_code(pattern: "create", match_type: "definition")
   → Only `def create` / `def self.create` lines
 
-rails_search_code(pattern: "can_cook", match_type: "call")
+rails_search_code(pattern: "publishable", match_type: "call")
   → Only call sites (excludes the definition)
 
 rails_search_code(pattern: "Controller", match_type: "class")
@@ -689,7 +689,7 @@ rails_search_code(pattern: "Controller", match_type: "class")
 rails_search_code(pattern: "has_many", group_by_file: true)
   → Results grouped by file with match counts
 
-rails_search_code(pattern: "cook", exclude_tests: true)
+rails_search_code(pattern: "post", exclude_tests: true)
   → Skip test/spec directories
 
 rails_search_code(pattern: "activate", match_type: "definition")
@@ -975,15 +975,15 @@ Get cross-layer context in a single call — combines schema, model, controller,
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `controller` | string | Controller name (e.g. `CooksController`). Returns action source, filters, strong params, routes, views. |
+| `controller` | string | Controller name (e.g. `PostsController`). Returns action source, filters, strong params, routes, views. |
 | `action` | string | Specific action name (e.g. `create`). Requires controller. Returns full action context. |
-| `model` | string | Model name (e.g. `Cook`). Returns schema, associations, validations, scopes, callbacks, tests. |
-| `feature` | string | Feature keyword (e.g. `cook`). Like analyze_feature but includes schema columns and scope bodies. |
+| `model` | string | Model name (e.g. `Post`). Returns schema, associations, validations, scopes, callbacks, tests. |
+| `feature` | string | Feature keyword (e.g. `post`). Like analyze_feature but includes schema columns and scope bodies. |
 
 **Examples:**
 
 ```
-rails_get_context(controller: "CooksController", action: "create")
+rails_get_context(controller: "PostsController", action: "create")
   → Controller action source + model details + routes + views — everything for that action
 
 rails_get_context(model: "User")

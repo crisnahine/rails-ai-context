@@ -233,7 +233,7 @@ module RailsAiContext
           end
           return exact if exact
 
-          # Substring match — prefer shortest (most specific) to avoid cook → cook_comments
+          # Substring match — prefer shortest (most specific) to avoid post → post_comments
           substring_matches = available.select { |a| a.downcase.include?(downcased) || downcased.include?(a.downcase) }
           return substring_matches.min_by(&:length) if substring_matches.any?
 

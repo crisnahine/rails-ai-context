@@ -98,7 +98,7 @@ module RailsAiContext
 
           # Show column names WITH types for key columns
           # Skip standard Rails FK columns (like user_id, account_id) but keep
-          # external ID columns (like paymongo_checkout_id, stripe_payment_id)
+          # external ID columns (like stripe_checkout_id, stripe_payment_id)
           fk_columns = (data[:foreign_keys] || []).map { |f| f[:column] }.to_set
           all_table_names = tables.keys.to_set
           key_cols = columns.select do |c|

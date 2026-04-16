@@ -6,8 +6,8 @@ module RailsAiContext
     # Reads config.tool_mode to generate MCP syntax, CLI syntax, or both.
     module ToolGuideHelper
       # Returns the tool invocation example for a given tool call.
-      # MCP: rails_analyze_feature(feature:"cook")
-      # CLI: rails 'ai:tool[analyze_feature]' feature=cook
+      # MCP: rails_analyze_feature(feature:"post")
+      # CLI: rails 'ai:tool[analyze_feature]' feature=post
       def tool_call(mcp_call, cli_call)
         case tool_mode
         when :cli
@@ -100,9 +100,9 @@ module RailsAiContext
           tool_call("rails_onboard(detail:\"standard\")", cli_cmd("onboard", "detail=standard")),
           "",
           "**`get_context` is your power tool** — bundles schema + model + controller + routes + views in ONE call:",
-          tool_call("rails_get_context(controller:\"CooksController\", action:\"create\")", cli_cmd("context", "controller=CooksController action=create")),
-          tool_call("rails_get_context(model:\"Cook\")", cli_cmd("context", "model=Cook")),
-          tool_call("rails_get_context(feature:\"cook\")", cli_cmd("context", "feature=cook")),
+          tool_call("rails_get_context(controller:\"PostsController\", action:\"create\")", cli_cmd("context", "controller=PostsController action=create")),
+          tool_call("rails_get_context(model:\"Post\")", cli_cmd("context", "model=Post")),
+          tool_call("rails_get_context(feature:\"post\")", cli_cmd("context", "feature=post")),
           "",
           "**`analyze_feature` for broad discovery** — scans all layers (models, controllers, routes, services, jobs, views, tests):",
           tool_call("rails_analyze_feature(feature:\"authentication\")", cli_cmd("analyze_feature", "feature=authentication")),
@@ -117,35 +117,35 @@ module RailsAiContext
           "### Step-by-step workflows (follow this order)",
           "",
           "**Modify a model** (add field, change validation, add scope):",
-          "1. #{tool_call_inline("rails_get_context", "model:\"Cook\"", "context", "model=Cook")} — schema + associations + validations in one call",
+          "1. #{tool_call_inline("rails_get_context", "model:\"Post\"", "context", "model=Post")} — schema + associations + validations in one call",
           "2. Read the model file, make your edit",
-          "3. #{tool_call_inline("rails_migration_advisor", "action:\"add_column\", table:\"cooks\", column:\"rating\", type:\"integer\"", "migration_advisor", "action=add_column table=cooks column=rating type=integer")} — if schema change needed",
-          "4. #{tool_call_inline("rails_validate", "files:[\"app/models/cook.rb\"], level:\"rails\"", "validate", "files=app/models/cook.rb level=rails")} — EVERY time after editing",
-          "5. #{tool_call_inline("rails_generate_test", "model:\"Cook\"", "generate_test", "model=Cook")} — generate tests matching project patterns",
+          "3. #{tool_call_inline("rails_migration_advisor", "action:\"add_column\", table:\"posts\", column:\"rating\", type:\"integer\"", "migration_advisor", "action=add_column table=posts column=rating type=integer")} — if schema change needed",
+          "4. #{tool_call_inline("rails_validate", "files:[\"app/models/post.rb\"], level:\"rails\"", "validate", "files=app/models/post.rb level=rails")} — EVERY time after editing",
+          "5. #{tool_call_inline("rails_generate_test", "model:\"Post\"", "generate_test", "model=Post")} — generate tests matching project patterns",
           "",
           "**Fix a controller bug:**",
-          "1. #{tool_call_inline("rails_get_context", "controller:\"CooksController\", action:\"create\"", "context", "controller=CooksController action=create")} — action source + routes + views + model",
+          "1. #{tool_call_inline("rails_get_context", "controller:\"PostsController\", action:\"create\"", "context", "controller=PostsController action=create")} — action source + routes + views + model",
           "2. Read the controller file, make your fix",
-          "3. #{tool_call_inline("rails_validate", "files:[\"app/controllers/cooks_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/cooks_controller.rb level=rails")}",
+          "3. #{tool_call_inline("rails_validate", "files:[\"app/controllers/posts_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/posts_controller.rb level=rails")}",
           "",
           "**Build or modify a view:**",
-          "1. #{tool_call_inline("rails_get_view", "controller:\"cooks\"", "view", "controller=cooks")} — existing templates, partials, Stimulus refs",
+          "1. #{tool_call_inline("rails_get_view", "controller:\"posts\"", "view", "controller=posts")} — existing templates, partials, Stimulus refs",
           "2. #{tool_call_inline("rails_get_partial_interface", "partial:\"shared/status_badge\"", "partial_interface", "partial=shared/status_badge")} — partial locals contract",
           "3. #{tool_call_inline("rails_get_component_catalog", "component:\"Button\"", "component_catalog", "component=Button")} — ViewComponent/Phlex props, slots, previews",
           "4. Read the view file, make your edit",
-          "5. #{tool_call_inline("rails_validate", "files:[\"app/views/cooks/index.html.erb\"]", "validate", "files=app/views/cooks/index.html.erb")}",
+          "5. #{tool_call_inline("rails_validate", "files:[\"app/views/posts/index.html.erb\"]", "validate", "files=app/views/posts/index.html.erb")}",
           "",
           "**Trace a method:**",
-          tool_call("rails_search_code(pattern:\"can_cook?\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"can_cook?\" match_type=trace")),
+          tool_call("rails_search_code(pattern:\"publishable?\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"publishable?\" match_type=trace")),
           "",
           "**Debug an error (one call — gathers context + git + logs + fix):**",
-          tool_call("rails_diagnose(error:\"NoMethodError: undefined method `foo` for nil\", file:\"app/models/cook.rb\")", cli_cmd("diagnose", "error=\"NoMethodError: undefined method foo\" file=app/models/cook.rb")),
+          tool_call("rails_diagnose(error:\"NoMethodError: undefined method `foo` for nil\", file:\"app/models/post.rb\")", cli_cmd("diagnose", "error=\"NoMethodError: undefined method foo\" file=app/models/post.rb")),
           "",
           "**Review changes before merging:**",
           tool_call("rails_review_changes(ref:\"main\")", cli_cmd("review_changes", "ref=main")),
           "",
           "**Generate tests matching project patterns:**",
-          tool_call("rails_generate_test(model:\"Cook\")", cli_cmd("generate_test", "model=Cook")),
+          tool_call("rails_generate_test(model:\"Post\")", cli_cmd("generate_test", "model=Post")),
           ""
         ]
       end

@@ -189,7 +189,7 @@ Controller actions with inherited filters, render map, strong params. Includes s
 
 ### `rails_get_routes`
 
-Routes with code-ready helpers (`cook_path(@record)`) and required params.
+Routes with code-ready helpers (`post_path(@record)`) and required params.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

@@ -22,7 +22,7 @@ module RailsAiContext
           files: {
             type: "array",
             items: { type: "string" },
-            description: "File paths relative to Rails root (e.g. ['app/models/cook.rb', 'app/views/cooks/index.html.erb'])"
+            description: "File paths relative to Rails root (e.g. ['app/models/post.rb', 'app/views/posts/index.html.erb'])"
           },
           level: {
             type: "string",
@@ -40,7 +40,7 @@ module RailsAiContext
       VALID_LEVELS = %w[syntax rails].freeze
 
       def self.call(files:, level: "syntax", server_context: nil)
-        return text_response("No files provided. Pass file paths relative to Rails root (e.g. files:[\"app/models/cook.rb\"]).") if files.nil? || files.empty?
+        return text_response("No files provided. Pass file paths relative to Rails root (e.g. files:[\"app/models/post.rb\"]).") if files.nil? || files.empty?
         return text_response("Too many files (#{files.size}). Maximum is #{max_files} per call.") if files.size > max_files
         return text_response("Unknown level: '#{level}'. Valid values: #{VALID_LEVELS.join(', ')}") unless VALID_LEVELS.include?(level)
 
@@ -646,7 +646,7 @@ module RailsAiContext
         return warnings unless schema && models
 
         visitor.permit_calls.each do |pc|
-          # Infer model: prefer require_key (:cook → Cook), fall back to controller filename
+          # Infer model: prefer require_key (:post → Post), fall back to controller filename
           model_name = if pc[:require_key]
             pc[:require_key].to_s.classify
           else
@@ -724,7 +724,7 @@ module RailsAiContext
         controllers = context[:controllers]
         return warnings unless routes && controllers
 
-        # Map file to controller name: app/controllers/cooks_controller.rb → cooks
+        # Map file to controller name: app/controllers/posts_controller.rb → posts
         relative = file.sub("app/controllers/", "").sub(/_controller\.rb$/, "")
         ctrl_key = relative.gsub("/", "::")
         ctrl_class = ctrl_key.camelize + "Controller"

@@ -185,14 +185,14 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
 
   describe "#tool_call_inline" do
     it "returns MCP + CLI in :mcp mode" do
-      result = helper.tool_call_inline("rails_get_context", "model:\"Cook\"", "context", "model=Cook")
-      expect(result).to include("rails_get_context(model:\"Cook\")")
-      expect(result).to include("rails 'ai:tool[context]' model=Cook")
+      result = helper.tool_call_inline("rails_get_context", "model:\"Post\"", "context", "model=Post")
+      expect(result).to include("rails_get_context(model:\"Post\")")
+      expect(result).to include("rails 'ai:tool[context]' model=Post")
     end
 
     it "returns only CLI in :cli mode" do
       RailsAiContext.configuration.tool_mode = :cli
-      result = helper.tool_call_inline("rails_get_context", "model:\"Cook\"", "context", "model=Cook")
+      result = helper.tool_call_inline("rails_get_context", "model:\"Post\"", "context", "model=Post")
       expect(result).to include("rails 'ai:tool[context]'")
       expect(result).not_to include("rails_get_context(model:")
     end

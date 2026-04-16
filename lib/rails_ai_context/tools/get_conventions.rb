@@ -421,7 +421,7 @@ module RailsAiContext
           sections << ""
         end
         sections << "  test \"[action] renders page\" do"
-        sections << "    sign_in users(:chef_one)" if has_sign_in
+        sections << "    sign_in users(:one)" if has_sign_in
         sections << "    get [path]"
         sections << "    assert_response :success"
         sections << "    assert_select \"h1\", \"[Expected Title]\"" if has_assert_select

@@ -122,6 +122,15 @@ module RailsAiContext
           raise RailsAiContext::Error, "Path not allowed: #{path}"
         end
 
+        # Rule 1 (security conventions in CLAUDE.md): early sensitive-file
+        # check on the caller-supplied string BEFORE any filesystem stat.
+        # Without this, the "View not found" vs "Path not allowed (sensitive
+        # file)" message distinction acts as an existence oracle for
+        # `.env` / `master.key` / `credentials.yml.enc` inside `app/views/`.
+        if RailsAiContext::Tools::BaseTool.send(:sensitive_file?, path)
+          raise RailsAiContext::Error, "Path not allowed: #{path} (sensitive file)"
+        end
+
         views_dir = Rails.root.join("app", "views")
         full_path = views_dir.join(path)
 

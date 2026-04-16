@@ -178,12 +178,26 @@ module RailsAiContext
           path = File.join(root, "log", "#{Rails.env}.log")
         end
 
-        # Path traversal protection
+        # Path traversal protection: separator-aware containment so a sibling
+        # directory (e.g. `/var/app/myapp_evil/log.log` vs `/var/app/myapp/`)
+        # cannot pass `start_with?("/var/app/myapp")`. Return the realpath so
+        # downstream callers (tail_file, File.size) operate on the canonical
+        # path, closing the TOCTOU window between this check and the open().
         return nil unless File.exist?(path)
         real = File.realpath(path)
-        return nil unless real.start_with?(File.realpath(root))
+        real_root = File.realpath(root)
+        return nil unless real == real_root || real.start_with?(real_root + File::SEPARATOR)
 
-        path
+        # Post-realpath sensitive recheck (Rule 3 of the file-reading
+        # conventions): a symlink placed inside `log/` pointing at a
+        # sensitive file still under Rails.root (e.g. `log/sneak.log ->
+        # ../config/master.key`) would otherwise pass the containment
+        # check above and be read by `tail_file`. Reject anything whose
+        # real path matches `sensitive_patterns`.
+        relative_real = real.sub("#{real_root}/", "")
+        return nil if sensitive_file?(relative_real)
+
+        real
       rescue Errno::ENOENT
         nil
       end

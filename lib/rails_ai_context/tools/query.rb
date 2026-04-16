@@ -178,6 +178,15 @@ module RailsAiContext
       # ── SQL comment stripping ───────────────────────────────────────
       def self.strip_sql_comments(sql)
         sql
+          # MySQL version-conditional comments `/*! ... */` / `/*!12345 ... */`
+          # are NOT comments — MySQL executes their content. Unwrap them first
+          # so the validator sees the inner SQL (e.g. `LOAD_FILE`) instead of
+          # stripping it alongside regular block comments, which would let
+          # `SELECT /*!50000 LOAD_FILE('/etc/passwd') */` slip past
+          # BLOCKED_FUNCTIONS. PostgreSQL and SQLite treat `/*! ... */` as
+          # a normal comment, so unwrapping is MySQL-safe: the content is
+          # ignored by those engines anyway.
+          .gsub(/\/\*!\d*\s*(.*?)\*\//m) { " #{Regexp.last_match(1)} " }
           .gsub(/\/\*.*?\*\//m, " ")   # Block comments: /* ... */
           .gsub(/--[^\n]*/, " ")        # Line comments: -- ...
           .gsub(/^\s*#[^\n]*/m, " ")   # MySQL-style comments: # at line start only
@@ -187,6 +196,14 @@ module RailsAiContext
       # ── SQL validation (Layer 1) ────────────────────────────────────
       def self.validate_sql(sql)
         return [ false, "SQL query is required." ] if sql.nil? || sql.strip.empty?
+
+        # Belt-and-suspenders: run BLOCKED_FUNCTIONS against the RAW sql before
+        # stripping comments. If the unwrap logic in strip_sql_comments is ever
+        # defeated by a novel MySQL comment variant, this still catches the
+        # dangerous primitives (pg_read_file, LOAD_FILE, dblink, ...).
+        if (m = sql.match(BLOCKED_FUNCTIONS))
+          return [ false, "Blocked: dangerous function #{m[0]} (filesystem/network primitive)" ]
+        end
 
         cleaned = strip_sql_comments(sql)
 
@@ -345,7 +362,18 @@ module RailsAiContext
           [ "EXPLAIN #{sql}", :parse_generic_explain ]
         end
 
-        result = conn.select_all(explain_sql)
+        # Route through the adapter-specific safety wrappers so EXPLAIN inherits
+        # the same READ ONLY transaction + statement_timeout / MAX_EXECUTION_TIME
+        # the regular query path gets. Load-bearing because PostgreSQL
+        # `EXPLAIN (FORMAT JSON, ANALYZE) ...` actually executes the plan — an
+        # attacker reaches this via `explain: true` to hold a DB connection
+        # indefinitely and bypass the query_timeout guard.
+        result = case adapter
+        when /postgresql/ then execute_postgresql(conn, explain_sql, timeout)
+        when /mysql/      then execute_mysql(conn, explain_sql, timeout)
+        when /sqlite/     then execute_sqlite(conn, explain_sql, timeout)
+        else                   conn.select_all(explain_sql)
+        end
         parsed = send(parser, result)
 
         lines = [ "# EXPLAIN Analysis", "" ]

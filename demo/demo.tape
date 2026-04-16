@@ -9,7 +9,7 @@ Set Padding 12
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 35ms
 
-Type "cd /Users/crisjosephnahine/Documents/Projects/daily-content-chef"
+Type "cd ~/my-rails-app"
 Enter
 Sleep 1s
 

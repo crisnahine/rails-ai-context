@@ -45,7 +45,7 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
     end
 
     it "parses ParameterMissing" do
-      result = described_class.call(error: "ActionController::ParameterMissing: param is missing or the value is empty: cook")
+      result = described_class.call(error: "ActionController::ParameterMissing: param is missing or the value is empty: post")
       text = result.content.first[:text]
       expect(text).to include("strong_params")
     end
@@ -66,7 +66,7 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
     it "includes Next Steps section" do
       result = described_class.call(
         error: "NoMethodError: undefined method `foo`",
-        file: "app/models/cook.rb"
+        file: "app/models/post.rb"
       )
       text = result.content.first[:text]
       expect(text).to include("Next Steps")

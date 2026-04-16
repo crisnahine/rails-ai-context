@@ -12,7 +12,7 @@ module RailsAiContext
         properties: {
           file: {
             type: "string",
-            description: "File path relative to Rails root (e.g. 'app/models/cook.rb', 'app/controllers/cooks_controller.rb')."
+            description: "File path relative to Rails root (e.g. 'app/models/post.rb', 'app/controllers/posts_controller.rb')."
           },
           near: {
             type: "string",
@@ -31,7 +31,7 @@ module RailsAiContext
       def self.call(file:, near:, context_lines: 5, server_context: nil)
         # Reject empty parameters
         if file.nil? || file.strip.empty?
-          return text_response("The `file` parameter is required. Provide a path relative to Rails root (e.g. 'app/models/cook.rb').")
+          return text_response("The `file` parameter is required. Provide a path relative to Rails root (e.g. 'app/models/post.rb').")
         end
 
         if near.nil? || near.strip.empty?

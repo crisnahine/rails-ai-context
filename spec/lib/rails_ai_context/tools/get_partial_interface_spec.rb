@@ -80,6 +80,22 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(text).to include("not allowed")
     end
 
+    it "blocks caller-supplied sensitive names BEFORE filesystem stat (existence oracle)" do
+      # Without the early sensitive_file? check, resolve_partial_path would
+      # stat each candidate for `.env` / `master.key` and the not-found vs
+      # access-denied message would leak whether the file exists under
+      # app/views/. The fix rejects sensitive names before any File.exist?.
+      result = described_class.call(partial: ".env")
+      text = result.content.first[:text]
+      expect(text).to match(/not allowed/)
+      expect(text).to include("sensitive")
+
+      result2 = described_class.call(partial: "config/master.key")
+      text2 = result2.content.first[:text]
+      expect(text2).to match(/not allowed/)
+      expect(text2).to include("sensitive")
+    end
+
     it "detects magic comment locals in status_badge partial" do
       result = described_class.call(partial: "shared/status_badge")
       text = result.content.first[:text]

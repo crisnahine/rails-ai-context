@@ -34,11 +34,11 @@ RSpec.describe "Token-saving improvements" do
     it "shows partial fields in rails_get_view standard detail" do
       context = RailsAiContext.introspect
       context[:view_templates] = {
-        templates: { "cooks/show.html.erb" => { lines: 50, partials: [ "cooks/output" ], stimulus: [ "cook-status" ] } },
-        partials: { "cooks/_output.html.erb" => { lines: 100, fields: %w[confidence_score strategy_brief], helpers: %w[render_markdown] } }
+        templates: { "posts/show.html.erb" => { lines: 50, partials: [ "posts/output" ], stimulus: [ "post-status" ] } },
+        partials: { "posts/_output.html.erb" => { lines: 100, fields: %w[confidence_score strategy_brief], helpers: %w[render_markdown] } }
       }
       allow(RailsAiContext::Tools::GetView).to receive(:cached_context).and_return(context)
-      result = RailsAiContext::Tools::GetView.call(controller: "cooks", detail: "standard")
+      result = RailsAiContext::Tools::GetView.call(controller: "posts", detail: "standard")
       text = result.content.first[:text]
       expect(text).to include("_output.html.erb")
       expect(text).to include("confidence_score")

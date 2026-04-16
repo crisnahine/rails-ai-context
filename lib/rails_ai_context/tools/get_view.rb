@@ -6,17 +6,17 @@ module RailsAiContext
       tool_name "rails_get_view"
       description "Get view templates, partials, and their Stimulus/partial references. " \
         "Use when: editing ERB views, checking which partials a page renders, or finding Stimulus controller usage. " \
-        "Filter with controller:\"cooks\" for all views, or path:\"cooks/index.html.erb\" for one file's content."
+        "Filter with controller:\"posts\" for all views, or path:\"posts/index.html.erb\" for one file's content."
 
       input_schema(
         properties: {
           controller: {
             type: "string",
-            description: "Filter views by controller name (e.g. 'cooks', 'brand_profiles'). Lists all templates for that controller."
+            description: "Filter views by controller name (e.g. 'posts', 'comments'). Lists all templates for that controller."
           },
           path: {
             type: "string",
-            description: "Specific view path relative to app/views (e.g. 'cooks/index.html.erb'). Returns full content."
+            description: "Specific view path relative to app/views (e.g. 'posts/index.html.erb'). Returns full content."
           },
           detail: {
             type: "string",
@@ -51,7 +51,7 @@ module RailsAiContext
         end
 
         if controller
-          # Normalize: accept "CooksController", "cooks", "cooks_controller", "Bonus::CooksController"
+          # Normalize: accept "PostsController", "posts", "posts_controller", "Admin::PostsController"
           ctrl_lower = controller.underscore.delete_suffix("_controller")
           ctrl_lower_alt = controller.downcase.delete_suffix("controller")
           filtered_templates = templates.select { |k, _|
@@ -209,15 +209,44 @@ module RailsAiContext
         files = Dir.glob(File.join(layouts_dir, "*")).reject { |f| File.directory?(f) }.sort
         return text_response("No layout files found.") if files.empty?
 
+        # Canonicalize the containment base once so every per-file check uses
+        # the same realpath. `max_file_size` is the configured per-file cap
+        # (default 5MB) — large apps raise it via `config.max_file_size`.
+        real_base = File.realpath(layouts_dir).to_s
+        max_size  = max_file_size
+
         lines = [ "# Layouts (#{files.size} files)", "" ]
         files.each do |path|
           relative = "layouts/#{File.basename(path)}"
+
+          # Apply the 5-rule file-reading pattern per CLAUDE.md:
+          #   1. sensitive_file? on the relative string (checked post-realpath
+          #      below, plus the basename pre-check here)
+          #   2. realpath + separator-aware containment under layouts_dir
+          #   3. post-realpath sensitive_file? recheck
+          #   4. size cap before SafeFile.read
+          #   5. read from the realpath, never the original Dir.glob string
+          # Without these, a symlink `layouts/leak.key -> ../../config/master.key`
+          # would leak secrets verbatim in the "full" detail branch.
+          real =
+            begin
+              File.realpath(path).to_s
+            rescue Errno::ENOENT
+              nil
+            end
+          next unless real
+          next unless real == real_base || real.start_with?(real_base + File::SEPARATOR)
+
+          relative_real = real.sub("#{real_base}/", "")
+          next if sensitive_file?(relative_real) || sensitive_file?(relative)
+          next if File.size(real) > max_size
+
           if detail == "full"
-            content = RailsAiContext::SafeFile.read(path) || "(error reading)"
+            content = RailsAiContext::SafeFile.read(real) || "(error reading)"
             lines << "## #{relative}" << "```erb" << strip_svg(content) << "```" << ""
           else
-            line_count = (RailsAiContext::SafeFile.read(path) || "").lines.size
-            lines << "- #{relative} (#{line_count} lines)"
+            content = RailsAiContext::SafeFile.read(real) || ""
+            lines << "- #{relative} (#{content.lines.size} lines)"
           end
         end
         text_response(lines.join("\n"))
@@ -309,8 +338,31 @@ module RailsAiContext
       end
 
       private_class_method def self.read_view_content(relative_path)
-        full_path = Rails.root.join("app", "views", relative_path)
-        File.exist?(full_path) ? (RailsAiContext::SafeFile.read(full_path) || "(error reading file)") : "(file not found)"
+        # Defense-in-depth: `relative_path` normally comes from the view
+        # introspector's Dir.glob over `app/views/`, but apply the 5-rule
+        # file-reading pattern anyway so a stale introspector entry, a
+        # symlink pivot, or a caller that wires a different source cannot
+        # turn this into a `cat /etc/passwd` primitive. Size cap uses
+        # `max_file_size` (default 5MB, tunable via `config.max_file_size`
+        # for large apps).
+        return "(file not found)" if relative_path.nil? || relative_path.to_s.empty?
+        return "(access denied)" if sensitive_file?(relative_path.to_s)
+
+        views_dir = Rails.root.join("app", "views")
+        full_path = views_dir.join(relative_path)
+        return "(file not found)" unless File.exist?(full_path)
+
+        real_base = File.realpath(views_dir).to_s
+        real      = File.realpath(full_path).to_s
+        return "(path not allowed)" unless real == real_base || real.start_with?(real_base + File::SEPARATOR)
+
+        relative_real = real.sub("#{real_base}/", "")
+        return "(access denied)" if sensitive_file?(relative_real)
+        return "(file too large)" if File.size(real) > max_file_size
+
+        RailsAiContext::SafeFile.read(real) || "(error reading file)"
+      rescue Errno::ENOENT
+        "(file not found)"
       rescue => e
         $stderr.puts "[rails-ai-context] read_view_content failed: #{e.message}" if ENV["DEBUG"]
         "(error reading file)"

@@ -6,13 +6,13 @@ module RailsAiContext
       tool_name "rails_get_context"
       description "Get cross-layer context in a single call — combines schema, model, controller, routes, views, stimulus, and tests. " \
         "Use when: you need full context for implementing a feature or modifying an action. " \
-        "Specify controller:\"CooksController\" action:\"create\" to get everything for that action in one call."
+        "Specify controller:\"PostsController\" action:\"create\" to get everything for that action in one call."
 
       input_schema(
         properties: {
           controller: {
             type: "string",
-            description: "Controller name (e.g. 'CooksController'). Returns action source, filters, strong params, routes, views."
+            description: "Controller name (e.g. 'PostsController'). Returns action source, filters, strong params, routes, views."
           },
           action: {
             type: "string",
@@ -20,11 +20,11 @@ module RailsAiContext
           },
           model: {
             type: "string",
-            description: "Model name (e.g. 'Cook'). Returns schema, associations, validations, scopes, callbacks, tests."
+            description: "Model name (e.g. 'Post'). Returns schema, associations, validations, scopes, callbacks, tests."
           },
           feature: {
             type: "string",
-            description: "Feature keyword (e.g. 'cook'). Like analyze_feature but includes schema columns and scope bodies."
+            description: "Feature keyword (e.g. 'post'). Like analyze_feature but includes schema columns and scope bodies."
           },
           include: {
             type: "array",
@@ -150,7 +150,7 @@ module RailsAiContext
         text.each_line do |line|
           # Skip lines that don't match the action's template when filtering
           if action
-            # Match: "cooks/show.html.erb" for action "show", "cooks/index.html.erb" for "index", etc.
+            # Match: "posts/show.html.erb" for action "show", "posts/index.html.erb" for "index", etc.
             next unless line.match?(/\/#{Regexp.escape(action)}\.html\.erb\b/)
           end
           if (match = line.match(/ivars:\s*(.+?)(?:\s+turbo:|$)/))

@@ -73,19 +73,19 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         models: {},
         routes: {
           by_controller: {
-            "cooks" => [
-              { verb: "GET", path: "/cooks", action: "index", name: "cooks" },
-              { verb: "POST", path: "/cooks", action: "create", name: "cooks" }
+            "posts" => [
+              { verb: "GET", path: "/posts", action: "index", name: "posts" },
+              { verb: "POST", path: "/posts", action: "create", name: "posts" }
             ]
           }
         }
       })
 
-      result = described_class.call(controller: "CooksController")
+      result = described_class.call(controller: "PostsController")
       text = result.content.first[:text]
       expect(text).to include("type: :request")
-      expect(text).to include("GET /cooks")
-      expect(text).to include("POST /cooks")
+      expect(text).to include("GET /posts")
+      expect(text).to include("POST /posts")
     end
 
     it "generates minitest controller test with quoted paths and defined params for nested routes" do
@@ -114,7 +114,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       allow(described_class).to receive(:cached_context).and_return({
         tests: { framework: "rspec" },
         models: {
-          "Cook" => {
+          "Post" => {
             associations: [],
             validations: [],
             scopes: [],
@@ -124,9 +124,9 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         }
       })
 
-      result = described_class.call(file: "app/models/cook.rb")
+      result = described_class.call(file: "app/models/post.rb")
       text = result.content.first[:text]
-      expect(text).to include("RSpec.describe Cook")
+      expect(text).to include("RSpec.describe Post")
     end
   end
 end

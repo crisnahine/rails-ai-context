@@ -6,7 +6,7 @@ module RailsAiContext
       tool_name "rails_get_test_info"
       description "Get test infrastructure and existing test files: framework, factories, fixtures, CI config, coverage setup. " \
         "Use when: writing new tests, checking what factories/fixtures exist, or finding the test file for a model/controller. " \
-        "Use model:\"User\" or controller:\"Cooks\" to see existing tests. detail:\"full\" lists factory and fixture names."
+        "Use model:\"User\" or controller:\"Posts\" to see existing tests. detail:\"full\" lists factory and fixture names."
 
       input_schema(
         properties: {
@@ -16,7 +16,7 @@ module RailsAiContext
           },
           controller: {
             type: "string",
-            description: "Show existing tests for a specific controller (e.g. 'Cooks'). Looks for controller/request spec/test file."
+            description: "Show existing tests for a specific controller (e.g. 'Posts'). Looks for controller/request spec/test file."
           },
           detail: {
             type: "string",
@@ -185,9 +185,9 @@ module RailsAiContext
       end
 
       private_class_method def self.find_test_file(name, type, detail = "full")
-        # Normalize: accept "Bonus::CrisesController", "bonus/crises", "Crises", "cooks" (plural)
+        # Normalize: accept "Admin::PostsController", "admin/posts", "Posts", "posts" (plural)
         snake = name.to_s.tr("/", "::").underscore.sub(/_controller$/, "")
-        # For models, also try singular form (cooks → cook)
+        # For models, also try singular form (posts → post)
         snake_singular = snake.singularize
         candidates = case type
         when :model
@@ -324,7 +324,7 @@ module RailsAiContext
             lines << "  end"
             lines << ""
             lines << "  test \"shows page for signed in user\" do"
-            lines << "    sign_in users(:chef_one)" if has_sign_in
+            lines << "    sign_in users(:one)" if has_sign_in
             lines << "    get feature_path"
             lines << "    assert_response :success"
             lines << "  end"
@@ -453,7 +453,7 @@ module RailsAiContext
                 parent_file = entry_lookup[str_value]
                 relationships["#{parent_file} (#{str_value})"] << "#{file}.#{entry_name}"
               elsif parsed_fixtures.key?(key.to_s) && parsed_fixtures[key.to_s].key?(str_value)
-                # Rails fixture reference: e.g. user: chef_one where "user" is a fixture file
+                # Rails fixture reference: e.g. user: one where "user" is a fixture file
                 relationships["#{key} (#{str_value})"] << "#{file}.#{entry_name}"
               elsif key.to_s =~ /\A(\w+)_id\z/
                 # Foreign key with integer value — note the relationship type

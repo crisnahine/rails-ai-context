@@ -44,7 +44,7 @@ module RailsAiContext
         # (HTML uses data-controller="weekly-chart", file is weekly_chart_controller.js)
         if controller
           normalized = controller.downcase.tr("-", "_").delete_suffix("_controller")
-          # Also handle PascalCase: CookStatus → cook_status
+          # Also handle PascalCase: PostStatus → post_status
           underscored = controller.underscore.downcase.tr("-", "_").delete_suffix("_controller")
           ctrl = all_controllers.find { |c|
             name_norm = c[:name]&.downcase&.tr("-", "_")

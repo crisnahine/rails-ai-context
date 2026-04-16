@@ -483,6 +483,51 @@ module RailsAiContext
         end
       end
 
+      def install_validation_hook
+        git_dir = Rails.root.join(".git")
+        return unless Dir.exist?(git_dir)
+
+        hooks_dir = git_dir.join("hooks")
+        hook_path = hooks_dir.join("pre-commit")
+
+        if File.exist?(hook_path) && !File.read(hook_path).include?("rails-ai-context")
+          say "  Skipped pre-commit hook (existing hook found — add manually)", :yellow
+          return
+        end
+
+        return if File.exist?(hook_path) && File.read(hook_path).include?("rails-ai-context")
+
+        answer = ask("Install a pre-commit hook that validates Rails references? (y/N)").strip.downcase
+        return unless answer == "y"
+
+        FileUtils.mkdir_p(hooks_dir)
+        File.write(hook_path, <<~HOOK)
+          #!/bin/bash
+          # rails-ai-context: validate Rails references before commit
+          # Catches hallucinated columns, missing models, and schema drift.
+          # Remove this file or the rails-ai-context section to disable.
+
+          changed_files=$(git diff --cached --name-only | grep -E '\\.(rb|erb)$' || true)
+
+          if [ -z "$changed_files" ]; then
+            exit 0
+          fi
+
+          if command -v rails &> /dev/null; then
+            rails 'ai:tool[validate]' files="$(echo $changed_files | tr '\\n' ',')" 2>/dev/null
+            exit_code=$?
+            if [ $exit_code -ne 0 ]; then
+              echo ""
+              echo "rails-ai-context validation found issues."
+              echo "Fix them or skip with: git commit --no-verify"
+              exit $exit_code
+            fi
+          fi
+        HOOK
+        FileUtils.chmod(0o755, hook_path)
+        say "  Installed pre-commit validation hook", :green
+      end
+
       def generate_context_files
         say ""
         say "Generating AI context files...", :yellow
@@ -529,6 +574,8 @@ module RailsAiContext
         if @tool_mode == :mcp
           say "  rails ai:serve           # Start MCP server (#{tool_count} live tools)"
         end
+        say "  rails ai:facts           # Print concise schema facts summary"
+        say "  rails 'ai:preset[arch]'   # Run multi-tool presets (architecture, debugging, migration)"
         say "  rails ai:doctor          # Check AI readiness"
         say "  rails ai:inspect         # Print introspection summary"
         say ""

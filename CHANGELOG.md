@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.0] — 2026-04-16
+
+### Added
+
+- **`preset` command** — composite multi-tool workflows from CLI and rake. `rails ai:preset[architecture]` runs `analyze_feature` + `dependency_graph` + `performance_check` in one call. Also: `debugging` (logs + review + validate) and `migration` (schema + migration_advisor + validate). Available via both `rails-ai-context preset architecture` and `rails 'ai:preset[architecture]'`.
+
+- **`facts` command** — concise schema facts summary. `rails ai:facts` / `rails-ai-context facts` prints tables with column/index/FK counts, model associations, key dependencies, and architecture patterns. Single command replaces 3+ MCP tool calls for quick context loading.
+
+- **Validation pre-commit hook** — optional during `rails generate rails_ai_context:install`. Prompts to install a `.git/hooks/pre-commit` hook that runs `rails ai:tool[validate]` on staged `.rb` and `.erb` files. Catches hallucinated columns and schema drift before commit. Respects existing hooks and `--no-verify`.
+
+### Fixed — Security Hardening (Round 2)
+
+Eleven additional vulnerabilities and defense-in-depth gaps found by multi-round adversarial code review. All discovered post-v5.8.1 — **users on 5.8.x should upgrade**.
+
+- **MySQL executable-comment bypass of `BLOCKED_FUNCTIONS`.** `strip_sql_comments` stripped `/*! ... */` (MySQL version-conditional comments) along with regular block comments. MySQL *executes* content inside `/*! ... */`, so `SELECT /*!50000 LOAD_FILE('/etc/passwd') */ AS x` passed all validation. **Fix:** unwraps executable comments (preserves inner content for checker visibility) before the block-comment strip. Belt-and-suspenders: also runs `BLOCKED_FUNCTIONS` against the raw SQL before any stripping.
+
+- **`execute_explain` bypassed READ ONLY transaction and statement timeout.** The EXPLAIN path called `conn.select_all(explain_sql)` directly instead of routing through `execute_postgresql`/`execute_mysql`/`execute_sqlite`. PostgreSQL `EXPLAIN (FORMAT JSON, ANALYZE)` actually executes the query plan — an attacker could hold a DB connection indefinitely and bypass the read-only guard. **Fix:** routes through adapter-specific safety wrappers.
+
+- **`read_logs` C1 sibling-directory bypass.** Bare `real.start_with?(File.realpath(root))` matched `/var/app/myapp_evil` against `/var/app/myapp`. **Fix:** separator-aware containment (`real == base || real.start_with?(base + File::SEPARATOR)`).
+
+- **`read_logs` TOCTOU window.** Resolved the realpath for the containment check, then opened the original `path` for reading. Symlink swap between check and open leaked arbitrary files. **Fix:** returns and reads from the realpath.
+
+- **`read_logs` missing post-realpath sensitive recheck.** A symlink `log/credentials.log -> ../config/master.key` resolves to a path still under Rails.root, passing containment. Without `sensitive_file?` on the realpath, `tail_file` read the secret. **Fix:** added post-realpath `sensitive_file?` recheck.
+
+- **VFS `resolve_view` existence-oracle side channel.** `File.exist?` ran before `sensitive_file?`, so two distinct error messages ("View not found" vs "sensitive file") revealed whether `.env` / `master.key` existed inside `app/views/`. **Fix:** early `sensitive_file?` check before any filesystem stat.
+
+- **`get_partial_interface` existence-oracle side channel.** `candidates.find { |c| File.exist?(c) }` stat'd candidates before any sensitive check on the caller-supplied `partial` string. Same oracle as the VFS fix. **Fix:** early `sensitive_file?` check in `call`.
+
+- **`get_view` `list_layouts` missing all security rules.** Iterated `Dir.glob` results with no realpath containment, no sensitive recheck, and no size gate. A symlink `layouts/leak.key -> ../../config/master.key` leaked secrets in the `full` detail branch. **Fix:** full 5-rule file-reading pattern per file.
+
+- **`get_view` `read_view_content` missing all security rules.** Called `SafeFile.read` after a bare `File.exist?` with no containment, no sensitive recheck, and no size cap. **Fix:** full 5-rule file-reading pattern with `max_file_size` gate.
+
+- **`get_concern` `show_concern` path traversal.** `name.underscore` does not sanitize `../`, so `name: "../../config/initializers/devise"` read arbitrary `.rb` files under Rails.root. The proposed fix in the IDOR variant would have been a security downgrade. **Fix:** early traversal/null-byte/absolute-path rejection, early `sensitive_file?`, per-candidate realpath + separator containment, post-realpath sensitive recheck.
+
+- **`get_concern` `list_concerns` symlink escape.** `Dir.glob` results passed to `SafeFile.read` with no realpath containment or sensitive recheck. **Fix:** per-file 5-rule pattern.
+
+### Changed
+
+- All documentation examples, tool descriptions, code comments, and test fixtures now use generic Rails terminology (`PostsController`, `publishable?`, `posts/index.html.erb`) instead of app-specific references. Affects README, GUIDE, CLI, RECIPES docs, tool_guide_helper serializer, 6 MCP tool description strings, CHANGELOG, demo scripts, and 3 spec files.
+
 ## [5.8.1] — 2026-04-15
 
 ### Fixed — Security Hardening
@@ -628,11 +668,11 @@ AI assistants that consume pre-digested summaries produce worse output than AI t
 - `analyze_feature` with nonexistent feature — returns clean "no match" instead of scaffolded empty sections
 - `migration_advisor` crash on empty/invalid action — now validates with "Did you mean?" suggestions
 - `migration_advisor` generates broken SQL with empty table/column — now validates required params
-- `migration_advisor` doesn't normalize table names — "Cook" now auto-resolves to "cooks"
+- `migration_advisor` doesn't normalize table names — "Post" now auto-resolves to "posts"
 - `migration_advisor` no duplicate column/index detection — now warns on existing columns, indexes, and FKs
 - `migration_advisor` no nonexistent column detection — now warns on remove/rename/change_type/add_index for missing columns
 - `edit_context` "File not found" with no hint — now suggests full path with "Did you mean?"
-- `performance_check` model filter fails for multi-word models — "BrandProfile" now resolves to "brand_profiles"
+- `performance_check` model filter fails for multi-word models — "UserProfile" now resolves to "user_profiles"
 - `performance_check` unknown model silently ignored — now returns "not found" with suggestions
 - `turbo_map` stream filter misses dynamic broadcasts — multi-line call handling + snippet fallback + fuzzy prefix matching
 - `turbo_map` controller filter misses job broadcasts — now includes broadcasts matching filtered subscriptions' streams
@@ -640,7 +680,7 @@ AI assistants that consume pre-digested summaries produce worse output than AI t
 - `search_code` unknown match_type silently ignored — now returns error with valid values
 - `validate` unknown level silently ignored — now returns error with valid values
 - `get_view` no "Did you mean?" on wrong controller — now uses `find_closest_match`
-- `get_context` plural model name ("Cooks") produces mixed output — now normalizes via singularize/classify, fails fast when not found
+- `get_context` plural model name ("Posts") produces mixed output — now normalizes via singularize/classify, fails fast when not found
 - `component_catalog` specific component returns generic "no components" — now acknowledges the input
 - `stimulus` doesn't strip `_controller` suffix — now auto-strips for lookup
 - `controller_introspector_spec` rate_limit test crashes on Rails 7.1 — split into source-parsing test (no class loading)
@@ -694,15 +734,15 @@ AI assistants that consume pre-digested summaries produce worse output than AI t
 ### Fixed
 
 - **Consistent input normalization across all tools** — AI agents and humans can now use any casing or format and tools resolve correctly:
-  - `model=brand_profile` (snake_case) now resolves to `BrandProfile` via `.underscore` comparison in `get_model_details`.
-  - `table=Cook` (model name) now resolves to `cooks` table via `.underscore.pluralize` normalization in `get_schema`.
-  - `controller=CooksController` now works in `get_view` and `get_routes` — both strip `Controller`/`_controller` suffix consistently, matching `get_controllers` behavior.
-  - `controller=cooks_controller` no longer leaves a trailing underscore in route matching.
-  - `stimulus=CookStatus` (PascalCase) now resolves to `cook_status` via `.underscore` conversion in `get_stimulus`.
+  - `model=user_profile` (snake_case) now resolves to `UserProfile` via `.underscore` comparison in `get_model_details`.
+  - `table=Post` (model name) now resolves to `posts` table via `.underscore.pluralize` normalization in `get_schema`.
+  - `controller=PostsController` now works in `get_view` and `get_routes` — both strip `Controller`/`_controller` suffix consistently, matching `get_controllers` behavior.
+  - `controller=posts_controller` no longer leaves a trailing underscore in route matching.
+  - `stimulus=PostStatus` (PascalCase) now resolves to `post_status` via `.underscore` conversion in `get_stimulus`.
   - `partial=_status_badge` (underscore-prefixed, no directory) now searches recursively across all view directories in `get_partial_interface`.
-  - `model=cooks` (plural) now tries `.singularize` for test file lookup in `get_test_info`.
-- **Smarter fuzzy matching** — `BaseTool.find_closest_match` now prefers shortest substring match (so `Cook` suggests `cooks`, not `cook_comments`) and supports underscore/classify variant matching.
-- **File path suggestions in validate** — `files=["cook.rb"]` now suggests `app/models/cook.rb` when the file isn't found at the given path.
+  - `model=posts` (plural) now tries `.singularize` for test file lookup in `get_test_info`.
+- **Smarter fuzzy matching** — `BaseTool.find_closest_match` now prefers shortest substring match (so `Post` suggests `posts`, not `post_comments`) and supports underscore/classify variant matching.
+- **File path suggestions in validate** — `files=["post.rb"]` now suggests `app/models/post.rb` when the file isn't found at the given path.
 - **Empty parameter validation** — `edit_context` now returns friendly messages for empty `file` or `near` parameters instead of hard errors.
 
 ## [3.0.1] — 2026-03-26
@@ -748,10 +788,10 @@ AI assistants that consume pre-digested summaries produce worse output than AI t
 
 ### Added
 
-- **Orphaned table detection** — `get_schema` standard mode flags tables with no ActiveRecord model: "⚠ Orphaned tables: content_calendars, cook_comments"
+- **Orphaned table detection** — `get_schema` standard mode flags tables with no ActiveRecord model: "⚠ Orphaned tables: content_calendars, post_comments"
 - **Concern method source code** — `get_concern(name:"X", detail:"full")` shows method bodies inline, same pattern as callbacks tool.
 - **analyze_feature: inherited filters** — shows `authenticate_user! (from ApplicationController)` in controller section.
-- **analyze_feature: code-ready route helpers** — `cook_path(@record)`, `cooks_path` inline with routes.
+- **analyze_feature: code-ready route helpers** — `post_path(@record)`, `posts_path` inline with routes.
 - **analyze_feature: service test gaps** — checks services for missing test files, not just models/controllers/jobs.
 - **All 6 serializers updated** — Claude, Cursor, Copilot, Windsurf, OpenCode all document trace mode, concern source, orphaned tables, inherited filters.
 
@@ -875,9 +915,9 @@ AI assistants that consume pre-digested summaries produce worse output than AI t
 - **Empty string defaults shown as `""`** — schema tool now renders `""` instead of a blank cell for empty string defaults. AI can distinguish "no default" from "empty string default".
 - **Implicit belongs_to validations labeled** — `presence on user` from `belongs_to :user` now shows `_(implicit from belongs_to)_` and filters phantom `(message: required)` options.
 - **Array columns shown as `type[]`** in generated rules — `string` columns with `array: true` now render as `string[]` in schema rules.
-- **External ID columns no longer hidden** — columns like `paymongo_checkout_id` and `stripe_payment_id` are now shown in schema rules. Only conventional Rails FK columns (matching a table name) are filtered.
+- **External ID columns no longer hidden** — columns like `stripe_checkout_id` and `stripe_payment_id` are now shown in schema rules. Only conventional Rails FK columns (matching a table name) are filtered.
 - **Column defaults shown in generated rules** — columns with non-nil defaults now show `(=value)` inline.
-- **`analyze_feature` matches models by table name and underscore form** — `feature:"share"` now finds `CookShare` (via `cook_shares` table and `cook_share` underscore form), not just exact model name substring.
+- **`analyze_feature` matches models by table name and underscore form** — `feature:"share"` now finds `PostShare` (via `post_shares` table and `post_share` underscore form), not just exact model name substring.
 
 ## [1.2.0] — 2026-03-23
 
@@ -966,7 +1006,7 @@ AI assistants that consume pre-digested summaries produce worse output than AI t
 
 - **Schema defaults always visible** — Null and Default columns always shown (NOT NULL marked bold). Previous token-saving logic accidentally hid critical migration data.
 - **Optional associations** — `belongs_to` with `optional: true` now shows `[optional]` flag.
-- **Concern methods inline** — shows public methods from concern source files (e.g. `PlanLimitable — can_cook?, increment_cook_count!`).
+- **Concern methods inline** — shows public methods from concern source files (e.g. `Publishable — publishable?, publish!`).
 - **MCP tool error messages** — all tools now show available values on error/not-found for AI self-correction.
 
 ## [0.15.5] — 2026-03-22
@@ -986,8 +1026,8 @@ AI assistants that consume pre-digested summaries produce worse output than AI t
 
 ### Fixed
 
-- **View subfolder paths** — listings now show full relative paths (`bonus/brand_profiles/index.html.erb`) instead of just basenames.
-- **Controller flexible matching** — `"cooks"`, `"CooksController"`, `"cookscontroller"` all resolve (matches other tools' forgiving lookup).
+- **View subfolder paths** — listings now show full relative paths (`admin/comments/index.html.erb`) instead of just basenames.
+- **Controller flexible matching** — `"posts"`, `"PostsController"`, `"postscontroller"` all resolve (matches other tools' forgiving lookup).
 - **View path traversal** — explicit `..` and absolute path rejection before any filesystem operation.
 - **Schema case-insensitive** — table lookup now case-insensitive (matches models/routes/etc.).
 - **limit:0 silent empty** — uses default instead of returning empty results.
@@ -1080,7 +1120,7 @@ AI assistants that consume pre-digested summaries produce worse output than AI t
 - **`app_only` filter for routes** — `rails_get_routes(app_only: true)` (default) hides internal Rails routes (Active Storage, Action Mailbox, Conductor).
 - **Search context lines** — `rails_search_code(context_lines: 2)` adds surrounding lines to matches (passes `-C` to ripgrep).
 - **Stimulus dash/underscore normalization** — Both `weekly-chart` and `weekly_chart` work for controller lookup. Output shows HTML `data-controller` attribute.
-- **Model public method signatures** — `rails_get_model_details(model: "Cook")` shows method names with params from source, stopping at private boundary.
+- **Model public method signatures** — `rails_get_model_details(model: "Post")` shows method names with params from source, stopping at private boundary.
 
 ## [0.13.1] — 2026-03-20
 
@@ -1118,7 +1158,7 @@ AI assistants that consume pre-digested summaries produce worse output than AI t
 - **Design Token Introspector** — auto-detects CSS framework and extracts tokens from Tailwind v3/v4, Bootstrap/Sass, plain CSS custom properties, Webpacker-era stylesheets, and ViewComponent sidecar CSS. Tested across 8 CSS setups. Added to standard preset.
 - **`rails_get_edit_context` MCP tool** — purpose-built for surgical edits. Returns code around a match point with line numbers. Replaces the Read + Edit workflow with a single call.
 - **Line numbers in action source** — `rails_get_controllers(action: "index")` now returns start/end line numbers for targeted editing.
-- **Model file structure** — `rails_get_model_details(model: "Cook")` now returns line ranges for each section (associations, validations, scopes, etc.).
+- **Model file structure** — `rails_get_model_details(model: "Post")` now returns line ranges for each section (associations, validations, scopes, etc.).
 
 ### Changed
 

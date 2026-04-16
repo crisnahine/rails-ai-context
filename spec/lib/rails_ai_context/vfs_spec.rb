@@ -188,6 +188,23 @@ RSpec.describe RailsAiContext::VFS do
         FileUtils.rm_rf(sibling_dir) if defined?(sibling_dir)
       end
 
+      it "blocks caller-supplied sensitive names BEFORE filesystem stat (existence oracle)" do
+        # The pre-fix `resolve_view` would call File.exist? on the requested
+        # path first, then only run sensitive_file? after realpath. That
+        # gave two distinct error messages — "View not found" vs "sensitive
+        # file" — which a caller could use to probe whether app/views/.env
+        # exists. The fix adds an early sensitive_file? check before any
+        # filesystem stat, so the rejection reason is identical regardless
+        # of whether the file is present.
+        expect {
+          described_class.resolve("rails-ai-context://views/.env")
+        }.to raise_error(RailsAiContext::Error, /sensitive|not allowed/)
+
+        expect {
+          described_class.resolve("rails-ai-context://views/master.key")
+        }.to raise_error(RailsAiContext::Error, /sensitive|not allowed/)
+      end
+
       it "blocks sensitive files resolved via symlink (v5.8.1 C1 defense-in-depth)" do
         # If a .key or .env file is symlinked into app/views/, the realpath
         # would be under views_dir but the file is sensitive. sensitive_file?
