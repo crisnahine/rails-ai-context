@@ -37,6 +37,8 @@ Real `rails new` → install → exercise → teardown against a fresh Rails app
 
 - **`spec/e2e/postgres_install_spec.rb`** — Postgres adapter coverage for the `rails_query` tool's adapter-specific code paths: `SET TRANSACTION READ ONLY`, `BLOCKED_FUNCTIONS` regex against `pg_read_file`, `dblink`, `COPY ... PROGRAM`, and DDL rejection. Skipped locally unless `TEST_POSTGRES=1`; runs unconditionally in CI which spins up a Postgres 16 service container.
 
+- **`spec/e2e/massive_app_spec.rb`** — 1500-model stress test. Programmatically generates a single migration with 1500 `create_table` statements and 1500 corresponding `ApplicationRecord` subclass files (rails-g-scaffold × 1500 would take 30+ min; direct file writes take seconds). Runs representative tools (`schema`, `model_details`, `routes`, `context`, `onboard`, `analyze_feature`, `get_turbo_map`, `get_env`) against the massive fixture and asserts: no signal, exit < 2, stdout non-empty, response size < 2 MB (tools must truncate — uncapped output overwhelms AI client context). Also verifies `rails_get_schema --table thing_0750s` finds a table in the middle of the range, proving schema introspection walks beyond the first page.
+
 Rake tasks: `bundle exec rake e2e` (full), `rake e2e:in_gemfile`, `rake e2e:standalone`, `rake e2e:zero_config`, `rake e2e:mcp`.
 
 CI: `.github/workflows/e2e.yml` runs on push to main + workflow_dispatch (separate from `ci.yml` so the 30-min job doesn't fail-stop the per-commit matrix). Matrix covers Ruby 3.3 + 3.4 across Rails 7.1, 7.2, 8.0, 8.1, and includes a Postgres 16 service container so the SQL-query and adapter-specific code paths are exercised on every push.

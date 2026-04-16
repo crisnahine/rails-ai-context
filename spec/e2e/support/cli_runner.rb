@@ -30,8 +30,8 @@ module E2E
     # Honors the isolated GEM_HOME in standalone/zero_config paths.
     # For in-Gemfile path, uses `bundle exec` because Bundler does not
     # auto-generate `bin/rails-ai-context` binstubs.
-    def cli_tool(tool_name, args = [])
-      run(cli_prefix + [ "tool", tool_name, *args ])
+    def cli_tool(tool_name, args = [], timeout: 60)
+      run(cli_prefix + [ "tool", tool_name, *args ], timeout: timeout)
     end
 
     # Run `rails-ai-context <subcommand>` (init, doctor, context, version, ...)
