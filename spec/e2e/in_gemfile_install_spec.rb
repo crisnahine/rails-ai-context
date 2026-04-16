@@ -62,6 +62,20 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       expect(File.exist?(init_path)).to be(true)
     end
 
+    it "writes both .cursor/rules/*.mdc AND the legacy .cursorrules (Cursor chat-agent fallback)" do
+      # v5.9.0: restored legacy .cursorrules because Cursor's chat agent
+      # didn't detect rules written only as .cursor/rules/*.mdc. See
+      # cursor_rules_serializer.rb for the full rationale.
+      cursorrules_path = File.join(@builder.app_path, ".cursorrules")
+      mdc_project_path = File.join(@builder.app_path, ".cursor", "rules", "rails-project.mdc")
+      expect(File.exist?(cursorrules_path)).to be(true), ".cursorrules (legacy) must be generated"
+      expect(File.exist?(mdc_project_path)).to be(true), ".cursor/rules/rails-project.mdc must be generated"
+
+      # Legacy file must be plain text, not MDC — older Cursor parses verbatim
+      expect(File.read(cursorrules_path)).not_to start_with("---")
+      expect(File.read(cursorrules_path)).to include("rails_get_schema")
+    end
+
     it "re-running the generator is idempotent (no duplicate entries)" do
       # Generator should be idempotent per CLAUDE.md #27.
       # Pipe answers for prompts: (a) all tools, (1) MCP mode, (n) no hook,

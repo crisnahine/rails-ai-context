@@ -22,7 +22,7 @@ module RailsAiContext
       # McpConfigGenerator.remove to preserve other servers' entries.
       FORMAT_PATHS = {
         claude:   %w[CLAUDE.md .claude/rules],
-        cursor:   %w[.cursor/rules],
+        cursor:   %w[.cursor/rules .cursorrules],
         copilot:  %w[.github/copilot-instructions.md .github/instructions],
         opencode: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
         codex:    %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md]

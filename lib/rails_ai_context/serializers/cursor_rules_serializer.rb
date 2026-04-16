@@ -2,9 +2,17 @@
 
 module RailsAiContext
   module Serializers
-    # Generates .cursor/rules/*.mdc files in the new Cursor MDC format.
-    # Each file is focused, <50 lines, with YAML frontmatter.
-    # .cursorrules is deprecated by Cursor; this is the recommended format.
+    # Generates .cursor/rules/*.mdc files (new Cursor MDC format) AND a
+    # .cursorrules legacy fallback at the project root.
+    #
+    # Why both:
+    #   - .cursor/rules/*.mdc is the recommended format for Cursor 0.42+
+    #     with per-file scoping (alwaysApply / globs / description triggers)
+    #   - .cursorrules is still consulted by Cursor's chat agent in many
+    #     versions and is the only format older clients understand. Real
+    #     user report (v5.9.0 release QA): the chat agent didn't detect
+    #     rules written only as .cursor/rules/*.mdc; adding .cursorrules
+    #     alongside fixed it.
     class CursorRulesSerializer
       include StackOverviewHelper
       include ToolGuideHelper
@@ -24,7 +32,8 @@ module RailsAiContext
           File.join(rules_dir, "rails-project.mdc") => render_project_rule,
           File.join(rules_dir, "rails-models.mdc") => render_models_rule,
           File.join(rules_dir, "rails-controllers.mdc") => render_controllers_rule,
-          File.join(rules_dir, "rails-mcp-tools.mdc") => render_mcp_tools_rule
+          File.join(rules_dir, "rails-mcp-tools.mdc") => render_mcp_tools_rule,
+          File.join(output_dir, ".cursorrules")       => render_cursorrules_legacy
         }
 
         write_rule_files(files)
@@ -166,6 +175,57 @@ module RailsAiContext
         ]
 
         lines.concat(render_tools_guide)
+
+        lines.join("\n")
+      end
+
+      # Legacy .cursorrules fallback. Plain text, no frontmatter — Cursor's
+      # chat agent reads it unconditionally in every version (unlike the
+      # newer .cursor/rules/*.mdc files which some Cursor builds / modes
+      # don't auto-attach to chat context). Keep it concise so it doesn't
+      # bloat the agent's context window on every message.
+      def render_cursorrules_legacy
+        lines = [
+          "# #{context[:app_name]} — Rails project rules",
+          "",
+          "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
+          ""
+        ]
+
+        schema = context[:schema]
+        lines << "- Database: #{schema[:adapter]} — #{schema[:total_tables]} tables" if schema && !schema[:error]
+
+        models = context[:models]
+        lines << "- Models: #{models.size}" if models.is_a?(Hash) && !models[:error]
+
+        routes = context[:routes]
+        lines << "- Routes: #{routes[:total_routes]}" if routes && !routes[:error]
+
+        conv = context[:conventions]
+        if conv.is_a?(Hash) && !conv[:error]
+          arch_labels = arch_labels_hash
+          (conv[:architecture] || []).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
+        end
+
+        lines << ""
+        lines << "## MCP tools"
+        lines << ""
+        lines << "This project has rails-ai-context installed. Use its MCP tools for ground-truth Rails context instead of guessing from file listings:"
+        lines << ""
+        lines << "- `rails_get_schema` — DB tables + columns + indexes"
+        lines << "- `rails_get_routes` — all routes with controller actions"
+        lines << "- `rails_get_model_details model:\"Name\"` — associations, validations, scopes, callbacks"
+        lines << "- `rails_get_controllers controller:\"Name\"` — actions, filters, params, rendered views"
+        lines << "- `rails_search_code pattern:\"...\"` — ripgrep across the app, respecting .gitignore"
+        lines << "- `rails_validate file:\"path\"` — semantic validation (columns, partials, routes) before commit"
+        lines << ""
+        lines << "Always call with `detail:\"summary\"` first, then drill into specifics. See .cursor/rules/rails-mcp-tools.mdc for the full tool list."
+        lines << ""
+        lines << "## Anti-hallucination"
+        lines << ""
+        lines << "- Never invent column names, association names, or route paths. Call `rails_get_schema` / `rails_get_routes` / `rails_get_model_details` first."
+        lines << "- Never assume a gem is installed. Check `rails_get_gems` or the Gemfile."
+        lines << "- When editing an existing file, read the surrounding code via `rails_get_edit_context` before applying changes."
 
         lines.join("\n")
       end
