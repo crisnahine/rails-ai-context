@@ -29,11 +29,10 @@ module RailsAiContext
 
       ALL_FORMATS = (FORMAT_MAP.keys + SPLIT_ONLY_FORMATS).freeze
 
-      # Re-exported from SectionMarkerWriter so existing code that referenced
-      # ContextFileSerializer::BEGIN_MARKER / END_MARKER keeps working.
-      BEGIN_MARKER = SectionMarkerWriter::BEGIN_MARKER
-      END_MARKER   = SectionMarkerWriter::END_MARKER
-
+      # Section markers live exclusively on SectionMarkerWriter — anyone
+      # who needs them references SectionMarkerWriter::BEGIN_MARKER /
+      # END_MARKER directly. (Re-exports were considered for back-compat
+      # but no external code referenced ContextFileSerializer::BEGIN_MARKER.)
       def initialize(context, format: :all)
         @context = context
         @format  = format

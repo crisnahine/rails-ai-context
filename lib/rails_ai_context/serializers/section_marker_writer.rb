@@ -24,8 +24,8 @@ module RailsAiContext
       # marker block so AI tools read our context first while keeping the
       # user's prior content intact below.
       #
-      # Returns :written if the file changed, :skipped if it was already up
-      # to date, or :unchanged if a no-op.
+      # Returns :written if the file changed (created or block updated),
+      # :skipped if the file already had the exact same marker block.
       def write_with_markers(filepath, content)
         marked_content = "#{BEGIN_MARKER}\n#{content}\n#{END_MARKER}\n"
 
