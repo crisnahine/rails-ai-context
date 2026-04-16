@@ -197,10 +197,21 @@ module E2E
         "GEM_HOME" => gem_home,
         "GEM_PATH" => gem_home
       )
+      # --ignore-dependencies is critical: without it, `gem install` pulls
+      # the LATEST railties/activesupport that satisfy our `>= 7.1, < 9.0`
+      # constraint into the isolated gem_home. If the test app is pinned
+      # to Rails 7.1/7.2/8.0 but the isolated dir has 8.1.x, `rails-ai-
+      # context init` crashes with `:compile_methods is blank (KeyError)`
+      # — activesupport 8.1 config options the app's Rails doesn't know
+      # about. Skipping deps forces transitive gems (railties, activesupport,
+      # mcp, thor, zeitwerk, prism, concurrent-ruby) to resolve from the
+      # app's gem set at run time via GEM_PATH (which prepends gem_home
+      # and appends ENV["GEM_PATH"] — see `env`).
       install_out, install_status = Open3.capture2e(install_env, "gem", "install", gem_path,
                                                      "--install-dir", gem_home,
                                                      "--bindir", File.join(gem_home, "bin"),
                                                      "--no-document",
+                                                     "--ignore-dependencies",
                                                      "--conservative")
       unless install_status.success?
         raise "gem install failed (isolated):\n#{install_out}"
