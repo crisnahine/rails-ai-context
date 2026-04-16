@@ -21,84 +21,8 @@ module RailsAiContext
         if RailsAiContext.configuration.context_mode == :full
           FullClaudeSerializer.new(context).call
         else
-          render_compact
+          render_compact_rules
         end
-      end
-
-      private
-
-      def render_compact
-        lines = []
-        lines.concat(render_header)
-        lines.concat(render_stack_overview)
-        lines.concat(render_key_models)
-        lines.concat(render_notable_gems)
-        lines.concat(render_architecture)
-        lines.concat(render_commands)
-        lines.concat(render_warnings)
-        lines.concat(render_footer)
-        lines.concat(render_tools_guide_compact)
-
-        enforce_max_lines(lines)
-      end
-
-      def render_architecture
-        conv = context[:conventions]
-        return [] unless conv.is_a?(Hash) && !conv[:error]
-
-        arch = conv[:architecture] || []
-        patterns = conv[:patterns] || []
-        return [] if arch.empty? && patterns.empty?
-
-        arch_labels = arch_labels_hash
-        pattern_labels = pattern_labels_hash
-
-        lines = [ "## Architecture" ]
-        arch.each { |p| lines << "- #{arch_labels[p] || p}" }
-        patterns.first(8).each { |p| lines << "- #{pattern_labels[p] || p}" }
-
-        dir_struct = conv[:directory_structure] || {}
-
-        if dir_struct["app/services"]
-          services = detect_service_files
-          lines << "" << "**Services:** #{services.join(', ')}" if services.any?
-        end
-
-        if dir_struct["app/jobs"]
-          jobs = detect_job_files
-          lines << "**Jobs:** #{jobs.join(', ')}" if jobs.any?
-        end
-
-        lines << ""
-        lines
-      end
-
-      def render_footer
-        test_cmd = detect_test_command
-        lines = [ "## Rules" ]
-        lines << "- Run `#{test_cmd}` after changes"
-        lines << "- Do NOT re-read files to verify edits — trust your Edit, validate syntax only"
-
-        conv = context[:conventions]
-        if conv.is_a?(Hash) && !conv[:error]
-          arch = conv[:architecture] || []
-          lines << "- Follow #{arch.join(' + ')} architecture" if arch.any?
-          patterns = conv[:patterns] || []
-          lines << "- Use service objects for business logic" if patterns.include?("service_objects")
-          lines << "- Use form objects for complex forms" if patterns.include?("form_objects")
-          lines << "- Use query objects for complex queries" if patterns.include?("query_objects")
-        end
-
-        stimulus = context[:stimulus]
-        if stimulus.is_a?(Hash) && !stimulus[:error] && (stimulus[:controllers]&.any? || stimulus[:total_controllers]&.positive?)
-          lines << "- Stimulus controllers auto-register — no manual import in controllers/index.js needed"
-        end
-
-        before_actions = detect_before_actions
-        lines << "- Global before_actions: #{before_actions.join(', ')}" if before_actions.any?
-
-        lines << ""
-        lines
       end
     end
 

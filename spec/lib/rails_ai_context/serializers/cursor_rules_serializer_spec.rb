@@ -97,7 +97,8 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
       expect(File.exist?(cursorrules_path)).to be true
 
       content = File.read(cursorrules_path)
-      # Plain text — no frontmatter — so every Cursor build reads it.
+      # Plain text / markdown — no YAML frontmatter — so every Cursor
+      # build reads it verbatim.
       expect(content).not_to start_with("---")
       # Must surface the gem's presence + name a couple of the MCP tools
       # so the chat agent knows to use them rather than guess.
@@ -105,6 +106,28 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
       expect(content).to include("rails_get_schema")
       expect(content).to include("rails_get_routes")
       expect(content).to include("App")  # app name from context
+    end
+  end
+
+  # .cursorrules and CLAUDE.md share render_compact_rules from
+  # CompactSerializerHelper. They target different AI clients but
+  # deliver the same project context — so when one changes, the other
+  # changes in lockstep. Ship-time invariant: identical core content
+  # between the two files.
+  it ".cursorrules mirrors the CLAUDE.md compact-rules pipeline (shared content)" do
+    Dir.mktmpdir do |dir|
+      described_class.new(context).call(dir)
+      cursor_content = File.read(File.join(dir, ".cursorrules"))
+      claude_content = RailsAiContext::Serializers::ClaudeSerializer.new(context).call
+
+      # Every major section of CLAUDE.md also appears in .cursorrules,
+      # guaranteeing parity across both AI-client targets. Drift between
+      # them is the class of bug that leaves one agent with stale rules.
+      %w[## Stack ## Key\ models ## Rules ## Architecture].each do |section|
+        next unless claude_content.include?(section)
+        expect(cursor_content).to include(section),
+          ".cursorrules missing section '#{section}' that CLAUDE.md has — shared pipeline drift"
+      end
     end
   end
 end
