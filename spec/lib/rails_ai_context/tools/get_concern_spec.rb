@@ -166,6 +166,29 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("Included By")
         expect(text).to include("Post")
       end
+
+      it "finds includers when the concern name is plural" do
+        File.write(File.join(model_concerns_dir, "worksheet_imports.rb"), <<~RUBY)
+          module WorksheetImports
+            extend ActiveSupport::Concern
+
+            class_methods do
+              def import(file); end
+            end
+          end
+        RUBY
+
+        File.write(File.join(models_dir, "worksheet.rb"), <<~RUBY)
+          class Worksheet < ApplicationRecord
+            include WorksheetImports
+          end
+        RUBY
+
+        result = described_class.call(name: "WorksheetImports")
+        text = result.content.first[:text]
+        expect(text).to include("Included By")
+        expect(text).to include("Worksheet")
+      end
     end
 
     context "detail levels" do
