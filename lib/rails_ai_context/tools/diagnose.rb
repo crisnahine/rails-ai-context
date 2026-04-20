@@ -265,7 +265,7 @@ module RailsAiContext
                   lines << text
                   lines << ""
                 end
-              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}"; end
+              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
             end
           end
 
@@ -284,7 +284,7 @@ module RailsAiContext
                   lines << text
                   lines << ""
                 end
-              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}"; end
+              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
             end
           end
 
@@ -298,7 +298,7 @@ module RailsAiContext
                 lines << text
                 lines << ""
               end
-            rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}"; end
+            rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
           end
 
           lines
@@ -329,7 +329,7 @@ module RailsAiContext
                          "This variable may not be set in all code paths — check if it's assigned before use, " \
                          "or use `#{receiver}&.#{method}` for safe navigation."
                 end
-              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}"; end
+              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
             end
           end
 
@@ -346,7 +346,7 @@ module RailsAiContext
                          "The record with the given ID doesn't exist or doesn't belong to the current user. " \
                          "Check if the record was deleted or if the user is authorized to access it."
                 end
-              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}"; end
+              rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
             end
           end
 

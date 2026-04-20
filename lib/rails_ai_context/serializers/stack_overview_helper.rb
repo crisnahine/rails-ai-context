@@ -186,7 +186,7 @@ module RailsAiContext
           .map { |f| File.basename(f, ".rb").camelize }
           .reject { |s| s == "ApplicationService" }
       rescue => e
-        $stderr.puts "[rails-ai-context] Service file scan skipped: #{e.message}"
+        $stderr.puts "[rails-ai-context] Service file scan skipped: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -198,7 +198,7 @@ module RailsAiContext
           .map { |f| File.basename(f, ".rb").camelize }
           .reject { |j| j == "ApplicationJob" }
       rescue => e
-        $stderr.puts "[rails-ai-context] Job file scan skipped: #{e.message}"
+        $stderr.puts "[rails-ai-context] Job file scan skipped: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -208,7 +208,7 @@ module RailsAiContext
         return [] unless File.exist?(app_ctrl_file)
         File.read(app_ctrl_file).scan(/before_action\s+:([\w!?]+)/).flatten
       rescue => e
-        $stderr.puts "[rails-ai-context] Before actions scan skipped: #{e.message}"
+        $stderr.puts "[rails-ai-context] Before actions scan skipped: #{e.message}" if ENV["DEBUG"]
         []
       end
     end

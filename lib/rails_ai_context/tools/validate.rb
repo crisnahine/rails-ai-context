@@ -170,7 +170,7 @@ module RailsAiContext
       end
 
       private_class_method def self.validate_ruby_prism(full_path)
-        result = Prism.parse_file(full_path.to_s)
+        result = AstCache.parse(full_path.to_s)
         basename = File.basename(full_path.to_s)
         warnings = result.warnings.map do |w|
           "#{basename}:#{w.location.start_line}:#{w.location.start_column}: warning: #{w.message}"
@@ -213,7 +213,7 @@ module RailsAiContext
         erb_src.force_encoding("UTF-8")
         compiled = "# encoding: utf-8\ndef __erb_syntax_check\n#{erb_src}\nend"
 
-        result = Prism.parse(compiled)
+        result = AstCache.parse_string(compiled)
         if result.success?
           [ true, nil, [] ]
         else
@@ -457,7 +457,7 @@ module RailsAiContext
           content
         end
 
-        result = Prism.parse(source)
+        result = AstCache.parse_string(source)
         visitor = RailsSemanticVisitor.new
         result.value.accept(visitor)
         visitor
