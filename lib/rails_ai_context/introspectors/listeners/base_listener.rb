@@ -23,7 +23,7 @@ module RailsAiContext
           case arg
           when Prism::SymbolNode then arg.value.to_sym
           when Prism::StringNode then arg.unescaped.to_sym
-          else "[INFERRED]"
+          else RailsAiContext::Confidence::INFERRED
           end
         end
 
@@ -56,7 +56,7 @@ module RailsAiContext
           case node
           when Prism::SymbolNode then node.value.to_sym
           when Prism::StringNode then node.unescaped.to_sym
-          else "[INFERRED]"
+          else RailsAiContext::Confidence::INFERRED
           end
         end
 
@@ -74,7 +74,7 @@ module RailsAiContext
           when Prism::ArrayNode          then node.elements.map { |e| extract_value(e) }
           when Prism::HashNode           then hash_node_to_hash(node)
           when Prism::KeywordHashNode    then hash_node_to_hash(node)
-          else "[INFERRED]"
+          else RailsAiContext::Confidence::INFERRED
           end
         end
 
