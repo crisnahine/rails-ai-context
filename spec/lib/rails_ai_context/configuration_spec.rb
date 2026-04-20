@@ -64,13 +64,14 @@ RSpec.describe RailsAiContext::Configuration do
 
     it "sets introspectors to full preset" do
       config.preset = :full
-      expect(config.introspectors.size).to eq(31)
+      expect(config.introspectors.size).to eq(39)
       expect(config.introspectors).to include(:stimulus, :database_stats, :views, :view_templates, :turbo, :auth, :api, :devops, :migrations, :seeds, :middleware, :engines, :multi_database, :components, :performance, :frontend_frameworks)
+      expect(config.introspectors).to include(:initializers, :autoload, :connection_pool, :active_support, :credentials, :security, :observability, :env)
     end
 
     it "accepts string preset names" do
       config.preset = "full"
-      expect(config.introspectors.size).to eq(31)
+      expect(config.introspectors.size).to eq(39)
     end
 
     it "raises on unknown preset" do

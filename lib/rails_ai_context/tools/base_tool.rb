@@ -121,7 +121,7 @@ module RailsAiContext
 
             # TTL expired: re-validate via fingerprint before re-introspecting.
             # If fingerprint is unchanged, bump the timestamp and reuse the
-            # cached context — saves re-running all 31 introspectors.
+            # cached context — saves re-running all 39 introspectors.
             if SHARED_CACHE[:context] && !Fingerprinter.changed?(rails_app, SHARED_CACHE[:fingerprint])
               SHARED_CACHE[:timestamp] = now
               return SHARED_CACHE[:context].deep_dup

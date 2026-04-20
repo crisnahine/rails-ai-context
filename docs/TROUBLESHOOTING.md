@@ -247,7 +247,7 @@ Without it, the tool reports "not installed" but the gem works fine otherwise.
 
 ### "Introspection is slow"
 
-1. Use `:standard` preset (17 introspectors vs 31)
+1. Use `:standard` preset (17 introspectors vs 39)
 2. Increase cache TTL: `config.cache_ttl = 300`
 3. Check schema file size: `rails ai:doctor` warns if too large
 4. Check view count: many views slow down view introspection

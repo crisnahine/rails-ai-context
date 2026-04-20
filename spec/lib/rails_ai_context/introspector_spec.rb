@@ -26,6 +26,16 @@ RSpec.describe RailsAiContext::Introspector do
       expect(result).to have_key(:conventions)
     end
 
+    it "wires the 8 nervous-system introspectors into the full context" do
+      result = introspector.call
+
+      %i[initializers autoload connection_pool active_support credentials security observability env].each do |key|
+        expect(result).to have_key(key), "expected orchestrator to return :#{key}"
+        expect(result[key]).to be_a(Hash)
+        expect(result[key]).not_to have_key(:error), "introspector :#{key} raised: #{result[key][:error]}"
+      end
+    end
+
     it "collects _warnings when an introspector fails" do
       # Use a minimal config with a known-bad introspector name won't work here,
       # so instead stub one introspector to raise

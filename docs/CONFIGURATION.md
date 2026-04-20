@@ -56,7 +56,7 @@ preset: full
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `preset` | Symbol | `:full` | `:full` (31 introspectors) or `:standard` (17 introspectors) |
+| `preset` | Symbol | `:full` | `:full` (39 introspectors) or `:standard` (17 introspectors) |
 | `context_mode` | Symbol | `:compact` | `:compact` (context files capped at ~150 lines) or `:full` (no line cap) |
 | `introspectors` | Array of symbols | (from preset) | Override the introspector list directly |
 | `generate_root_files` | Boolean | `true` | Set `false` to generate split rules only, no root CLAUDE.md/AGENTS.md |
@@ -155,7 +155,7 @@ preset: full
 
 ## Presets
 
-### `:full` (default) — 31 introspectors
+### `:full` (default) — 39 introspectors
 
 All available introspectors. Best for comprehensive context.
 
