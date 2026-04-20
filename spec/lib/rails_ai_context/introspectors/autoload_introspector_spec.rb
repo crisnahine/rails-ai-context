@@ -50,6 +50,7 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
       let(:init_path) { File.join(Rails.root, "config/initializers/inflection_test.rb") }
 
       before do
+        FileUtils.mkdir_p(File.dirname(init_path))
         File.write(init_path, <<~RUBY)
           ActiveSupport::Inflector.inflections(:en) do |inflect|
             inflect.acronym "XYZ"

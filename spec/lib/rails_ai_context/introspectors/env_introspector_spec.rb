@@ -62,6 +62,7 @@ RSpec.describe RailsAiContext::Introspectors::EnvIntrospector do
       let(:fixture_path) { File.join(Rails.root, "config/initializers/custom_env.rb") }
 
       before do
+        FileUtils.mkdir_p(File.dirname(fixture_path))
         File.write(fixture_path, <<~RUBY)
           MY_CUSTOM_FLAG = ENV["MY_SPECIAL_APP_FLAG"]
         RUBY

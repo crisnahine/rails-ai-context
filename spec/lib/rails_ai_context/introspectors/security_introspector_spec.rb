@@ -52,6 +52,7 @@ RSpec.describe RailsAiContext::Introspectors::SecurityIntrospector do
       let(:init_path) { File.join(Rails.root, "config/initializers/content_security_policy.rb") }
 
       before do
+        FileUtils.mkdir_p(File.dirname(init_path))
         File.write(init_path, <<~RUBY)
           Rails.application.config.content_security_policy do |policy|
             policy.default_src :self, :https
