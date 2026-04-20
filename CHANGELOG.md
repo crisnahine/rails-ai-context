@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.9.1] — 2026-04-20
 
+### Fixed — `GetConcern` missed plural concern names (#78)
+
+Thanks to [@johan--](https://github.com/johan--) for the report and fix.
+
+`rails_get_concern`'s includer search built its include-pattern regex via `String#classify`, which singularizes its input. Concerns with intentionally plural module names — `WorksheetImports`, `PaperTrailEvents`, `SoftDeletables`, etc. — got demodulized to `WorksheetImport` and the `include WorksheetImports` line in the model never matched. The tool reported no includers even when the concern was in use.
+
+Switched to `String#camelize`, which normalizes case (so lowercase input like `plan_limitable` → `PlanLimitable` still works) **without** singularizing. This also restores consistency with the three other `.camelize` calls already used in `get_concern.rb` for the same "file basename / module name → class name" conversion. Covered by a new spec in `get_concern_spec.rb` that exercises the plural-name case end-to-end.
+
 ### Fixed — internal invariant compliance
 
 - **`validate.rb` now routes all Prism parses through `AstCache`.** The Ruby syntax validator was calling `Prism.parse_file` directly and the ERB + semantic-visitor paths `Prism.parse` on string input, bypassing the cache entirely for the first and violating the "all Prism parses must flow through `RailsAiContext::AstCache`" invariant (`.results/3-identify-architecture.json:33`) for all three. Now uses `AstCache.parse(path)` for on-disk sources (picking up the existing size-cap + content-hash caching) and `AstCache.parse_string(source)` for synthetic strings. Note: `AstCache.parse` enforces a 5 MB `MAX_PARSE_SIZE` cap; Ruby files above that size fall through the existing `rescue` to the `ruby -c` subprocess validator, which returns errors but not Prism warnings — a graceful degradation that affects only pathologically large source files.
