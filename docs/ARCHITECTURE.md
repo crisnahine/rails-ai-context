@@ -18,7 +18,7 @@ graph TD
         A["models + schema + routes + controllers + views + jobs + config"]
     end
 
-    A -->|"31 introspectors"| gem
+    A -->|"39 introspectors"| gem
 
     subgraph gem["rails-ai-context"]
         direction TB
@@ -101,7 +101,7 @@ flowchart LR
 
 ### Introspectors (`lib/rails_ai_context/introspectors/`)
 
-31 modules that extract structured data from your Rails app. Each introspector:
+39 modules that extract structured data from your Rails app. Each introspector:
 
 - Returns a Hash (never raises — wraps errors in `{ error: msg }`)
 - Is registered in `INTROSPECTOR_MAP` with a symbol key

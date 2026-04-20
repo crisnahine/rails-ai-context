@@ -80,7 +80,15 @@ module RailsAiContext
       multi_database: Introspectors::MultiDatabaseIntrospector,
       components: Introspectors::ComponentIntrospector,
       performance: Introspectors::PerformanceIntrospector,
-      frontend_frameworks: Introspectors::FrontendFrameworkIntrospector
+      frontend_frameworks: Introspectors::FrontendFrameworkIntrospector,
+      initializers: Introspectors::InitializerIntrospector,
+      autoload: Introspectors::AutoloadIntrospector,
+      connection_pool: Introspectors::ConnectionPoolIntrospector,
+      active_support: Introspectors::ActiveSupportIntrospector,
+      credentials: Introspectors::CredentialsIntrospector,
+      security: Introspectors::SecurityIntrospector,
+      observability: Introspectors::ObservabilityIntrospector,
+      env: Introspectors::EnvIntrospector
     }.freeze
 
     private

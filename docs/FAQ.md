@@ -99,7 +99,7 @@ PostgreSQL, MySQL, and SQLite. Each gets database-specific safety mechanisms (re
 
 ### What's the difference between `:full` and `:standard` preset?
 
-- **`:full`** (default) — 31 introspectors. Comprehensive context for every aspect of your app.
+- **`:full`** (default) — 39 introspectors. Comprehensive context for every aspect of your app.
 - **`:standard`** — 17 introspectors. Faster, covers the essentials (schema, models, routes, controllers, tests, etc.).
 
 ### What's `:compact` vs `:full` context mode?

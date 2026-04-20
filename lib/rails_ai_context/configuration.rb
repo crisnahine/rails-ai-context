@@ -78,7 +78,8 @@ module RailsAiContext
       full: %i[schema models routes jobs gems conventions stimulus database_stats controllers views view_templates turbo
                i18n config active_storage action_text auth api tests rake_tasks assets
                devops action_mailbox migrations seeds middleware engines multi_database
-               components performance frontend_frameworks]
+               components performance frontend_frameworks
+               initializers autoload connection_pool active_support credentials security observability env]
     }.freeze
 
     # MCP server settings

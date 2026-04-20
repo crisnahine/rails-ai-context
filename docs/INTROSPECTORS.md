@@ -2,7 +2,7 @@
 
 # Introspectors
 
-**31 modules that extract structured data from your Rails application.**
+**39 modules that extract structured data from your Rails application.**
 
 [Architecture](ARCHITECTURE.md) · [Configuration](CONFIGURATION.md) · [Tools Reference](TOOLS.md) · [Security](SECURITY.md)
 
@@ -21,7 +21,7 @@ Each introspector:
 
 ## Presets
 
-### `:full` (default) — all 31 introspectors
+### `:full` (default) — all 39 introspectors
 
 Best for comprehensive AI context. Covers every aspect of your app.
 
@@ -49,13 +49,16 @@ graph LR
         S16["performance"] ~~~ S17["i18n"]
     end
 
-    subgraph full_only["Full Preset adds +14"]
+    subgraph full_only["Full Preset adds +22"]
         direction TB
         F1["views"] ~~~ F2["database_stats"] ~~~ F3["api"]
         F4["active_storage"] ~~~ F5["action_text"] ~~~ F6["action_mailbox"]
         F7["rake_tasks"] ~~~ F8["assets"] ~~~ F9["devops"]
         F10["seeds"] ~~~ F11["middleware"] ~~~ F12["engines"]
         F13["multi_database"] ~~~ F14["frontend_frameworks"]
+        F15["initializers"] ~~~ F16["autoload"] ~~~ F17["connection_pool"]
+        F18["active_support"] ~~~ F19["credentials"] ~~~ F20["security"]
+        F21["observability"] ~~~ F22["env"]
     end
 
     standard --> full_only
@@ -74,7 +77,7 @@ end
 
 ---
 
-## All 31 introspectors
+## All 39 introspectors
 
 ### Core
 
@@ -147,6 +150,21 @@ end
 |:-------------|:----|:-----------------|
 | TestIntrospector | `:tests` | Test framework, file counts, coverage hints |
 | PerformanceIntrospector | `:performance` | N+1 risks, missing indexes, counter_cache hints |
+
+### Runtime & Framework Internals
+
+These introspectors map directly onto [`RAILS_NERVOUS_SYSTEM.md`](../RAILS_NERVOUS_SYSTEM.md) sections and capture framework-level surface that `:config`, `:auth`, and `:middleware` don't.
+
+| Introspector | Key | Nervous-system § | What it extracts |
+|:-------------|:----|:---|:-----------------|
+| InitializerIntrospector | `:initializers` | §2 | `Rails.application.initializers` graph: name, owner, `before:`/`after:` edges, block `source_location`, per-file `config/initializers/*.rb` summary |
+| AutoloadIntrospector | `:autoload` | §3 | Zeitwerk presence, autoloaders (`:main` / `:once`) with collapsed + ignored dirs, `autoload_paths`, `eager_load_paths`, custom inflections (`acronym`, `plural`, `singular`, `irregular`) |
+| ConnectionPoolIntrospector | `:connection_pool` | §10 | Per-database adapter config: pool size, `checkout_timeout`, `reaping_frequency`, `prepared_statements`, `advisory_locks`, replica flag, connection-handler roles, automatic shard selector detection |
+| ActiveSupportIntrospector | `:active_support` | §17 | Concerns in `app/**/concerns/` (ActiveSupport::Concern flags, `included do`/`class_methods do` blocks), deprecators registry, MessageEncryptor/Verifier usage, TaggedLogging config, common on-load hooks, cache store options |
+| CredentialsIntrospector | `:credentials` | §30 | Default + per-env encrypted files, master-key source (`env:RAILS_MASTER_KEY` vs `file:config/master.key` vs missing), `require_master_key` flag, arbitrary encrypted configs (`config/*.yml.enc`), top-level key **names only** (never values) |
+| SecurityIntrospector | `:security` | §32 | `force_ssl`, SSL options (HSTS `expires`/`subdomains`/`preload`), `host_authorization` hosts, ContentSecurityPolicy directives + `report_only`, PermissionsPolicy directives, CSRF config (`protect_from_forgery`, `per_form_csrf_tokens`, `origin_check`), cookie session options, Rails 7.2+ `allow_browser` usage |
+| ObservabilityIntrospector | `:observability` | §34 + §38 | `ActiveSupport::LogSubscriber.log_subscribers` catalog, AS::Notifications subscriber registry (pattern + count + sample class), `ActionDispatch::ServerTiming` middleware detection, Rails 8.1 `event_reporter` availability, log level + tags, canonical Rails event-name catalog (10 subsystems) |
+| EnvIntrospector | `:env` | §36 | Catalog of 30+ Rails-related ENV vars partitioned into `set` / `unset`; safe vars (`RAILS_ENV`, `RAILS_MAX_THREADS`, etc.) return values, sensitive vars (`SECRET_KEY_BASE`, `DATABASE_URL`, `RAILS_MASTER_KEY`, etc.) return `redacted: true` only; scans `config/`/`app/`/`lib/` for app-specific `ENV["X"]` references |
 
 ---
 

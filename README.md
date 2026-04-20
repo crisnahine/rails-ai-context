@@ -21,7 +21,7 @@
 <br>
 [![Ruby](https://img.shields.io/badge/Ruby-3.2%20%7C%203.3%20%7C%203.4-CC342D)](https://github.com/crisnahine/rails-ai-context)
 [![Rails](https://img.shields.io/badge/Rails-7.1%20%7C%207.2%20%7C%208.0-CC0000)](https://github.com/crisnahine/rails-ai-context)
-[![Tests](https://img.shields.io/badge/Tests-2078%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
+[![Tests](https://img.shields.io/badge/Tests-2154%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -397,7 +397,7 @@ Enabled by default. Disable with `config.anti_hallucination_rules = false` if yo
 
 ```mermaid
 graph TD
-    A["Your Rails App\nmodels + schema + routes + controllers + views + jobs"] -->|"31 introspectors"| B
+    A["Your Rails App\nmodels + schema + routes + controllers + views + jobs"] -->|"39 introspectors"| B
 
     B["rails-ai-context\nPrism AST parsing · Cached · Confidence-tagged\nVFS: rails-ai-context:// URIs introspected fresh"]
 
@@ -459,7 +459,7 @@ Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, Open
 | **[Configuration](docs/CONFIGURATION.md)** | 40+ config options with defaults |
 | **[AI Tool Setup](docs/SETUP.md)** | Claude, Cursor, Copilot, OpenCode, Codex |
 | **[Architecture](docs/ARCHITECTURE.md)** | System design and internals |
-| **[Introspectors](docs/INTROSPECTORS.md)** | All 31 introspectors and AST engine |
+| **[Introspectors](docs/INTROSPECTORS.md)** | All 39 introspectors and AST engine |
 | **[Security](docs/SECURITY.md)** | 4-layer SQL safety and file blocking |
 | **[CLI Reference](docs/CLI.md)** | Commands and argument syntax |
 | **[Standalone](docs/STANDALONE.md)** | Use without Gemfile entry |
@@ -508,7 +508,7 @@ if defined?(RailsAiContext)
   RailsAiContext.configure do |config|
     config.ai_tools   = %i[claude cursor] # Which AI tools to generate for
     config.tool_mode  = :mcp              # :mcp (default) or :cli
-    config.preset     = :full             # :full (31 introspectors) or :standard (17)
+    config.preset     = :full             # :full (39 introspectors) or :standard (17)
   end
 end
 ```
@@ -543,7 +543,7 @@ end
 ## About
 
 Built by a Rails developer with 10+ years of production experience.<br>
-2078 tests + 100-example e2e harness. 38 tools. 5 resource templates. 31 introspectors. Standalone or in-Gemfile.<br>
+2154 tests + 100-example e2e harness. 38 tools. 5 resource templates. 39 introspectors. Standalone or in-Gemfile.<br>
 MIT licensed. [Contributions welcome.](CONTRIBUTING.md)
 
 <br>
