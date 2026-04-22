@@ -85,7 +85,7 @@ jobs:
           bundler-cache: true
 
       - name: Cache shared e2e bundle directory
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .e2e-bundle
           key: e2e-bundle-ruby${{ matrix.ruby }}-rails${{ matrix.rails }}-v1
