@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Avoid false-positive route helper warnings when `rails_validate` sees locally defined Ruby methods ending in `_path` or `_url`.
+- Preserve newline-separated staged file names in the generated pre-commit validation hook before passing them to the CLI tool.
+
 ## [5.10.0] — 2026-04-20
 
 ### Added — 8 new introspectors closing RAILS_NERVOUS_SYSTEM.md gaps

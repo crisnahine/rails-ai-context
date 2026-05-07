@@ -114,6 +114,82 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
   end
 
+  describe "route helper validation", skip: (!defined?(Prism) && "requires Prism (Ruby 3.3+)") do
+    let(:tmp_dir) { File.join(Rails.root, "tmp") }
+    let(:file_path) { File.join(tmp_dir, "local_route_helper_test.rb") }
+
+    before { FileUtils.mkdir_p(tmp_dir) }
+
+    after do
+      File.delete(file_path) if File.exist?(file_path)
+    end
+
+    it "does not report locally defined _url methods as missing route helpers" do
+      File.write(file_path, <<~RUBY)
+        class LocalRouteHelperTest
+          def call
+            provider_metadata_url
+          end
+
+          private
+
+          def provider_metadata_url
+            "https://example.test/.well-known/openid-configuration"
+          end
+        end
+      RUBY
+
+      result = described_class.call(files: [ "tmp/local_route_helper_test.rb" ], level: "rails")
+      text = result.content.first[:text]
+
+      expect(text).not_to include("provider_metadata_url — route helper not found")
+      expect(text).to include("1/1 files passed")
+    end
+
+    it "still reports route-like calls when the local method is defined in another class" do
+      File.write(file_path, <<~RUBY)
+        class LocalRouteDefinition
+          def provider_metadata_url
+            "https://example.test/.well-known/openid-configuration"
+          end
+        end
+
+        class OtherRouteCaller
+          def call
+            provider_metadata_url
+          end
+        end
+      RUBY
+
+      result = described_class.call(files: [ "tmp/local_route_helper_test.rb" ], level: "rails")
+      text = result.content.first[:text]
+
+      expect(text).to include("provider_metadata_url — route helper not found")
+    end
+
+    it "does not report private inline _url method definitions in regex fallback mode" do
+      allow(described_class).to receive(:parse_and_visit).and_return(nil)
+
+      File.write(file_path, <<~RUBY)
+        class LocalRouteHelperTest
+          def call
+            provider_metadata_url
+          end
+
+          private def provider_metadata_url
+            "https://example.test/.well-known/openid-configuration"
+          end
+        end
+      RUBY
+
+      result = described_class.call(files: [ "tmp/local_route_helper_test.rb" ], level: "rails")
+      text = result.content.first[:text]
+
+      expect(text).not_to include("provider_metadata_url — route helper not found")
+      expect(text).to include("1/1 files passed")
+    end
+  end
+
   describe "JavaScript fallback validator" do
     let(:tmp_dir) { File.join(Rails.root, "tmp") }
 
