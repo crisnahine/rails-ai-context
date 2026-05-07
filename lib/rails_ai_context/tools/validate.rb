@@ -289,8 +289,10 @@ module RailsAiContext
       # Prism AST Visitor — walks the AST once, extracts data for all checks
       class RailsSemanticVisitor < Prism::Visitor
         attr_reader :render_calls, :route_helper_calls, :validates_calls,
-                    :permit_calls, :callback_registrations, :has_many_calls
+                    :permit_calls, :callback_registrations, :has_many_calls,
+                    :local_method_names_by_scope, :singleton_method_names_by_scope
 
+        TOP_LEVEL_SCOPE = "__top_level__"
         CALLBACK_NAMES = %i[
           before_validation after_validation before_save after_save
           before_create after_create before_update after_update
@@ -305,6 +307,36 @@ module RailsAiContext
           @permit_calls = []
           @callback_registrations = []
           @has_many_calls = []
+          @local_method_names_by_scope = Hash.new { |hash, key| hash[key] = Set.new }
+          @singleton_method_names_by_scope = Hash.new { |hash, key| hash[key] = Set.new }
+          @scope_stack = [ TOP_LEVEL_SCOPE ]
+          @method_context_stack = []
+        end
+
+        def local_route_method_defined?(helper, scope, method_kind)
+          case method_kind
+          when :singleton
+            @singleton_method_names_by_scope[scope].include?(helper)
+          when :instance
+            @local_method_names_by_scope[scope].include?(helper)
+          else
+            @local_method_names_by_scope[scope].include?(helper) ||
+              @singleton_method_names_by_scope[scope].include?(helper)
+          end
+        end
+
+        def visit_class_node(node)
+          with_scope(node.constant_path&.slice) { super }
+        end
+
+        def visit_module_node(node)
+          with_scope(node.constant_path&.slice) { super }
+        end
+
+        def visit_def_node(node)
+          method_kind = node.receiver ? :singleton : :instance
+          method_names_for(method_kind, current_scope) << node.name.to_s
+          with_method_context(method_kind) { super }
         end
 
         def visit_call_node(node)
@@ -315,7 +347,12 @@ module RailsAiContext
           when :has_many   then extract_has_many(node)
           else
             if node.name.to_s.end_with?("_path", "_url") && node.receiver.nil?
-              @route_helper_calls << { name: node.name.to_s, line: node.location.start_line }
+              @route_helper_calls << {
+                name: node.name.to_s,
+                line: node.location.start_line,
+                scope: current_scope,
+                method_kind: current_method_kind
+              }
             elsif CALLBACK_NAMES.include?(node.name) && node.receiver.nil?
               extract_callback(node)
             end
@@ -324,6 +361,32 @@ module RailsAiContext
         end
 
         private
+
+        def with_scope(scope_name)
+          @scope_stack << scope_name.to_s
+          yield
+        ensure
+          @scope_stack.pop
+        end
+
+        def with_method_context(method_kind)
+          @method_context_stack << method_kind
+          yield
+        ensure
+          @method_context_stack.pop
+        end
+
+        def method_names_for(method_kind, scope)
+          method_kind == :singleton ? @singleton_method_names_by_scope[scope] : @local_method_names_by_scope[scope]
+        end
+
+        def current_scope
+          @scope_stack.join("::")
+        end
+
+        def current_method_kind
+          @method_context_stack.last
+        end
 
         def extract_render(node)
           args = node.arguments&.arguments || []
@@ -524,6 +587,7 @@ module RailsAiContext
           helper = call[:name]
           next if seen.include?(helper)
           seen << helper
+          next if visitor.local_route_method_defined?(helper, call[:scope], call[:method_kind])
 
           name = helper.sub(/_(path|url)\z/, "")
           next if ASSET_HELPER_PREFIXES.any? { |p| name.start_with?(p) }
@@ -544,17 +608,23 @@ module RailsAiContext
         return warnings if valid_names.empty?
 
         seen = Set.new
+        local_method_names = local_route_like_method_names(content)
         content.scan(/\b(\w+)_(path|url)\b/).each do |match|
           name, suffix = match
           helper = "#{name}_#{suffix}"
           next if seen.include?(helper)
           seen << helper
+          next if local_method_names.include?(helper)
           next if ASSET_HELPER_PREFIXES.any? { |p| name.start_with?(p) }
           next if DEVISE_HELPER_NAMES.include?(name)
           next if %w[edit new polymorphic].include?(name)
           warnings << "#{helper} \u2014 route helper not found" unless valid_names.include?(name)
         end
         warnings
+      end
+
+      private_class_method def self.local_route_like_method_names(content)
+        content.scan(/^\s*(?:(?:private|protected|public|private_class_method)\s+)*def\s+(?:self\.)?(\w+_(?:path|url))\b/).flatten.to_set
       end
 
       private_class_method def self.build_route_name_set(routes)
