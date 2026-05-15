@@ -15,7 +15,6 @@ module E2E
     BASE_RAILS_NEW_FLAGS = %w[
       --skip-bundle --skip-git --skip-spring --skip-listen
       --skip-javascript --skip-test --skip-system-test
-      --skip-dev-gems
     ].freeze
 
     attr_reader :app_path, :install_path, :gem_home, :database
