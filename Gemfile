@@ -4,6 +4,8 @@ source "https://rubygems.org"
 
 gemspec
 
+# Default tracks the minimum supported Rails version so local bundle
+# resolution exercises the support floor unless CI overrides it.
 rails_version = ENV.fetch("RAILS_VERSION", "7.0")
 
 group :development, :test do
