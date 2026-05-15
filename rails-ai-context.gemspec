@@ -23,7 +23,7 @@ Gem::Specification.new do |spec|
   spec.homepage      = "https://github.com/crisnahine/rails-ai-context"
   spec.license       = "MIT"
 
-  spec.required_ruby_version = ">= 3.2.0"
+  spec.required_ruby_version = ">= 3.1.0"
 
   spec.metadata["homepage_uri"]      = spec.homepage
   spec.metadata["source_code_uri"]   = "#{spec.homepage}/tree/main"
@@ -60,7 +60,7 @@ Gem::Specification.new do |spec|
 
   # Core dependencies
   spec.add_dependency "mcp", ">= 0.8", "< 2.0"    # Official MCP Ruby SDK (0.8–0.10+ compatible)
-  spec.add_dependency "railties", ">= 7.1", "< 9.0"
+  spec.add_dependency "railties", ">= 7.0", "< 9.0"
   spec.add_dependency "thor", ">= 1.0", "< 3.0"
   spec.add_dependency "zeitwerk", "~> 2.6"         # Autoloading
 

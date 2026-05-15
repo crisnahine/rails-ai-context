@@ -4,7 +4,7 @@ source "https://rubygems.org"
 
 gemspec
 
-rails_version = ENV.fetch("RAILS_VERSION", "8.0")
+rails_version = ENV.fetch("RAILS_VERSION", "7.0")
 
 group :development, :test do
   gem "pry", "~> 0.14"

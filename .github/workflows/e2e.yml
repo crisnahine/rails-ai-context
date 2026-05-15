@@ -28,6 +28,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Rails 7.0 / Ruby 3.1 — new support floor
+          - ruby: "3.1"
+            rails: "7.0"
           # Rails 8.0 + 8.1 require Ruby 3.3+ (active_support drop)
           - ruby: "3.3"
             rails: "7.1"

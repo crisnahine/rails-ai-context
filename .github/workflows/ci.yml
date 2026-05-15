@@ -12,15 +12,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ruby: ["3.2", "3.3", "3.4", "4.0"]
-        rails: ["7.1", "7.2", "8.0", "8.1"]
+        ruby: ["3.1", "3.2", "3.3", "3.4", "4.0"]
+        rails: ["7.0", "7.1", "7.2", "8.0", "8.1"]
         exclude:
           # Rails 8.x requires Ruby 3.3+
+          - ruby: "3.1"
+            rails: "8.0"
+          - ruby: "3.1"
+            rails: "8.1"
           - ruby: "3.2"
             rails: "8.0"
           - ruby: "3.2"
             rails: "8.1"
           # Rails 7.x is not Ruby 4.0 compatible (no upstream support)
+          - ruby: "4.0"
+            rails: "7.0"
           - ruby: "4.0"
             rails: "7.1"
           - ruby: "4.0"
