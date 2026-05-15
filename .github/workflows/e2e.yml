@@ -31,7 +31,7 @@ jobs:
           # Rails 7.0 / Ruby 3.1 — new support floor
           - ruby: "3.1"
             rails: "7.0"
-          # Rails 8.0 + 8.1 require Ruby 3.3+ (active_support drop)
+          # Rails 8.0 + 8.1 require Ruby 3.2+; Ruby 3.2 excluded by project policy
           - ruby: "3.3"
             rails: "7.1"
           - ruby: "3.3"

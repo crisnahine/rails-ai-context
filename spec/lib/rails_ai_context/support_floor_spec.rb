@@ -52,9 +52,10 @@ RSpec.describe "support floor" do
     expect(excluded_pairs).not_to include(["3.1", "7.0"])
   end
 
-  it "excludes incompatible Rails 8.x + pre-Ruby-3.3 pairs from the CI matrix" do
+  it "excludes Ruby 3.1 and 3.2 with Rails 8.x from the CI matrix" do
     excluded_pairs = (ci_matrix["exclude"] || []).map { |e| [e["ruby"], e["rails"]] }
-    # Rails 8.x requires Ruby 3.3+
+    # Rails 8.x requires Ruby 3.2+; Ruby 3.1 is excluded for technical incompatibility.
+    # Ruby 3.2 is excluded by project policy (Rails 8.x supports Ruby 3.2 upstream).
     expect(excluded_pairs).to include(["3.1", "8.0"])
     expect(excluded_pairs).to include(["3.1", "8.1"])
     expect(excluded_pairs).to include(["3.2", "8.0"])
