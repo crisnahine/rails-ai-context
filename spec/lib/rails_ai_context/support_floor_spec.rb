@@ -12,14 +12,18 @@ RSpec.describe "support floor" do
     YAML.safe_load_file(
       File.join(repo_root, ".github/workflows/ci.yml"),
       aliases: true
-    ).dig("jobs", "test", "strategy", "matrix")
+    ).dig("jobs", "test", "strategy", "matrix").tap do |matrix|
+      raise "Could not find CI test matrix in .github/workflows/ci.yml" if matrix.nil?
+    end
   end
 
   let(:e2e_includes) do
     YAML.safe_load_file(
       File.join(repo_root, ".github/workflows/e2e.yml"),
       aliases: true
-    ).dig("jobs", "e2e", "strategy", "matrix", "include") || []
+    ).dig("jobs", "e2e", "strategy", "matrix", "include").tap do |includes|
+      raise "Could not find E2E include list in .github/workflows/e2e.yml" if includes.nil?
+    end
   end
 
   it "declares Ruby 3.1 and Rails 7.0 as the minimum supported versions" do
