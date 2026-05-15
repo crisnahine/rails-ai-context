@@ -64,7 +64,7 @@ The `ToolRunner` (`lib/rails_ai_context/cli/tool_runner.rb`) handles CLI executi
 ## Code Style
 
 - Follow `rubocop-rails-omakase` style (run `bundle exec rubocop`)
-- Ruby 3.2+ features welcome (pattern matching, etc.)
+- Ruby 3.1+ features welcome (pattern matching, etc.)
 - Every introspector must return a Hash and never raise — wrap errors in `{ error: msg }`
 - MCP tools return `MCP::Tool::Response` objects
 - All tools must be prefixed with `rails_` and annotated as read-only
