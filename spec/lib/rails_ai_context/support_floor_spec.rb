@@ -41,16 +41,22 @@ RSpec.describe "support floor" do
     expect(excluded_pairs).not_to include(["3.1", "7.0"])
   end
 
-  it "excludes only the expected incompatible pairs from the CI matrix" do
+  it "excludes exactly the expected incompatible pairs from the CI matrix" do
     excluded_pairs = (ci_matrix["exclude"] || []).map { |e| [e["ruby"], e["rails"]] }
-    # Rails 8.x requires Ruby 3.3+
-    expect(excluded_pairs).to include(["3.1", "8.0"])
-    expect(excluded_pairs).to include(["3.1", "8.1"])
-    # Rails 7.x is not Ruby 4.0 compatible
-    expect(excluded_pairs).to include(["4.0", "7.0"])
-    # Rails 7.0 is not compatible with Ruby 3.3+ (user decision)
-    expect(excluded_pairs).to include(["3.3", "7.0"])
-    expect(excluded_pairs).to include(["3.4", "7.0"])
+    expect(excluded_pairs).to match_array([
+      # Rails 8.x requires Ruby 3.3+
+      ["3.1", "8.0"],
+      ["3.1", "8.1"],
+      ["3.2", "8.0"],
+      ["3.2", "8.1"],
+      # Rails 7.0 is not compatible with Ruby 3.3+ (user decision)
+      ["3.3", "7.0"],
+      ["3.4", "7.0"],
+      # Rails 7.x is not Ruby 4.0 compatible (no upstream support)
+      ["4.0", "7.0"],
+      ["4.0", "7.1"],
+      ["4.0", "7.2"]
+    ])
   end
 
   it "adds the support-floor pair Ruby 3.1 / Rails 7.0 to the E2E matrix" do
