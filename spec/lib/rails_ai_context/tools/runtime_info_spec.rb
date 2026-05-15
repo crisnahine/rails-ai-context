@@ -120,13 +120,15 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
     it "falls back to ActiveRecord::Migrator when pending_migrations is unavailable (Rails 7.0)" do
       fake_context = double("MigrationContext", migrations: []) # rubocop:disable RSpec/VerifiedDoubles
       schema_migration = double("SchemaMigration") # rubocop:disable RSpec/VerifiedDoubles
+      fake_connection = double("Connection") # rubocop:disable RSpec/VerifiedDoubles
       fake_migrator = double("Migrator", pending_migrations: []) # rubocop:disable RSpec/VerifiedDoubles
 
       allow(Dir).to receive(:exist?).and_call_original
       allow(Dir).to receive(:exist?).with(File.join(Rails.root, "db/migrate")).and_return(true)
       allow(ActiveRecord::MigrationContext).to receive(:new).and_return(fake_context)
       allow(fake_context).to receive(:respond_to?).with(:pending_migrations).and_return(false)
-      allow(ActiveRecord::Base).to receive_message_chain(:connection, :schema_migration).and_return(schema_migration)
+      allow(ActiveRecord::Base).to receive(:connection).and_return(fake_connection)
+      allow(fake_connection).to receive(:schema_migration).and_return(schema_migration)
       allow(ActiveRecord::Migrator).to receive(:new).with(:up, [], schema_migration).and_return(fake_migrator)
 
       # Test the private method directly to isolate fallback from gather_database's connection calls

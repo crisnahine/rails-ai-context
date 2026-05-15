@@ -324,13 +324,15 @@ RSpec.describe RailsAiContext::Doctor do
     # Use non-verifying double: pending_migrations doesn't exist on MigrationContext in Rails 7.0
     let(:context) { double("MigrationContext", migrations: migrations) } # rubocop:disable RSpec/VerifiedDoubles
     let(:schema_migration) { double("SchemaMigration") } # rubocop:disable RSpec/VerifiedDoubles
+    let(:fake_connection) { double("Connection") } # rubocop:disable RSpec/VerifiedDoubles
     let(:migrator) { double("Migrator", pending_migrations: []) } # rubocop:disable RSpec/VerifiedDoubles
 
     before do
       allow(ActiveRecord::Base).to receive(:connected?).and_return(true)
       allow(ActiveRecord::MigrationContext).to receive(:new).and_return(context)
       allow(context).to receive(:respond_to?).with(:pending_migrations).and_return(false)
-      allow(ActiveRecord::Base).to receive_message_chain(:connection, :schema_migration).and_return(schema_migration)
+      allow(ActiveRecord::Base).to receive(:connection).and_return(fake_connection)
+      allow(fake_connection).to receive(:schema_migration).and_return(schema_migration)
       allow(ActiveRecord::Migrator).to receive(:new).with(:up, migrations, schema_migration).and_return(migrator)
     end
 
