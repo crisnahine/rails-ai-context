@@ -24,10 +24,11 @@ RSpec.describe "support floor" do
     expect(ci_yml).to include("- ruby: \"3.1\"\n            rails: \"8.0\"")
     expect(ci_yml).to include("- ruby: \"3.1\"\n            rails: \"8.1\"")
     expect(ci_yml).to include("- ruby: \"4.0\"\n            rails: \"7.0\"")
+    expect(ci_yml).to include("- ruby: \"3.3\"\n            rails: \"7.0\"")
+    expect(ci_yml).to include("- ruby: \"3.4\"\n            rails: \"7.0\"")
   end
 
   it "adds Rails 7.0 / Ruby 3.1 to the E2E matrix" do
-    expect(e2e_yml).to include('- ruby: "3.1"')
-    expect(e2e_yml).to include('rails: "7.0"')
+    expect(e2e_yml).to include("- ruby: \"3.1\"\n            rails: \"7.0\"")
   end
 end

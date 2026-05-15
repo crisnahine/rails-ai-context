@@ -24,6 +24,11 @@ jobs:
             rails: "8.0"
           - ruby: "3.2"
             rails: "8.1"
+          # Rails 7.0 is not compatible with Ruby 3.3+ (user decision)
+          - ruby: "3.3"
+            rails: "7.0"
+          - ruby: "3.4"
+            rails: "7.0"
           # Rails 7.x is not Ruby 4.0 compatible (no upstream support)
           - ruby: "4.0"
             rails: "7.0"
