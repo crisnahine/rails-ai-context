@@ -81,4 +81,40 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
       expect(result[:error]).to be_nil
     end
   end
+
+  describe "#pending_migrations (Rails compatibility)" do
+    let(:migrate_dir) { File.join(app.root.to_s, "db/migrate") }
+
+    it "uses MigrationContext#pending_migrations when available (Rails 7.1+)" do
+      # Non-verifying double since pending_migrations may not exist in Rails 7.0
+      fake_context = double("MigrationContext", migrations: [], pending_migrations: []) # rubocop:disable RSpec/VerifiedDoubles
+
+      allow(ActiveRecord::Base).to receive(:connected?).and_return(true)
+      allow(ActiveRecord::MigrationContext).to receive(:new).and_return(fake_context)
+      allow(fake_context).to receive(:respond_to?).with(:pending_migrations).and_return(true)
+
+      result = introspector.call
+      expect(result[:pending]).to eq([])
+      expect(fake_context).to have_received(:pending_migrations)
+    end
+
+    it "falls back to ActiveRecord::Migrator with schema_migration when pending_migrations is unavailable (Rails 7.0)" do
+      fake_migration = double("Migration", version: 20240101120000, name: "CreateUsers") # rubocop:disable RSpec/VerifiedDoubles
+      fake_context = double("MigrationContext", migrations: [fake_migration]) # rubocop:disable RSpec/VerifiedDoubles
+      schema_migration = double("SchemaMigration") # rubocop:disable RSpec/VerifiedDoubles
+      fake_connection = double("Connection") # rubocop:disable RSpec/VerifiedDoubles
+      fake_migrator = double("Migrator", pending_migrations: [fake_migration]) # rubocop:disable RSpec/VerifiedDoubles
+
+      allow(ActiveRecord::Base).to receive(:connected?).and_return(true)
+      allow(ActiveRecord::MigrationContext).to receive(:new).and_return(fake_context)
+      allow(fake_context).to receive(:respond_to?).with(:pending_migrations).and_return(false)
+      allow(ActiveRecord::Base).to receive(:connection).and_return(fake_connection)
+      allow(fake_connection).to receive(:schema_migration).and_return(schema_migration)
+      allow(ActiveRecord::Migrator).to receive(:new).with(:up, [fake_migration], schema_migration).and_return(fake_migrator)
+
+      result = introspector.call
+      expect(result[:pending]).to eq([{ version: "20240101120000", name: "CreateUsers" }])
+      expect(ActiveRecord::Migrator).to have_received(:new).with(:up, [fake_migration], schema_migration)
+    end
+  end
 end

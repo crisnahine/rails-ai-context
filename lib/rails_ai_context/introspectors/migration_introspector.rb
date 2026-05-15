@@ -65,13 +65,19 @@ module RailsAiContext
 
       # Detect pending migrations by comparing against schema version
       def pending_migrations
-        if defined?(ActiveRecord::Base) && ActiveRecord::Base.connection_pool.connected?
+        if defined?(ActiveRecord::Base) && ActiveRecord::Base.connected?
           begin
             context = ActiveRecord::MigrationContext.new(migrate_dir)
-            if context.respond_to?(:pending_migrations)
-              return context.pending_migrations.map do |m|
-                { version: m.version.to_s, name: m.name }
-              end
+            pending = if context.respond_to?(:pending_migrations)
+              # Rails 7.1+
+              context.pending_migrations
+            else
+              # Rails 7.0 and earlier: Migrator requires schema_migration as 3rd arg
+              schema_migration = ActiveRecord::Base.connection.schema_migration
+              ActiveRecord::Migrator.new(:up, context.migrations, schema_migration).pending_migrations
+            end
+            return pending.map do |m|
+              { version: m.version.to_s, name: m.name }
             end
           rescue => _e
             # Fall through to file-based detection
