@@ -174,7 +174,9 @@ module RailsAiContext
           pending = if context.respond_to?(:pending_migrations)
             context.pending_migrations
           else
-            ActiveRecord::Migrator.new(:up, context.migrations).pending_migrations
+            # Rails 7.0 and earlier: Migrator requires schema_migration as 3rd arg
+            schema_migration = ActiveRecord::Base.connection.schema_migration
+            ActiveRecord::Migrator.new(:up, context.migrations, schema_migration).pending_migrations
           end
           pending.map { |m| "#{m.version} — #{m.name}" }
         rescue => e

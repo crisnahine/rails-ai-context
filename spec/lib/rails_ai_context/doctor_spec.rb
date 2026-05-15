@@ -317,6 +317,29 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe "#check_pending_migrations" do
+    subject(:check) { doctor.send(:check_pending_migrations) }
+
+    let(:migrations) { [] }
+    # Use non-verifying double: pending_migrations doesn't exist on MigrationContext in Rails 7.0
+    let(:context) { double("MigrationContext", migrations: migrations) } # rubocop:disable RSpec/VerifiedDoubles
+    let(:schema_migration) { double("SchemaMigration") } # rubocop:disable RSpec/VerifiedDoubles
+    let(:migrator) { double("Migrator", pending_migrations: []) } # rubocop:disable RSpec/VerifiedDoubles
+
+    before do
+      allow(ActiveRecord::Base).to receive(:connected?).and_return(true)
+      allow(ActiveRecord::MigrationContext).to receive(:new).and_return(context)
+      allow(context).to receive(:respond_to?).with(:pending_migrations).and_return(false)
+      allow(ActiveRecord::Base).to receive_message_chain(:connection, :schema_migration).and_return(schema_migration)
+      allow(ActiveRecord::Migrator).to receive(:new).with(:up, migrations, schema_migration).and_return(migrator)
+    end
+
+    it "falls back to ActiveRecord::Migrator when MigrationContext lacks pending_migrations (Rails 7.0)" do
+      expect(check.status).to eq(:pass)
+      expect(ActiveRecord::Migrator).to have_received(:new).with(:up, migrations, schema_migration)
+    end
+  end
+
   describe "#check_context_freshness" do
     subject(:check) { doctor.send(:check_context_freshness) }
 

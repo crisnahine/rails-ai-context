@@ -100,5 +100,40 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(annotations.read_only_hint).to eq(true)
       expect(annotations.destructive_hint).to eq(false)
     end
+
+    it "uses MigrationContext#pending_migrations when available (Rails 7.1+)" do
+      # Non-verifying double since pending_migrations may not exist in Rails 7.0
+      fake_context = double("MigrationContext", migrations: [], pending_migrations: []) # rubocop:disable RSpec/VerifiedDoubles
+
+      allow(Dir).to receive(:exist?).and_call_original
+      allow(Dir).to receive(:exist?).with(File.join(Rails.root, "db/migrate")).and_return(true)
+      allow(ActiveRecord::MigrationContext).to receive(:new).and_return(fake_context)
+      allow(fake_context).to receive(:respond_to?).with(:pending_migrations).and_return(true)
+
+      result = described_class.call(section: "database")
+      text = result.content.first[:text]
+
+      expect(text).to include("Database")
+      expect(fake_context).to have_received(:pending_migrations)
+    end
+
+    it "falls back to ActiveRecord::Migrator when pending_migrations is unavailable (Rails 7.0)" do
+      fake_context = double("MigrationContext", migrations: []) # rubocop:disable RSpec/VerifiedDoubles
+      schema_migration = double("SchemaMigration") # rubocop:disable RSpec/VerifiedDoubles
+      fake_migrator = double("Migrator", pending_migrations: []) # rubocop:disable RSpec/VerifiedDoubles
+
+      allow(Dir).to receive(:exist?).and_call_original
+      allow(Dir).to receive(:exist?).with(File.join(Rails.root, "db/migrate")).and_return(true)
+      allow(ActiveRecord::MigrationContext).to receive(:new).and_return(fake_context)
+      allow(fake_context).to receive(:respond_to?).with(:pending_migrations).and_return(false)
+      allow(ActiveRecord::Base).to receive_message_chain(:connection, :schema_migration).and_return(schema_migration)
+      allow(ActiveRecord::Migrator).to receive(:new).with(:up, [], schema_migration).and_return(fake_migrator)
+
+      # Test the private method directly to isolate fallback from gather_database's connection calls
+      result = described_class.send(:gather_pending_migrations)
+
+      expect(result).to eq([])
+      expect(ActiveRecord::Migrator).to have_received(:new).with(:up, [], schema_migration)
+    end
   end
 end
