@@ -7,7 +7,7 @@ RSpec.describe E2E::TestAppBuilder do
 
   after { FileUtils.remove_entry(parent_dir) if File.exist?(parent_dir) }
 
-  it "excludes all Rails 8-only flags from BASE_RAILS_NEW_FLAGS" do
+  it "excludes all flags not available in Rails 7.0 from BASE_RAILS_NEW_FLAGS" do
     builder = described_class.new(
       parent_dir: parent_dir,
       name: "compat_app",
