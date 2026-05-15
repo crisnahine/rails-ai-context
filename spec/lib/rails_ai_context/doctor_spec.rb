@@ -340,6 +340,19 @@ RSpec.describe RailsAiContext::Doctor do
       expect(check.status).to eq(:pass)
       expect(ActiveRecord::Migrator).to have_received(:new).with(:up, migrations, schema_migration)
     end
+
+    context "when MigrationContext has pending_migrations (Rails 7.1+)" do
+      before do
+        allow(context).to receive(:respond_to?).with(:pending_migrations).and_return(true)
+        allow(context).to receive(:pending_migrations).and_return([])
+      end
+
+      it "uses MigrationContext#pending_migrations and does not fall back to ActiveRecord::Migrator" do
+        expect(check.status).to eq(:pass)
+        expect(context).to have_received(:pending_migrations)
+        expect(ActiveRecord::Migrator).not_to have_received(:new)
+      end
+    end
   end
 
   describe "#check_context_freshness" do

@@ -17,6 +17,12 @@ module E2E
       --skip-javascript --skip-test --skip-system-test
     ].freeze
 
+    # Flags introduced in Rails 7.1+ that are not available in Rails 7.0.
+    NEWER_RAILS_FLAGS = %w[
+      --skip-dev-gems --skip-rubocop --skip-ci --skip-kamal
+      --skip-solid --skip-thruster --skip-docker
+    ].freeze
+
     attr_reader :app_path, :install_path, :gem_home, :database
 
     def initialize(parent_dir:, name:, install_path:, database: :sqlite3)
@@ -27,7 +33,9 @@ module E2E
     end
 
     def rails_new_flags
-      BASE_RAILS_NEW_FLAGS + [ "--database=#{database}" ]
+      flags = BASE_RAILS_NEW_FLAGS + [ "--database=#{database}" ]
+      flags += NEWER_RAILS_FLAGS unless rails_70_target?
+      flags
     end
 
     # Build the app + install the gem per the chosen path.
@@ -127,6 +135,10 @@ module E2E
     end
 
     private
+
+    def rails_70_target?
+      (ENV["RAILS_VERSION"] || "").start_with?("7.0")
+    end
 
     def run_rails_new!
       FileUtils.mkdir_p(File.dirname(app_path))
