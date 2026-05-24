@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.11.0] — 2026-05-24
+
+### Changed — Prism AST migration: all introspectors now use structural code extraction
+
+Every introspector that scans `.rb` files has been migrated from regex-based pattern matching to Prism AST-based structural extraction. This is a zero-regression internal refactor -- all introspector outputs are verified identical via side-by-side comparison, 2257 unit tests, 119 E2E tests, and live validation against a production-scale Rails 8.1 app (39/39 introspectors, 41/41 tool invocations, 0 failures).
+
+**What changed internally:**
+
+- **`SourceIntrospector.walk(path, listener_map)`** -- new generic API that accepts any combination of listener classes or Proc factories, enabling ad-hoc AST extraction without modifying the core dispatcher. Supports both `Class` values (instantiated via `.new`) and `-> { Instance }` lambdas for configurable listeners.
+- **11 new listener classes** for patterns beyond the original 7 model-level listeners:
+  - `GenericMacroListener` -- configurable no-receiver call detector (handles most Rails DSL patterns including `self.method` calls)
+  - `ChainedCallListener` -- method calls with receivers (`.variant()`, `.includes()`, `.create()`)
+  - `VariantCallListener` -- ActiveStorage variant detection
+  - `MailboxRoutingListener` -- ActionMailbox routing + lifecycle callbacks
+  - `MiddlewareConfigListener` -- `config.middleware.use/insert_before/insert_after/unshift`
+  - `EnvAccessListener` -- `ENV["KEY"]` / `ENV.fetch("KEY")` with block-default detection
+  - `MountListener` -- `mount Engine, at: "/path"` (both keyword and hash-rocket syntax)
+  - `RakeTaskDslListener` -- `namespace`/`desc`/`task` with deps and args (handles string + symbol deps)
+  - `GemfileDslListener` -- `gem`/`group`/`source` with group-scope tracking
+  - `SchemaDslListener` -- `create_table`/`t.type`/`t.index`/`add_foreign_key`/`create_enum`/`check_constraint`
+  - `MigrationDslListener` -- `create_table`/`add_column`/`add_index`/`rename_column`/`add_reference` and 6 more actions
+- **28 introspectors converted**: ActiveStorage, ActionText, ActionMailbox, Middleware, ActiveSupport, Auth, Security, Controller (all 9 regex blocks including strong params, filters, rescue_from, rate_limit, respond_to, turbo_stream), Convention, Turbo, MultiDatabase, Performance, Job, Model, Component, View, Api, AssetPipeline, DevOps, Env, Gem, RakeTask, Engine, Seeds, Test, Schema, Config.
+- **181 regex patterns intentionally remain** in categories where Prism cannot help: non-Ruby files (JS/TS/ERB/Haml -- 78), keyword/content matching (22), config assignments (15), runtime SQL/YAML (25), and complex partial patterns (41).
+
+**What didn't change:**
+
+- All introspector output formats are identical. No consumer-facing API changes.
+- All 39 MCP tools work exactly as before.
+- Runtime reflection paths (ActiveRecord, Rails config, I18n, etc.) are untouched.
+- Non-Ruby file scanning (YAML, JSON, ERB, JS, Procfile, Dockerfile, Gemfile.lock) is untouched.
+
+**Why this matters:**
+
+- Regex scanning matches patterns in comments, strings, and dead code. AST extraction only matches actual code structure -- fewer false positives.
+- Multi-line declarations that broke regex (e.g., `devise` with 9 modules across 3 lines, `before_action` with complex `only:`/`except:` constraints) are now parsed correctly by Prism.
+- The `AstCache` provides thread-safe LRU caching of parse results, so repeated walks of the same file are free.
+- New listeners are composable -- introspectors mix and match listeners via `SourceIntrospector.walk(path, { key: Listener })` without coupling.
+
+### Tests
+
+- 2257 unit examples (up from 2154), 0 failures
+- 119 E2E examples, 0 failures
+- 47 edge-case tests for controller, auth, and security AST conversions
+- 10 listener edge-case tests (block-syntax ENV defaults, string rake deps, insert-with-index middleware, hash-rocket mounts, complex gem lines)
+- Side-by-side regression comparison: all 39 introspector outputs verified identical between old regex and new AST code
+
 ## [5.10.0] — 2026-04-20
 
 ### Added — 8 new introspectors closing RAILS_NERVOUS_SYSTEM.md gaps
