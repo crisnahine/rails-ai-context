@@ -2,10 +2,10 @@
 
 require_relative "e2e_helper"
 
-# Concurrent MCP stdio sessions — spawns N independent `rails-ai-context
+# Concurrent MCP stdio sessions - spawns N independent `rails-ai-context
 # serve` subprocesses against the same Rails app and verifies they each
 # answer their own requests without cross-talk. Each subprocess has its
-# own stdin/stdout pair and its own SHARED_CACHE state — but since they
+# own stdin/stdout pair and its own SHARED_CACHE state - but since they
 # all introspect the same Rails app, their tools/list responses must be
 # identical.
 #
@@ -15,7 +15,7 @@ require_relative "e2e_helper"
 # fourth client would hit.
 RSpec.describe "E2E: concurrent MCP stdio clients", type: :e2e do
   before(:all) do
-    # Read-only spec — reuse the shared in-Gemfile fixture.
+    # Read-only spec - reuse the shared in-Gemfile fixture.
     @builder = E2E.shared_app(install_path: :in_gemfile)
   end
 

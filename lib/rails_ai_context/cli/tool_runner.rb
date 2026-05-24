@@ -3,7 +3,7 @@
 module RailsAiContext
   module CLI
     # Runs MCP tools from the command line without requiring an MCP client.
-    # Reads tool schemas at runtime — no hardcoded parameter lists.
+    # Reads tool schemas at runtime - no hardcoded parameter lists.
     #
     # Usage:
     #   runner = ToolRunner.new("schema", ["--table", "users", "--detail", "full"])
@@ -61,7 +61,7 @@ module RailsAiContext
         required = schema[:required] || []
 
         lines = [
-          "#{tool_class.tool_name} — #{tool_class.description_value}",
+          "#{tool_class.tool_name} - #{tool_class.description_value}",
           "",
           "Usage:",
           "  rails 'ai:tool[#{short_name(tool_class.tool_name)}]' #{properties.keys.map { |k| "#{k}=VALUE" }.join(' ')}",
@@ -234,7 +234,7 @@ module RailsAiContext
         if unknown.any?
           msgs = unknown.map do |k|
             suggestion = Tools::BaseTool.find_closest_match(k, known_keys)
-            suggestion ? "  '#{k}' — did you mean '#{suggestion}='?" : "  '#{k}'"
+            suggestion ? "  '#{k}' - did you mean '#{suggestion}='?" : "  '#{k}'"
           end
           valid_str = known_keys.any? ? "Valid params: #{known_keys.join(', ')}" : "This tool takes no params."
           raise InvalidArgumentError, "Unknown param#{unknown.size > 1 ? 's' : ''}:\n#{msgs.join("\n")}\n#{valid_str}"
@@ -252,7 +252,7 @@ module RailsAiContext
           end
         end
 
-        # Check enum constraints — downcase before comparing for case-insensitive match.
+        # Check enum constraints - downcase before comparing for case-insensitive match.
         # If invalid, strip the param so the tool uses its default behavior.
         kwargs.each do |key, value|
           prop = properties[key]

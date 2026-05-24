@@ -15,7 +15,7 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       # Use a ref that matches HEAD exactly (no changes)
       result = described_class.call(ref: "HEAD")
       text = result.content.first[:text]
-      # Either shows changes or says no changes — both are valid
+      # Either shows changes or says no changes - both are valid
       expect(text).to be_a(String)
     end
 

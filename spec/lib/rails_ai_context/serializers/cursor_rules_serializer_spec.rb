@@ -85,7 +85,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
     end
   end
 
-  # v5.9.0 regression: real user report during release QA — Cursor chat
+  # v5.9.0 regression: real user report during release QA - Cursor chat
   # agent didn't detect rules written only as .cursor/rules/*.mdc. Writing
   # .cursorrules alongside (legacy format) fixed it. Ensure both are
   # produced so neither older Cursor builds nor newer ones miss the rules.
@@ -97,7 +97,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
       expect(File.exist?(cursorrules_path)).to be true
 
       content = File.read(cursorrules_path)
-      # Plain text / markdown — no YAML frontmatter — so every Cursor
+      # Plain text / markdown - no YAML frontmatter - so every Cursor
       # build reads it verbatim.
       expect(content).not_to start_with("---")
       # Must surface the gem's presence + name a couple of the MCP tools
@@ -111,7 +111,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
 
   # .cursorrules and CLAUDE.md share render_compact_rules from
   # CompactSerializerHelper. They target different AI clients but
-  # deliver the same project context — so when one changes, the other
+  # deliver the same project context - so when one changes, the other
   # changes in lockstep. Ship-time invariant: identical core content
   # between the two files.
   it ".cursorrules mirrors the CLAUDE.md compact-rules pipeline (shared content)" do
@@ -126,7 +126,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
       %w[## Stack ## Key\ models ## Rules ## Architecture].each do |section|
         next unless claude_content.include?(section)
         expect(cursor_content).to include(section),
-          ".cursorrules missing section '#{section}' that CLAUDE.md has — shared pipeline drift"
+          ".cursorrules missing section '#{section}' that CLAUDE.md has - shared pipeline drift"
       end
     end
   end
@@ -163,7 +163,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
 
     it "preserves user content above and below the markers on regeneration" do
       Dir.mktmpdir do |dir|
-        # First write — gem creates the marker block.
+        # First write - gem creates the marker block.
         described_class.new(context).call(dir)
         path = File.join(dir, ".cursorrules")
 
@@ -171,7 +171,7 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
         gem_block = File.read(path)
         File.write(path, "# Above the gem\n#{gem_block}\n# Below the gem\n")
 
-        # Regenerate — gem must replace ONLY its own block.
+        # Regenerate - gem must replace ONLY its own block.
         described_class.new(context).call(dir)
 
         final = File.read(path)

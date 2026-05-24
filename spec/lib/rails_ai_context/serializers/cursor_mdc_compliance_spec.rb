@@ -44,7 +44,7 @@ RSpec.describe "Cursor MDC compliance" do
 
   # Scope the MDC-compliance assertions to files under .cursor/rules/ only.
   # The serializer ALSO writes .cursorrules at the project root as a legacy
-  # fallback — that file is plain text, not MDC, and is intentionally
+  # fallback - that file is plain text, not MDC, and is intentionally
   # outside the frontmatter/extension/<500-lines contract. The legacy file
   # is covered separately in cursor_rules_serializer_spec.rb.
   let(:generated_files) do

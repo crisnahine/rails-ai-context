@@ -30,7 +30,7 @@ module RailsAiContext
       def call(output_dir)
         rules_dir = File.join(output_dir, ".cursor", "rules")
 
-        # Split rule files (.cursor/rules/*.mdc) are fully gem-owned —
+        # Split rule files (.cursor/rules/*.mdc) are fully gem-owned.
         # written as-is with no markers (the gem manages every file in
         # that directory).
         mdc_files = {
@@ -74,7 +74,7 @@ module RailsAiContext
 
         schema = context[:schema]
         if schema && !schema[:error]
-          lines << "- Database: #{schema[:adapter]} — #{schema[:total_tables]} tables"
+          lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables"
         end
 
         models = context[:models]
@@ -115,7 +115,7 @@ module RailsAiContext
         lines << "" << "Global before_actions: #{before_actions.join(', ')}" if before_actions.any?
 
         lines << ""
-        lines << "MCP tools available — see rails-mcp-tools.mdc for full reference."
+        lines << "MCP tools available - see rails-mcp-tools.mdc for full reference."
         lines << "Always call with detail:\"summary\" first, then drill into specifics."
 
         lines.join("\n")
@@ -181,11 +181,11 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # Agent-requested MCP tool reference — loaded on-demand when agent needs tool guidance
+      # Agent-requested MCP tool reference - loaded on-demand when agent needs tool guidance
       def render_mcp_tools_rule
         lines = [
           "---",
-          "description: \"Rails MCP tools reference — #{tool_count} tools for schema, models, routes, controllers, search, testing, and more\"",
+          "description: \"Rails MCP tools reference - #{tool_count} tools for schema, models, routes, controllers, search, testing, and more\"",
           "alwaysApply: false",
           "---",
           ""
@@ -197,7 +197,7 @@ module RailsAiContext
       end
 
       # Legacy .cursorrules fallback. Same content pipeline as CLAUDE.md
-      # (render_compact_rules from CompactSerializerHelper) — both files
+      # (render_compact_rules from CompactSerializerHelper) - both files
       # give an AI agent the same project context; only the filename /
       # distribution mechanism differs. Cursor's chat agent reads
       # .cursorrules unconditionally in every version, so this serves as

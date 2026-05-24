@@ -57,11 +57,11 @@ module RailsAiContext
         if conventions[:custom_directories]&.any?
           lines << "" << "## Custom Directories"
           conventions[:custom_directories].each do |dir, desc|
-            lines << "- `#{dir}/` — #{desc}"
+            lines << "- `#{dir}/` - #{desc}"
           end
         end
 
-        # Config files — only show non-obvious ones (skip files every Rails app has)
+        # Config files - only show non-obvious ones (skip files every Rails app has)
         if conventions[:config_files]&.any?
           obvious = %w[
             config/application.rb config/puma.rb config/locales/en.yml
@@ -81,7 +81,7 @@ module RailsAiContext
           locale_info.each { |l| lines << "- #{l}" }
         end
 
-        # Convention Fingerprint — one-paragraph summary of the app's detected conventions
+        # Convention Fingerprint - one-paragraph summary of the app's detected conventions
         fingerprint_parts = []
         fingerprint_parts << conventions[:architecture].map { |a| humanize_arch(a) }.join(", ") if conventions[:architecture]&.any?
         fingerprint_parts << conventions[:patterns].map { |p| humanize_pattern(p) }.join(", ") if conventions[:patterns]&.any?
@@ -325,7 +325,7 @@ module RailsAiContext
 
         sections
       rescue => e
-        [] # Graceful degradation — never break the tool
+        [] # Graceful degradation - never break the tool
       end
 
       private_class_method def self.detect_locale_info

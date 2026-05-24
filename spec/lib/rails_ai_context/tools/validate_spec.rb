@@ -47,7 +47,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
 
     it "skips unsupported file types" do
-      # package.json is neither sensitive nor a validatable language — it
+      # package.json is neither sensitive nor a validatable language - it
       # should be skipped, not denied. (Previously this test used
       # config/database.yml which is now blocked by the v5.8.1 expanded
       # sensitive_patterns list.)
@@ -57,7 +57,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
 
     it "denies access to sensitive files (v5.8.1)" do
-      # config/database.yml, .env, config/master.key — all blocked by the
+      # config/database.yml, .env, config/master.key - all blocked by the
       # v5.8.1 sensitive_patterns expansion. validate.rb previously had no
       # sensitive_file? check at all, so these would be read + probed via
       # error messages.
@@ -142,7 +142,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
       result = described_class.call(files: [ "tmp/local_route_helper_test.rb" ], level: "rails")
       text = result.content.first[:text]
 
-      expect(text).not_to include("provider_metadata_url — route helper not found")
+      expect(text).not_to include("provider_metadata_url - route helper not found")
       expect(text).to include("1/1 files passed")
     end
 
@@ -164,7 +164,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
       result = described_class.call(files: [ "tmp/local_route_helper_test.rb" ], level: "rails")
       text = result.content.first[:text]
 
-      expect(text).to include("provider_metadata_url — route helper not found")
+      expect(text).to include("provider_metadata_url - route helper not found")
     end
 
     it "does not report private inline _url method definitions in regex fallback mode" do
@@ -185,7 +185,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
       result = described_class.call(files: [ "tmp/local_route_helper_test.rb" ], level: "rails")
       text = result.content.first[:text]
 
-      expect(text).not_to include("provider_metadata_url — route helper not found")
+      expect(text).not_to include("provider_metadata_url - route helper not found")
       expect(text).to include("1/1 files passed")
     end
   end

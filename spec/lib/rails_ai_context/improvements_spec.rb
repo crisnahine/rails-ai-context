@@ -99,8 +99,8 @@ RSpec.describe "Token-saving improvements" do
         content = File.read(File.join(dir, ".claude", "rules", "rails-schema.md"))
         lines = content.lines.select { |l| l.start_with?("- ") }
         lines.each do |line|
-          next unless line.include?("—")
-          cols_part = line.split("—").last
+          next unless line.include?(" - ")
+          cols_part = line.split(" - ").last
           expect(cols_part).not_to include("created_at")
           expect(cols_part).not_to include("updated_at")
           expect(cols_part).not_to include("user_id")

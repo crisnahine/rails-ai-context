@@ -4,7 +4,7 @@ module RailsAiContext
   module Introspectors
     # Extracts the autoloading configuration: Zeitwerk vs Classic, custom
     # inflections, autoload/eager-load paths, collapsed dirs, and ignored
-    # paths. Covers RAILS_NERVOUS_SYSTEM.md §3 (Autoloading — Zeitwerk).
+    # paths. Covers RAILS_NERVOUS_SYSTEM.md §3 (Autoloading - Zeitwerk).
     class AutoloadIntrospector
       attr_reader :app
 

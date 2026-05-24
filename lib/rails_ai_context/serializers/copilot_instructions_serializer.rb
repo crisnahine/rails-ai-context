@@ -37,7 +37,7 @@ module RailsAiContext
           "description: \"Rails version, database, models, routes, gems, architecture patterns\"",
           "---",
           "",
-          "# #{context[:app_name] || 'Rails App'} — Overview",
+          "# #{context[:app_name] || 'Rails App'} - Overview",
           "",
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
@@ -45,7 +45,7 @@ module RailsAiContext
 
         schema = context[:schema]
         if schema.is_a?(Hash) && !schema[:error]
-          lines << "- Database: #{schema[:adapter]} — #{schema[:total_tables]} tables"
+          lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables"
         end
 
         models = context[:models]
@@ -96,7 +96,7 @@ module RailsAiContext
           "---",
           "applyTo: \"app/models/**/*.rb\"",
           "name: \"Rails Models Reference\"",
-          "description: \"ActiveRecord models — associations, validations, scopes, enums\"",
+          "description: \"ActiveRecord models - associations, validations, scopes, enums\"",
           "---",
           "",
           "# ActiveRecord Models (#{models.size})",
@@ -127,7 +127,7 @@ module RailsAiContext
           "---",
           "applyTo: \"app/controllers/**/*.rb\"",
           "name: \"Rails Controllers Reference\"",
-          "description: \"Controllers — actions, filters, strong parameters\"",
+          "description: \"Controllers - actions, filters, strong parameters\"",
           "---",
           "",
           "# Controllers (#{controllers.size})",
@@ -146,7 +146,7 @@ module RailsAiContext
           "---",
           "applyTo: \"**/*\"",
           "name: \"Rails MCP Tools\"",
-          "description: \"#{tool_count} introspection tools — schema, models, routes, controllers, search, testing, validation\"",
+          "description: \"#{tool_count} introspection tools - schema, models, routes, controllers, search, testing, validation\"",
           "excludeAgent: \"code-review\"",
           "---",
           ""

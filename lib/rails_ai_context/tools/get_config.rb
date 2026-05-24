@@ -19,19 +19,19 @@ module RailsAiContext
 
         lines = [ "# Application Configuration", "" ]
 
-        # Database — critical for query syntax decisions
+        # Database - critical for query syntax decisions
         db_config = detect_database
         lines << "- **Database:** #{db_config}" if db_config
 
-        # Auth framework — affects every controller
+        # Auth framework - affects every controller
         auth = detect_auth_framework
         lines << "- **Auth:** #{auth}" if auth
 
-        # Assets/CSS — uses frontend framework introspector data when available
+        # Assets/CSS - uses frontend framework introspector data when available
         assets = detect_assets_stack
         lines << "- **Assets:** #{assets}" if assets
 
-        # Action Cable — uses Rails config API with YAML fallback
+        # Action Cable - uses Rails config API with YAML fallback
         cable = detect_action_cable
         lines << "- **Action Cable:** #{cable}" if cable
 
@@ -136,7 +136,7 @@ module RailsAiContext
           end
         end
 
-        # Asset pipeline detection (always check — not from introspector)
+        # Asset pipeline detection (always check - not from introspector)
         parts << "Propshaft" if defined?(Propshaft)
         parts << "Sprockets" if defined?(Sprockets) && !defined?(Propshaft)
         parts << "Import Maps" if File.exist?(Rails.root.join("config/importmap.rb"))

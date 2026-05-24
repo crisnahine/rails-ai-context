@@ -40,7 +40,7 @@ module RailsAiContext
         all_controllers = data[:controllers] || []
         return text_response("No Stimulus controllers found.") if all_controllers.empty?
 
-        # Specific controller — accepts both dash and underscore naming
+        # Specific controller - accepts both dash and underscore naming
         # (HTML uses data-controller="weekly-chart", file is weekly_chart_controller.js)
         if controller
           normalized = controller.downcase.tr("-", "_").delete_suffix("_controller")
@@ -85,7 +85,7 @@ module RailsAiContext
             parts << "#{targets} targets" if targets > 0
             parts << "#{values} values" if values > 0
             parts << "#{actions} actions" if actions > 0
-            lines << "- **#{ctrl[:name]}** — #{parts.join(', ')}"
+            lines << "- **#{ctrl[:name]}** - #{parts.join(', ')}"
           end
           if empty.any?
             names = empty.map { |c| c[:name] }.join(", ")
@@ -181,7 +181,7 @@ module RailsAiContext
 
         lines << "- **File:** #{ctrl[:file]}" if ctrl[:file]
 
-        # HTML data-attribute format — copy-paste ready
+        # HTML data-attribute format - copy-paste ready
         html_attrs = generate_html_attrs(ctrl)
         if html_attrs.any?
           lines << "" << "### HTML Usage (copy-paste)"
@@ -190,7 +190,7 @@ module RailsAiContext
           lines << "```"
         end
 
-        # Reverse view lookup — where this controller is used
+        # Reverse view lookup - where this controller is used
         views_using = find_views_using(ctrl[:name])
         if views_using.any?
           lines << "" << "### Used in views"

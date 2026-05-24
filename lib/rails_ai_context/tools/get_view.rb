@@ -39,7 +39,7 @@ module RailsAiContext
         templates = data[:templates] || {}
         partials = data[:partials] || {}
 
-        # Specific path — return file content
+        # Specific path - return file content
         if path
           return read_view_file(path)
         end
@@ -141,7 +141,7 @@ module RailsAiContext
               end
 
               phlex_tag = meta[:phlex] ? " [phlex]" : ""
-              details = detail_parts.any? ? " — #{detail_parts.join(' | ')}" : ""
+              details = detail_parts.any? ? " - #{detail_parts.join(' | ')}" : ""
               lines << "- **#{name}** (#{meta[:lines]} lines#{phlex_tag})#{details}"
             end
             ctrl_partials.sort.each do |name, meta|
@@ -188,7 +188,7 @@ module RailsAiContext
           else
             # List available controllers when no controller specified
             all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
-            lines = [ "# Views — Full Detail", "", "_Specify a controller to see template content:_", "" ]
+            lines = [ "# Views - Full Detail", "", "_Specify a controller to see template content:_", "" ]
             all_dirs.each do |ctrl|
               count = templates.count { |k, _| k.start_with?("#{ctrl}/") } +
                       partials.count { |k, _| k.start_with?("#{ctrl}/") }
@@ -211,7 +211,7 @@ module RailsAiContext
 
         # Canonicalize the containment base once so every per-file check uses
         # the same realpath. `max_file_size` is the configured per-file cap
-        # (default 5MB) — large apps raise it via `config.max_file_size`.
+        # (default 5MB) - large apps raise it via `config.max_file_size`.
         real_base = File.realpath(layouts_dir).to_s
         max_size  = max_file_size
 
@@ -259,7 +259,7 @@ module RailsAiContext
         end
 
         # Block sensitive files on the caller-supplied string before any
-        # filesystem stat — closes the existence-oracle side channel.
+        # filesystem stat - closes the existence-oracle side channel.
         if sensitive_file?(path)
           return text_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
         end
@@ -304,7 +304,7 @@ module RailsAiContext
         text_response("# #{path}\n\n```erb\n#{content}\n```")
       end
 
-      # Strip inline SVG blocks — they're visual noise that buries the signal AI needs.
+      # Strip inline SVG blocks - they're visual noise that buries the signal AI needs.
       # Replaces <svg ...>...</svg> with a compact placeholder.
       private_class_method def self.strip_svg(content)
         content.gsub(/<svg\b[^>]*>.*?<\/svg>/m, "<!-- svg icon -->")

@@ -116,8 +116,8 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         text = result.content.first[:text]
 
         expect(text).to include("Frontend Roots")
-        expect(text).to include("`app/frontend` — 32 components")
-        expect(text).to include("`app/frontend/admin` — 15 components")
+        expect(text).to include("`app/frontend` - 32 components")
+        expect(text).to include("`app/frontend/admin` - 15 components")
       end
 
       it "shows non-strict when typescript strict is false" do
@@ -164,9 +164,9 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         text = result.content.first[:text]
 
         expect(text).to include("Component Directories")
-        expect(text).to include("`app/frontend/components/shared` — 18 components")
-        expect(text).to include("`app/frontend/components/pages` — 14 components")
-        expect(text).to include("`app/frontend/admin/components` — 15 components")
+        expect(text).to include("`app/frontend/components/shared` - 18 components")
+        expect(text).to include("`app/frontend/components/pages` - 14 components")
+        expect(text).to include("`app/frontend/admin/components` - 15 components")
       end
 
       it "includes build plugins" do

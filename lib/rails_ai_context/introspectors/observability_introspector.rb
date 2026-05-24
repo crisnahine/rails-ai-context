@@ -78,7 +78,7 @@ module RailsAiContext
 
       # The Fanout notifier splits subscribers across @string_subscribers
       # (exact-name → Array) and @other_subscribers (Regexp/nil patterns →
-      # flat Array). This shape has been stable since Rails 6.0 — the gem's
+      # flat Array). This shape has been stable since Rails 6.0 - the gem's
       # supported floor is Rails 7.1, so both ivars are always present.
       def extract_subscribers_from_notifier(notifier)
         all = []
@@ -140,7 +140,7 @@ module RailsAiContext
 
       # Rails 8.1 adds `Rails.application.event_reporter`. Report whether it's
       # available and the subscriber count. We deliberately do NOT call
-      # `reporter.tagged` — it's a block-scoped DSL (`reporter.tagged(:x) { … }`)
+      # `reporter.tagged` - it's a block-scoped DSL (`reporter.tagged(:x) { … }`)
       # that delegates to `TagStack#with_tags` and `yield`s unconditionally, so
       # a blockless call raises `LocalJumpError`. There is no keyspace to
       # introspect.

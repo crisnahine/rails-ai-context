@@ -4,7 +4,7 @@ module RailsAiContext
   module Introspectors
     # Reports which Rails-related environment variables are currently set
     # in the running process. Values are NEVER returned for sensitive vars
-    # (SECRET_KEY_BASE, DATABASE_URL, REDIS_URL, etc.) — only presence
+    # (SECRET_KEY_BASE, DATABASE_URL, REDIS_URL, etc.) - only presence
     # (boolean). Safe, non-sensitive vars report their value.
     # Covers RAILS_NERVOUS_SYSTEM.md §36 (ENV vars Rails reads).
     class EnvIntrospector
@@ -51,11 +51,11 @@ module RailsAiContext
         { name: "RAILS_SERVE_STATIC_FILES",     safe: true,  category: :assets,     doc: "Serve static assets from Rails (vs an edge CDN/nginx)." },
         { name: "RAILS_EAGER_LOAD",             safe: true,  category: :boot,       doc: "Force eager_load regardless of environment." },
 
-        # Master key / credentials — presence only
+        # Master key / credentials - presence only
         { name: "RAILS_MASTER_KEY",             safe: false, category: :secrets,    doc: "Master key for config/credentials.yml.enc." },
         { name: "SECRET_KEY_BASE",              safe: false, category: :secrets,    doc: "Session / signed cookie / MessageEncryptor key." },
 
-        # Database — presence only
+        # Database - presence only
         { name: "DATABASE_URL",                 safe: false, category: :database,   doc: "Primary database connection URL." },
         { name: "PRIMARY_DATABASE_URL",         safe: false, category: :database,   doc: "Explicit primary DB URL (multi-db setups)." },
         { name: "CACHE_DATABASE_URL",           safe: false, category: :database,   doc: "Solid Cache / cache DB URL." },
@@ -75,7 +75,7 @@ module RailsAiContext
         { name: "DYNO",                         safe: true,  category: :platform,   doc: "Heroku dyno name." },
         { name: "HEROKU_APP_NAME",              safe: true,  category: :platform,   doc: "Heroku app name." },
 
-        # Bundler / gem loading — paths are absolute and contain the OS
+        # Bundler / gem loading - paths are absolute and contain the OS
         # username on most systems (e.g. /Users/alice/.bundle), so we redact
         # their values and report only presence.
         { name: "BUNDLE_GEMFILE",               safe: false, category: :bundler,    doc: "Path to the Gemfile Bundler uses." },

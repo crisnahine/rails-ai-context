@@ -13,7 +13,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
   # ────────────────────────────────────────────────────────────
   # Edge case 1: Inline before_action block (no symbol arg)
   # The old regex matched `before_action :symbol_name`.
-  # An inline block has no symbol — both versions should skip it.
+  # An inline block has no symbol - both versions should skip it.
   # ────────────────────────────────────────────────────────────
   describe "inline before_action block" do
     let(:fixture) { File.join(Rails.root, "app/controllers/inline_block_controller.rb") }

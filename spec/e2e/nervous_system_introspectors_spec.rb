@@ -3,13 +3,13 @@
 require_relative "e2e_helper"
 
 # E2E coverage for the 8 "nervous-system" introspectors added in this
-# release — initializers, autoload, connection_pool, active_support,
+# release - initializers, autoload, connection_pool, active_support,
 # credentials, security, observability, env.
 #
 # These introspectors read Rails runtime state (Rails.application.initializers,
 # Rails.autoloaders.main, ActiveRecord connection handler, ActiveSupport
 # notifier registry, etc.), so the combustion fixture in unit specs is
-# *necessary* but not *sufficient* — a real `rails new` app exercises
+# *necessary* but not *sufficient* - a real `rails new` app exercises
 # the post-boot state AI clients actually see. This spec builds a real
 # app, then runs `bin/rails runner` to invoke the orchestrator in-process
 # and asserts each new introspector produced a non-error Hash.

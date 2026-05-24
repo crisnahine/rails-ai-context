@@ -3,7 +3,7 @@
 module E2E
   # Runs CLI commands against a TestAppBuilder-produced app and returns
   # a structured result (stdout, stderr, exit status). Never raises on
-  # non-zero exit — callers assert what they care about.
+  # non-zero exit - callers assert what they care about.
   class CliRunner
     Result = Struct.new(:command, :stdout, :stderr, :status, keyword_init: true) do
       def success? = status.success?

@@ -12,10 +12,10 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
             suggestion: "Add .includes(:comments) to the Post query to avoid N+1 queries" },
           { model: "User", association: "comments", controller: "app/controllers/users_controller.rb",
             action: "index", risk: "medium",
-            suggestion: "User query has preloading but missing :comments — add it to the includes list" },
+            suggestion: "User query has preloading but missing :comments - add it to the includes list" },
           { model: "Post", association: "tags", controller: "app/controllers/posts_controller.rb",
             action: "show", risk: "low",
-            suggestion: "tags is preloaded — no action needed" }
+            suggestion: "tags is preloaded - no action needed" }
         ],
         missing_counter_cache: [],
         missing_fk_indexes: [

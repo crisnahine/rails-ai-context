@@ -2,7 +2,7 @@
 
 require_relative "e2e_helper"
 
-# Install path C: Zero-config — `gem install rails-ai-context` into an
+# Install path C: Zero-config - `gem install rails-ai-context` into an
 # isolated GEM_HOME, then run `rails-ai-context serve` (or any CLI tool)
 # directly without running `init` or the Rails generator. Nothing is
 # written to the app, no Gemfile entry, no config files. Useful for
@@ -28,7 +28,7 @@ RSpec.describe "E2E: zero-config install", type: :e2e do
     end
 
     it "does NOT generate per-AI-client config files (no init run)" do
-      # Zero-config path deliberately skips init — config files should be absent.
+      # Zero-config path deliberately skips init - config files should be absent.
       %w[.mcp.json .cursor/mcp.json .vscode/mcp.json opencode.json .codex/config.toml].each do |relative|
         path = File.join(@builder.app_path, relative)
         expect(File.exist?(path)).to be(false), "expected #{relative} to NOT exist in zero-config mode"

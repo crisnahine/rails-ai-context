@@ -4,11 +4,11 @@ module RailsAiContext
   module Serializers
     # Generates per-directory AGENTS.md files for OpenCode's lazy-loading system.
     # When OpenCode's agent reads a file, it walks up the directory tree and
-    # auto-loads any AGENTS.md it finds — acting as contextual split rules.
+    # auto-loads any AGENTS.md it finds - acting as contextual split rules.
     #
     # Generated files:
-    #   app/models/AGENTS.md      — model listing, loaded when editing models
-    #   app/controllers/AGENTS.md — controller listing, loaded when editing controllers
+    #   app/models/AGENTS.md      - model listing, loaded when editing models
+    #   app/controllers/AGENTS.md - controller listing, loaded when editing controllers
     class OpencodeRulesSerializer
       include StackOverviewHelper
 
@@ -53,7 +53,7 @@ module RailsAiContext
           vals = (data[:validations] || []).size
           line = "- **#{name}**"
           line += " (table: #{data[:table_name]})" if data[:table_name]
-          line += " — #{assocs}" unless assocs.empty?
+          line += " - #{assocs}" unless assocs.empty?
           line += " [#{vals}v]" if vals > 0
           lines << line
           extras = model_extras_line(data)
@@ -95,7 +95,7 @@ module RailsAiContext
           info = app_controllers[name]
           actions = (info[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
           line = "- **#{name}**"
-          line += " — #{actions.join(", ")}" unless actions.empty?
+          line += " - #{actions.join(", ")}" unless actions.empty?
           lines << line
         end
 
@@ -114,7 +114,7 @@ module RailsAiContext
         lines << "Use `rails_get_edit_context(file:\"path\", near:\"keyword\")` for surgical edit context."
         lines << "Use `rails_get_view(controller:\"name\")` for view templates."
         lines << "Use `rails_get_test_info(controller:\"Name\")` for existing controller tests."
-        lines << "Use `rails_validate(files:[...])` to check syntax after editing — do NOT re-read files to verify."
+        lines << "Use `rails_validate(files:[...])` to check syntax after editing - do NOT re-read files to verify."
 
         lines.join("\n")
       end

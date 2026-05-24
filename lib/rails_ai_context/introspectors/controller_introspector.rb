@@ -130,7 +130,7 @@ module RailsAiContext
         false
       end
 
-      # Prefer source-based parsing for actions — always reflects current file state.
+      # Prefer source-based parsing for actions - always reflects current file state.
       # Falls back to reflection for controllers without readable source files.
       def extract_actions(ctrl, source = nil)
         if source
@@ -274,12 +274,12 @@ module RailsAiContext
       # Statically evaluate known runtime conditions to exclude inapplicable filters.
       # e.g., `unless: :devise_controller?` on a Devise controller means the filter doesn't apply.
       def filter_excluded_by_condition?(ctrl, filter)
-        # unless: :devise_controller? — filter does NOT apply to Devise controllers
+        # unless: :devise_controller? - filter does NOT apply to Devise controllers
         if filter[:unless] == "devise_controller?"
           return true if devise_controller?(ctrl)
         end
 
-        # if: :devise_controller? — filter ONLY applies to Devise controllers
+        # if: :devise_controller? - filter ONLY applies to Devise controllers
         if filter[:if] == "devise_controller?"
           return true unless devise_controller?(ctrl)
         end

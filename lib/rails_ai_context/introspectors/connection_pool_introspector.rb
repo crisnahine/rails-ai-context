@@ -5,7 +5,7 @@ module RailsAiContext
     # Extracts ActiveRecord connection pool & adapter configuration per
     # database: pool size, checkout timeout, reaping, prepared_statements,
     # advisory_locks, read-replica flag. Covers RAILS_NERVOUS_SYSTEM.md
-    # §10 (ActiveRecord — Connections & Adapters).
+    # §10 (ActiveRecord - Connections & Adapters).
     class ConnectionPoolIntrospector
       attr_reader :app
 

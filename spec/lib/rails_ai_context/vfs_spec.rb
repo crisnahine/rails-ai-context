@@ -191,8 +191,8 @@ RSpec.describe RailsAiContext::VFS do
       it "blocks caller-supplied sensitive names BEFORE filesystem stat (existence oracle)" do
         # The pre-fix `resolve_view` would call File.exist? on the requested
         # path first, then only run sensitive_file? after realpath. That
-        # gave two distinct error messages — "View not found" vs "sensitive
-        # file" — which a caller could use to probe whether app/views/.env
+        # gave two distinct error messages - "View not found" vs "sensitive
+        # file" - which a caller could use to probe whether app/views/.env
         # exists. The fix adds an early sensitive_file? check before any
         # filesystem stat, so the rejection reason is identical regardless
         # of whether the file is present.

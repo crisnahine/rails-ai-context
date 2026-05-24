@@ -114,8 +114,8 @@ module RailsAiContext
     attr_accessor :cache_ttl
 
     # Context file generation mode
-    # :compact — ≤150 lines CLAUDE.md, references MCP tools for details (default)
-    # :full    — current behavior, dumps everything into context files
+    # :compact - ≤150 lines CLAUDE.md, references MCP tools for details (default)
+    # :full    - current behavior, dumps everything into context files
     attr_accessor :context_mode
 
     # Max lines for generated CLAUDE.md (only applies in :compact mode)
@@ -125,9 +125,9 @@ module RailsAiContext
     attr_accessor :max_tool_response_chars
 
     # Live reload: auto-invalidate MCP tool caches on file changes
-    # :auto (default) — enable if `listen` gem is available, skip silently otherwise
-    # true  — enable, raise if `listen` gem is missing
-    # false — disable entirely
+    # :auto (default) - enable if `listen` gem is available, skip silently otherwise
+    # true  - enable, raise if `listen` gem is missing
+    # false - disable entirely
     attr_accessor :live_reload
 
     # Debounce interval in seconds for live reload file watching
@@ -137,7 +137,7 @@ module RailsAiContext
     # instrumentation events. Default: false (v5.8.1+). When false, only
     # metadata (method, tool_name, duration, error) is forwarded to
     # subscribers. When true, `tool_arguments` and `arguments` are forwarded
-    # verbatim — including raw SQL from `rails_query`, env var names from
+    # verbatim - including raw SQL from `rails_query`, env var names from
     # `rails_get_env`, and log search patterns from `rails_read_logs`.
     #
     # Setting this to true means the operator takes on the redaction
@@ -155,7 +155,7 @@ module RailsAiContext
     # AGENTS.md, .claude/rules/, .cursor/rules/, .github/instructions/.
     attr_accessor :anti_hallucination_rules
 
-    # File size limits (bytes) — increase for larger projects
+    # File size limits (bytes) - increase for larger projects
     attr_accessor :max_file_size          # Per-file read limit for tools (default: 2MB)
     attr_accessor :max_test_file_size     # Test file read limit (default: 500KB)
     attr_accessor :max_schema_file_size   # schema.rb / structure.sql parse limit (default: 10MB)
@@ -211,7 +211,7 @@ module RailsAiContext
       noticed_events noticed_notifications
     ].freeze
 
-    # Filtering — customize what's hidden from AI output
+    # Filtering - customize what's hidden from AI output
     attr_accessor :excluded_controllers   # Controller classes hidden from listings (e.g. DeviseController)
     attr_accessor :excluded_route_prefixes # Route controller prefixes hidden with app_only (e.g. action_mailbox/)
     attr_accessor :excluded_concerns      # Regex patterns for concerns to hide (e.g. /Devise::Models/)
@@ -223,7 +223,7 @@ module RailsAiContext
     attr_accessor :search_extensions      # File extensions for Ruby fallback search (default: rb,js,erb,yml,yaml,json)
     attr_accessor :concern_paths          # Where to look for concern source files (default: app/models/concerns)
 
-    # Frontend framework detection (optional overrides — auto-detected if nil)
+    # Frontend framework detection (optional overrides - auto-detected if nil)
     attr_accessor :frontend_paths         # User-declared frontend dirs (e.g. ["app/frontend", "../web-client"])
 
     # Database query tool settings (rails_query)

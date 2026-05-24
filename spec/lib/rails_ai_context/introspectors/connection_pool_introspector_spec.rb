@@ -36,14 +36,14 @@ RSpec.describe RailsAiContext::Introspectors::ConnectionPoolIntrospector do
         (e[:pool_config].is_a?(Hash) && e[:pool_config].any?) ||
           (e[:adapter_options].is_a?(Hash) && e[:adapter_options].any?)
       end
-      # Combustion's SQLite fixture may omit pool knobs entirely — accept
+      # Combustion's SQLite fixture may omit pool knobs entirely - accept
       # true-or-none, but if present, the shape must be a Hash.
       result[:databases].each do |e|
         expect(e[:pool_config]).to be_a(Hash) if e.key?(:pool_config)
         expect(e[:adapter_options]).to be_a(Hash) if e.key?(:adapter_options)
       end
       # Sanity: if the fixture DID have pool knobs, the flag must be true.
-      # This is a one-way guard — asserts the shape matches when present.
+      # This is a one-way guard - asserts the shape matches when present.
       expect(has_extras).to eq(true).or(eq(false))
     end
 

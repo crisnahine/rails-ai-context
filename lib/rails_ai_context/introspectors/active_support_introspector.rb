@@ -98,7 +98,7 @@ module RailsAiContext
           dir = File.join(root, rel)
           next unless Dir.exist?(dir)
 
-          # Sort before slicing — Dir.glob ordering is filesystem-dependent
+          # Sort before slicing - Dir.glob ordering is filesystem-dependent
           # and would produce non-deterministic output on large monorepos.
           Dir.glob(File.join(dir, "**/*.rb")).sort.first(2000).each do |path|
             content = RailsAiContext::SafeFile.read(path) or next

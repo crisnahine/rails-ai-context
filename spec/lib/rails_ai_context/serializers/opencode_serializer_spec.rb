@@ -28,7 +28,7 @@ RSpec.describe RailsAiContext::Serializers::OpencodeSerializer do
 
       it "includes AI Context header" do
         output = described_class.new(context).call
-        expect(output).to include("TestApp — AI Context")
+        expect(output).to include("TestApp - AI Context")
       end
 
       it "includes MCP tools section" do

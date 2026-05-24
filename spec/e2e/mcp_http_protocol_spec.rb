@@ -6,7 +6,7 @@ require_relative "e2e_helper"
 # app on a free local port (Railtie auto-mounts the Rack middleware at
 # /mcp) and sends JSON-RPC POST requests over HTTP.
 #
-# This verifies the HTTP transport path — distinct from stdio. Many
+# This verifies the HTTP transport path - distinct from stdio. Many
 # deployed MCP clients (especially team/shared contexts) use HTTP rather
 # than spawning one stdio server per consumer.
 RSpec.describe "E2E: MCP HTTP protocol", type: :e2e do

@@ -4,9 +4,9 @@ module E2E
   # Builds a fresh Rails application for e2e testing. Supports the three
   # install paths documented in CLAUDE.md #36:
   #
-  #   :in_gemfile  — add gem line to Gemfile, bundle, run generator
-  #   :standalone  — build gem, install to isolated GEM_HOME, run `rails-ai-context init`
-  #   :zero_config — same GEM_HOME setup, but no init/generator — just serve with defaults
+  #   :in_gemfile  - add gem line to Gemfile, bundle, run generator
+  #   :standalone  - build gem, install to isolated GEM_HOME, run `rails-ai-context init`
+  #   :zero_config - same GEM_HOME setup, but no init/generator - just serve with defaults
   class TestAppBuilder
     # Bootsnap stays enabled (no --skip-bootsnap) because the harness runs
     # many bin/rails / rails-ai-context invocations against each generated
@@ -58,7 +58,7 @@ module E2E
         build_and_install_gem!
         bundle_install!
         scaffold_sample_model!
-        # NO init / NO generator — just the isolated gem + bare app.
+        # NO init / NO generator - just the isolated gem + bare app.
       else
         raise ArgumentError, "unknown install_path: #{install_path}"
       end
@@ -69,7 +69,7 @@ module E2E
     # Environment for subprocess calls that need Bundler (bundle install,
     # bin/rails, bin/rails generate). Points Bundler at the test app's
     # Gemfile while clearing the outer project's Bundler context. Does NOT
-    # override GEM_HOME — bundler resolves gems from the system gem set,
+    # override GEM_HOME - bundler resolves gems from the system gem set,
     # which has rails/sqlite3/etc. pre-installed.
     #
     # CLI calls (version/doctor/tool/serve) use `cli_env` instead, which
@@ -101,12 +101,12 @@ module E2E
 
     # Build the gem artefact once per rspec process and memoize the path.
     # Standalone + zero_config paths each do a per-spec `gem install` but
-    # reuse the same pre-built .gem — avoids spending ~2s on `gem build`
+    # reuse the same pre-built .gem - avoids spending ~2s on `gem build`
     # every time we spin up one of those specs.
     #
     # Thread-safety: rspec runs specs serially by default, so a plain @@
     # memo is fine. parallel_tests forks workers before specs load, so
-    # each worker would rebuild once — still net positive.
+    # each worker would rebuild once - still net positive.
     @shared_gem_mutex = Mutex.new
     def self.shared_gem_artifact_path
       @shared_gem_mutex.synchronize do
@@ -191,7 +191,7 @@ module E2E
              stdin_input: generator_stdin_input)
     end
 
-    # Run `rails-ai-context init` from inside the app — pre-loads the gem
+    # Run `rails-ai-context init` from inside the app - pre-loads the gem
     # without needing a Gemfile entry (CLAUDE.md #33).
     def run_cli_init!
       cli_bin = File.join(gem_home, "bin", "rails-ai-context")
@@ -212,7 +212,7 @@ module E2E
     # class) and install into an isolated GEM_HOME for standalone /
     # zero_config paths so they never touch the system gem set.
     #
-    # Must run with a *clean* env — the outer RSpec process runs under
+    # Must run with a *clean* env - the outer RSpec process runs under
     # Bundler, so Bundler env vars (BUNDLE_GEMFILE, BUNDLER_SETUP, RUBYOPT,
     # RUBYLIB) leak into subprocesses and cause `gem install` to resolve
     # against the gem-under-test's Gemfile instead of the isolated GEM_HOME
@@ -230,11 +230,11 @@ module E2E
       # constraint into the isolated gem_home. If the test app is pinned
       # to Rails 7.1/7.2/8.0 but the isolated dir has 8.1.x, `rails-ai-
       # context init` crashes with `:compile_methods is blank (KeyError)`
-      # — activesupport 8.1 config options the app's Rails doesn't know
+      # - activesupport 8.1 config options the app's Rails doesn't know
       # about. Skipping deps forces transitive gems (railties, activesupport,
       # mcp, thor, zeitwerk, prism, concurrent-ruby) to resolve from the
       # app's gem set at run time via GEM_PATH (which prepends gem_home
-      # and appends ENV["GEM_PATH"] — see `env`).
+      # and appends ENV["GEM_PATH"] - see `env`).
       install_out, install_status = Open3.capture2e(install_env, "gem", "install", gem_path,
                                                      "--install-dir", gem_home,
                                                      "--bindir", File.join(gem_home, "bin"),

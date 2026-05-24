@@ -8,7 +8,7 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
   describe "#call" do
     it "returns table stats for SQLite adapter" do
       result = introspector.call
-      # Test suite uses SQLite — should return stats
+      # Test suite uses SQLite - should return stats
       expect(result[:adapter]).to eq("sqlite")
       expect(result[:tables]).to be_an(Array)
       expect(result[:total_tables]).to be_a(Integer)

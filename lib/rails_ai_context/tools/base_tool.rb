@@ -10,7 +10,7 @@ module RailsAiContext
     class BaseTool < MCP::Tool
       # ── Auto-registration ────────────────────────────────────────────
       # Every subclass is tracked automatically via inherited.
-      # BaseTool itself is abstract — only concrete tools are registered.
+      # BaseTool itself is abstract - only concrete tools are registered.
       # Thread-safe: Mutex guards @descendants and @eager_loaded.
       @descendants = []
       @abstract = true
@@ -62,7 +62,7 @@ module RailsAiContext
             end
           end
 
-          # Load outside mutex — inherited callbacks acquire the mutex individually.
+          # Load outside mutex - inherited callbacks acquire the mutex individually.
           # Use inherit: false so top-level constants (Set, Hash, etc.) don't
           # shadow tool classes that Zeitwerk hasn't autoloaded yet.
           consts_to_load.each do |const|
@@ -87,7 +87,7 @@ module RailsAiContext
 
       # Session-level context tracking. Lets AI avoid redundant queries
       # by recording what tools have been called with what params.
-      # In-memory only — resets on server restart (matches conversation lifecycle).
+      # In-memory only - resets on server restart (matches conversation lifecycle).
       SESSION_CONTEXT = { mutex: Mutex.new, queries: {} }
 
       class << self
@@ -111,7 +111,7 @@ module RailsAiContext
             # Fast path: within TTL window, trust the cache and skip the
             # fingerprint walk entirely. Fingerprinter stats every *.rb file
             # in WATCHED_DIRS (plus, in dev-mode path: installs, every file
-            # in the gem's own lib/ tree) — measured at ~12ms per call in
+            # in the gem's own lib/ tree) - measured at ~12ms per call in
             # dev mode, ~0.5ms in production. Since LiveReload fires
             # reset_all_caches! on actual file-change events, stale-cache
             # risk during a short TTL window is already covered.
@@ -121,7 +121,7 @@ module RailsAiContext
 
             # TTL expired: re-validate via fingerprint before re-introspecting.
             # If fingerprint is unchanged, bump the timestamp and reuse the
-            # cached context — saves re-running all 39 introspectors.
+            # cached context - saves re-running all 39 introspectors.
             if SHARED_CACHE[:context] && !Fingerprinter.changed?(rails_app, SHARED_CACHE[:fingerprint])
               SHARED_CACHE[:timestamp] = now
               return SHARED_CACHE[:context].deep_dup
@@ -210,7 +210,7 @@ module RailsAiContext
         # Helps AI agents self-correct without retrying blind.
         def not_found_response(type, name, available, recovery_tool: nil)
           suggestion = find_closest_match(name, available)
-          # Don't suggest the exact same string the user typed — that's useless
+          # Don't suggest the exact same string the user typed - that's useless
           suggestion = nil if suggestion == name
           lines = [ "#{type} '#{name}' not found." ]
           lines << "Did you mean '#{suggestion}'?" if suggestion
@@ -233,7 +233,7 @@ module RailsAiContext
           end
           return exact if exact
 
-          # Substring match — prefer shortest (most specific) to avoid post → post_comments
+          # Substring match - prefer shortest (most specific) to avoid post → post_comments
           substring_matches = available.select { |a| a.downcase.include?(downcased) || downcased.include?(a.downcase) }
           return substring_matches.min_by(&:length) if substring_matches.any?
 
@@ -241,7 +241,7 @@ module RailsAiContext
           available.find { |a| a.downcase.start_with?(downcased[0..2]) }
         end
 
-        # Cache key for paginated responses — lets agents detect stale data between pages
+        # Cache key for paginated responses - lets agents detect stale data between pages
         def cache_key
           SHARED_CACHE[:fingerprint] || "none"
         end
@@ -360,7 +360,7 @@ module RailsAiContext
         #   (b) not a sensitive file via symlink indirection
         # `real_dir` and `real_root` must already be realpath-resolved.
         # Returns the realpath string (use for File.size / safe_read) or nil if rejected.
-        # Per CLAUDE.md Security Conventions — callers should perform all subsequent
+        # Per CLAUDE.md Security Conventions - callers should perform all subsequent
         # file operations on the returned realpath, not the original glob path.
         def safe_glob_realpath(file_path, real_dir, real_root)
           real = File.realpath(file_path).to_s
@@ -381,7 +381,7 @@ module RailsAiContext
         # Run Dir.glob under `dir` with the given glob pattern and return an array
         # of realpaths filtered through `safe_glob_realpath`. Skips files that
         # escape containment (via symlink to a sibling directory) or resolve to
-        # a sensitive file. `dir` does NOT need to be realpath-resolved — this
+        # a sensitive file. `dir` does NOT need to be realpath-resolved - this
         # helper resolves it. Returns [] if `dir` does not exist.
         #
         # Usage:

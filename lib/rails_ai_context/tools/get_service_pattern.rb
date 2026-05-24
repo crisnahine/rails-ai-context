@@ -166,7 +166,7 @@ module RailsAiContext
         when "standard"
           service_data.each do |s|
             methods_str = s[:public_methods].any? ? s[:public_methods].join(", ") : "none"
-            lines << "- **#{s[:class_name]}** (#{s[:line_count]} lines) — #{methods_str}"
+            lines << "- **#{s[:class_name]}** (#{s[:line_count]} lines) - #{methods_str}"
           end
           lines << "" << "_Use `service:\"Name\"` for dependencies, error handling, and callers._"
 

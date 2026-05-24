@@ -47,7 +47,7 @@ module RailsAiContext
         framework_controllers = RailsAiContext.configuration.excluded_controllers
         app_controller_names = controllers.keys.reject { |name| framework_controllers.include?(name) }.sort
 
-        # Specific controller — always full detail (searches ALL controllers including framework)
+        # Specific controller - always full detail (searches ALL controllers including framework)
         # Flexible matching: "posts", "PostsController", "postscontroller" all work
         if controller
           # Accept multiple formats: "PostsController", "posts", "admin/posts", "Admin::PostsController"
@@ -67,7 +67,7 @@ module RailsAiContext
           end
           return text_response("Error inspecting #{key}: #{info[:error]}") if info[:error]
 
-          # Specific action — return source code
+          # Specific action - return source code
           if action
             return text_response(format_action_source(key, info, action))
           end
@@ -95,7 +95,7 @@ module RailsAiContext
           paginated_names.each do |name|
             info = app_controllers[name]
             action_count = info[:actions]&.size || 0
-            lines << "- **#{name}** — #{action_count} actions"
+            lines << "- **#{name}** - #{action_count} actions"
           end
           lines << "" << "_Use `controller:\"Name\"` for full detail._#{pagination_hint}"
           text_response(lines.join("\n"))
@@ -105,7 +105,7 @@ module RailsAiContext
           paginated_names.each do |name|
             info = app_controllers[name]
             actions = info[:actions]&.join(", ") || "none"
-            lines << "- **#{name}** — #{actions}"
+            lines << "- **#{name}** - #{actions}"
           end
           lines << "" << "_Use `controller:\"Name\"` for filters and strong params, or `detail:\"full\"` for everything._#{pagination_hint}"
           text_response(lines.join("\n"))
@@ -222,7 +222,7 @@ module RailsAiContext
           lines << "```ruby" << source_with_lines[:code] << "```"
 
           # Instance variables set by this action
-          # Detect instance variables — handles both @var = x and @a, @b = x
+          # Detect instance variables - handles both @var = x and @a, @b = x
           ivars = []
           source_with_lines[:code].each_line do |line|
             next unless line.include?("=")
@@ -232,7 +232,7 @@ module RailsAiContext
           ivars.uniq!
           lines << "" << "## Instance Variables" << ivars.map { |v| "- `@#{v}`" }.join("\n") if ivars.any?
 
-          # Private methods called by this action — include their source inline
+          # Private methods called by this action - include their source inline
           called_methods = detect_called_private_methods(source_with_lines[:code], source_path)
           if called_methods.any?
             lines << "" << "## Private Methods Called"
@@ -263,7 +263,7 @@ module RailsAiContext
             if sp.is_a?(Hash)
               lines << "### #{sp[:name]}"
               if sp[:unrestricted]
-                lines << "- **WARNING:** `params.permit!` — all parameters allowed"
+                lines << "- **WARNING:** `params.permit!` - all parameters allowed"
               else
                 lines << "- requires: `:#{sp[:requires]}`" if sp[:requires]
                 lines << "- permits: #{sp[:permits].map { |p| "`:#{p}`" }.join(', ')}" if sp[:permits]&.any?
@@ -451,7 +451,7 @@ module RailsAiContext
         start_idx = source_lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/) }
         return nil unless start_idx
 
-        # Use indentation-based matching — much more reliable than regex depth counting.
+        # Use indentation-based matching - much more reliable than regex depth counting.
         # The `end` for a `def` is always at the same indentation level.
         def_indent = source_lines[start_idx][/\A\s*/].length
         result = []

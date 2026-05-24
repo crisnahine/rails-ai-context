@@ -16,7 +16,7 @@ module RailsAiContext
           },
           near: {
             type: "string",
-            description: "What to find in the file — a method name, keyword, or string to locate (e.g. 'scope', 'def index', 'validates', 'STATUSES')."
+            description: "What to find in the file - a method name, keyword, or string to locate (e.g. 'scope', 'def index', 'validates', 'STATUSES')."
           },
           context_lines: {
             type: "integer",
@@ -61,7 +61,7 @@ module RailsAiContext
         begin
           real = File.realpath(full_path).to_s
           rails_root_real = File.realpath(Rails.root).to_s
-          # Separator-aware containment — matches the v5.8.1-r2 hardening in
+          # Separator-aware containment - matches the v5.8.1-r2 hardening in
           # get_view.rb / vfs.rb. Without `+ File::SEPARATOR`, a sibling-dir
           # like `/app/rails_evil/...` would prefix-match a Rails root at
           # `/app/rails`. Same bug class as the original C1.
@@ -106,11 +106,11 @@ module RailsAiContext
         method_start = find_method_start(source_lines, match_idx)
         method_end = find_method_end(source_lines, method_start) if method_start
         if method_start && method_end && source_lines[match_idx].match?(/\A\s*def\s/)
-          # Match IS a method definition — show the complete method, no extra context
+          # Match IS a method definition - show the complete method, no extra context
           start_idx = method_start
           end_idx = method_end
         elsif method_start && method_end
-          # Match is inside a method — expand to include full method + context
+          # Match is inside a method - expand to include full method + context
           start_idx = [ start_idx, method_start ].min
           end_idx = [ end_idx, method_end ].max
         end
@@ -171,7 +171,7 @@ module RailsAiContext
       end
 
       private_class_method def self.find_method_end(lines, from_idx)
-        # Use indentation-based matching — the `end` for a `def` is always at the same indent level.
+        # Use indentation-based matching - the `end` for a `def` is always at the same indent level.
         # This is much more reliable than regex depth counting which miscounts inline if/unless modifiers.
         def_indent = lines[from_idx][/\A\s*/]&.length || 0
         lines[(from_idx + 1)..].each_with_index do |line, i|

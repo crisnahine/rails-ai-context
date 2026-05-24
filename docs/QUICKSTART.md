@@ -22,13 +22,13 @@ rails generate rails_ai_context:install
 
 The generator asks two questions:
 
-1. **Which AI tools do you use?** — Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI, or all
-2. **Do you want MCP server support?** — Yes (MCP mode) or No (CLI-only mode)
+1. **Which AI tools do you use?** - Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI, or all
+2. **Do you want MCP server support?** - Yes (MCP mode) or No (CLI-only mode)
 
 That's it. Your AI tool now has live access to your schema, models, routes, controllers, views, and conventions.
 
 > [!TIP]
-> The generator is idempotent — re-running it preserves existing config and only adds new sections.
+> The generator is idempotent - re-running it preserves existing config and only adds new sections.
 
 ## Option B: Standalone (no Gemfile entry)
 
@@ -54,7 +54,7 @@ The install generator created:
 
 | File | Purpose |
 |:-----|:--------|
-| `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` / `opencode.json` / `.codex/config.toml` | MCP auto-discovery — your AI tool detects these on project open |
+| `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` / `opencode.json` / `.codex/config.toml` | MCP auto-discovery - your AI tool detects these on project open |
 | `CLAUDE.md` / `.cursor/rules/` / `.cursorrules` / `.github/instructions/` / `AGENTS.md` | Static context rules your AI reads |
 | `config/initializers/rails_ai_context.rb` | All configuration options |
 | `.rails-ai-context.yml` | Config for standalone mode |
@@ -75,25 +75,25 @@ rails 'ai:tool[routes]' controller=users
 ## See it work
 
 > [!IMPORTANT]
-> These are CLI commands. When MCP is connected, your AI calls the same tools automatically — you never type these manually.
+> These are CLI commands. When MCP is connected, your AI calls the same tools automatically - you never type these manually.
 
 Three commands that show immediate value:
 
 ```bash
-# 1. Trace a method across your entire codebase — one call
+# 1. Trace a method across your entire codebase - one call
 rails 'ai:tool[search_code]' pattern="your_method_name" match_type=trace
 
-# 2. Full-stack feature analysis — models + controllers + routes + tests
+# 2. Full-stack feature analysis - models + controllers + routes + tests
 rails 'ai:tool[analyze_feature]' feature=auth
 
-# 3. Get your app's actual conventions — not generic Rails patterns
+# 3. Get your app's actual conventions - not generic Rails patterns
 rails 'ai:tool[conventions]'
 ```
 
 ## What to do next
 
-1. **Open your project** in your AI tool — MCP auto-discovery kicks in
-2. **Ask your AI** to describe your User model — it will call `rails_get_model_details` instead of guessing
+1. **Open your project** in your AI tool - MCP auto-discovery kicks in
+2. **Ask your AI** to describe your User model - it will call `rails_get_model_details` instead of guessing
 3. **Read [Recipes](RECIPES.md)** for real-world workflows that show the tools in action
 
 ## Quick reference

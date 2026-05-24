@@ -14,7 +14,7 @@
 
 ### What does this gem do?
 
-It gives AI coding assistants verified, real-time access to your Rails app's structure — schema, models, routes, controllers, views, conventions, and more. Instead of guessing from training data, AI queries your actual app.
+It gives AI coding assistants verified, real-time access to your Rails app's structure - schema, models, routes, controllers, views, conventions, and more. Instead of guessing from training data, AI queries your actual app.
 
 ### Which AI tools are supported?
 
@@ -23,9 +23,9 @@ Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI. Each gets tailored
 ### Do I need MCP support in my AI tool?
 
 No. The gem works three ways:
-1. **MCP server** — AI calls tools via the protocol (best experience)
-2. **Static files** — Generated context files (CLAUDE.md, .cursor/rules/, etc.)
-3. **CLI** — Same 38 tools from the terminal, no server needed
+1. **MCP server** - AI calls tools via the protocol (best experience)
+2. **Static files** - Generated context files (CLAUDE.md, .cursor/rules/, etc.)
+3. **CLI** - Same 38 tools from the terminal, no server needed
 
 ### Is this safe for production?
 
@@ -33,13 +33,13 @@ The gem is designed for development environments. All tools are read-only. The q
 
 ### Does it work without a database?
 
-Yes. The gem gracefully degrades — it parses `db/schema.rb` as text when no database connection is available.
+Yes. The gem gracefully degrades - it parses `db/schema.rb` as text when no database connection is available.
 
 ---
 
 ## Installation
 
-### Gemfile or standalone — which should I use?
+### Gemfile or standalone - which should I use?
 
 **In-Gemfile** is recommended if you own the project. Gives you the install generator, rake tasks, and initializer config.
 
@@ -52,12 +52,12 @@ Yes, freely. Both generate identical context files and provide the same 38 tools
 ### Do I need to commit the generated files?
 
 **Yes, commit these:**
-- `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml` — so teammates get MCP auto-discovery
-- `CLAUDE.md`, `.cursor/rules/`, `.cursorrules`, `.github/instructions/`, `AGENTS.md` — so AI has context
-- `config/initializers/rails_ai_context.rb`, `.rails-ai-context.yml` — so config is shared
+- `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml` - so teammates get MCP auto-discovery
+- `CLAUDE.md`, `.cursor/rules/`, `.cursorrules`, `.github/instructions/`, `AGENTS.md` - so AI has context
+- `config/initializers/rails_ai_context.rb`, `.rails-ai-context.yml` - so config is shared
 
 **Don't commit:**
-- `.ai-context.json` — auto-added to .gitignore by the install generator
+- `.ai-context.json` - auto-added to .gitignore by the install generator
 
 ---
 
@@ -81,13 +81,13 @@ config.skip_tools = %w[rails_security_scan rails_query]
 
 ### What's the `detail` parameter?
 
-Individual lookup tools accept `detail`: `summary` (compact), `standard` (default), `full` (everything). Start with summary and drill down as needed. This keeps AI context windows lean. Composite tools (`rails_get_context`, `rails_analyze_feature`) do not accept `detail` — they always return their full bundled output.
+Individual lookup tools accept `detail`: `summary` (compact), `standard` (default), `full` (everything). Start with summary and drill down as needed. This keeps AI context windows lean. Composite tools (`rails_get_context`, `rails_analyze_feature`) do not accept `detail` - they always return their full bundled output.
 
 ### What are `[VERIFIED]` and `[INFERRED]` tags?
 
 Confidence tags from Prism AST parsing:
-- **`[VERIFIED]`** — all arguments are static literals. This is ground truth.
-- **`[INFERRED]`** — arguments contain dynamic expressions. Needs runtime verification.
+- **`[VERIFIED]`** - all arguments are static literals. This is ground truth.
+- **`[INFERRED]`** - arguments contain dynamic expressions. Needs runtime verification.
 
 ### Does the query tool support all databases?
 
@@ -99,13 +99,13 @@ PostgreSQL, MySQL, and SQLite. Each gets database-specific safety mechanisms (re
 
 ### What's the difference between `:full` and `:standard` preset?
 
-- **`:full`** (default) — 39 introspectors. Comprehensive context for every aspect of your app.
-- **`:standard`** — 17 introspectors. Faster, covers the essentials (schema, models, routes, controllers, tests, etc.).
+- **`:full`** (default) - 39 introspectors. Full context for every aspect of your app.
+- **`:standard`** - 17 introspectors. Faster, covers the essentials (schema, models, routes, controllers, tests, etc.).
 
 ### What's `:compact` vs `:full` context mode?
 
-- **`:compact`** (default) — context files capped at ~150 lines. Optimized for AI context windows.
-- **`:full`** — no line cap. All introspection data included.
+- **`:compact`** (default) - context files capped at ~150 lines. Optimized for AI context windows.
+- **`:full`** - no line cap. All introspection data included.
 
 ### Can I use YAML config with the Gemfile approach?
 
@@ -158,7 +158,7 @@ Yes. Add content outside the `<!-- BEGIN/END rails-ai-context -->` markers. The 
 
 ### Is introspection slow?
 
-Introspection results are cached with TTL (default: 60s) and fingerprint invalidation. The first call is slower; subsequent calls use cache. Prism AST parsing uses a single-pass Dispatcher — all 7 listeners run in one tree walk.
+Introspection results are cached with TTL (default: 60s) and fingerprint invalidation. The first call is slower; subsequent calls use cache. Prism AST parsing uses a single-pass Dispatcher - all 7 listeners run in one tree walk.
 
 ### Does this affect my app's performance?
 
@@ -194,11 +194,11 @@ config.anti_hallucination_rules = false
 
 ### ...a hand-written CLAUDE.md?
 
-A manual CLAUDE.md goes stale the moment someone adds a column or changes a route. rails-ai-context reads your app live — schema, models, routes, controllers are always current. You can still add your own rules alongside the generated content. See [Recipes: Migrating](RECIPES.md#migrating-from-manual-ai-context).
+A manual CLAUDE.md goes stale the moment someone adds a column or changes a route. rails-ai-context reads your app live - schema, models, routes, controllers are always current. You can still add your own rules alongside the generated content. See [Recipes: Migrating](RECIPES.md#migrating-from-manual-ai-context).
 
 ### ...cursor-rules repos / awesome-cursorrules?
 
-Community cursor rules are generic Rails patterns. rails-ai-context generates rules from *your* app — your actual schema, your associations, your conventions. Generic rules say "Rails uses `before_action`"; this gem tells AI which specific filters your `ApplicationController` applies.
+Community cursor rules are generic Rails patterns. rails-ai-context generates rules from *your* app - your actual schema, your associations, your conventions. Generic rules say "Rails uses `before_action`"; this gem tells AI which specific filters your `ApplicationController` applies.
 
 ### ...pasting schema.rb into the prompt?
 
@@ -214,7 +214,7 @@ Those are AI coding interfaces. This gem is a data layer that makes *any* of the
 
 ### My AI tool doesn't see the MCP server
 
-Run `rails ai:doctor` — it checks MCP config files for all configured tools. See [Troubleshooting](TROUBLESHOOTING.md) for detailed steps.
+Run `rails ai:doctor` - it checks MCP config files for all configured tools. See [Troubleshooting](TROUBLESHOOTING.md) for detailed steps.
 
 ### Tools return empty results
 

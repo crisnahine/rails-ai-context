@@ -7,7 +7,7 @@ require_relative "e2e_helper"
 # never crashes, and never silently succeed with garbage output.
 RSpec.describe "E2E: tool input edge cases", type: :e2e do
   before(:all) do
-    # Read-only spec — reuse the shared in-Gemfile fixture.
+    # Read-only spec - reuse the shared in-Gemfile fixture.
     @builder = E2E.shared_app(install_path: :in_gemfile)
     @cli = E2E::CliRunner.new(@builder)
   end
@@ -32,7 +32,7 @@ RSpec.describe "E2E: tool input edge cases", type: :e2e do
     it "rails_get_edit_context with no params returns a friendly error, not a crash" do
       result = @cli.cli_tool("edit_context")
       # Tool guards against missing params and returns a friendly message.
-      # Either exits 0 with the message, or exits 1 — both are acceptable
+      # Either exits 0 with the message, or exits 1 - both are acceptable
       # as long as the process didn't crash and the output is informative.
       expect(result.status.signaled?).to be(false)
       expect(result.exit_status).to be < 2

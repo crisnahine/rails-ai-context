@@ -3,7 +3,7 @@
 require "json"
 
 module RailsAiContext
-  # Virtual File System — pattern-matched URI routing for MCP resources.
+  # Virtual File System - pattern-matched URI routing for MCP resources.
   # Each resolve call introspects fresh (zero stale data).
   module VFS
     SCHEME = "rails-ai-context"
@@ -140,7 +140,7 @@ module RailsAiContext
         end
 
         # Verify resolved path is still under views_dir. `start_with?` alone
-        # matches `/app/views_spec/x` against `/app/views` — so we append
+        # matches `/app/views_spec/x` against `/app/views` - so we append
         # File::SEPARATOR (or accept exact equality for the dir itself).
         # A symlink at `app/views/leak → ../views_spec/secret.html.erb`
         # would otherwise escape the views tree. Fixed in v5.8.1.

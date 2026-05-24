@@ -76,7 +76,7 @@ module RailsAiContext
           lines << ""
         end
 
-        # File-by-file context — cap at 20 files to prevent overflow
+        # File-by-file context - cap at 20 files to prevent overflow
         max_files = 20
         show_files = classified.first(max_files)
         lines << "## File-by-File Context (#{show_files.size} of #{classified.size})"
@@ -275,7 +275,7 @@ module RailsAiContext
             next unless diff
             removed_validations = diff.lines.select { |l| l.start_with?("-") && l.match?(/validates?\s/) }
             removed_validations.each do |line|
-              warnings << "**Removed validation**: `#{entry[:file]}` — `#{line.strip[1..].strip}`"
+              warnings << "**Removed validation**: `#{entry[:file]}` - `#{line.strip[1..].strip}`"
             end
           end
 

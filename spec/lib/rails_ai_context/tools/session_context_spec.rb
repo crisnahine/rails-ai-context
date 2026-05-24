@@ -33,7 +33,7 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
 
     it "auto-tracks tool calls via text_response" do
       RailsAiContext::Tools::BaseTool.session_reset!
-      # Call a tool — it should auto-record in session
+      # Call a tool - it should auto-record in session
       RailsAiContext::Tools::GetSchema.call(detail: "summary")
       result = described_class.call(action: "status")
       text = result.content.first[:text]

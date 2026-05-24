@@ -49,7 +49,7 @@ RSpec.describe RailsAiContext::Instrumentation do
       ActiveSupport::Notifications.unsubscribe(/rails_ai_context/)
     end
 
-    # v5.8.1 C2 — the MCP SDK forwards raw tool_arguments to the callback.
+    # v5.8.1 C2 - the MCP SDK forwards raw tool_arguments to the callback.
     # rails_query receives raw SQL, rails_get_env receives env var names,
     # rails_read_logs receives search patterns. Previously these were
     # forwarded unredacted to every AS::Notifications subscriber.
@@ -101,7 +101,7 @@ RSpec.describe RailsAiContext::Instrumentation do
       end
     end
 
-    # v5.8.1 C2 — a failing subscriber must not crash the tool call. The MCP
+    # v5.8.1 C2 - a failing subscriber must not crash the tool call. The MCP
     # SDK invokes this callback from an ensure block, so any exception would
     # overwrite the tool's actual return value.
     describe "subscriber failure isolation (v5.8.1 C2)" do
@@ -110,7 +110,7 @@ RSpec.describe RailsAiContext::Instrumentation do
           raise "simulated subscriber crash (Datadog dropped connection, etc.)"
         end
 
-        # Should not raise — callback must rescue internally.
+        # Should not raise - callback must rescue internally.
         expect {
           described_class.callback.call({ method: "tools/call", tool_name: "rails_get_schema" })
         }.not_to raise_error

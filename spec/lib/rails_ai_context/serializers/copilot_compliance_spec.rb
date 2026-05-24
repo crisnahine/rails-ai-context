@@ -6,12 +6,12 @@ require "yaml"
 # Validates that Copilot serializer output conforms to GitHub Copilot's instruction format.
 #
 # GitHub Copilot instructions spec (as of 2026):
-# - Root file: .github/copilot-instructions.md — NO YAML frontmatter, plain markdown
-# - Path-specific: .github/instructions/*.instructions.md — MUST have applyTo frontmatter
+# - Root file: .github/copilot-instructions.md - NO YAML frontmatter, plain markdown
+# - Path-specific: .github/instructions/*.instructions.md - MUST have applyTo frontmatter
 # - Supported frontmatter fields: applyTo (required), excludeAgent, name, description
 # - excludeAgent values: "code-review", "coding-agent", or "workspace"
 # - Copilot Code Review: ~1,000 lines soft recommendation per instruction file
-# - Glob patterns: **/* (all), app/models/**/*.rb, *.{js,ts} — standard glob syntax
+# - Glob patterns: **/* (all), app/models/**/*.rb, *.{js,ts} - standard glob syntax
 # - No order guarantee between matching instruction files
 # - Subdirectory organization allowed in .github/instructions/
 RSpec.describe "Copilot instructions compliance" do

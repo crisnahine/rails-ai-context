@@ -3,7 +3,7 @@
 require_relative "e2e_helper"
 
 # Install path A: Gemfile entry + `rails generate rails_ai_context:install`.
-# This is the most common path — documented in README + CLAUDE.md #36.
+# This is the most common path - documented in README + CLAUDE.md #36.
 #
 # Covers:
 #   - rails new → bundle → generator idempotency
@@ -50,7 +50,7 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
           expect(servers_key).not_to be_nil, "#{relative} has no recognizable server root key"
           expect(parsed[servers_key]).to have_key("rails-ai-context"), "#{relative} is missing rails-ai-context server entry"
         when :toml
-          # Minimal TOML parsing — verify the server section is present
+          # Minimal TOML parsing - verify the server section is present
           expect(content).to match(/\[mcp_servers\.rails-ai-context\]/)
           expect(content).to match(/command\s*=/)
         end
@@ -71,7 +71,7 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       expect(File.exist?(cursorrules_path)).to be(true), ".cursorrules (legacy) must be generated"
       expect(File.exist?(mdc_project_path)).to be(true), ".cursor/rules/rails-project.mdc must be generated"
 
-      # Legacy file must be plain text, not MDC — older Cursor parses verbatim
+      # Legacy file must be plain text, not MDC - older Cursor parses verbatim
       expect(File.read(cursorrules_path)).not_to start_with("---")
       expect(File.read(cursorrules_path)).to include("rails_get_schema")
     end
@@ -107,7 +107,7 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
   end
 
   describe "CLI tool invocations" do
-    # Representative sample of the 38 tools — covers the main output
+    # Representative sample of the 38 tools - covers the main output
     # channels (schema, routes, models, components, etc.). Running ALL 38
     # via subprocess per describe block would push wall-clock past 5
     # minutes; the in-process ToolRunner smoke spec covers complete
@@ -128,7 +128,7 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
 
     it "every registered built-in tool is callable via CLI without crashing" do
       # Full-matrix subprocess sweep. Tools may return structured error
-      # responses (missing required params) — that's fine, we only fail
+      # responses (missing required params) - that's fine, we only fail
       # on crashes (non-zero with no recognizable MCP error envelope)
       # or timeouts.
       tools = RailsAiContext::Server.builtin_tools

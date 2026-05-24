@@ -23,7 +23,7 @@ module E2E
       @stdin, @stdout, @stderr, @wait_thr = Open3.popen3(
         @app.env, *prefix, "serve", chdir: @app.app_path
       )
-      # Server may emit a line of banner text before the JSON-RPC stream —
+      # Server may emit a line of banner text before the JSON-RPC stream.
       # we tolerate that because the MCP SDK also does (the first byte of
       # JSON starts the message). But if the process dies early, fail loud.
       sleep 0.25
@@ -80,7 +80,7 @@ module E2E
     private
 
     # The MCP stdio transport uses newline-delimited JSON (NDJSON) per the
-    # official SDK — each message is one line of JSON, not LSP-style
+    # official SDK - each message is one line of JSON, not LSP-style
     # Content-Length framing. Confirmed by reading the SDK's
     # StdioTransport#send_message / receive_message.
     def write_message(payload)
@@ -104,7 +104,7 @@ module E2E
         begin
           msg = JSON.parse(line)
         rescue JSON::ParserError
-          # Banner line or log output — skip.
+          # Banner line or log output - skip.
           next
         end
 

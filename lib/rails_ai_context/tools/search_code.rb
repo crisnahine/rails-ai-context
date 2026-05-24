@@ -7,7 +7,7 @@ module RailsAiContext
     class SearchCode < BaseTool
       tool_name "rails_search_code"
       description "Search the Rails codebase with smart modes. " \
-        "Use match_type:\"trace\" to see where a method is defined, who calls it, and what it calls — in one call. " \
+        "Use match_type:\"trace\" to see where a method is defined, who calls it, and what it calls - in one call. " \
         "Use match_type:\"definition\" for definitions only, \"call\" for call sites only, \"class\" for class/module definitions. " \
         "Requires pattern:\"method_name\". Narrow with path:\"app/models\" and file_type:\"rb\"."
 
@@ -32,7 +32,7 @@ module RailsAiContext
           match_type: {
             type: "string",
             enum: %w[any definition class call trace],
-            description: "any: all matches (default). definition: `def` lines only. class: `class/module` lines. call: call sites only (excludes definitions). trace: FULL PICTURE — shows definition + source code + all callers + what it calls internally."
+            description: "any: all matches (default). definition: `def` lines only. class: `class/module` lines. call: call sites only (excludes definitions). trace: FULL PICTURE - shows definition + source code + all callers + what it calls internally."
           },
           exact_match: {
             type: "boolean",
@@ -73,7 +73,7 @@ module RailsAiContext
           return text_response("Pattern is required. Provide a search term or regex.")
         end
 
-        # Trace mode — the game changer: full method picture in one call
+        # Trace mode: definition + source + callers + internal calls in one response
         if match_type == "trace"
           return trace_method(pattern.strip, root, path, exclude_tests)
         end
@@ -303,7 +303,7 @@ module RailsAiContext
         end
       end
 
-      # ── Trace Mode — the game changer ──────────────────────────────
+      # ── Trace Mode ─────────────────────────────────────────────────
       # Shows definition + source + callers + internal calls in one response
 
       private_class_method def self.trace_method(method_name, root, path, exclude_tests) # rubocop:disable Metrics

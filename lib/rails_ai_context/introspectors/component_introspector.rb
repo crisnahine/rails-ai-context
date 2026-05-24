@@ -279,19 +279,19 @@ module RailsAiContext
       def extract_enum_values(content)
         enums = {}
 
-        # Pattern 1: Hash constants — NAME = { key: "value", ... }
+        # Pattern 1: Hash constants - NAME = { key: "value", ... }
         content.scan(/([A-Z][A-Z_0-9]*)\s*=\s*\{([^}]*)\}/m) do |name, body|
           keys = body.scan(/(\w+):/).map(&:first)
           enums[name.downcase] = keys if keys.any?
         end
 
-        # Pattern 2: Array constants — NAME = [:sym, :sym, ...]
+        # Pattern 2: Array constants - NAME = [:sym, :sym, ...]
         content.scan(/([A-Z][A-Z_0-9]*)\s*=\s*\[([^\]]*)\]/) do |name, body|
           values = body.scan(/:(\w+)/).map(&:first)
           enums[name.downcase] = values if values.any?
         end
 
-        # Pattern 3: Case statements — case @ivar; when :val1 ... when :val2
+        # Pattern 3: Case statements - case @ivar; when :val1 ... when :val2
         # Use a non-greedy match that stops at the next `end`, `case`, or `def` keyword
         content.scan(/case\s+@(\w+)\s*\n(.*?)(?=\n\s*(?:end|case|def)\b)/m) do |ivar, block|
           values = block.scan(/when\s+:(\w+)/).map(&:first)

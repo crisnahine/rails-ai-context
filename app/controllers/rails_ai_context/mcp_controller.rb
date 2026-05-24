@@ -2,7 +2,7 @@
 
 module RailsAiContext
   # Rails controller for serving MCP over Streamable HTTP.
-  # Alternative to the Rack middleware — integrates with Rails routing,
+  # Alternative to the Rack middleware - integrates with Rails routing,
   # authentication, and middleware stack.
   #
   # Mount in routes: mount RailsAiContext::Engine, at: "/mcp"
@@ -15,7 +15,7 @@ module RailsAiContext
     end
 
     class << self
-      # Class-level memoization — transport persists across requests.
+      # Class-level memoization - transport persists across requests.
       # Thread-safe: MCP::Server and transport are stateless for reads.
       def mcp_transport
         @transport_mutex.synchronize do

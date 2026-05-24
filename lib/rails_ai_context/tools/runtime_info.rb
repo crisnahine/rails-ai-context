@@ -125,7 +125,7 @@ module RailsAiContext
               end
               hot = index_usage.sort_by { |i| -(i[:scans] || 0) }.first(5)
               lines << "" << "**Most used indexes:**"
-              hot.each { |i| lines << "- `#{i[:index]}` on `#{i[:table]}` — #{i[:scans]} scans" }
+              hot.each { |i| lines << "- `#{i[:index]}` on `#{i[:table]}` - #{i[:scans]} scans" }
             end
           end
 
@@ -176,7 +176,7 @@ module RailsAiContext
           else
             ActiveRecord::Migrator.new(:up, context.migrations).pending_migrations
           end
-          pending.map { |m| "#{m.version} — #{m.name}" }
+          pending.map { |m| "#{m.version} - #{m.name}" }
         rescue => e
           $stderr.puts "[rails-ai-context] gather_pending_migrations failed: #{e.message}" if ENV["DEBUG"]
           nil

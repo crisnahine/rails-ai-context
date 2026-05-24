@@ -67,14 +67,14 @@ preset: full
 
 | Option | Type | Default | Validation | Description |
 |:-------|:-----|:--------|:-----------|:------------|
-| `server_name` | String | `"rails-ai-context"` | — | MCP server name |
+| `server_name` | String | `"rails-ai-context"` | - | MCP server name |
 | `cache_ttl` | Integer | `60` | Must be positive | Cache time-to-live in seconds |
 | `max_tool_response_chars` | Integer | `200_000` | Must be positive | Safety cap for tool response length |
-| `live_reload` | Symbol/Boolean | `:auto` | — | `:auto` (uses `listen` gem if available), `true`, or `false` |
-| `live_reload_debounce` | Float | `1.5` | — | Seconds to wait before processing file changes |
-| `auto_mount` | Boolean | `false` | — | Auto-mount Rack middleware for HTTP transport |
-| `http_path` | String | `"/mcp"` | — | HTTP endpoint path |
-| `http_bind` | String | `"127.0.0.1"` | — | HTTP bind address |
+| `live_reload` | Symbol/Boolean | `:auto` | - | `:auto` (uses `listen` gem if available), `true`, or `false` |
+| `live_reload_debounce` | Float | `1.5` | - | Seconds to wait before processing file changes |
+| `auto_mount` | Boolean | `false` | - | Auto-mount Rack middleware for HTTP transport |
+| `http_path` | String | `"/mcp"` | - | HTTP endpoint path |
+| `http_bind` | String | `"127.0.0.1"` | - | HTTP bind address |
 | `http_port` | Integer | `6029` | 1–65535 | HTTP listen port |
 
 ### Cross-Tool Hydration
@@ -121,10 +121,10 @@ preset: full
 
 | Option | Type | Default | Validation | Description |
 |:-------|:-----|:--------|:-----------|:------------|
-| `query_timeout` | Integer | `5` | — | SQL query timeout in seconds |
+| `query_timeout` | Integer | `5` | - | SQL query timeout in seconds |
 | `query_row_limit` | Integer | `100` | 1–1000 | Maximum rows returned |
-| `query_redacted_columns` | Array | 10+ patterns | — | Column names/suffixes to redact |
-| `allow_query_in_production` | Boolean | `false` | — | Allow `rails_query` tool in production |
+| `query_redacted_columns` | Array | 10+ patterns | - | Column names/suffixes to redact |
+| `allow_query_in_production` | Boolean | `false` | - | Allow `rails_query` tool in production |
 
 ### Logs
 
@@ -155,11 +155,11 @@ preset: full
 
 ## Presets
 
-### `:full` (default) — 39 introspectors
+### `:full` (default) - 39 introspectors
 
-All available introspectors. Best for comprehensive context.
+All available introspectors. Maximum context.
 
-### `:standard` — 17 introspectors
+### `:standard` - 17 introspectors
 
 Lightweight subset for faster generation:
 
@@ -172,7 +172,7 @@ Lightweight subset for faster generation:
 | AI Tool | Root File | Split Rules | MCP Config |
 |:--------|:----------|:------------|:-----------|
 | Claude Code | `CLAUDE.md` | `.claude/rules/*.md` | `.mcp.json` |
-| Cursor | — | `.cursor/rules/*.mdc` | `.cursor/mcp.json` |
+| Cursor | - | `.cursor/rules/*.mdc` | `.cursor/mcp.json` |
 | GitHub Copilot | `.github/copilot-instructions.md` | `.github/instructions/*.instructions.md` | `.vscode/mcp.json` |
 | OpenCode | `AGENTS.md` | `app/*/AGENTS.md` | `opencode.json` |
 | Codex CLI | (shares `AGENTS.md`) | (shares OpenCode rules) | `.codex/config.toml` |

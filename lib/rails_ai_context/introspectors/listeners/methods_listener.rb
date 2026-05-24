@@ -59,7 +59,7 @@ module RailsAiContext
               # Bare modifier: affects all subsequent defs in this scope
               @visibility_stack[-1] = node.name
             else
-              # Inline form: `private :method_name` — retroactively update
+              # Inline form: `private :method_name` - retroactively update
               # already-recorded methods and mark for future defs
               args = node.arguments.arguments
               args.each do |arg|

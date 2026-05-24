@@ -31,7 +31,7 @@ module RailsAiContext
           },
           new_name: {
             type: "string",
-            description: "New column name — only for rename_column action (e.g., 'full_name')"
+            description: "New column name - only for rename_column action (e.g., 'full_name')"
           },
           options: {
             type: "string",
@@ -146,7 +146,7 @@ module RailsAiContext
           lines << "```"
           lines << ""
           lines << "**Reversible:** Yes"
-          lines << "**Index needed?** #{column.end_with?("_id") ? "Yes — add `add_index :#{table}, :#{column}`" : "Depends on query patterns"}"
+          lines << "**Index needed?** #{column.end_with?("_id") ? "Yes - add `add_index :#{table}, :#{column}`" : "Depends on query patterns"}"
           lines
         end
 
@@ -184,7 +184,7 @@ module RailsAiContext
           lines << "```"
           lines << ""
           lines << "**Reversible:** Only if type is specified (included above)"
-          lines << "**Data loss:** Yes — all data in this column will be permanently deleted"
+          lines << "**Data loss:** Yes - all data in this column will be permanently deleted"
 
           if column.end_with?("_id")
             lines << "**Foreign key:** This looks like a foreign key column. Check for `has_many`/`belongs_to` that reference it."
@@ -341,12 +341,12 @@ module RailsAiContext
           lines
         end
 
-        # Strong Migrations integration — surfaces the same warnings the gem would raise
+        # Strong Migrations integration - surfaces the same warnings the gem would raise
         # at migration runtime, so AI agents see them at code-generation time. Only fires
         # when the gem is actually present in the project's Gemfile.lock.
         #
         # Catalog covers the most common breaking-change patterns (columns, indexes, FKs).
-        # Not exhaustive — see https://github.com/ankane/strong_migrations#checks for the full list.
+        # Not exhaustive - see https://github.com/ankane/strong_migrations#checks for the full list.
         def strong_migrations_warnings(action, table, column, options)
           warnings = case action
           when "remove_column"
@@ -392,7 +392,7 @@ module RailsAiContext
 
           return [] unless warnings&.any?
 
-          [ "", "## Strong Migrations Warnings", "", "_The `strong_migrations` gem is in your Gemfile — these warnings match what it would raise at migration runtime._", "" ] + warnings
+          [ "", "## Strong Migrations Warnings", "", "_The `strong_migrations` gem is in your Gemfile - these warnings match what it would raise at migration runtime._", "" ] + warnings
         end
 
         def strong_migrations_gem_present?
@@ -413,7 +413,7 @@ module RailsAiContext
 
           model_name = table.singularize.camelize
           if models.key?(model_name.to_sym) || models.key?(model_name)
-            lines << "- **#{model_name}** — directly affected (table: #{table})"
+            lines << "- **#{model_name}** - directly affected (table: #{table})"
           end
 
           # Find models with associations pointing to this table
@@ -426,7 +426,7 @@ module RailsAiContext
               a[:name]&.to_s&.singularize == table.singularize
             }
             related.each do |a|
-              lines << "- **#{name}** — #{a[:macro] || a[:type]} :#{a[:name]}"
+              lines << "- **#{name}** - #{a[:macro] || a[:type]} :#{a[:name]}"
             end
           end
 

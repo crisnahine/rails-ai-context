@@ -10,7 +10,7 @@ module RailsAiContext
     #
     # Used by ContextFileSerializer (for CLAUDE.md, AGENTS.md, .github/copilot-
     # instructions.md) and CursorRulesSerializer (for .cursorrules). Same
-    # marker contract everywhere — a user can hand-write content above or below
+    # marker contract everywhere - a user can hand-write content above or below
     # the gem-managed block and it'll persist across `rails ai:context` runs.
     module SectionMarkerWriter
       BEGIN_MARKER = "<!-- BEGIN rails-ai-context -->"

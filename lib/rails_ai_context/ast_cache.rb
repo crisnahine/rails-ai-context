@@ -6,7 +6,7 @@ require "prism"
 
 module RailsAiContext
   # Thread-safe AST parse cache backed by Concurrent::Map.
-  # Keyed by path + content hash + mtime — automatically invalidates
+  # Keyed by path + content hash + mtime - automatically invalidates
   # when file content changes. Used by all Prism-based introspectors.
   #
   # Bounded: evicts oldest entries when MAX_SIZE is exceeded.
@@ -16,13 +16,13 @@ module RailsAiContext
     EVICTION_MUTEX = Mutex.new
 
     # Max file size for parsing (default: matches config.max_file_size).
-    # Public API — callers don't need to pre-check size.
+    # Public API - callers don't need to pre-check size.
     MAX_PARSE_SIZE = 5_000_000
 
     # Parse a Ruby source file and cache the result.
     # Returns a Prism::ParseResult. Rejects files exceeding MAX_PARSE_SIZE.
     #
-    # Reads content first, then checks size — avoids TOCTOU race where the
+    # Reads content first, then checks size - avoids TOCTOU race where the
     # file could change between File.size and File.read.
     def self.parse(path)
       content = File.read(path)
@@ -65,7 +65,7 @@ module RailsAiContext
       STORE.size
     end
 
-    # Evict ~25% of entries (arbitrary selection — Concurrent::Map has no ordering guarantee)
+    # Evict ~25% of entries (arbitrary selection - Concurrent::Map has no ordering guarantee)
     # when cache exceeds MAX_SIZE. Synchronized to prevent multiple threads from over-evicting.
     def self.evict_if_full
       EVICTION_MUTEX.synchronize do

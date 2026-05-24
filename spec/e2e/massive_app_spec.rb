@@ -2,7 +2,7 @@
 
 require_relative "e2e_helper"
 
-# Massive Rails app — programmatically generate 500 models + 500 tables
+# Massive Rails app - programmatically generate 500 models + 500 tables
 # in a single migration, then exercise representative tools to verify they
 # don't crash, hang, or OOM. Catches: unbounded output, unbounded memory
 # use, tools that forgot to cap their Dir.glob / introspection work, and
@@ -20,7 +20,7 @@ require_relative "e2e_helper"
 # view scan), get_env (app tree scan).
 RSpec.describe "E2E: massive Rails app (500 models)", type: :e2e do
   MODEL_COUNT = 500
-  # Bumped timeout — tools that introspect every model file or every
+  # Bumped timeout - tools that introspect every model file or every
   # schema table need more than the default 60 s on a cold-boot Rails app.
   PER_TOOL_TIMEOUT = 180
 
@@ -51,7 +51,7 @@ RSpec.describe "E2E: massive Rails app (500 models)", type: :e2e do
       # Output must be within the configured response cap. A tool that forgot
       # to truncate would blow past this and we'd fail here loudly rather
       # than silently overwhelm an AI client's context window.
-      expect(result.stdout.bytesize).to be < 2_000_000, "#{short} returned #{result.stdout.bytesize} bytes — tools must cap response size"
+      expect(result.stdout.bytesize).to be < 2_000_000, "#{short} returned #{result.stdout.bytesize} bytes - tools must cap response size"
     end
   end
 
@@ -67,7 +67,7 @@ RSpec.describe "E2E: massive Rails app (500 models)", type: :e2e do
   end
 
   it "rails_get_schema reports the correct total table count in its truncation hint" do
-    # The default response includes "all N tables" in a hint — proves
+    # The default response includes "all N tables" in a hint - proves
     # the tool knows about every table, even when displaying only the
     # first page.
     result = @cli.cli_tool("schema")

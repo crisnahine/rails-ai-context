@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class GetContext < BaseTool
       tool_name "rails_get_context"
-      description "Get cross-layer context in a single call — combines schema, model, controller, routes, views, stimulus, and tests. " \
+      description "Get cross-layer context in a single call - combines schema, model, controller, routes, views, stimulus, and tests. " \
         "Use when: you need full context for implementing a feature or modifying an action. " \
         "Specify controller:\"PostsController\" action:\"create\" to get everything for that action in one call."
 
@@ -171,21 +171,21 @@ module RailsAiContext
           in_ctrl = ctrl_ivars.include?(ivar)
           in_view = view_ivars.include?(ivar)
           if in_ctrl && in_view
-            lines << "- \u2713 @#{ivar} — set in controller, used in view"
+            lines << "- \u2713 @#{ivar} - set in controller, used in view"
           elsif in_view && !in_ctrl
-            lines << "- \u2717 @#{ivar} — used in view but NOT set in controller"
+            lines << "- \u2717 @#{ivar} - used in view but NOT set in controller"
             missing_ivars << ivar
           elsif in_ctrl && !in_view
-            lines << "- \u26A0 @#{ivar} — set in controller but not used in view"
+            lines << "- \u26A0 @#{ivar} - set in controller but not used in view"
           end
         end
 
         # If there are missing ivars AND this action renders another template,
-        # add a note explaining why — the other action likely sets them
+        # add a note explaining why - the other action likely sets them
         if missing_ivars.any? && rendered_templates.any?
           templates = rendered_templates.map { |t| "`#{t}`" }.join(", ")
           lines << ""
-          lines << "_Note: This action renders #{templates} on failure — those ivars are likely set in the corresponding action(s)._"
+          lines << "_Note: This action renders #{templates} on failure - those ivars are likely set in the corresponding action(s)._"
         end
 
         (missing_ivars.any? || all.any?) ? lines.join("\n") : nil
@@ -232,7 +232,7 @@ module RailsAiContext
         model_result = GetModelDetails.call(model: resolved_name)
         model_text = model_result.content.first[:text]
 
-        # If model not found, fail fast — don't leak partial results from sub-tools
+        # If model not found, fail fast - don't leak partial results from sub-tools
         if model_text.include?("not found")
           return model_result
         end
@@ -332,7 +332,7 @@ module RailsAiContext
                 lines << "" << "## Related Controllers (by name)"
                 related_ctrls.each do |c|
                   actions = (c[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
-                  lines << "- **#{c[:name]}** — #{actions.join(', ')}"
+                  lines << "- **#{c[:name]}** - #{actions.join(', ')}"
                 end
               end
             end

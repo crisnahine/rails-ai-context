@@ -20,7 +20,7 @@ RSpec.describe "Bugfix verification" do
       # All 11 tools should resolve the same SHARED_CACHE constant
       RailsAiContext::Server::TOOLS.each do |tool_class|
         expect(tool_class::SHARED_CACHE).to be(cache),
-          "#{tool_class.name} has a different SHARED_CACHE object — cache is not shared!"
+          "#{tool_class.name} has a different SHARED_CACHE object - cache is not shared!"
       end
     end
 
@@ -57,7 +57,7 @@ RSpec.describe "Bugfix verification" do
   # not total. A search across many files could return hundreds of results
   # when the user asked for 5. The Ruby fallback correctly capped total results.
   # Fix: Added .first(max_results) after parse_rg_output.
-  describe "Bug 2: ripgrep --max-count is per-file — results must be capped" do
+  describe "Bug 2: ripgrep --max-count is per-file - results must be capped" do
     before do
       skip "ripgrep not installed" unless system("which rg > /dev/null 2>&1")
     end
@@ -100,12 +100,12 @@ RSpec.describe "Bugfix verification" do
   # If queue.call raised, queue.to_s evaluated while queue was still the Proc,
   # yielding garbage like "#<Proc:0x00007f...>" as the queue name.
   # Fix: Changed rescue fallback to "default" instead of queue.to_s.
-  describe "Bug 3: Proc queue_name rescue produces garbage — should fallback to 'default'" do
+  describe "Bug 3: Proc queue_name rescue produces garbage - should fallback to 'default'" do
     it "demonstrates the old bug: Proc#to_s produces garbage" do
       failing_proc = proc { raise "Redis not available" }
       garbage = failing_proc.to_s
       expect(garbage).to match(/^#<Proc:/),
-        "Proc#to_s should produce garbage like '#<Proc:0x...>' — this is what the old code returned"
+        "Proc#to_s should produce garbage like '#<Proc:0x...>' - this is what the old code returned"
     end
 
     it "the fixed code returns 'default' when a Proc queue raises" do

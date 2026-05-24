@@ -61,7 +61,7 @@ module RailsAiContext
         end
 
         # Derive display-string bases from the realpath that resolve_partial_path
-        # already computed internally — keeps all path operations on realpaths.
+        # already computed internally - keeps all path operations on realpaths.
         real_root = File.realpath(root)
         real_views_dir = File.realpath(views_dir)
 
@@ -139,7 +139,7 @@ module RailsAiContext
           all_locals.each do |local|
             methods = method_calls[local]
             if methods&.any?
-              lines << "- **#{local}** — calls: #{methods.first(10).join(', ')}"
+              lines << "- **#{local}** - calls: #{methods.first(10).join(', ')}"
             else
               lines << "- **#{local}**"
             end
@@ -152,7 +152,7 @@ module RailsAiContext
         if render_sites.any?
           lines << "" << "## Rendered From (#{render_sites.size})"
           render_sites.first(15).each do |site|
-            locals_str = site[:locals].any? ? " — locals: #{site[:locals].join(', ')}" : ""
+            locals_str = site[:locals].any? ? " - locals: #{site[:locals].join(', ')}" : ""
             lines << "- `#{site[:file]}:#{site[:line]}`#{locals_str}"
           end
           if render_sites.size > 15
@@ -184,7 +184,7 @@ module RailsAiContext
           all_locals.each do |local|
             methods = method_calls[local]
             if methods&.any?
-              lines << "- **#{local}** — calls: #{methods.join(', ')}"
+              lines << "- **#{local}** - calls: #{methods.join(', ')}"
             else
               lines << "- **#{local}**"
             end
@@ -195,7 +195,7 @@ module RailsAiContext
         if render_sites.any?
           lines << "" << "## Rendered From (#{render_sites.size})"
           render_sites.first(25).each do |site|
-            locals_str = site[:locals].any? ? " — locals: #{site[:locals].join(', ')}" : ""
+            locals_str = site[:locals].any? ? " - locals: #{site[:locals].join(', ')}" : ""
             lines << "- `#{site[:file]}:#{site[:line]}`#{locals_str}"
             if site[:snippet]
               lines << "  ```erb"
@@ -260,7 +260,7 @@ module RailsAiContext
 
         # Path traversal protection: separator-aware containment + post-realpath
         # sensitive recheck. Returns real_found (the resolved realpath) so the
-        # caller reads from the same path that was security-checked — TOCTOU closed.
+        # caller reads from the same path that was security-checked - TOCTOU closed.
         begin
           real_found = File.realpath(found).to_s
           real_base = File.realpath(views_dir).to_s
@@ -323,7 +323,7 @@ module RailsAiContext
           new_record? persisted? errors model_name
         ])
 
-        # High-confidence local detection only — avoids false positives from HTML/CSS text
+        # High-confidence local detection only - avoids false positives from HTML/CSS text
         source.scan(/<%[=\-]?\s*(.+?)\s*-?%>/m).each do |match|
           code = match[0]
           next if code.start_with?("#")

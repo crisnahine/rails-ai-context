@@ -86,7 +86,7 @@ RSpec.describe RailsAiContext::Introspector do
       RailsAiContext::Configuration::PRESETS.each do |preset_name, names|
         names.each do |name|
           expect(described_class::INTROSPECTOR_MAP).to have_key(name),
-            "Preset :#{preset_name} references unknown introspector #{name.inspect} — add it to INTROSPECTOR_MAP or remove from PRESETS"
+            "Preset :#{preset_name} references unknown introspector #{name.inspect} - add it to INTROSPECTOR_MAP or remove from PRESETS"
         end
       end
     end

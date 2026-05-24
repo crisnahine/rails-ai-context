@@ -55,7 +55,7 @@ module RailsAiContext
         return text_response("Model introspection not available. Add :models to introspectors.") unless models
         return text_response("Model introspection failed: #{models[:error]}") if models[:error]
 
-        # Specific model — show callbacks in execution order
+        # Specific model - show callbacks in execution order
         if model
           key = fuzzy_find_key(models.keys, model) || model
           data = models[key]
@@ -78,7 +78,7 @@ module RailsAiContext
           return "# #{name}\n\nNo callbacks defined.\n\n_Next: `rails_get_model_details(model:\"#{name}\")` for full model detail._"
         end
 
-        lines = [ "# #{name} — Callbacks", "" ]
+        lines = [ "# #{name} - Callbacks", "" ]
 
         # Organize callbacks in execution order
         ordered = order_callbacks(callbacks)
@@ -165,7 +165,7 @@ module RailsAiContext
           models_with_callbacks.sort_by { |_name, data| -(data[:callbacks]&.values&.flatten&.size || 0) }.each do |name, data|
             total = data[:callbacks].values.flatten.size
             types = data[:callbacks].keys.join(", ")
-            lines << "- **#{name}** — #{total} callbacks (#{types})"
+            lines << "- **#{name}** - #{total} callbacks (#{types})"
           end
           lines << "" << "_Use `model:\"Name\"` for callbacks in execution order._"
 

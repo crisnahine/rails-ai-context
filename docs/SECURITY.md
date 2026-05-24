@@ -15,11 +15,11 @@
 
 ## Design principles
 
-1. **Read-only by design** — All 38 tools are annotated as non-destructive in the MCP protocol
-2. **Defense in depth** — Multiple security layers, not single points of failure
-3. **Sensitive data blocking** — Configurable patterns prevent access to secrets
-4. **Offline by default** — No network calls except optional `rails_search_docs` with `fetch: true`
-5. **Graceful degradation** — Missing optional dependencies don't expose errors or state
+1. **Read-only by design** - All 38 tools are annotated as non-destructive in the MCP protocol
+2. **Defense in depth** - Multiple security layers, not single points of failure
+3. **Sensitive data blocking** - Configurable patterns prevent access to secrets
+4. **Offline by default** - No network calls except optional `rails_search_docs` with `fetch: true`
+5. **Graceful degradation** - Missing optional dependencies don't expose errors or state
 
 ---
 
@@ -44,7 +44,7 @@ flowchart LR
     style L4 fill:#9b59b6,stroke:#8e44ad,color:#fff
 ```
 
-### Layer 1 — SQL validation (regex-based)
+### Layer 1 - SQL validation (regex-based)
 
 Before any query reaches the database:
 
@@ -57,7 +57,7 @@ Before any query reaches the database:
 - **Blocks injection patterns**: OR 1=1, OR true, OR ''='', UNION SELECT
 - **Allows only**: SELECT, WITH, SHOW, EXPLAIN, DESCRIBE, DESC
 
-### Layer 2 — Database-level read-only
+### Layer 2 - Database-level read-only
 
 After validation, the query runs inside a transaction:
 
@@ -69,19 +69,19 @@ After validation, the query runs inside a transaction:
 
 All queries execute inside a transaction, then rollback (even if they could write, they can't).
 
-### Layer 3 — Row limit
+### Layer 3 - Row limit
 
 - Default: 100 rows
 - Configurable: `config.query_row_limit` (hard cap: 1000)
 - Applied as `LIMIT` clause appended to query
 
-### Layer 4 — Column redaction
+### Layer 4 - Column redaction
 
 Sensitive column values are replaced with `[REDACTED]`:
 
 **Default redacted patterns:** `password_digest`, `encrypted_password`, `password_hash`, `reset_password_token`, `confirmation_token`, `unlock_token`, `otp_secret`, `session_data`, `secret_key`, `api_key`, `api_secret`, `access_token`, `refresh_token`, `jti`
 
-Redaction matches by **name** and **suffix** — `SELECT password_digest AS pd` still redacts `pd` because the column name is tracked through the query result.
+Redaction matches by **name** and **suffix** - `SELECT password_digest AS pd` still redacts `pd` because the column name is tracked through the query result.
 
 ### Environment guard
 
@@ -205,8 +205,8 @@ The `rails_migration_advisor` tool validates input:
 
 When using HTTP transport (Rack middleware or McpController):
 
-- **Default bind**: `127.0.0.1` (localhost only — not exposed to network)
-- **`auto_mount` is `false` by default** — must be explicitly enabled
+- **Default bind**: `127.0.0.1` (localhost only - not exposed to network)
+- **`auto_mount` is `false` by default** - must be explicitly enabled
 - **Doctor checks** warn if `auto_mount` is true (security flag)
 
 The McpController uses thread-safe transport initialization with mutex synchronization.

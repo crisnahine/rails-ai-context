@@ -345,7 +345,7 @@ RSpec.describe RailsAiContext::Tools::Query do
     context "sensitive column reference rejection (pre-execution)" do
       # v5.8.1 replaced post-execution redaction with pre-execution rejection.
       # Post-execution redaction runs on `result.columns`, which the caller
-      # controls via aliases and expressions — trivially bypassable by
+      # controls via aliases and expressions - trivially bypassable by
       # `SELECT password_digest AS x FROM users`. Reject at validate_sql instead.
 
       it "rejects a direct reference to a sensitive column" do
@@ -401,7 +401,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       it "does not false-positive on unrelated columns containing a substring" do
         # `keyword` contains "key" as a substring but the match is word-bounded
-        # so this should pass. `description` contains "script" — fine.
+        # so this should pass. `description` contains "script" - fine.
         valid, error = described_class.validate_sql("SELECT id, keyword, description FROM tags")
         expect(valid).to be true
         expect(error).to be_nil
@@ -667,7 +667,7 @@ RSpec.describe RailsAiContext::Tools::Query do
       # executes the query plan. Without routing through execute_postgresql /
       # execute_mysql / execute_sqlite, EXPLAIN bypasses SET TRANSACTION READ
       # ONLY + statement_timeout / PRAGMA query_only. This spy confirms the
-      # adapter wrapper is called on the SQLite test connection — for PG/MySQL
+      # adapter wrapper is called on the SQLite test connection - for PG/MySQL
       # the same routing logic applies via the `case adapter` branch.
       expect(described_class).to receive(:execute_sqlite).once.and_call_original
       described_class.call(sql: "SELECT 1 AS test", explain: true)

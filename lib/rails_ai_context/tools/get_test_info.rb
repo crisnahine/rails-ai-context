@@ -458,7 +458,7 @@ module RailsAiContext
                 # Rails fixture reference: e.g. user: one where "user" is a fixture file
                 relationships["#{key} (#{str_value})"] << "#{file}.#{entry_name}"
               elsif key.to_s =~ /\A(\w+)_id\z/
-                # Foreign key with integer value — note the relationship type
+                # Foreign key with integer value - note the relationship type
                 parent_table = $1.pluralize
                 if parsed_fixtures.key?(parent_table)
                   relationships["#{parent_table} (id=#{str_value})"] << "#{file}.#{entry_name}"

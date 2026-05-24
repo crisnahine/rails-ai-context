@@ -31,7 +31,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
     it "blocks sibling-directory escape via File::SEPARATOR-aware containment" do
       # A realpath like /app/myapp_evil would pass start_with?("/app/myapp") without
-      # the separator suffix — the fix adds File::SEPARATOR to close this gap.
+      # the separator suffix - the fix adds File::SEPARATOR to close this gap.
       Dir.mktmpdir("rac_sibling_") do |sibling_dir|
         result = described_class.call(pattern: "test", path: sibling_dir)
         text = result.content.first[:text]
@@ -80,7 +80,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       # First call: should run system check
       result = described_class.send(:ripgrep_available?)
 
-      # Store the result and call again — should not re-check
+      # Store the result and call again - should not re-check
       expect(described_class.instance_variable_get(:@rg_available)).not_to be_nil
 
       # Force false and verify it stays cached

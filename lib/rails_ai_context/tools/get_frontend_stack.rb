@@ -7,7 +7,7 @@ module RailsAiContext
       description "Returns the app's frontend stack: framework, build tool, state management, TypeScript config, " \
         "component directories, and package manager. " \
         "Use when: scaffolding new frontend features, choosing libraries, or understanding the JS/TS build pipeline. " \
-        "Key params: detail (summary for one-liner, standard for stack overview, full for config deep-dive)."
+        "Key params: detail (summary for one-liner, standard for stack overview, full for config detail)."
 
       input_schema(
         properties: {
@@ -129,10 +129,10 @@ module RailsAiContext
             lines << "- **Testing:** #{data[:testing_frameworks].join(', ')}"
           end
 
-          # Hotwire stack — enrich with Stimulus/Turbo data for importmap apps
+          # Hotwire stack - enrich with Stimulus/Turbo data for importmap apps
           enrich_with_hotwire(lines)
 
-          # Frontend roots with component counts — skip "0 components" for Hotwire apps
+          # Frontend roots with component counts - skip "0 components" for Hotwire apps
           # where Stimulus controllers ARE the components
           has_hotwire = lines.any? { |l| l.include?("Hotwire Stack") }
           if data[:frontend_roots].is_a?(Array) && data[:frontend_roots].any?
@@ -140,13 +140,13 @@ module RailsAiContext
             if roots_with_components.any?
               lines << "" << "## Frontend Roots" << ""
               roots_with_components.each do |root|
-                lines << "- `#{root[:path]}` — #{root[:component_count]} components"
+                lines << "- `#{root[:path]}` - #{root[:component_count]} components"
               end
             elsif !has_hotwire
               # Only show "0 components" for non-Hotwire apps where it's meaningful
               lines << "" << "## Frontend Roots" << ""
               data[:frontend_roots].each do |root|
-                lines << "- `#{root[:path]}` — 0 components"
+                lines << "- `#{root[:path]}` - 0 components"
               end
             end
           end
@@ -178,7 +178,7 @@ module RailsAiContext
           if data[:component_dirs].is_a?(Array) && data[:component_dirs].any?
             lines << "" << "## Component Directories" << ""
             data[:component_dirs].each do |dir|
-              lines << "- `#{dir[:path]}` — #{dir[:count]} components"
+              lines << "- `#{dir[:path]}` - #{dir[:count]} components"
             end
           end
 

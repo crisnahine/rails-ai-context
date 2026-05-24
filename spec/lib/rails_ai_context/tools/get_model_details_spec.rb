@@ -62,7 +62,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     it "sorts models by association count descending" do
       result = described_class.call
       text = result.content.first[:text]
-      # User has 2 associations, Post has 2, Comment has 2 — all tied but User should appear
+      # User has 2 associations, Post has 2, Comment has 2 - all tied but User should appear
       expect(text).to include("**User**")
       expect(text).to include("**Post**")
       expect(text).to include("**Comment**")

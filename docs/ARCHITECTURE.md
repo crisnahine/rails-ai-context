@@ -103,7 +103,7 @@ flowchart LR
 
 39 modules that extract structured data from your Rails app. Each introspector:
 
-- Returns a Hash (never raises — wraps errors in `{ error: msg }`)
+- Returns a Hash (never raises - wraps errors in `{ error: msg }`)
 - Is registered in `INTROSPECTOR_MAP` with a symbol key
 - Belongs to one or both presets (`:standard`, `:full`)
 - Results are cached with TTL + fingerprint invalidation
@@ -114,10 +114,10 @@ The `Introspector` orchestrator runs configured introspectors and merges results
 
 **Prism AST parsing** replaced all regex-based Ruby source parsing in v5.2.0.
 
-- **AstCache** — Thread-safe parse cache (`Concurrent::Map`), keyed by path + SHA256 + mtime
-- **SourceIntrospector** — Single-pass Prism Dispatcher walks the AST once, feeds events to all 7 listeners simultaneously
-- **7 Listeners** — Associations, Validations, Scopes, Enums, Callbacks, Macros, Methods
-- **Confidence** — Every result carries `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions)
+- **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by path + SHA256 + mtime
+- **SourceIntrospector** - Single-pass Prism Dispatcher walks the AST once, feeds events to all 7 listeners simultaneously
+- **7 Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros, Methods
+- **Confidence** - Every result carries `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions)
 
 ### Tool Registry (`lib/rails_ai_context/tools/base_tool.rb`)
 
@@ -126,7 +126,7 @@ Auto-registration via Ruby's `inherited` hook:
 1. `BaseTool.inherited(subclass)` fires when any file in `tools/` defines a subclass
 2. Subclass is appended to `@descendants` (protected by `@registry_mutex`)
 3. `BaseTool.registered_tools` eager-loads all tool files and returns non-abstract classes
-4. `BaseTool` itself is marked `abstract!` — excluded from the registry
+4. `BaseTool` itself is marked `abstract!` - excluded from the registry
 
 **Deadlock-free design**: `eager_load!` collects constants to load inside the mutex, loads them outside (because `const_get` triggers Zeitwerk autoloading which calls `inherited` which needs the mutex), then sets the flag inside the mutex.
 
@@ -152,16 +152,16 @@ rails-ai-context://views/posts/show.html.erb → template content
 rails-ai-context://routes/posts        → filtered routes
 ```
 
-Every resolve call introspects fresh — zero stale data.
+Every resolve call introspects fresh - zero stale data.
 
 ### Hydration Layer (`lib/rails_ai_context/hydrators/`)
 
 Cross-tool semantic hydration (v5.3.0):
 
-- **ControllerHydrator** — Parses controller source via Prism AST to detect model references, injects schema hints
-- **ViewHydrator** — Maps `@post` → `Post` by convention, injects schema hints
-- **SchemaHintBuilder** — Resolves model names to `SchemaHint` value objects from cached context
-- **HydrationFormatter** — Renders hints as compact Markdown sections
+- **ControllerHydrator** - Parses controller source via Prism AST to detect model references, injects schema hints
+- **ViewHydrator** - Maps `@post` → `Post` by convention, injects schema hints
+- **SchemaHintBuilder** - Resolves model names to `SchemaHint` value objects from cached context
+- **HydrationFormatter** - Renders hints as compact Markdown sections
 
 Result: controller and view tools automatically include relevant schema information without extra tool calls.
 
@@ -190,7 +190,7 @@ Result: controller and view tools automatically include relevant schema informat
 
 Thor-based CLI that works standalone (no Gemfile entry):
 
-- `ToolRunner` — Parses CLI args, resolves tool names, executes tools, formats output
+- `ToolRunner` - Parses CLI args, resolves tool names, executes tools, formats output
 - Supports `--json` mode for machine-readable output
 - Same 38 tools available as MCP and CLI
 
@@ -198,9 +198,9 @@ Thor-based CLI that works standalone (no Gemfile entry):
 
 Three cache layers:
 
-1. **Introspection cache** (`BaseTool.SHARED_CACHE`) — Mutex-protected, TTL + fingerprint invalidation
-2. **AST cache** (`AstCache`) — `Concurrent::Map`, SHA256 fingerprint per file
-3. **Session cache** (`BaseTool.SESSION_CONTEXT`) — Mutex-protected call history, resets on server restart
+1. **Introspection cache** (`BaseTool.SHARED_CACHE`) - Mutex-protected, TTL + fingerprint invalidation
+2. **AST cache** (`AstCache`) - `Concurrent::Map`, SHA256 fingerprint per file
+3. **Session cache** (`BaseTool.SESSION_CONTEXT`) - Mutex-protected call history, resets on server restart
 
 `LiveReload` watches files and calls `reset_all_caches!` when changes are detected.
 
@@ -214,18 +214,18 @@ SHA256-based change detection:
 
 ## Key design decisions
 
-1. **Official MCP SDK** — Not a custom protocol. Uses `mcp` gem's `MCP::Tool`, `MCP::Server`, transports.
-2. **Read-only tools** — All 38 tools annotated as non-destructive. Defense-in-depth for query tool.
-3. **Graceful degradation** — Works without database (parses schema.rb as text), without Brakeman, without ripgrep, without listen gem.
-4. **Zeitwerk autoloading** — Files loaded on-demand. No `require_relative` in the gem.
-5. **Diff-aware generation** — Context file regeneration skips unchanged files using fingerprinting.
-6. **Section markers** — Root file content wrapped in `<!-- BEGIN/END rails-ai-context -->` to preserve user-added content.
+1. **Official MCP SDK** - Not a custom protocol. Uses `mcp` gem's `MCP::Tool`, `MCP::Server`, transports.
+2. **Read-only tools** - All 38 tools annotated as non-destructive. Defense-in-depth for query tool.
+3. **Graceful degradation** - Works without database (parses schema.rb as text), without Brakeman, without ripgrep, without listen gem.
+4. **Zeitwerk autoloading** - Files loaded on-demand. No `require_relative` in the gem.
+5. **Diff-aware generation** - Context file regeneration skips unchanged files using fingerprinting.
+6. **Section markers** - Root file content wrapped in `<!-- BEGIN/END rails-ai-context -->` to preserve user-added content.
 
 ## Dependencies
 
 | Gem | Purpose | Required? |
 |:----|:--------|:----------|
-| `mcp` | MCP SDK — server, tools, transports | Yes |
+| `mcp` | MCP SDK - server, tools, transports | Yes |
 | `prism` | AST parsing (stdlib in Ruby 3.3+) | Yes |
 | `concurrent-ruby` | Thread-safe caches | Yes |
 | `zeitwerk` | Autoloading | Yes |

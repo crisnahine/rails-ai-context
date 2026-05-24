@@ -246,7 +246,7 @@ module RailsAiContext
         if model_broadcasts.any?
           lines << "## Model Broadcasts (#{model_broadcasts.size})"
           model_broadcasts.each do |b|
-            lines << "### #{b[:model]} — `#{b[:macro]}`"
+            lines << "### #{b[:model]} - `#{b[:macro]}`"
             lines << "- **File:** `#{b[:file]}:#{b[:line]}`"
             lines << "- **Stream:** `#{b[:stream]}`" if b[:stream]
             lines << "- **Snippet:** `#{b[:snippet]}`" if b[:snippet]
@@ -271,7 +271,7 @@ module RailsAiContext
         if view_subscriptions.any?
           lines << "## Stream Subscriptions (#{view_subscriptions.size})"
           view_subscriptions.each do |s|
-            lines << "- `turbo_stream_from` `#{s[:stream]}` — `#{s[:file]}:#{s[:line]}`"
+            lines << "- `turbo_stream_from` `#{s[:stream]}` - `#{s[:file]}:#{s[:line]}`"
             lines << "  ```erb"
             lines << "  #{s[:snippet]}"
             lines << "  ```" if s[:snippet]
@@ -481,7 +481,7 @@ module RailsAiContext
       private_class_method def self.extract_stream_name_from_macro(line, macro)
         case macro
         when "broadcasts"
-          # broadcasts — stream name is typically the model's plural name
+          # broadcasts - stream name is typically the model's plural name
           # broadcasts inserts_by: :prepend
           "self (model plural)"
         when "broadcasts_to"
@@ -606,7 +606,7 @@ module RailsAiContext
         subscription_streams = Set.new
         view_subscriptions.each { |s| subscription_streams << s[:stream] if s[:stream] && !s[:stream].include?("dynamic") }
 
-        # Broadcasts without subscribers — use fuzzy matching for dynamic streams
+        # Broadcasts without subscribers - use fuzzy matching for dynamic streams
         orphan_broadcasts = broadcast_streams.reject { |bs|
           subscription_streams.any? { |ss| streams_match?(bs, ss) }
         }
@@ -617,7 +617,7 @@ module RailsAiContext
           warnings << "Broadcast to `#{stream}` has no matching `turbo_stream_from`#{file_ref}"
         end
 
-        # Subscriptions without broadcasters — use fuzzy matching
+        # Subscriptions without broadcasters - use fuzzy matching
         orphan_subscriptions = subscription_streams.reject { |ss|
           broadcast_streams.any? { |bs| streams_match?(bs, ss) }
         }

@@ -23,29 +23,29 @@ module RailsAiContext
         RailsAiContext.configuration.tool_mode
       end
 
-      # Derived from BaseTool.registered_tools — the single source of truth for tool count.
+      # Derived from BaseTool.registered_tools - the single source of truth for tool count.
       def tool_count
         RailsAiContext::Server.builtin_tools.size
       end
 
       def tools_header
-        "## Tools (#{tool_count}) — MANDATORY, Use Before Read"
+        "## Tools (#{tool_count}) - MANDATORY, Use Before Read"
       end
 
       def tools_intro
         case tool_mode
         when :cli
           [
-            "This project has #{tool_count} introspection tools. **MANDATORY — use these instead of reading files.**",
-            "They return ground truth from the running app: real schema, real associations, real filters — not guesses.",
+            "This project has #{tool_count} introspection tools. **MANDATORY - use these instead of reading files.**",
+            "They return ground truth from the running app: real schema, real associations, real filters - not guesses.",
             "Read files ONLY when you are about to Edit them.",
             ""
           ]
         else
           [
             "This project has #{tool_count} MCP tools via `rails ai:serve`.",
-            "**MANDATORY — use these instead of reading files.** They return ground truth from the running app:",
-            "real schema, real associations, real filters — not guesses from file reads.",
+            "**MANDATORY - use these instead of reading files.** They return ground truth from the running app:",
+            "real schema, real associations, real filters - not guesses from file reads.",
             "Read files ONLY when you are about to Edit them.",
             "If MCP tools are not connected, use CLI fallback: `#{cli_cmd("TOOL_NAME", "param=value")}`",
             ""
@@ -57,7 +57,7 @@ module RailsAiContext
         return [] unless RailsAiContext.configuration.anti_hallucination_rules
 
         [
-          "### Anti-Hallucination Protocol — Verify Before You Write",
+          "### Anti-Hallucination Protocol - Verify Before You Write",
           "",
           "AI assistants produce confident-wrong code when statistical priors from training",
           "data override observed facts in the current project. These 6 rules force",
@@ -67,7 +67,7 @@ module RailsAiContext
           "2. **Mark every assumption.** If you must proceed without verification, prefix the relevant output with `[ASSUMPTION]` and state what you're assuming and why. Silent assumptions are forbidden. \"I'd need to check X first\" is a valid and preferred answer.",
           "3. **Training data describes average Rails. This app isn't average.** When something feels \"obviously\" like standard Rails, query anyway. Factories vs fixtures? Pundit vs CanCan? Devise vs has_secure_password? Check `rails_get_conventions` and `rails_get_gems` BEFORE scaffolding anything.",
           "4. **Check the inheritance chain before every edit.** Before writing a controller action: inherited `before_action` filters and ancestor classes. Before writing a model method: concerns, includes, STI parents. Inheritance is never flat.",
-          "5. **Empty tool output is information, not permission.** \"0 callers found,\" \"no validations,\" or a missing model is a signal to investigate or confirm with the user — not a license to proceed on guesses. Follow `_Next:` hints.",
+          "5. **Empty tool output is information, not permission.** \"0 callers found,\" \"no validations,\" or a missing model is a signal to investigate or confirm with the user - not a license to proceed on guesses. Follow `_Next:` hints.",
           "6. **Stale context lies. Re-query after writes.** After any edit, tool output from earlier in this turn may be wrong. Re-query the affected tool before the next write.",
           ""
         ]
@@ -78,33 +78,33 @@ module RailsAiContext
         context_tool = tool_mode == :cli ? cli_cmd("context") : "rails_get_context"
         analyze_tool = tool_mode == :cli ? cli_cmd("analyze_feature") : "rails_analyze_feature"
         [
-          "### detail parameter — ALWAYS start with summary",
+          "### detail parameter - ALWAYS start with summary",
           "",
           "Individual lookup tools accept `#{detail_param}`. Use the right level:",
-          "- **summary** — first call, orient yourself (table list, model names, route overview)",
-          "- **standard** — working detail (columns with types, associations, action source) — DEFAULT",
-          "- **full** — only when you need indexes, foreign keys, code snippets, or complete content",
+          "- **summary** - first call, orient yourself (table list, model names, route overview)",
+          "- **standard** - working detail (columns with types, associations, action source) - DEFAULT",
+          "- **full** - only when you need indexes, foreign keys, code snippets, or complete content",
           "",
           "Pattern: summary to find the target → standard to understand it → full only if needed.",
           "",
-          "**Do NOT pass `detail` to composite tools** — `#{context_tool}` and `#{analyze_tool}` do not accept it and will return an error.",
+          "**Do NOT pass `detail` to composite tools** - `#{context_tool}` and `#{analyze_tool}` do not accept it and will return an error.",
           ""
         ]
       end
 
       def tools_power_tool_section
         [
-          "### Start here — composite tools save multiple calls",
+          "### Start here - composite tools save multiple calls",
           "",
           "**New to this project?** Get a full walkthrough first:",
           tool_call("rails_onboard(detail:\"standard\")", cli_cmd("onboard", "detail=standard")),
           "",
-          "**`get_context` is your power tool** — bundles schema + model + controller + routes + views in ONE call:",
+          "**`get_context` is your power tool** - bundles schema + model + controller + routes + views in ONE call:",
           tool_call("rails_get_context(controller:\"PostsController\", action:\"create\")", cli_cmd("context", "controller=PostsController action=create")),
           tool_call("rails_get_context(model:\"Post\")", cli_cmd("context", "model=Post")),
           tool_call("rails_get_context(feature:\"post\")", cli_cmd("context", "feature=post")),
           "",
-          "**`analyze_feature` for broad discovery** — scans all layers (models, controllers, routes, services, jobs, views, tests):",
+          "**`analyze_feature` for broad discovery** - scans all layers (models, controllers, routes, services, jobs, views, tests):",
           tool_call("rails_analyze_feature(feature:\"authentication\")", cli_cmd("analyze_feature", "feature=authentication")),
           "",
           "Use individual tools only when you need deeper detail on a specific layer.",
@@ -117,28 +117,28 @@ module RailsAiContext
           "### Step-by-step workflows (follow this order)",
           "",
           "**Modify a model** (add field, change validation, add scope):",
-          "1. #{tool_call_inline("rails_get_context", "model:\"Post\"", "context", "model=Post")} — schema + associations + validations in one call",
+          "1. #{tool_call_inline("rails_get_context", "model:\"Post\"", "context", "model=Post")} - schema + associations + validations in one call",
           "2. Read the model file, make your edit",
-          "3. #{tool_call_inline("rails_migration_advisor", "action:\"add_column\", table:\"posts\", column:\"rating\", type:\"integer\"", "migration_advisor", "action=add_column table=posts column=rating type=integer")} — if schema change needed",
-          "4. #{tool_call_inline("rails_validate", "files:[\"app/models/post.rb\"], level:\"rails\"", "validate", "files=app/models/post.rb level=rails")} — EVERY time after editing",
-          "5. #{tool_call_inline("rails_generate_test", "model:\"Post\"", "generate_test", "model=Post")} — generate tests matching project patterns",
+          "3. #{tool_call_inline("rails_migration_advisor", "action:\"add_column\", table:\"posts\", column:\"rating\", type:\"integer\"", "migration_advisor", "action=add_column table=posts column=rating type=integer")} - if schema change needed",
+          "4. #{tool_call_inline("rails_validate", "files:[\"app/models/post.rb\"], level:\"rails\"", "validate", "files=app/models/post.rb level=rails")} - EVERY time after editing",
+          "5. #{tool_call_inline("rails_generate_test", "model:\"Post\"", "generate_test", "model=Post")} - generate tests matching project patterns",
           "",
           "**Fix a controller bug:**",
-          "1. #{tool_call_inline("rails_get_context", "controller:\"PostsController\", action:\"create\"", "context", "controller=PostsController action=create")} — action source + routes + views + model",
+          "1. #{tool_call_inline("rails_get_context", "controller:\"PostsController\", action:\"create\"", "context", "controller=PostsController action=create")} - action source + routes + views + model",
           "2. Read the controller file, make your fix",
           "3. #{tool_call_inline("rails_validate", "files:[\"app/controllers/posts_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/posts_controller.rb level=rails")}",
           "",
           "**Build or modify a view:**",
-          "1. #{tool_call_inline("rails_get_view", "controller:\"posts\"", "view", "controller=posts")} — existing templates, partials, Stimulus refs",
-          "2. #{tool_call_inline("rails_get_partial_interface", "partial:\"shared/status_badge\"", "partial_interface", "partial=shared/status_badge")} — partial locals contract",
-          "3. #{tool_call_inline("rails_get_component_catalog", "component:\"Button\"", "component_catalog", "component=Button")} — ViewComponent/Phlex props, slots, previews",
+          "1. #{tool_call_inline("rails_get_view", "controller:\"posts\"", "view", "controller=posts")} - existing templates, partials, Stimulus refs",
+          "2. #{tool_call_inline("rails_get_partial_interface", "partial:\"shared/status_badge\"", "partial_interface", "partial=shared/status_badge")} - partial locals contract",
+          "3. #{tool_call_inline("rails_get_component_catalog", "component:\"Button\"", "component_catalog", "component=Button")} - ViewComponent/Phlex props, slots, previews",
           "4. Read the view file, make your edit",
           "5. #{tool_call_inline("rails_validate", "files:[\"app/views/posts/index.html.erb\"]", "validate", "files=app/views/posts/index.html.erb")}",
           "",
           "**Trace a method:**",
           tool_call("rails_search_code(pattern:\"publishable?\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"publishable?\" match_type=trace")),
           "",
-          "**Debug an error (one call — gathers context + git + logs + fix):**",
+          "**Debug an error (one call - gathers context + git + logs + fix):**",
           tool_call("rails_diagnose(error:\"NoMethodError: undefined method `foo` for nil\", file:\"app/models/post.rb\")", cli_cmd("diagnose", "error=\"NoMethodError: undefined method foo\" file=app/models/post.rb")),
           "",
           "**Review changes before merging:**",
@@ -154,15 +154,15 @@ module RailsAiContext
         search_tool = tool_mode == :cli ? cli_cmd("search_code") : "rails_search_code"
         validate_tool = tool_mode == :cli ? cli_cmd("validate") : "rails_validate"
         [
-          "### Common mistakes — avoid these",
+          "### Common mistakes - avoid these",
           "",
-          "- **Don't read db/schema.rb** — use `get_schema`. It adds [indexed]/[unique] hints you'd miss.",
-          "- **Don't read model files for reference** — use `get_model_details`. It resolves concerns, inherited methods, and implicit belongs_to validations.",
+          "- **Don't read db/schema.rb** - use `get_schema`. It adds [indexed]/[unique] hints you'd miss.",
+          "- **Don't read model files for reference** - use `get_model_details`. It resolves concerns, inherited methods, and implicit belongs_to validations.",
           "- **Prefer `#{search_tool}` over Grep** for method tracing and cross-layer search. It excludes sensitive files, supports `match_type:\"trace\"`, and paginates.",
-          "- **Don't call tools without a target** — `get_model_details()` without `model:` returns a paginated list, not an error. Always specify what you want.",
-          "- **Don't skip validation** — run `#{validate_tool}` after EVERY edit. It catches syntax errors AND Rails-specific issues (missing partials, bad column refs).",
-          "- **Don't ignore cross-references** — tool responses include `_Next:` hints suggesting the best follow-up call. Follow them.",
-          "- **Don't call `detail:\"full\"` first** — start with `summary` to find your target, then drill in. Full responses bury the signal.",
+          "- **Don't call tools without a target** - `get_model_details()` without `model:` returns a paginated list, not an error. Always specify what you want.",
+          "- **Don't skip validation** - run `#{validate_tool}` after EVERY edit. It catches syntax errors AND Rails-specific issues (missing partials, bad column refs).",
+          "- **Don't ignore cross-references** - tool responses include `_Next:` hints suggesting the best follow-up call. Follow them.",
+          "- **Don't call `detail:\"full\"` first** - start with `summary` to find your target, then drill in. Full responses bury the signal.",
           ""
         ]
       end
@@ -173,24 +173,24 @@ module RailsAiContext
           [
             "### Rules",
             "",
-            "1. **Use composite tools first** — `#{cli_cmd("context")}` and `#{cli_cmd("analyze_feature")}` before individual tools",
-            "2. **NEVER read reference files** — db/schema.rb, config/routes.rb, model files, test files — tools are better",
-            "3. **Prefer `#{cli_cmd("search_code")}`** for tracing and cross-layer search — standard search tools are fine for simple targeted lookups",
-            "4. **Read files ONLY to Edit them** — not for reference",
-            "5. **Validate EVERY edit** — `#{cli_cmd("validate", "files=... level=rails")}`",
-            "6. **Follow _Next:_ hints** — tool responses suggest the best follow-up call",
+            "1. **Use composite tools first** - `#{cli_cmd("context")}` and `#{cli_cmd("analyze_feature")}` before individual tools",
+            "2. **NEVER read reference files** - db/schema.rb, config/routes.rb, model files, test files - tools are better",
+            "3. **Prefer `#{cli_cmd("search_code")}`** for tracing and cross-layer search - standard search tools are fine for simple targeted lookups",
+            "4. **Read files ONLY to Edit them** - not for reference",
+            "5. **Validate EVERY edit** - `#{cli_cmd("validate", "files=... level=rails")}`",
+            "6. **Follow _Next:_ hints** - tool responses suggest the best follow-up call",
             ""
           ]
         else
           [
             "### Rules",
             "",
-            "1. **Use composite tools first** — `rails_get_context` and `rails_analyze_feature` before individual tools",
-            "2. **NEVER read reference files** — db/schema.rb, config/routes.rb, model files, test files — tools are better",
-            "3. **Prefer `rails_search_code`** for tracing and cross-layer search — standard search tools are fine for simple targeted lookups",
-            "4. **Read files ONLY to Edit them** — not for reference",
-            "5. **Validate EVERY edit** — `rails_validate(files:[...], level:\"rails\")`",
-            "6. **Follow _Next:_ hints** — tool responses suggest the best follow-up call",
+            "1. **Use composite tools first** - `rails_get_context` and `rails_analyze_feature` before individual tools",
+            "2. **NEVER read reference files** - db/schema.rb, config/routes.rb, model files, test files - tools are better",
+            "3. **Prefer `rails_search_code`** for tracing and cross-layer search - standard search tools are fine for simple targeted lookups",
+            "4. **Read files ONLY to Edit them** - not for reference",
+            "5. **Validate EVERY edit** - `rails_validate(files:[...], level:\"rails\")`",
+            "6. **Follow _Next:_ hints** - tool responses suggest the best follow-up call",
             "7. If MCP tools are not connected, use CLI: `#{cli_cmd("TOOL_NAME", "param=value")}`",
             ""
           ]
@@ -207,7 +207,7 @@ module RailsAiContext
       # Each row is [mcp_call, cli_name, cli_args, description].
       # Set include_mcp: false for CLI-only 2-column table.
       TOOL_ROWS = [
-        [ 'rails_get_context(model:"X")', "context", "model=X", "**START HERE** — schema + model + controller + routes + views in one call" ],
+        [ 'rails_get_context(model:"X")', "context", "model=X", "**START HERE** - schema + model + controller + routes + views in one call" ],
         [ 'rails_analyze_feature(feature:"X")', "analyze_feature", "feature=X", "Full-stack: models + controllers + routes + services + jobs + views + tests" ],
         [ 'rails_search_code(pattern:"X", match_type:"trace")', "search_code", "pattern=X match_type=trace", 'Search + trace: definition, source, callers, test coverage. Also: `match_type:"any"` for regex search' ],
         [ 'rails_get_controllers(controller:"X", action:"Y")', "controllers", "controller=X action=Y", "Action source + inherited filters + render map + private methods" ],
@@ -261,7 +261,7 @@ module RailsAiContext
         header + rows
       end
 
-      # Full tool guide section — used by split rules files (.claude/rules/, .cursor/rules/, etc.)
+      # Full tool guide section - used by split rules files (.claude/rules/, .cursor/rules/, etc.)
       def render_tools_guide
         lines = []
         lines << tools_header
@@ -293,7 +293,7 @@ module RailsAiContext
         lines
       end
 
-      # Dense one-line-per-tool listing — derived from TOOL_ROWS (single source of truth)
+      # Dense one-line-per-tool listing - derived from TOOL_ROWS (single source of truth)
       def tools_name_list
         all_tools = TOOL_ROWS.map { |row| row[0][/^(rails_\w+)/, 1] }
         [

@@ -57,7 +57,7 @@ module RailsAiContext
         offset = [ offset.to_i, 0 ].max
         limit = [ limit.to_i, 0 ].max if limit && limit.to_i < 0
 
-        # Single table — case-insensitive lookup with model name normalization
+        # Single table - case-insensitive lookup with model name normalization
         # Accepts: "users", "Users", "User" (model name → pluralized+underscored table)
         if table
           table_down = table.downcase
@@ -97,7 +97,7 @@ module RailsAiContext
             data = tables[name]
             col_count = data[:columns]&.size || 0
             idx_count = data[:indexes]&.size || 0
-            lines << "- **#{name}** — #{col_count} columns, #{idx_count} indexes"
+            lines << "- **#{name}** - #{col_count} columns, #{idx_count} indexes"
           end
           if offset + limit < total
             lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more, or `table:\"name\"` for full detail._"
@@ -108,7 +108,7 @@ module RailsAiContext
         when "standard"
           limit ||= 25
           limit = 25 if limit.to_i < 1
-          # Sort by column count (most complex first) — AI agents care about big tables first
+          # Sort by column count (most complex first) - AI agents care about big tables first
           sorted = tables.keys.sort_by { |name| -(tables[name][:columns]&.size || 0) }
           paginated = sorted.drop(offset).first(limit)
           if paginated.empty?
@@ -212,7 +212,7 @@ module RailsAiContext
 
       private_class_method def self.format_table_markdown(name, data)
         columns = data[:columns] || []
-        # Always show Nullable and Default — agents need these for migrations and validations
+        # Always show Nullable and Default - agents need these for migrations and validations
         has_defaults = columns.any? { |c| c.key?(:default) && !c[:default].nil? }
 
         model_refs = models_for_table(name)
@@ -277,7 +277,7 @@ module RailsAiContext
         if data[:generated_columns]&.any?
           lines << "" << "### Generated Columns"
           data[:generated_columns].each do |gc|
-            lines << "- `#{gc[:name]}` — #{gc[:expression]}"
+            lines << "- `#{gc[:name]}` - #{gc[:expression]}"
           end
         end
 

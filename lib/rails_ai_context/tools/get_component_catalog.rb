@@ -46,7 +46,7 @@ module RailsAiContext
           component = component.to_s.strip
 
           if components.empty?
-            return text_response("Component '#{component}' not found — no components exist in app/components/. Create ViewComponent or Phlex components first.")
+            return text_response("Component '#{component}' not found - no components exist in app/components/. Create ViewComponent or Phlex components first.")
           end
 
           found = components.find { |c|
@@ -65,8 +65,8 @@ module RailsAiContext
             return text_response(
               "No components found in app/components/.\n\n" \
               "This app may use ERB partials instead of ViewComponent/Phlex. Try:\n" \
-              "- `rails_get_partial_interface(partial:\"shared/partial_name\")` — partial locals contract + usage\n" \
-              "- `rails_get_view(controller:\"name\")` — view templates with partial/Stimulus references"
+              "- `rails_get_partial_interface(partial:\"shared/partial_name\")` - partial locals contract + usage\n" \
+              "- `rails_get_view(controller:\"name\")` - view templates with partial/Stimulus references"
             )
           end
           text_response(render_catalog(components, data[:summary], detail, offset: offset, limit: limit))
@@ -91,7 +91,7 @@ module RailsAiContext
           page[:items].each do |comp|
             case detail
             when "summary"
-              lines << "- **#{comp[:name]}** (#{comp[:type]}) — #{comp[:slots]&.size || 0} slots, #{comp[:props]&.size || 0} props"
+              lines << "- **#{comp[:name]}** (#{comp[:type]}) - #{comp[:slots]&.size || 0} slots, #{comp[:props]&.size || 0} props"
             when "standard"
               lines.concat(render_component_standard(comp))
             when "full"

@@ -109,7 +109,7 @@ module RailsAiContext
 
           result = begin
             unless File.exist?(INDEX_PATH)
-              return { error: "Documentation index not found at #{INDEX_PATH}. The gem installation may be incomplete — reinstall rails-ai-context." }
+              return { error: "Documentation index not found at #{INDEX_PATH}. The gem installation may be incomplete - reinstall rails-ai-context." }
             end
 
             raw = RailsAiContext::SafeFile.read(INDEX_PATH)
@@ -155,7 +155,7 @@ module RailsAiContext
           score
         end
 
-        # Derive URL at runtime — no hardcoded URLs stored in index.json
+        # Derive URL at runtime - no hardcoded URLs stored in index.json
         def url_for(topic, branch)
           case topic["source"]
           when "rails"

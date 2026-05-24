@@ -175,7 +175,7 @@ module RailsAiContext
             lines << "" << "## #{current_type}"
           end
           loc = w.line ? "#{w.file.relative}:#{w.line}" : w.file.relative
-          lines << "- [#{w.confidence_name}] #{loc} — #{w.message}"
+          lines << "- [#{w.confidence_name}] #{loc} - #{w.message}"
         end
 
         text_response(lines.join("\n"))

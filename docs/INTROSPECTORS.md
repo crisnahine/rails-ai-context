@@ -15,17 +15,17 @@
 Each introspector:
 
 1. Examines a specific aspect of your Rails app (schema, models, routes, etc.)
-2. Returns a Hash with structured data (never raises — wraps errors in `{ error: msg }`)
+2. Returns a Hash with structured data (never raises - wraps errors in `{ error: msg }`)
 3. Results are cached with TTL + SHA256 fingerprint invalidation
 4. Runs as part of a preset (`:standard` or `:full`) or can be configured individually
 
 ## Presets
 
-### `:full` (default) — all 39 introspectors
+### `:full` (default) - all 39 introspectors
 
-Best for comprehensive AI context. Covers every aspect of your app.
+Full AI context. Covers every aspect of your app.
 
-### `:standard` — 17 introspectors
+### `:standard` - 17 introspectors
 
 Lightweight subset for faster generation:
 
@@ -39,7 +39,7 @@ turbo, auth, performance, i18n
 
 ```mermaid
 graph LR
-    subgraph standard["Standard Preset — 17 introspectors"]
+    subgraph standard["Standard Preset - 17 introspectors"]
         direction TB
         S1["schema"] ~~~ S2["models"] ~~~ S3["routes"]
         S4["controllers"] ~~~ S5["jobs"] ~~~ S6["gems"]
@@ -188,8 +188,8 @@ The **SourceIntrospector** uses Prism AST parsing for model analysis. It runs a 
 
 Every AST result carries a confidence tag:
 
-- **`[VERIFIED]`** — All arguments are static literals (strings, symbols, numbers). Ground truth.
-- **`[INFERRED]`** — Arguments contain dynamic expressions (variables, method calls). Requires runtime verification.
+- **`[VERIFIED]`** - All arguments are static literals (strings, symbols, numbers). Ground truth.
+- **`[INFERRED]`** - Arguments contain dynamic expressions (variables, method calls). Requires runtime verification.
 
 ```
 has_many :posts                    → [VERIFIED]
@@ -211,8 +211,8 @@ Thread-safe parse cache using `Concurrent::Map`:
 
 Introspection results are cached at two levels:
 
-1. **Introspection cache** — Full context hash, invalidated by TTL (`config.cache_ttl`, default: 60s) and fingerprint change
-2. **AST cache** — Per-file parse results, invalidated by file content change (SHA256)
+1. **Introspection cache** - Full context hash, invalidated by TTL (`config.cache_ttl`, default: 60s) and fingerprint change
+2. **AST cache** - Per-file parse results, invalidated by file content change (SHA256)
 
 The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/tasks/`, `Gemfile.lock`). When the fingerprint changes, the introspection cache is invalidated even if TTL hasn't expired.
 

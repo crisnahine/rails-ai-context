@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# E2E helper — does NOT load combustion. Each e2e spec spawns a real Rails
+# E2E helper - does NOT load combustion. Each e2e spec spawns a real Rails
 # application in a tmpdir. Tag specs with `type: :e2e` so the default
 # `bundle exec rspec` run skips them (see spec/spec_helper.rb).
 
@@ -30,7 +30,7 @@ RSpec.configure do |config|
 end
 
 module E2E
-  # Absolute path to the gem being tested — resolved dynamically so the
+  # Absolute path to the gem being tested - resolved dynamically so the
   # harness works regardless of where the repo is checked out.
   GEM_ROOT = File.expand_path("../..", __dir__)
   TMPDIR_PREFIX = "rails-ai-context-e2e-"

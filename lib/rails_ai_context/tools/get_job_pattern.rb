@@ -40,7 +40,7 @@ module RailsAiContext
           job_files = []
         end
 
-        # Pull enriched channel data from the cached introspector context — this
+        # Pull enriched channel data from the cached introspector context - this
         # gives us the v5.8.0 fields (identified_by, streams, periodic, actions)
         # that JobIntrospector#extract_channels populates.
         channels = (cached_context.dig(:jobs, :channels) || []).reject { |c| c.is_a?(Hash) && c[:error] }
@@ -51,7 +51,7 @@ module RailsAiContext
           return format_single_job(job, job_files, real_jobs_dir, real_root)
         end
 
-        # No jobs and no channels — bail out with the legacy message.
+        # No jobs and no channels - bail out with the legacy message.
         if job_files.empty? && channels.empty?
           return text_response("No app/jobs/ directory found and no Action Cable channels detected. This app may not use background jobs.")
         end
@@ -205,7 +205,7 @@ module RailsAiContext
         when "standard"
           job_data.each do |j|
             queue_label = j[:queue] ? " [#{j[:queue]}]" : ""
-            retry_label = j[:retry_config].any? ? " — #{j[:retry_config].first}" : ""
+            retry_label = j[:retry_config].any? ? " - #{j[:retry_config].first}" : ""
             deps_label = j[:dependencies].any? ? " → #{j[:dependencies].join(', ')}" : ""
             lines << "- **#{j[:class_name]}**#{queue_label} (#{j[:line_count]} lines)#{retry_label}#{deps_label}"
           end
@@ -243,7 +243,7 @@ module RailsAiContext
 
       # Renders the v5.8.0 enriched Action Cable channel detail produced by
       # JobIntrospector#extract_channels (identified_by, streams, periodic, actions).
-      # Returns lines, not a Response — caller composes.
+      # Returns lines, not a Response - caller composes.
       private_class_method def self.format_channels_section(channels)
         lines = [ "# Action Cable Channels (#{channels.size})", "" ]
 

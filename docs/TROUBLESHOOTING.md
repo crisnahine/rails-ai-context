@@ -102,10 +102,10 @@ For Codex CLI specifically, the env section in `.codex/config.toml` must match y
 
 ### MCP server responds slowly
 
-- Check `config.cache_ttl` — lower values mean more frequent re-introspection
-- Check `config.preset` — `:standard` is faster than `:full`
+- Check `config.cache_ttl` - lower values mean more frequent re-introspection
+- Check `config.preset` - `:standard` is faster than `:full`
 - Large schema files (>10MB) slow down schema introspection
-- Run `rails ai:doctor` — it checks schema size and view count
+- Run `rails ai:doctor` - it checks schema size and view count
 
 ---
 
@@ -219,7 +219,7 @@ Standalone mode pre-loads the gem before Rails boot and restores `$LOAD_PATH` en
 
 YAML config (`.rails-ai-context.yml`) is skipped if an initializer runs. Check precedence:
 
-1. Initializer (`config/initializers/rails_ai_context.rb`) — highest priority
+1. Initializer (`config/initializers/rails_ai_context.rb`) - highest priority
 2. YAML (`.rails-ai-context.yml`)
 3. Defaults
 
@@ -270,7 +270,7 @@ config.live_reload = false
 
 ## Getting help
 
-1. Run `rails ai:doctor` first — it catches most issues
+1. Run `rails ai:doctor` first - it catches most issues
 2. Check [GitHub issues](https://github.com/crisnahine/rails-ai-context/issues)
 3. Open a new issue with doctor output and error details
 

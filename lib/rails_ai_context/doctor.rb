@@ -89,7 +89,7 @@ module RailsAiContext
         Check.new(name: "Pending migrations", status: :pass, message: "No pending migrations", fix: nil)
       else
         Check.new(name: "Pending migrations", status: :fail,
-          message: "#{pending.size} pending migration(s) — schema data will be stale",
+          message: "#{pending.size} pending migration(s) - schema data will be stale",
           fix: "Run `rails db:migrate`")
       end
     rescue => e
@@ -168,7 +168,7 @@ module RailsAiContext
 
     # ── Context file checks ───────────────────────────────────────────
 
-    # Per-tool context path — sentinel checked for the freshness check.
+    # Per-tool context path - sentinel checked for the freshness check.
     # Other files generated alongside are assumed in-sync (they're written
     # atomically by the same serializer). For Cursor, `.cursor/rules/` is
     # the sentinel; `.cursorrules` (v5.9.0 legacy fallback) is generated
@@ -215,7 +215,7 @@ module RailsAiContext
         File.mtime(context_file)
       end
       # Check if any source file changed after context was generated.
-      # Exclude our own initializer — it's written during install and would
+      # Exclude our own initializer - it's written during install and would
       # always appear newer than context files generated in the same run.
       stale_dirs = %w[app/models app/controllers app/views config db/migrate].select do |dir|
         full = File.join(app.root, dir)
@@ -228,7 +228,7 @@ module RailsAiContext
         Check.new(name: "Context files", status: :pass, message: "#{context_label} is up to date", fix: nil)
       else
         Check.new(name: "Context files", status: :warn,
-          message: "#{context_label} may be stale — #{stale_dirs.join(', ')} changed since last generation",
+          message: "#{context_label} may be stale - #{stale_dirs.join(', ')} changed since last generation",
           fix: "Run `rails ai:context` to regenerate")
       end
     end
@@ -307,7 +307,7 @@ module RailsAiContext
       env_section = match[1]
 
       # Check if snapshotted GEM_HOME directory still exists on disk.
-      # This is version-manager agnostic and OS agnostic — no string format
+      # This is version-manager agnostic and OS agnostic - no string format
       # assumptions. If the directory was removed (e.g. Ruby upgrade), the
       # env snapshot is definitely stale.
       gem_home_match = env_section.match(/^GEM_HOME\s*=\s*"([^"]+)"/)
@@ -317,11 +317,11 @@ module RailsAiContext
 
       if Dir.exist?(snapshot_gem_home)
         Check.new(name: "Codex env snapshot", status: :pass,
-          message: "Codex GEM_HOME (#{snapshot_gem_home}) exists — env snapshot is current",
+          message: "Codex GEM_HOME (#{snapshot_gem_home}) exists - env snapshot is current",
           fix: nil)
       else
         Check.new(name: "Codex env snapshot", status: :warn,
-          message: "Codex MCP env snapshot is stale — GEM_HOME #{snapshot_gem_home} no longer exists. Re-run the install generator to update.",
+          message: "Codex MCP env snapshot is stale - GEM_HOME #{snapshot_gem_home} no longer exists. Re-run the install generator to update.",
           fix: "Run `rails generate rails_ai_context:install` or `rails-ai-context init`")
       end
     end
@@ -468,7 +468,7 @@ module RailsAiContext
       config = RailsAiContext.configuration
       if config.auto_mount && defined?(Rails.env) && Rails.env.production?
         Check.new(name: "MCP auto_mount", status: :fail,
-          message: "auto_mount is enabled in production — MCP endpoint is publicly accessible",
+          message: "auto_mount is enabled in production - MCP endpoint is publicly accessible",
           fix: "Set `config.auto_mount = false` or restrict to development: `config.auto_mount = Rails.env.development?`")
       else
         Check.new(name: "MCP auto_mount", status: :pass,

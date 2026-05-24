@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class GenerateTest < BaseTool
       tool_name "rails_generate_test"
-      description "Generate test scaffolding that matches your project's actual test patterns — framework, factories, assertion style. " \
+      description "Generate test scaffolding that matches your project's actual test patterns - framework, factories, assertion style. " \
         "Use when: adding tests for a model, controller, or service. Generates copy-paste-ready test files. " \
         "Key params: model (e.g. 'User'), controller (e.g. 'PostsController'), file (e.g. 'app/services/foo.rb')."
 

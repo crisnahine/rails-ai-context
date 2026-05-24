@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # Reusable test helper for verifying MCP tools — both built-in and custom.
+  # Reusable test helper for verifying MCP tools - both built-in and custom.
   # Works with RSpec and Minitest.
   #
   #   # RSpec

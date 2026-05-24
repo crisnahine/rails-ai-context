@@ -11,7 +11,7 @@ require_relative "e2e_helper"
 # the stdio transport behavior is identical across install paths.
 RSpec.describe "E2E: MCP stdio protocol", type: :e2e do
   before(:all) do
-    # Read-only spec — reuse the shared in-Gemfile fixture.
+    # Read-only spec - reuse the shared in-Gemfile fixture.
     @builder = E2E.shared_app(install_path: :in_gemfile)
     @mcp = E2E::McpStdioClient.new(@builder).start!
   end
@@ -64,7 +64,7 @@ RSpec.describe "E2E: MCP stdio protocol", type: :e2e do
     expect(content.first["type"]).to eq("text")
     expect(content.first["text"]).to be_a(String)
     expect(content.first["text"]).not_to be_empty
-    # The scaffold created a Post table — expect it in the schema output
+    # The scaffold created a Post table - expect it in the schema output
     expect(content.first["text"]).to include("posts").or include("Post")
   end
 

@@ -12,13 +12,13 @@ bundle exec rspec
 bundle exec rubocop --parallel
 ```
 
-The test suite uses [Combustion](https://github.com/pat/combustion) to boot a minimal Rails app in `spec/internal/`. No external database required — tests run against an in-memory SQLite database.
+The test suite uses [Combustion](https://github.com/pat/combustion) to boot a minimal Rails app in `spec/internal/`. No external database required - tests run against an in-memory SQLite database.
 
 ## Project Structure
 
 ```
 lib/rails_ai_context/
-├── cli/               # CLI tool runner (tool_runner.rb) — executes MCP tools from rake/Thor
+├── cli/               # CLI tool runner (tool_runner.rb) - executes MCP tools from rake/Thor
 ├── introspectors/     # 39 introspectors (schema, models, routes, etc.)
 ├── tools/             # 38 MCP tools with detail levels and pagination
 ├── serializers/       # Per-assistant formatters + shared ToolGuideHelper
@@ -41,7 +41,7 @@ lib/rails_ai_context/
 1. Create `lib/rails_ai_context/tools/your_tool.rb` inheriting from `BaseTool` (auto-loaded by Zeitwerk)
 2. Define `tool_name`, `description`, `input_schema`, and `annotations`
 3. Implement `def self.call(...)` returning `text_response(string)`
-4. Auto-registered — no manual list to update (BaseTool.inherited tracks it)
+4. Auto-registered - no manual list to update (BaseTool.inherited tracks it)
 5. Write specs in `spec/lib/rails_ai_context/tools/your_tool_spec.rb`
 
 ## Adding a Prism Listener
@@ -49,7 +49,7 @@ lib/rails_ai_context/
 Listeners extract specific concerns (associations, validations, etc.) from the AST via `Prism::Dispatcher` events.
 
 1. Create `lib/rails_ai_context/introspectors/listeners/your_listener.rb` inheriting from `BaseListener`
-2. Implement `on_call_node_enter(node)` and/or `on_def_node_enter(node)` — only the events your concern needs
+2. Implement `on_call_node_enter(node)` and/or `on_def_node_enter(node)` - only the events your concern needs
 3. Use `confidence_for(node)` from `BaseListener` to tag results `[VERIFIED]` or `[INFERRED]`
 4. Store results in `@results` (accessed via `#results`)
 5. Register the key/class pair in `SourceIntrospector::LISTENER_MAP`
@@ -59,13 +59,13 @@ See existing listeners in `lib/rails_ai_context/introspectors/listeners/` for re
 
 ## Adding a CLI Tool Interface
 
-The `ToolRunner` (`lib/rails_ai_context/cli/tool_runner.rb`) handles CLI execution of all MCP tools. It is tested in `spec/lib/rails_ai_context/cli/tool_runner_spec.rb`. If you add a new MCP tool, it is automatically available via CLI — no extra registration needed. Tool name resolution (`schema` → `get_schema` → `rails_get_schema`) works for all tools.
+The `ToolRunner` (`lib/rails_ai_context/cli/tool_runner.rb`) handles CLI execution of all MCP tools. It is tested in `spec/lib/rails_ai_context/cli/tool_runner_spec.rb`. If you add a new MCP tool, it is automatically available via CLI - no extra registration needed. Tool name resolution (`schema` → `get_schema` → `rails_get_schema`) works for all tools.
 
 ## Code Style
 
 - Follow `rubocop-rails-omakase` style (run `bundle exec rubocop`)
 - Ruby 3.2+ features welcome (pattern matching, etc.)
-- Every introspector must return a Hash and never raise — wrap errors in `{ error: msg }`
+- Every introspector must return a Hash and never raise - wrap errors in `{ error: msg }`
 - MCP tools return `MCP::Tool::Response` objects
 - All tools must be prefixed with `rails_` and annotated as read-only
 

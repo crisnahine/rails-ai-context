@@ -111,7 +111,7 @@ module RailsAiContext
       end
 
       # Returns whether credentials are configured (boolean).
-      # Does NOT expose key names — those could reveal integrated services.
+      # Does NOT expose key names - those could reveal integrated services.
       def credentials_configured?
         creds = app.credentials
         creds.respond_to?(:config) && creds.config.keys.any?

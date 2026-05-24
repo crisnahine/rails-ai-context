@@ -9,7 +9,7 @@ module RailsAiContext
       # Extracts constant names used as method receivers (Post.find, Post.new),
       # params.require(:post) keys, and instance variable write targets.
       #
-      # Not registered in SourceIntrospector::LISTENER_MAP — used standalone
+      # Not registered in SourceIntrospector::LISTENER_MAP - used standalone
       # by ControllerHydrator since model references are controller-specific.
       class ModelReferenceListener < BaseListener
         attr_reader :constant_references, :require_keys, :ivar_models

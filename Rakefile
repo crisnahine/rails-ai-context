@@ -5,7 +5,7 @@ require "rspec/core/rake_task"
 
 RSpec::Core::RakeTask.new(:spec)
 
-# E2E harness — runs specs under spec/e2e/ with E2E=1 so they're not
+# E2E harness - runs specs under spec/e2e/ with E2E=1 so they're not
 # excluded by spec/spec_helper.rb. Each install-path spec spawns a
 # fresh Rails app in a tmpdir and can take minutes.
 #
@@ -47,7 +47,7 @@ namespace :e2e do
   desc "Run e2e specs in parallel via parallel_tests (opt-in; uses all CPUs)"
   task :parallel do
     # Opt-in parallelization. Each parallel_tests worker is a separate
-    # process — it will rebuild its own shared-fixture memoization and
+    # process - it will rebuild its own shared-fixture memoization and
     # its own built .gem artefact. Still a net win because rspec-level
     # wall-clock scales with the slowest worker, not the sum.
     #
@@ -56,7 +56,7 @@ namespace :e2e do
     #     derived from E2E_DB_SUFFIX and workers would collide unless you
     #     pre-create per-worker databases. Run `rake e2e` separately if
     #     you need postgres coverage.
-    #   - Shared BUNDLE_PATH is NOT used in parallel mode — two workers
+    #   - Shared BUNDLE_PATH is NOT used in parallel mode - two workers
     #     writing to the same bundle path can corrupt native extension
     #     builds. Each worker gets its own implicit bundle directory.
     require "shellwords"

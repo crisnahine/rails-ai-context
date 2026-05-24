@@ -28,7 +28,7 @@ Interactive setup asks:
 2. MCP or CLI mode?
 
 Creates:
-- `.rails-ai-context.yml` — YAML configuration
+- `.rails-ai-context.yml` - YAML configuration
 - MCP config files for selected AI tools
 - Context files for selected AI tools
 
@@ -47,11 +47,11 @@ rails-ai-context version            # Show version
 
 ## How standalone mode works
 
-1. **Pre-loads the gem** before Rails boots — the CLI loads `rails-ai-context` before `Bundler.setup`
+1. **Pre-loads the gem** before Rails boots - the CLI loads `rails-ai-context` before `Bundler.setup`
 2. **Restores `$LOAD_PATH`** entries that `Bundler.setup` strips (since the gem isn't in the Gemfile)
-3. **YAML config** — uses `.rails-ai-context.yml` instead of a Ruby initializer
+3. **YAML config** - uses `.rails-ai-context.yml` instead of a Ruby initializer
 
-This means you get the same 38 tools, same MCP server, same context generation — without touching the project's Gemfile.
+This means you get the same 38 tools, same MCP server, same context generation - without touching the project's Gemfile.
 
 ## Configuration via YAML
 
@@ -94,8 +94,8 @@ skip_tools:
 
 Two config options are Ruby-only and can't be set via YAML:
 
-- `custom_tools` — requires Ruby class references
-- `excluded_concerns` — requires Regex objects
+- `custom_tools` - requires Ruby class references
+- `excluded_concerns` - requires Regex objects
 
 For these, use the initializer approach (in-Gemfile mode).
 
@@ -122,7 +122,7 @@ Standalone mode works with all Ruby version managers:
 
 ### Codex CLI env snapshot
 
-Codex CLI is special — it `env_clear()`s the process before spawning MCP servers. The install generator snapshots your Ruby environment variables (PATH, GEM_HOME, GEM_PATH, GEM_ROOT, RUBY_VERSION, BUNDLE_PATH) into `.codex/config.toml` so Codex can find Ruby and gems.
+Codex CLI is special - it `env_clear()`s the process before spawning MCP servers. The install generator snapshots your Ruby environment variables (PATH, GEM_HOME, GEM_PATH, GEM_ROOT, RUBY_VERSION, BUNDLE_PATH) into `.codex/config.toml` so Codex can find Ruby and gems.
 
 If you switch Ruby versions, re-run `rails-ai-context init` to update the snapshot.
 
@@ -155,7 +155,7 @@ ruby -v                       # Right Ruby version?
 
 ### "YAML config not loading"
 
-Check that no initializer exists — if `config/initializers/rails_ai_context.rb` runs, YAML is skipped.
+Check that no initializer exists - if `config/initializers/rails_ai_context.rb` runs, YAML is skipped.
 
 ### Commands hang
 

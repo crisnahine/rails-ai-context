@@ -53,7 +53,7 @@ module RailsAiContext
           by_controller = by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
         end
 
-        # Filter by controller — accepts "posts", "PostsController", "posts_controller", "Api::V1::Posts"
+        # Filter by controller - accepts "posts", "PostsController", "posts_controller", "Api::V1::Posts"
         if controller
           normalized = controller.underscore.delete_suffix("_controller")
           normalized_alt = controller.downcase.delete_suffix("_controller").delete_suffix("controller")
@@ -89,12 +89,12 @@ module RailsAiContext
               actions = app_routes[ctrls.first]
               verbs = actions.map { |r| r[:verb] }.tally.map { |v, c| "#{c} #{v}" }.join(", ")
               short_names = ctrls.map { |c| c.split("/").last }
-              lines << "- **#{namespace}/*** (#{short_names.join(', ')}) — #{actions.size} routes each (#{verbs})"
+              lines << "- **#{namespace}/*** (#{short_names.join(', ')}) - #{actions.size} routes each (#{verbs})"
             else
               ctrls.each do |ctrl|
                 actions = app_routes[ctrl]
                 verbs = actions.map { |r| r[:verb] }.tally.map { |v, c| "#{c} #{v}" }.join(", ")
-                lines << "- **#{ctrl}** — #{actions.size} routes (#{verbs})"
+                lines << "- **#{ctrl}** - #{actions.size} routes (#{verbs})"
               end
             end
           end

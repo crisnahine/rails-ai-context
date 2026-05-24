@@ -100,7 +100,7 @@ module RailsAiContext
             lines << "## From .env.example (not referenced in code)"
             example_only.each do |v|
               entry = "- `#{v[:name]}`"
-              entry += " — #{v[:comment]}" if v[:comment]
+              entry += " - #{v[:comment]}" if v[:comment]
               lines << entry
             end
             lines << ""
@@ -113,7 +113,7 @@ module RailsAiContext
           external_services.each do |svc|
             entry = "- **#{svc[:name]}**"
             entry += " (#{svc[:gem]})" if svc[:gem]
-            entry += " — found in `#{svc[:file]}`" if svc[:file]
+            entry += " - found in `#{svc[:file]}`" if svc[:file]
             lines << entry
           end
           lines << ""
@@ -189,7 +189,7 @@ module RailsAiContext
           env_example.each do |v|
             entry = "- `#{v[:name]}`"
             entry += " = `#{v[:example_value]}`" if v[:example_value] && !v[:example_value].empty?
-            entry += " — #{v[:comment]}" if v[:comment]
+            entry += " - #{v[:comment]}" if v[:comment]
             lines << entry
           end
           lines << ""
@@ -262,7 +262,7 @@ module RailsAiContext
               # ENV.fetch("VAR_NAME") or ENV.fetch("VAR_NAME", default)
               line.scan(/ENV\.fetch\(["']([^"']+)["'](?:\s*,\s*([^)]+))?\)/).each do |match|
                 default = match[1]&.strip
-                # Sanitize default — don't expose potential secrets
+                # Sanitize default - don't expose potential secrets
                 default = sanitize_default(default) if default
                 vars << { name: match[0], line: line_num, default: default }
               end
@@ -276,7 +276,7 @@ module RailsAiContext
       end
 
       private_class_method def self.scan_env_example(root)
-        # Only read .env.example or .env.sample — NEVER .env or .env.local
+        # Only read .env.example or .env.sample - NEVER .env or .env.local
         candidates = %w[.env.example .env.sample .env.template]
         vars = []
 
@@ -305,7 +305,7 @@ module RailsAiContext
                 comment = parts[1]&.strip
               end
 
-              # Don't expose actual secret values — only show structure
+              # Don't expose actual secret values - only show structure
               example_value = sanitize_example_value(example_value)
 
               vars << { name: match[1], example_value: example_value, comment: comment }
@@ -503,7 +503,7 @@ module RailsAiContext
           # Recursively extract key paths (never values)
           extract_key_paths(creds.config, [], keys)
         rescue => _e
-          # Credentials not accessible (missing master key, etc.) — graceful degradation
+          # Credentials not accessible (missing master key, etc.) - graceful degradation
           # Try parsing credentials file structure without decrypting
           keys = parse_credentials_structure
         end

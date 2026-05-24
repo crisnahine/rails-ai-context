@@ -23,7 +23,7 @@ RSpec.describe "MCP Tool Integration" do
 
         it "does not declare a default output_schema (issue #69)" do
           # Declaring an outputSchema without returning structured_content violates
-          # the MCP spec — strict clients (e.g. Copilot CLI) reject the response
+          # the MCP spec - strict clients (e.g. Copilot CLI) reject the response
           # with "MCP error -32600: Tool ... has an output schema but did not
           # return structured content". Tools that return only text MUST NOT
           # advertise an outputSchema. See issue #69.

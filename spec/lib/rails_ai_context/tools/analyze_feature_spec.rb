@@ -240,10 +240,10 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
           result = described_class.call(feature: "dos_thing")
           text = result.content.first[:text]
 
-          # Each section asserted independently — a regression in any single
+          # Each section asserted independently - a regression in any single
           # discover_* method would now fail the spec on its own line.
-          expect(text).to include("## Mailers (#{described_class::MAX_SCAN_FILES} — first #{described_class::MAX_SCAN_FILES} scanned)")
-          expect(text).to include("## Channels (#{described_class::MAX_SCAN_FILES} — first #{described_class::MAX_SCAN_FILES} scanned)")
+          expect(text).to include("## Mailers (#{described_class::MAX_SCAN_FILES} - first #{described_class::MAX_SCAN_FILES} scanned)")
+          expect(text).to include("## Channels (#{described_class::MAX_SCAN_FILES} - first #{described_class::MAX_SCAN_FILES} scanned)")
           expect(text).to include("## Environment Dependencies (first #{described_class::MAX_SCAN_FILES} per dir scanned)")
         end
       end
@@ -252,7 +252,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
         Dir.mktmpdir("rac_below_cap") do |tmp|
           services_dir = File.join(tmp, "app", "services")
           FileUtils.mkdir_p(services_dir)
-          # Strictly below MAX_SCAN_FILES — guard against a `>= cap` off-by-one
+          # Strictly below MAX_SCAN_FILES - guard against a `>= cap` off-by-one
           # that would falsely emit the truncation note.
           (described_class::MAX_SCAN_FILES - 50).times do |i|
             File.write(File.join(services_dir, "small_service_#{i}.rb"),

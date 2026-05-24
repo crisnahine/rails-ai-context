@@ -116,7 +116,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
-  describe "argument parsing — CLI style" do
+  describe "argument parsing - CLI style" do
     it "parses --key value pairs" do
       runner = described_class.new("schema", [ "--table", "users", "--detail", "full" ])
       output = runner.run
@@ -149,7 +149,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
-  describe "argument parsing — rake style (hash)" do
+  describe "argument parsing - rake style (hash)" do
     it "accepts hash params" do
       runner = described_class.new("schema", { detail: "summary" })
       output = runner.run
@@ -189,7 +189,7 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
-  describe "integration — real tool calls" do
+  describe "integration - real tool calls" do
     it "runs schema tool" do
       runner = described_class.new("schema", [ "--detail", "summary" ])
       output = runner.run

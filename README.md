@@ -32,17 +32,17 @@
 
 You've seen it. Your AI:
 
-- **Writes a migration for a column that already exists** — didn't check the schema
-- **Creates a method that duplicates one in a concern** — didn't know it was there
-- **Uses the wrong association name** — `user.posts` when it's `user.articles`
-- **Generates tests that don't match your patterns** — factories when you use fixtures, or the reverse
-- **Adds a gem you already have** — or calls an API from one you don't
-- **Misses `before_action` filters from parent controllers** — then wonders why auth fails
-- **Invents a method** that isn't in your codebase — then you spend 10 minutes finding out
+- **Writes a migration for a column that already exists** - didn't check the schema
+- **Creates a method that duplicates one in a concern** - didn't know it was there
+- **Uses the wrong association name** - `user.posts` when it's `user.articles`
+- **Generates tests that don't match your patterns** - factories when you use fixtures, or the reverse
+- **Adds a gem you already have** - or calls an API from one you don't
+- **Misses `before_action` filters from parent controllers** - then wonders why auth fails
+- **Invents a method** that isn't in your codebase - then you spend 10 minutes finding out
 
 You catch it. You fix it. You re-prompt. It breaks something else.
 
-**The real cost of AI coding isn't the tokens — it's the correction loop.** Every guess is a round-trip: you catch it, you fix it, you re-prompt, and something adjacent breaks. This gem kills the guessing at its source.
+**The real cost of AI coding isn't the tokens - it's the correction loop.** Every guess is a round-trip: you catch it, you fix it, you re-prompt, and something adjacent breaks. This gem kills the guessing at its source.
 
 <br>
 
@@ -53,7 +53,7 @@ gem "rails-ai-context", group: :development
 rails generate rails_ai_context:install
 ```
 
-### Or standalone — no Gemfile needed
+### Or standalone - no Gemfile needed
 
 ```bash
 gem install rails-ai-context
@@ -68,7 +68,7 @@ rails-ai-context serve    # start MCP server
 
 </div>
 
-Now your AI doesn't guess — it **asks your app directly.** 38 tools and 5 resource templates that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing — every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
+Now your AI doesn't guess - it **asks your app directly.** 38 tools and 5 resource templates that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing - every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
 
 <br>
 
@@ -86,9 +86,9 @@ One call returns: definition + source code + every caller grouped by type + test
 
 ## What stops being wrong
 
-Real scenarios where AI goes sideways — and what it does instead with ground truth:
+Real scenarios where AI goes sideways - and what it does instead with ground truth:
 
-| You ask AI to... | Without — AI guesses | With — AI verifies first |
+| You ask AI to... | Without - AI guesses | With - AI verifies first |
 |:-----|:-----|:-----|
 | Add a `subscription_tier` column to users | Writes the migration, duplicates an existing column | Reads live schema, spots `subscription_status` already exists, asks before migrating |
 | Call `user.posts` in a controller | Uses the guess; runtime `NoMethodError` | Resolves the actual association (`user.articles`) from the model |
@@ -111,7 +111,7 @@ rails 'ai:tool[schema]' table=users
 # Trace: find every caller of a method across the codebase
 rails 'ai:tool[search_code]' pattern=your_method match_type=trace
 
-# Model: associations, scopes, callbacks, concerns — all resolved
+# Model: associations, scopes, callbacks, concerns - all resolved
 rails 'ai:tool[model_details]' model=User
 
 # Controllers: action source + inherited filters + strong params in one shot
@@ -132,7 +132,7 @@ Compare what AI outputs with and without these tools wired in. The difference is
 
 ### MCP Server (stdio)
 
-AI calls tools directly via the protocol. Each AI tool gets its own config file — auto-detected on project open.
+AI calls tools directly via the protocol. Each AI tool gets its own config file - auto-detected on project open.
 
 ```
 rails ai:serve
@@ -149,7 +149,7 @@ rails ai:serve
 
 ### MCP Server (HTTP)
 
-Mount inside your Rails app — inherits routing, auth, and middleware.
+Mount inside your Rails app - inherits routing, auth, and middleware.
 
 ```ruby
 # config/routes.rb
@@ -175,7 +175,7 @@ rails 'ai:tool[analyze_feature]' feature=billing
 </tr>
 </table>
 
-> **[Full Guide →](docs/GUIDE.md)** — every command, every parameter, every configuration option.
+> **[Full Guide →](docs/GUIDE.md)** - every command, every parameter, every configuration option.
 
 <br>
 
@@ -198,7 +198,7 @@ rails 'ai:tool[schema]' table=users
 | created_at          | datetime| NO   |          |
 ```
 
-AI sees `subscription_status` already exists. Checks the model, then generates a correct migration — **first attempt**.
+AI sees `subscription_status` already exists. Checks the model, then generates a correct migration - **first attempt**.
 
 </details>
 
@@ -247,7 +247,7 @@ rails 'ai:tool[stimulus]' controller=chart
 
 ## 38 Tools
 
-Every tool is **read-only** and returns data verified against your actual app — not guesses, not training data.
+Every tool is **read-only** and returns data verified against your actual app - not guesses, not training data.
 
 <details open>
 <summary><strong>Search & Trace</strong></summary>
@@ -276,7 +276,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 | Tool | What it does |
 |:-----|:------------|
 | `get_schema` | Columns with indexed/unique/encrypted/default hints |
-| `get_model_details` | AST-parsed associations, validations, scopes, enums, macros — each result tagged `[VERIFIED]` or `[INFERRED]` |
+| `get_model_details` | AST-parsed associations, validations, scopes, enums, macros - each result tagged `[VERIFIED]` or `[INFERRED]` |
 | `get_callbacks` | Callbacks in Rails execution order with source |
 | `get_concern` | Concern methods + source + which models include it |
 
@@ -313,7 +313,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 | `get_test_info` | Fixtures + relationships + test template matching your patterns |
 | `generate_test` | Test scaffolding matching your project's patterns |
 | `validate` | Syntax + semantic + Brakeman security in one call |
-| `security_scan` | Brakeman static analysis — SQL injection, XSS, mass assignment |
+| `security_scan` | Brakeman static analysis - SQL injection, XSS, mass assignment |
 | `performance_check` | N+1 risks, missing indexes, counter_cache, eager load candidates |
 
 </details>
@@ -357,7 +357,7 @@ Every tool is **read-only** and returns data verified against your actual app �
 
 ## Live Resources (VFS)
 
-AI clients can also read structured data through **resource templates** — `rails-ai-context://` URIs that introspect fresh on every request. Zero stale data.
+AI clients can also read structured data through **resource templates** - `rails-ai-context://` URIs that introspect fresh on every request. Zero stale data.
 
 | Resource Template | What it returns |
 |:------------------|:---------------|
@@ -416,14 +416,14 @@ graph TD
 
 ## Install
 
-**Option A — In Gemfile:**
+**Option A - In Gemfile:**
 
 ```bash
 gem "rails-ai-context", group: :development
 rails generate rails_ai_context:install
 ```
 
-**Option B — Standalone (no Gemfile entry needed):**
+**Option B - Standalone (no Gemfile entry needed):**
 
 ```bash
 gem install rails-ai-context
@@ -431,7 +431,7 @@ cd your-rails-app
 rails-ai-context init
 ```
 
-Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI) and whether you want MCP or CLI mode. Each tool gets its own MCP config file — auto-detected on project open.
+Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI) and whether you want MCP or CLI mode. Each tool gets its own MCP config file - auto-detected on project open.
 
 <br>
 
@@ -523,7 +523,7 @@ Every MCP tool call fires an `ActiveSupport::Notifications` event:
 
 ```ruby
 ActiveSupport::Notifications.subscribe("rails_ai_context.tools.call") do |event|
-  Rails.logger.info "[MCP] #{event.payload[:method]} — #{event.duration}ms"
+  Rails.logger.info "[MCP] #{event.payload[:method]} - #{event.duration}ms"
 end
 ```
 

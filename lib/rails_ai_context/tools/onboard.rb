@@ -4,7 +4,7 @@ module RailsAiContext
   module Tools
     class Onboard < BaseTool
       tool_name "rails_onboard"
-      description "Get a narrative walkthrough of the Rails application — stack, data model, authentication, key flows, " \
+      description "Get a narrative walkthrough of the Rails application - stack, data model, authentication, key flows, " \
         "background jobs, frontend, testing, and getting started instructions. " \
         "Use when: first encountering a project, onboarding a new developer, or orienting an AI agent. " \
         "Key params: detail (quick/standard/full)."
@@ -14,7 +14,7 @@ module RailsAiContext
           detail: {
             type: "string",
             enum: %w[quick standard full],
-            description: "Detail level. quick: 1-paragraph overview. standard: structured walkthrough (default). full: comprehensive with all subsystems."
+            description: "Detail level. quick: 1-paragraph overview. standard: structured walkthrough (default). full: all subsystems included."
           }
         }
       )
@@ -67,11 +67,11 @@ module RailsAiContext
             stats << "#{job_count} jobs" if job_count > 0
           end
 
-          parts << "— #{stats.join(', ')}" if stats.any?
+          parts << "- #{stats.join(', ')}" if stats.any?
 
           # Frontend and testing
           frontend_desc = quick_frontend_summary(ctx)
-          parts << "— #{frontend_desc}" if frontend_desc
+          parts << "- #{frontend_desc}" if frontend_desc
 
           tests = ctx[:tests]
           if tests.is_a?(Hash) && !tests[:error]
@@ -139,7 +139,7 @@ module RailsAiContext
             if notable.any?
               by_cat = notable.group_by { |g| g[:category]&.to_s || "other" }
               gem_parts = by_cat.first(5).map { |cat, list| "#{cat}: #{list.map { |g| g[:name] }.join(', ')}" }
-              lines << "Notable gems — #{gem_parts.join('; ')}."
+              lines << "Notable gems - #{gem_parts.join('; ')}."
             end
           end
 
@@ -169,7 +169,7 @@ module RailsAiContext
             val_count = (data[:validations] || []).size
             desc = "**#{name}**"
             desc += " (table: `#{data[:table_name]}`)" if data[:table_name]
-            desc += " — #{assocs.first(4).join(', ')}" if assocs.any?
+            desc += " - #{assocs.first(4).join(', ')}" if assocs.any?
             desc += ", +#{assocs.size - 4} more" if assocs.size > 4
             desc += ". #{val_count} validations." if val_count > 0
             lines << "- #{desc}"
@@ -257,7 +257,7 @@ module RailsAiContext
           top_ctrls.each do |ctrl, ctrl_routes|
             actions = ctrl_routes.map { |r| r[:action] }.compact.uniq
             verbs = ctrl_routes.map { |r| "#{r[:verb]} #{r[:path]}" }.first(3)
-            lines << "- **#{ctrl}** — #{actions.join(', ')} (#{verbs.join(', ')})"
+            lines << "- **#{ctrl}** - #{actions.join(', ')} (#{verbs.join(', ')})"
           end
 
           lines << ""

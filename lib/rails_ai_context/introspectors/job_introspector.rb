@@ -292,7 +292,7 @@ module RailsAiContext
         path.start_with?(rails_root) ? path.sub("#{rails_root}/", "") : path
       end
 
-      # `identified_by :current_user, :tenant` — declared on ApplicationCable::Connection,
+      # `identified_by :current_user, :tenant` - declared on ApplicationCable::Connection,
       # but channels can also use it. Returns array of attribute names.
       def extract_identified_by(source)
         return nil unless source
@@ -301,7 +301,7 @@ module RailsAiContext
         matches.flat_map { |m| m.first.scan(/:(\w+)/).flatten }.uniq
       end
 
-      # `stream_from "channel_name"` and `stream_for object` — what the channel broadcasts.
+      # `stream_from "channel_name"` and `stream_for object` - what the channel broadcasts.
       def extract_channel_streams(source)
         return nil unless source
         from_targets = source.scan(/\bstream_from\s+["']([^"']+)["']/).flatten

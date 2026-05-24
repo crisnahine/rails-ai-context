@@ -2,21 +2,21 @@
 
 require_relative "e2e_helper"
 
-# Postgres adapter coverage. Skipped unless TEST_POSTGRES=1 — local
+# Postgres adapter coverage. Skipped unless TEST_POSTGRES=1 - local
 # developers rarely have postgres running, and we don't want to silently
 # pass by skipping in CI.
 #
 # Exercises the rails_query tool's Postgres-specific code paths:
 #   - SET TRANSACTION READ ONLY before SELECT
 #   - BLOCKED_FUNCTIONS regex (pg_read_file, pg_ls_dir, dblink, COPY ...
-#     PROGRAM, LO_*, etc.) — verified via attempting one and asserting
+#     PROGRAM, LO_*, etc.) - verified via attempting one and asserting
 #     a structured rejection
 #
 # Plus the SQLite-equivalent baseline (rails_get_schema, rails_get_routes)
 # to prove the gem works against a non-default adapter end-to-end.
 RSpec.describe "E2E: Postgres adapter", type: :e2e do
   before(:all) do
-    skip "TEST_POSTGRES not set — Postgres harness only runs when explicitly requested" unless ENV["TEST_POSTGRES"] == "1"
+    skip "TEST_POSTGRES not set - Postgres harness only runs when explicitly requested" unless ENV["TEST_POSTGRES"] == "1"
 
     @builder = E2E::TestAppBuilder.new(
       parent_dir: E2E.root,

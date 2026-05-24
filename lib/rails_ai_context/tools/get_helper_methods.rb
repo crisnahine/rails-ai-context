@@ -66,7 +66,7 @@ module RailsAiContext
           return text_response("No helper files found in app/helpers/.")
         end
 
-        # Specific helper — full detail
+        # Specific helper - full detail
         if helper
           return show_helper(helper, helper_files, real_helpers_dir, real_root, max_size, detail)
         end
@@ -174,7 +174,7 @@ module RailsAiContext
         case detail
         when "summary"
           page[:items].each do |h|
-            lines << "- **#{h[:name]}** — #{h[:method_count]} methods"
+            lines << "- **#{h[:name]}** - #{h[:method_count]} methods"
           end
           lines << "" << "_Use `helper:\"Name\"` for method signatures._"
 

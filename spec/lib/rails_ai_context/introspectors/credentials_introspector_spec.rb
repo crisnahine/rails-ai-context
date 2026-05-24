@@ -69,7 +69,7 @@ RSpec.describe RailsAiContext::Introspectors::CredentialsIntrospector do
       let(:sentinel) { "SENTINEL_CREDENTIAL_VALUE_MUST_NEVER_APPEAR" }
       let(:stub_creds) do
         # Struct's single-field constructor takes the hash as its one positional
-        # arg — matches the real `ActiveSupport::EncryptedConfiguration#config`
+        # arg - matches the real `ActiveSupport::EncryptedConfiguration#config`
         # API which returns a Hash.
         Struct.new(:config).new({ api_key: sentinel, database_password: sentinel, secret_token: sentinel })
       end
@@ -115,8 +115,8 @@ RSpec.describe RailsAiContext::Introspectors::CredentialsIntrospector do
       it "surfaces structured error metadata without echoing the exception message" do
         # The inner `attempt_top_level_keys` rescues and returns nil, so the
         # `:default` hash reports `present: true` with no `:top_level_keys`.
-        # Critically, the exception message — which includes the absolute
-        # path `/Users/alice/secret/master.key` — must never reach output.
+        # Critically, the exception message - which includes the absolute
+        # path `/Users/alice/secret/master.key` - must never reach output.
         default = result[:default]
         expect(default[:file]).to eq("config/credentials.yml.enc")
         expect(default[:present]).to eq(true)

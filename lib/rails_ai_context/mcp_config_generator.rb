@@ -77,7 +77,7 @@ module RailsAiContext
 
     # VS Code / Copilot (.vscode/mcp.json)
     # Format: { "servers": { "rails-ai-context": { "command": "...", "args": [...] } } }
-    # Type is optional for stdio — VS Code infers from presence of command.
+    # Type is optional for stdio - VS Code infers from presence of command.
     def write_vscode_json(path)
       entry = mcp_json_entry
       merge_json(path, "servers", entry)
@@ -187,7 +187,7 @@ module RailsAiContext
     end
 
     # Snapshot environment variables needed for Ruby/Bundler to work.
-    # Only captures vars that are actually set — works with any version manager.
+    # Only captures vars that are actually set - works with any version manager.
     RUBY_ENV_KEYS = %w[PATH GEM_HOME GEM_PATH GEM_ROOT RUBY_VERSION BUNDLE_PATH].freeze
 
     def ruby_env_snapshot

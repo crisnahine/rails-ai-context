@@ -265,7 +265,7 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
       result1 = described_class.call(query: "active record")
       expect(result1.content.first[:text]).to include("Failed to parse")
 
-      # Second call: fix the index — should retry since error wasn't memoized
+      # Second call: fix the index - should retry since error wasn't memoized
       allow(RailsAiContext::SafeFile).to receive(:read).with(described_class::INDEX_PATH).and_return(mock_index_json)
 
       result2 = described_class.call(query: "active record")

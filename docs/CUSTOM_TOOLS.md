@@ -11,7 +11,7 @@
 ---
 
 > [!NOTE]
-> Custom tools have full access to your Rails environment — ActiveRecord, services, mailers, everything. They appear alongside the 38 built-in tools in both MCP and CLI.
+> Custom tools have full access to your Rails environment - ActiveRecord, services, mailers, everything. They appear alongside the 38 built-in tools in both MCP and CLI.
 
 ## Creating a custom tool
 
@@ -34,7 +34,7 @@ class RailsGetBusinessMetrics < MCP::Tool
   )
 
   def call(period: "week")
-    # Your logic here — full access to Rails models, services, etc.
+    # Your logic here - full access to Rails models, services, etc.
     stats = {
       users: User.where("created_at > ?", period_start(period)).count,
       orders: Order.where("created_at > ?", period_start(period)).count,
@@ -176,7 +176,7 @@ end
 | `assert_tool_response_excludes(response, text)` | Assert response does NOT contain the given text. |
 | `extract_response_text(response)` | Extract plain text from an `MCP::Tool::Response`. |
 
-**Name resolution** is fuzzy — all of these resolve to the same tool:
+**Name resolution** is fuzzy - all of these resolve to the same tool:
 
 ```ruby
 execute_tool("rails_get_schema")
@@ -198,7 +198,7 @@ end
 
 ## Tips
 
-- Custom tools have access to the full Rails environment — ActiveRecord, services, mailers, etc.
+- Custom tools have access to the full Rails environment - ActiveRecord, services, mailers, etc.
 - Keep tools read-only when possible. MCP tools annotated as non-destructive build more trust with AI clients.
 - Return `MCP::Tool::Response` objects with `type: "text"` content blocks.
 - Tool responses are automatically truncated at `config.max_tool_response_chars` (default: 200,000).

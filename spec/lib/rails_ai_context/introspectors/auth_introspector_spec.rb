@@ -296,7 +296,7 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       end
     end
 
-    describe "Rails 8 auth — edge cases for allow_unauthenticated_access" do
+    describe "Rails 8 auth - edge cases for allow_unauthenticated_access" do
       let(:session_model)  { File.join(Rails.root, "app/models/session.rb") }
       let(:current_model)  { File.join(Rails.root, "app/models/current.rb") }
       let(:multi_ctrl)     { File.join(Rails.root, "app/controllers/multi_controller.rb") }

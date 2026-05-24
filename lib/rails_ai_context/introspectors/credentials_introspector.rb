@@ -30,7 +30,7 @@ module RailsAiContext
           encrypted_configs: detect_encrypted_configs
         }
       rescue => e
-        # Never echo `e.message` into the return hash — exception messages
+        # Never echo `e.message` into the return hash - exception messages
         # from OS errors (EACCES, ENOENT) or OpenSSL decryption failures
         # can contain absolute paths with the OS username or partial
         # ciphertext. The stderr log is fine because it's debug-gated.

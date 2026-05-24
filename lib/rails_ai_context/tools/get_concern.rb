@@ -39,7 +39,7 @@ module RailsAiContext
           return text_response("No concern directories found. Searched: #{searched_dirs(type).join(', ')}")
         end
 
-        # Specific concern — full detail
+        # Specific concern - full detail
         if name
           return show_concern(name, concern_dirs, root, max_size, detail)
         end
@@ -89,7 +89,7 @@ module RailsAiContext
           return text_response("Path not allowed: #{name} (sensitive file)")
         end
 
-        # Find the concern file — try underscore variants and nested paths
+        # Find the concern file - try underscore variants and nested paths
         underscore = name.underscore
         # Re-check traversal on the post-underscore string in case `underscore`
         # introduces unexpected transformations on future AS versions.
@@ -296,7 +296,7 @@ module RailsAiContext
         if model_concerns.any?
           lines << "## Model Concerns (#{model_concerns.size})"
           model_concerns.each do |c|
-            lines << "- **#{c[:name]}** — #{c[:method_count]} methods (`#{c[:path]}`)"
+            lines << "- **#{c[:name]}** - #{c[:method_count]} methods (`#{c[:path]}`)"
           end
           lines << ""
         end
@@ -304,7 +304,7 @@ module RailsAiContext
         if controller_concerns.any?
           lines << "## Controller Concerns (#{controller_concerns.size})"
           controller_concerns.each do |c|
-            lines << "- **#{c[:name]}** — #{c[:method_count]} methods (`#{c[:path]}`)"
+            lines << "- **#{c[:name]}** - #{c[:method_count]} methods (`#{c[:path]}`)"
           end
           lines << ""
         end
@@ -471,7 +471,7 @@ module RailsAiContext
         max_size = RailsAiContext.configuration.max_file_size
         # Build pattern: match `include ConcernName` or `include ModuleName::ConcernName`
         # Handle both simple and namespaced concern names.
-        # Use `camelize` (not `classify`) — `classify` singularizes, which drops
+        # Use `camelize` (not `classify`) - `classify` singularizes, which drops
         # the final `s` from plural concern names like `WorksheetImports` and
         # then fails to match `include WorksheetImports` in the model.
         simple_name = concern_name.demodulize.camelize

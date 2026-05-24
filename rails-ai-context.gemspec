@@ -8,14 +8,14 @@ Gem::Specification.new do |spec|
   spec.authors       = [ "crisnahine" ]
   spec.email         = [ "crisjosephnahine@gmail.com" ]
 
-  spec.summary       = "Stop AI from guessing your Rails app. 38 tools give coding agents ground truth — schema, models, routes, conventions — on demand. MCP or CLI."
+  spec.summary       = "Stop AI from guessing your Rails app. 38 tools give coding agents ground truth - schema, models, routes, conventions - on demand. MCP or CLI."
   spec.description   = <<~DESC
     rails-ai-context turns your running Rails app into the source of truth for AI
     coding assistants. Instead of guessing from training data or stale file reads,
     agents query 38 live tools (via MCP server or CLI) to get your actual schema,
     associations, routes, inherited filters, conventions, and test patterns.
     Semantic validation catches cross-file errors (wrong columns, missing partials,
-    broken routes) before code runs — so AI writes correct code on the first try.
+    broken routes) before code runs - so AI writes correct code on the first try.
     Auto-generates context files for Claude Code, Cursor, GitHub Copilot,
     OpenCode, and Codex CLI. Works standalone or in-Gemfile.
   DESC
@@ -65,7 +65,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "zeitwerk", "~> 2.6"         # Autoloading
 
   # AST foundation (Phase 1: Ground Truth Engine)
-  spec.add_dependency "prism", ">= 0.28"           # Ruby parser — stdlib in 3.3+, gem for 3.2
+  spec.add_dependency "prism", ">= 0.28"           # Ruby parser - stdlib in 3.3+, gem for 3.2
   spec.add_dependency "concurrent-ruby", ">= 1.2"  # Thread-safe AST cache via Concurrent::Map
 
   # Dev dependencies

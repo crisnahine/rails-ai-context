@@ -9,7 +9,7 @@ module RailsAiContext
       description "One-call error diagnosis: parses the error, classifies it, gathers controller/model/schema context, " \
         "shows recent git changes, pulls relevant logs, and suggests a fix. " \
         "Use when: you hit an error and need to understand why. " \
-        "Key params: error (required — paste the error message), file, line, action (controller#action)."
+        "Key params: error (required - paste the error message), file, line, action (controller#action)."
 
       input_schema(
         properties: {
@@ -114,7 +114,7 @@ module RailsAiContext
         lines << "**Classification:** #{classification[:type]}"
         lines << ""
 
-        # Likely cause — enriched with specific inference when possible
+        # Likely cause - enriched with specific inference when possible
         lines << "## Likely Cause"
         lines << classification[:likely]
         specific = infer_specific_cause(parsed, classification, file, action)
@@ -309,11 +309,11 @@ module RailsAiContext
           msg = parsed[:message].to_s
           method = parsed[:method_name]
 
-          # "undefined method X for nil" — identify WHAT is nil
+          # "undefined method X for nil" - identify WHAT is nil
           if classification[:type] == :nil_reference && msg.include?("for nil")
             # Check if calling on current_user (common: auth not running)
             if file&.include?("controller") && msg.match?(/current_user/)
-              return "`current_user` is nil — the `authenticate_user!` before_action may not be running for this route. " \
+              return "`current_user` is nil - the `authenticate_user!` before_action may not be running for this route. " \
                      "Check if this action is excluded via `unless:` or `skip_before_action`."
             end
             # Check if calling on an association
@@ -326,14 +326,14 @@ module RailsAiContext
                 if receiver_match
                   receiver = receiver_match[1]
                   return "`#{receiver}` is nil when `.#{method}` is called. " \
-                         "This variable may not be set in all code paths — check if it's assigned before use, " \
+                         "This variable may not be set in all code paths - check if it's assigned before use, " \
                          "or use `#{receiver}&.#{method}` for safe navigation."
                 end
               rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
             end
           end
 
-          # RecordNotFound — check if there's a set_* before_action
+          # RecordNotFound - check if there's a set_* before_action
           if classification[:type] == :record_not_found && action
             ctrl, act = action.split("#", 2)
             if ctrl && act

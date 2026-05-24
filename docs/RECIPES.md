@@ -62,7 +62,7 @@
 
 </details>
 
-AI sees `subscription_status` already exists — asks before proceeding instead of creating a duplicate column.
+AI sees `subscription_status` already exists - asks before proceeding instead of creating a duplicate column.
 
 ```
 → rails_get_model_details(model: "User")
@@ -139,7 +139,7 @@ AI sees what already exists before building anything. Then:
 → rails_get_schema()        # Picks the right foreign keys and types
 ```
 
-AI scaffolds the feature matching your app's actual patterns — not generic Rails conventions from training data.
+AI scaffolds the feature matching your app's actual patterns - not generic Rails conventions from training data.
 
 ---
 
@@ -357,7 +357,7 @@ The gem wraps its generated content in section markers:
 <!-- END rails-ai-context -->
 ```
 
-Add your custom rules **outside** these markers — they're preserved on regeneration.
+Add your custom rules **outside** these markers - they're preserved on regeneration.
 
 **Step 3: Remove manual maintenance**
 
@@ -373,11 +373,11 @@ Your custom rules (coding style, PR conventions, team preferences) stay. The gem
 
 ## Tips
 
-1. **Start with `detail:"summary"`** — get the lay of the land before drilling down
-2. **Use `analyze_feature` first** — it's the best starting point for any feature work
-3. **`search_code` with `match_type:"trace"`** — the single most powerful tool for understanding code flow
-4. **Don't read files directly** — let tools give you the structured, verified data
-5. **Re-query after edits** — earlier tool output may be stale after you make changes
+1. **Start with `detail:"summary"`** - get the lay of the land before drilling down
+2. **Use `analyze_feature` first** - it's the best starting point for any feature work
+3. **`search_code` with `match_type:"trace"`** - the single most powerful tool for understanding code flow
+4. **Don't read files directly** - let tools give you the structured, verified data
+5. **Re-query after edits** - earlier tool output may be stale after you make changes
 
 ---
 

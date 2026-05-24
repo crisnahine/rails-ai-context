@@ -2,7 +2,7 @@
 
 module RailsAiContext
   module Introspectors
-    # Enumerates Rails.application.initializers — the graph Rails assembles
+    # Enumerates Rails.application.initializers - the graph Rails assembles
     # during boot. Captures each initializer's name, the file:line where its
     # block is defined, and any declared `before:` / `after:` ordering edges.
     #

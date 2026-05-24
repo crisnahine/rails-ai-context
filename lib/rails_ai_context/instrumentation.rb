@@ -8,7 +8,7 @@ module RailsAiContext
 
     # Metadata-only fields forwarded to ActiveSupport::Notifications. We
     # deliberately exclude `tool_arguments`, `params`, `arguments`, and
-    # `request` because the MCP SDK includes raw tool inputs in those keys —
+    # `request` because the MCP SDK includes raw tool inputs in those keys.
     # e.g. `rails_query(sql: "SELECT password_digest...")`, `rails_get_env(name: "SECRET_KEY_BASE")`,
     # `rails_read_logs(search: "api_key=xyz")`. Forwarding them unredacted
     # would leak the request-side data that each tool's response-side
@@ -29,7 +29,7 @@ module RailsAiContext
           method = data[:method] || "unknown"
           event_name = "#{EVENT_PREFIX}.#{method.to_s.tr("/", ".")}"
 
-          # build_payload reads configuration — wrap it in the rescue so a
+          # build_payload reads configuration - wrap it in the rescue so a
           # broken/nil configuration doesn't propagate out of the lambda and
           # crash the MCP SDK's ensure block. v5.8.1-r3 hardening.
           payload = build_payload(data)
@@ -37,7 +37,7 @@ module RailsAiContext
         rescue => e
           # The MCP SDK's instrument_call invokes this callback from an `ensure`
           # block, which means any exception raised here would overwrite the
-          # tool's actual return value with the subscriber's error — effectively
+          # tool's actual return value with the subscriber's error - effectively
           # crashing every tool call whenever a single subscriber is broken.
           # Swallow the error and log to stderr instead. Fixed in v5.8.1.
           $stderr.puts "[rails-ai-context] instrumentation subscriber failed: #{e.message}" if ENV["DEBUG"]

@@ -15,7 +15,7 @@ module RailsAiContext
       Tools::BaseTool.registered_tools
     end
 
-    # Backwards-compatible constant — delegates to the registry.
+    # Backwards-compatible constant - delegates to the registry.
     # Existing code referencing Server::TOOLS continues to work.
     # Emits a deprecation notice once to guide migration.
     def self.const_missing(name)
@@ -108,7 +108,7 @@ module RailsAiContext
 
       loopback = %w[127.0.0.1 ::1 localhost].freeze
       unless loopback.include?(config.http_bind)
-        $stderr.puts "[rails-ai-context] WARNING: MCP HTTP transport binding to #{config.http_bind} — " \
+        $stderr.puts "[rails-ai-context] WARNING: MCP HTTP transport binding to #{config.http_bind} - " \
                      "this exposes all tools to the network without authentication. " \
                      "Use 127.0.0.1 (default) unless you have external auth in place."
       end
@@ -128,9 +128,9 @@ module RailsAiContext
     end
 
     # Conditionally start live reload based on configuration.
-    # :auto  — try to load `listen`, skip silently with a tip if missing
-    # true   — try to load `listen`, raise if missing
-    # false  — skip entirely
+    # :auto  - try to load `listen`, skip silently with a tip if missing
+    # true   - try to load `listen`, raise if missing
+    # false  - skip entirely
     def maybe_start_live_reload(mcp_server)
       mode = RailsAiContext.configuration.live_reload
 
@@ -145,7 +145,7 @@ module RailsAiContext
           raise LoadError, "Live reload requires the `listen` gem. Add to your Gemfile: gem 'listen', group: :development"
         end
 
-        # :auto mode — skip silently with a tip
+        # :auto mode - skip silently with a tip
         $stderr.puts "[rails-ai-context] Live reload unavailable (add `listen` gem for auto-refresh)"
       end
     end

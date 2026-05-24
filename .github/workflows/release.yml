@@ -83,7 +83,7 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/v}"
           if gem search rails-ai-context --exact --versions | grep -q "$VERSION"; then
             echo "already_published=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Gem v$VERSION already on RubyGems — skipping push"
+            echo "::notice::Gem v$VERSION already on RubyGems - skipping push"
           else
             echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi

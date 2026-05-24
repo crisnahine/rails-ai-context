@@ -33,8 +33,8 @@ flowchart TD
     B -->|No| D[Standalone]
     C --> E{Need MCP\nserver?}
     D --> E
-    E -->|"Yes — best experience"| F[MCP Mode]
-    E -->|"No — terminal only"| G[CLI Mode]
+    E -->|"Yes - best experience"| F[MCP Mode]
+    E -->|"No - terminal only"| G[CLI Mode]
     F --> H{Which AI tools?}
     G --> H
     H --> I["Claude Code"]
@@ -59,12 +59,12 @@ rails generate rails_ai_context:install  # Select "Claude Code"
 ```
 
 This creates:
-- `.mcp.json` — MCP auto-discovery config (auto-detected on project open)
-- `CLAUDE.md` — Root context file
-- `.claude/rules/rails-schema.md` — Schema rules (loaded when editing `db/` files)
-- `.claude/rules/rails-models.md` — Model rules (loaded when editing `app/models/`)
-- `.claude/rules/rails-context.md` — General context rules (always loaded)
-- `.claude/rules/rails-mcp-tools.md` — Tool reference (always loaded)
+- `.mcp.json` - MCP auto-discovery config (auto-detected on project open)
+- `CLAUDE.md` - Root context file
+- `.claude/rules/rails-schema.md` - Schema rules (loaded when editing `db/` files)
+- `.claude/rules/rails-models.md` - Model rules (loaded when editing `app/models/`)
+- `.claude/rules/rails-context.md` - General context rules (always loaded)
+- `.claude/rules/rails-mcp-tools.md` - Tool reference (always loaded)
 
 ### Manual MCP config
 
@@ -106,12 +106,12 @@ rails generate rails_ai_context:install  # Select "Cursor"
 ```
 
 This creates:
-- `.cursor/mcp.json` — MCP auto-discovery config
-- `.cursor/rules/rails-project.mdc` — Project overview (Type 1: alwaysApply)
-- `.cursor/rules/rails-models.mdc` — Model rules (Type 2: glob `app/models/**/*.rb`)
-- `.cursor/rules/rails-controllers.mdc` — Controller rules (Type 2: glob `app/controllers/**/*.rb`)
-- `.cursor/rules/rails-mcp-tools.mdc` — Tool reference (Type 3: agent-requested)
-- `.cursorrules` — **legacy single-file fallback** at the project root. Cursor's chat agent doesn't always detect `.cursor/rules/*.mdc` (reported in v5.9.0 release QA); this file is parsed verbatim by every Cursor build and contains the same compact project context as `CLAUDE.md`.
+- `.cursor/mcp.json` - MCP auto-discovery config
+- `.cursor/rules/rails-project.mdc` - Project overview (Type 1: alwaysApply)
+- `.cursor/rules/rails-models.mdc` - Model rules (Type 2: glob `app/models/**/*.rb`)
+- `.cursor/rules/rails-controllers.mdc` - Controller rules (Type 2: glob `app/controllers/**/*.rb`)
+- `.cursor/rules/rails-mcp-tools.mdc` - Tool reference (Type 3: agent-requested)
+- `.cursorrules` - **legacy single-file fallback** at the project root. Cursor's chat agent doesn't always detect `.cursor/rules/*.mdc` (reported in v5.9.0 release QA); this file is parsed verbatim by every Cursor build and contains the same compact project context as `CLAUDE.md`.
 
 ### Manual MCP config
 
@@ -134,7 +134,7 @@ The MCP tools rule uses `alwaysApply: false` with a descriptive `description:` f
 
 ```markdown
 ---
-description: 38 MCP tools for Rails introspection — schema, models, routes, controllers, views
+description: 38 MCP tools for Rails introspection - schema, models, routes, controllers, views
 alwaysApply: false
 ---
 ```
@@ -150,12 +150,12 @@ rails generate rails_ai_context:install  # Select "GitHub Copilot"
 ```
 
 This creates:
-- `.vscode/mcp.json` — MCP auto-discovery config (VS Code format)
-- `.github/copilot-instructions.md` — Root instructions
-- `.github/instructions/rails-models.instructions.md` — Model rules
-- `.github/instructions/rails-controllers.instructions.md` — Controller rules
-- `.github/instructions/rails-context.instructions.md` — Context rules
-- `.github/instructions/rails-mcp-tools.instructions.md` — Tool reference
+- `.vscode/mcp.json` - MCP auto-discovery config (VS Code format)
+- `.github/copilot-instructions.md` - Root instructions
+- `.github/instructions/rails-models.instructions.md` - Model rules
+- `.github/instructions/rails-controllers.instructions.md` - Controller rules
+- `.github/instructions/rails-context.instructions.md` - Context rules
+- `.github/instructions/rails-mcp-tools.instructions.md` - Tool reference
 
 ### Manual MCP config
 
@@ -194,10 +194,10 @@ rails generate rails_ai_context:install  # Select "OpenCode"
 ```
 
 This creates:
-- `opencode.json` — MCP auto-discovery config
-- `AGENTS.md` — Root context file
-- `app/models/AGENTS.md` — Model-level rules
-- `app/controllers/AGENTS.md` — Controller-level rules
+- `opencode.json` - MCP auto-discovery config
+- `AGENTS.md` - Root context file
+- `app/models/AGENTS.md` - Model-level rules
+- `app/controllers/AGENTS.md` - Controller-level rules
 
 ### Manual MCP config
 
@@ -227,7 +227,7 @@ rails generate rails_ai_context:install  # Select "Codex CLI"
 ```
 
 This creates:
-- `.codex/config.toml` — MCP config (TOML format) with Ruby environment snapshot
+- `.codex/config.toml` - MCP config (TOML format) with Ruby environment snapshot
 - Shares `AGENTS.md` and OpenCode rules files
 
 ### Manual MCP config
@@ -247,7 +247,7 @@ GEM_PATH = "/Users/you/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0"
 
 ### Why the env section?
 
-Codex CLI `env_clear()`s the process before spawning MCP servers. Without the env section, Ruby/Bundler can't find gems. The install generator snapshots your current Ruby environment variables automatically — works with rbenv, rvm, asdf, mise, chruby, and system Ruby.
+Codex CLI `env_clear()`s the process before spawning MCP servers. Without the env section, Ruby/Bundler can't find gems. The install generator snapshots your current Ruby environment variables automatically - works with rbenv, rvm, asdf, mise, chruby, and system Ruby.
 
 ### Checking for stale env
 
@@ -322,7 +322,7 @@ In VS Code with Copilot Chat, ask:
 codex --verbose "list your tools"
 ```
 
-### All tools — CLI verification
+### All tools - CLI verification
 
 If MCP isn't connecting, verify the server works standalone:
 

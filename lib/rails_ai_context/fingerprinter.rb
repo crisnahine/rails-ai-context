@@ -40,7 +40,7 @@ module RailsAiContext
         digest.update(RailsAiContext::VERSION)
 
         # Include gem lib directory fingerprint when using a local/path gem.
-        # MEMOIZED — the gem lib contents don't change within a single process
+        # MEMOIZED - the gem lib contents don't change within a single process
         # lifetime unless a developer is actively editing the gem source (rare
         # audience, they should restart the server to see changes). Previously
         # this walked 123 gem files on every tool call, adding ~12ms to the
@@ -51,7 +51,7 @@ module RailsAiContext
           path = File.join(root, file)
           digest.update(File.mtime(path).to_f.to_s) if File.exist?(path)
         rescue Errno::ENOENT
-          # File deleted between exist? check and mtime read — skip
+          # File deleted between exist? check and mtime read - skip
         end
 
         WATCHED_DIRS.each do |dir|
@@ -61,7 +61,7 @@ module RailsAiContext
           Dir.glob(File.join(full_dir, "**/*.{rb,rake,js,ts,erb,haml,slim,yml}")).sort.each do |path|
             digest.update(File.mtime(path).to_f.to_s)
           rescue Errno::ENOENT
-            # File deleted between glob and mtime read — skip
+            # File deleted between glob and mtime read - skip
           end
         end
 
@@ -92,7 +92,7 @@ module RailsAiContext
         Dir.glob(File.join(gem_lib, "**/*.rb")).sort.each do |path|
           sub.update(File.mtime(path).to_f.to_s)
         rescue Errno::ENOENT
-          # File deleted between glob and mtime read — skip
+          # File deleted between glob and mtime read - skip
         end
         sub.hexdigest
       end

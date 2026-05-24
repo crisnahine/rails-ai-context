@@ -147,7 +147,7 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
 
       result = described_class.call
       text = result.content.first[:text]
-      # Should not crash — assets line may be absent or show only pipeline
+      # Should not crash - assets line may be absent or show only pipeline
       expect(text).to include("Application Configuration")
     end
 
@@ -211,13 +211,13 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
     end
 
     it "falls back to YAML when config API unavailable" do
-      # The YAML fallback is tested by the existing behavior —
+      # The YAML fallback is tested by the existing behavior.
       # when no cable.yml exists and no config API, returns nil
       allow(described_class).to receive(:detect_action_cable).and_call_original
 
       result = described_class.call
       text = result.content.first[:text]
-      # Just verify it doesn't crash — cable line may or may not be present
+      # Just verify it doesn't crash - cable line may or may not be present
       expect(text).to include("Application Configuration")
     end
   end

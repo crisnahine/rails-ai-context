@@ -17,8 +17,8 @@ module RailsAiContext
         "5" => { key: :codex,   name: "Codex CLI",       files: "AGENTS.md + .codex/config.toml",                     format: :codex }
       }.freeze
 
-      # Files/dirs generated per AI tool format — used for cleanup on tool removal.
-      # MCP config files are NOT listed here — they use merge-safe removal via
+      # Files/dirs generated per AI tool format - used for cleanup on tool removal.
+      # MCP config files are NOT listed here - they use merge-safe removal via
       # McpConfigGenerator.remove to preserve other servers' entries.
       FORMAT_PATHS = {
         claude:   %w[CLAUDE.md .claude/rules],
@@ -48,7 +48,7 @@ module RailsAiContext
         end
 
         if @selected_formats.empty?
-          say "No tools selected — defaulting to all.", :yellow
+          say "No tools selected - defaulting to all.", :yellow
           @selected_formats = AI_TOOLS.values.map { |t| t[:format] }
         end
 
@@ -73,9 +73,9 @@ module RailsAiContext
         say ""
 
         say "Remove their generated files?", :yellow
-        say "  y — remove all listed above"
-        say "  n — keep all (default)"
-        say "  1,2 — remove only specific ones by number"
+        say "  y - remove all listed above"
+        say "  n - keep all (default)"
+        say "  1,2 - remove only specific ones by number"
         say ""
 
         input = ask("Enter choice:").strip.downcase
@@ -111,7 +111,7 @@ module RailsAiContext
             end
           end
 
-          # Merge-safe MCP config cleanup — removes only the rails-ai-context entry
+          # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
           cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Rails.root.to_s)
           cleaned.each { |f| say "  Removed MCP entry from #{Pathname.new(f).relative_path_from(Rails.root)}", :red }
 
@@ -123,8 +123,8 @@ module RailsAiContext
         say ""
         say "Do you also want MCP server support?", :yellow
         say ""
-        say "  1. Yes — MCP primary + CLI fallback (generates per-tool MCP config files)"
-        say "  2. No  — CLI only (no server needed)"
+        say "  1. Yes - MCP primary + CLI fallback (generates per-tool MCP config files)"
+        say "  2. No  - CLI only (no server needed)"
         say ""
 
         input = ask("Enter number (default: 1):").strip
@@ -152,7 +152,7 @@ module RailsAiContext
         end
         result[:skipped].each do |f|
           rel = Pathname.new(f).relative_path_from(Rails.root)
-          say "#{rel} unchanged — skipped", :yellow
+          say "#{rel} unchanged - skipped", :yellow
         end
         if @tool_mode == :cli
           say "Skipped MCP config files (CLI-only mode)", :yellow
@@ -170,15 +170,15 @@ module RailsAiContext
             # config.ai_tools = %i[claude cursor copilot opencode codex]  # default: all
 
             # Tool invocation mode:
-            #   :mcp — MCP primary + CLI fallback (default, requires `rails ai:serve`)
-            #   :cli — CLI only (no MCP server needed, uses `rails 'ai:tool[NAME]'`)
+            #   :mcp - MCP primary + CLI fallback (default, requires `rails ai:serve`)
+            #   :cli - CLI only (no MCP server needed, uses `rails 'ai:tool[NAME]'`)
             # config.tool_mode = :mcp
         SECTION
         "Introspection" => <<~SECTION,
             # ── Introspection ─────────────────────────────────────────────────
             # Introspector preset:
-            #   :full     — all #{RailsAiContext::Configuration::PRESETS[:full].size} introspectors (default)
-            #   :standard — #{RailsAiContext::Configuration::PRESETS[:standard].size} core introspectors (schema, models, routes, jobs, gems,
+            #   :full     - all #{RailsAiContext::Configuration::PRESETS[:full].size} introspectors (default)
+            #   :standard - #{RailsAiContext::Configuration::PRESETS[:standard].size} core introspectors (schema, models, routes, jobs, gems,
             #               conventions, controllers, tests, migrations, stimulus,
             #               view_templates, config, components)
             # config.preset = :full
@@ -222,9 +222,9 @@ module RailsAiContext
             # config.max_tool_response_chars = 200_000
 
             # Live reload: auto-invalidate MCP tool caches on file changes
-            #   :auto — enable if `listen` gem is available (default)
-            #   true  — enable, raise if `listen` gem is missing
-            #   false — disable entirely
+            #   :auto - enable if `listen` gem is available (default)
+            #   true  - enable, raise if `listen` gem is missing
+            #   false - disable entirely
             # config.live_reload = :auto
 
             # Auto-mount HTTP MCP endpoint (for HTTP transport)
@@ -275,7 +275,7 @@ module RailsAiContext
             # config.query_redacted_columns += %w[my_app_specific_secret]
 
             # rails_query is DISABLED in production by default. Setting
-            # this to true is rarely correct — only do so if you have
+            # this to true is rarely correct - only do so if you have
             # audit logging + access controls around your AI client.
             # config.allow_query_in_production = false
         SECTION
@@ -342,8 +342,8 @@ module RailsAiContext
           #{tools_line}
 
             # Tool invocation mode:
-            #   :mcp — MCP primary + CLI fallback (default, requires `rails ai:serve`)
-            #   :cli — CLI only (no MCP server needed, uses `rails 'ai:tool[NAME]'`)
+            #   :mcp - MCP primary + CLI fallback (default, requires `rails ai:serve`)
+            #   :cli - CLI only (no MCP server needed, uses `rails 'ai:tool[NAME]'`)
           #{tool_mode_line}
 
         SECTION
@@ -392,7 +392,7 @@ module RailsAiContext
           File.write(full_path, existing)
           say "Updated #{full_path.relative_path_from(Rails.root)}: #{changes.join(', ')}", :green
         else
-          say "#{full_path.relative_path_from(Rails.root)} is up to date — no changes needed", :green
+          say "#{full_path.relative_path_from(Rails.root)} is up to date - no changes needed", :green
         end
       end
 
@@ -406,7 +406,7 @@ module RailsAiContext
           end
           [ updated, updated != content ]
         else
-          # Key not found at all — don't add (it's in a section that will be added)
+          # Key not found at all - don't add (it's in a section that will be added)
           [ content, false ]
         end
       end
@@ -512,7 +512,7 @@ module RailsAiContext
         if append.any?
           File.open(gitignore, "a") do |f|
             f.puts ""
-            f.puts "# rails-ai-context (JSON cache — markdown files should be committed)"
+            f.puts "# rails-ai-context (JSON cache - markdown files should be committed)"
             append.each { |line| f.puts line }
           end
           say "Updated .gitignore", :green
@@ -527,7 +527,7 @@ module RailsAiContext
         hook_path = hooks_dir.join("pre-commit")
 
         if File.exist?(hook_path) && !File.read(hook_path).include?("rails-ai-context")
-          say "  Skipped pre-commit hook (existing hook found — add manually)", :yellow
+          say "  Skipped pre-commit hook (existing hook found - add manually)", :yellow
           return
         end
 
@@ -618,12 +618,12 @@ module RailsAiContext
         say ""
         if @tool_mode == :mcp
           say "MCP auto-discovery:", :yellow
-          say "  Each AI tool gets its own config file — auto-detected on project open."
+          say "  Each AI tool gets its own config file - auto-detected on project open."
           say "  No manual config needed."
         else
           say "CLI tools:", :yellow
           say "  AI agents can run `rails 'ai:tool[schema]' table=users` directly."
-          say "  No MCP server needed — tools work from the terminal."
+          say "  No MCP server needed - tools work from the terminal."
         end
         say ""
         say "To add more AI tools later:", :yellow

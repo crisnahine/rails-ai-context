@@ -12,7 +12,7 @@ module RailsAiContext
     # Can be called with a file path (cached via AstCache) or a source string.
     class SourceIntrospector
       # Map result keys to listener classes. Iteration order is preserved
-      # (Ruby >= 1.9), but results are accessed by key — never by index.
+      # (Ruby >= 1.9), but results are accessed by key - never by index.
       LISTENER_MAP = {
         associations: Listeners::AssociationsListener,
         validations:  Listeners::ValidationsListener,

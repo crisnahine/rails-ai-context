@@ -173,7 +173,7 @@ module RailsAiContext
             all_assocs = (model[:has_many] || []) + (model[:belongs_to] || [])
             all_assocs.each do |assoc|
               assoc_name = assoc[:name]
-              # Skip polymorphic belongs_to — can't preload generically
+              # Skip polymorphic belongs_to - can't preload generically
               next if assoc[:options]&.match?(/polymorphic/)
               next unless association_accessed?(ivar, assoc_name, action_body, view_contents)
 
@@ -282,9 +282,9 @@ module RailsAiContext
         when :high
           "Add .includes(:#{assoc_name}) to the #{model_name} query to avoid N+1 queries"
         when :medium
-          "#{model_name} query has preloading but missing :#{assoc_name} — add it to the includes list"
+          "#{model_name} query has preloading but missing :#{assoc_name} - add it to the includes list"
         when :low
-          "#{assoc_name} is preloaded — no action needed"
+          "#{assoc_name} is preloaded - no action needed"
         end
       end
 

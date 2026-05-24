@@ -25,7 +25,7 @@ module RailsAiContext
       AUTH_KEYWORDS = %w[auth authentication login signup signin session devise omniauth].freeze
 
       # Cap per-directory file scans to avoid unbounded work on large monorepos.
-      # Note: Dir.glob materialises the full path array before .first() truncates —
+      # Note: Dir.glob materialises the full path array before .first() truncates.
       # the directory walk itself is unbounded; only per-file reading and processing
       # is capped at MAX_SCAN_FILES. Applied to every discover_* method that walks
       # the filesystem. Tool output notes when the cap is hit so the AI agent knows
@@ -211,7 +211,7 @@ module RailsAiContext
           end
           return if found.empty?
 
-          lines << "## Services (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " — first #{MAX_SCAN_FILES} scanned" : ""})"
+          lines << "## Services (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
           found.each do |path|
             relative = path.sub("#{real_root}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
@@ -238,7 +238,7 @@ module RailsAiContext
           end
           return if found.empty?
 
-          lines << "## Jobs (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " — first #{MAX_SCAN_FILES} scanned" : ""})"
+          lines << "## Jobs (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
           found.each do |path|
             relative = path.sub("#{real_root}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
@@ -265,7 +265,7 @@ module RailsAiContext
           end
           return if found.empty?
 
-          lines << "## Views (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " — first #{MAX_SCAN_FILES} scanned" : ""})"
+          lines << "## Views (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
           found.each do |path|
             relative = path.sub("#{real_views_dir}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
@@ -338,7 +338,7 @@ module RailsAiContext
           found.uniq!
           return found if found.empty?
 
-          header = "## Tests (#{found.size}#{truncated ? " — first #{MAX_SCAN_FILES} per glob scanned" : ""})"
+          header = "## Tests (#{found.size}#{truncated ? " - first #{MAX_SCAN_FILES} per glob scanned" : ""})"
           lines << header
           found.each do |path|
             relative = path.sub("#{real_root}/", "")
@@ -362,7 +362,7 @@ module RailsAiContext
           matched_models&.each do |name, _data|
             snake = name.underscore
             unless test_basenames.any? { |t| t.include?(snake) }
-              gaps << "Model `#{name}` — no test file found"
+              gaps << "Model `#{name}` - no test file found"
             end
           end
 
@@ -372,7 +372,7 @@ module RailsAiContext
             next unless ctrl_name.downcase.include?(pattern)
             snake = ctrl_name.underscore.delete_suffix("_controller")
             unless test_basenames.any? { |t| t.include?(snake) }
-              gaps << "Controller `#{ctrl_name}` — no test file found"
+              gaps << "Controller `#{ctrl_name}` - no test file found"
             end
           end
 
@@ -385,7 +385,7 @@ module RailsAiContext
               next unless File.basename(path, ".rb").include?(pattern)
               snake = File.basename(path, ".rb")
               unless test_basenames.any? { |t| t.include?(snake) }
-                gaps << "Job `#{snake}` — no test file found"
+                gaps << "Job `#{snake}` - no test file found"
               end
             end
           end
@@ -397,7 +397,7 @@ module RailsAiContext
               next unless File.basename(path, ".rb").include?(pattern)
               snake = File.basename(path, ".rb")
               unless test_basenames.any? { |t| t.include?(snake) }
-                gaps << "Service `#{snake}` — no test file found"
+                gaps << "Service `#{snake}` - no test file found"
               end
             end
           end
@@ -453,7 +453,7 @@ module RailsAiContext
           return if related.empty?
 
           lines << "## Related Models (#{related.size})"
-          related.sort.each { |name, refs| lines << "- **#{name}** — #{refs.join(', ')}" }
+          related.sort.each { |name, refs| lines << "- **#{name}** - #{refs.join(', ')}" }
           lines << ""
         end
 
@@ -510,7 +510,7 @@ module RailsAiContext
           found = candidates.select { |p| File.basename(p, ".rb").include?(pattern) }
           return if found.empty?
 
-          lines << "## Channels (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " — first #{MAX_SCAN_FILES} scanned" : ""})"
+          lines << "## Channels (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
           found.each do |path|
             relative = path.sub("#{real_root}/", "")
             lines << "- `#{relative}`"
@@ -531,12 +531,12 @@ module RailsAiContext
           found = candidates.select { |p| File.basename(p, ".rb").include?(pattern) }
           return if found.empty?
 
-          lines << "## Mailers (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " — first #{MAX_SCAN_FILES} scanned" : ""})"
+          lines << "## Mailers (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
           found.each do |path|
             relative = path.sub("#{real_root}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
             methods = source.scan(/^\s*def (\w+)/m).flatten.reject { |m| m == "initialize" }
-            lines << "- `#{relative}` — #{methods.join(', ')}" if methods.any?
+            lines << "- `#{relative}` - #{methods.join(', ')}" if methods.any?
           end
           lines << ""
         rescue => e
@@ -560,7 +560,7 @@ module RailsAiContext
           matched.first(10).each do |c|
             slots = c[:slots]&.size || 0
             slot_info = slots > 0 ? " (#{slots} slots)" : ""
-            used_in = c[:used_in]&.any? ? " — used in: #{c[:used_in].first(5).join(', ')}" : ""
+            used_in = c[:used_in]&.any? ? " - used in: #{c[:used_in].first(5).join(', ')}" : ""
             lines << "- **#{c[:name]}**#{slot_info}#{used_in}"
           end
           lines << ""

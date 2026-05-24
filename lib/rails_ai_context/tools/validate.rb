@@ -50,7 +50,7 @@ module RailsAiContext
 
         files.each do |file|
           if file.nil? || file.strip.empty?
-            results << "- (empty) \u2014 skipped (empty filename)"
+            results << "- (empty) - skipped (empty filename)"
             next
           end
 
@@ -60,7 +60,7 @@ module RailsAiContext
           # for a path like config/master.key. Mirrors get_edit_context.rb
           # ordering. v5.8.1 round 2 hardening.
           if sensitive_file?(file)
-            results << "\u2717 #{file} \u2014 access denied (sensitive file)"
+            results << "\u2717 #{file} - access denied (sensitive file)"
             total += 1
             next
           end
@@ -70,7 +70,7 @@ module RailsAiContext
           unless File.exist?(full_path)
             suggestion = find_file_suggestion(file)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
-            results << "\u2717 #{file} \u2014 file not found.#{hint}"
+            results << "\u2717 #{file} - file not found.#{hint}"
             total += 1
             next
           end
@@ -78,12 +78,12 @@ module RailsAiContext
           begin
             real = File.realpath(full_path).to_s
             rails_root_real = File.realpath(Rails.root).to_s
-            # Separator-aware containment — matches the v5.8.1-r2 hardening in
+            # Separator-aware containment - matches the v5.8.1-r2 hardening in
             # get_view.rb / vfs.rb. Without `+ File::SEPARATOR`, a sibling-dir
             # like `/app/rails_evil/...` would prefix-match a Rails root at
             # `/app/rails`. Same bug class as the original C1.
             unless real == rails_root_real || real.start_with?(rails_root_real + File::SEPARATOR)
-              results << "\u2717 #{file} \u2014 path not allowed (outside Rails root)"
+              results << "\u2717 #{file} - path not allowed (outside Rails root)"
               total += 1
               next
             end
@@ -93,12 +93,12 @@ module RailsAiContext
             # ../../config/master.key).
             relative_real = real.sub("#{rails_root_real}/", "")
             if sensitive_file?(relative_real)
-              results << "\u2717 #{file} \u2014 access denied (resolves to sensitive file)"
+              results << "\u2717 #{file} - access denied (resolves to sensitive file)"
               total += 1
               next
             end
           rescue Errno::ENOENT
-            results << "\u2717 #{file} \u2014 file not found"
+            results << "\u2717 #{file} - file not found"
             total += 1
             next
           end
@@ -113,16 +113,16 @@ module RailsAiContext
           elsif file.end_with?(".js")
             validate_javascript(real_path)
           else
-            results << "- #{file} \u2014 skipped (unsupported file type)"
+            results << "- #{file} - skipped (unsupported file type)"
             total -= 1
             next
           end
 
           if ok
-            results << "\u2713 #{file} \u2014 syntax OK"
+            results << "\u2713 #{file} - syntax OK"
             passed += 1
           else
-            results << "\u2717 #{file} \u2014 #{msg}"
+            results << "\u2717 #{file} - #{msg}"
           end
 
           (warnings || []).each { |w| results << "  \u26A0 #{w}" }
@@ -286,7 +286,7 @@ module RailsAiContext
       # ── Rails-aware semantic checks (level: "rails") ─────────────────
       # ════════════════════════════════════════════════════════════════════
 
-      # Prism AST Visitor — walks the AST once, extracts data for all checks
+      # Prism AST Visitor - walks the AST once, extracts data for all checks
       class RailsSemanticVisitor < Prism::Visitor
         attr_reader :render_calls, :route_helper_calls, :validates_calls,
                     :permit_calls, :callback_registrations, :has_many_calls,
@@ -538,7 +538,7 @@ module RailsAiContext
           next if ref.include?("@") || ref.include?("#") || ref.include?("{")
           possible = resolve_partial_paths(file, ref)
           unless possible.any? { |p| File.exist?(File.join(Rails.root, "app", "views", p)) }
-            warnings << "render \"#{ref}\" \u2014 partial not found (checked: #{possible.first(2).join(', ')})"
+            warnings << "render \"#{ref}\" - partial not found (checked: #{possible.first(2).join(', ')})"
           end
         end
         warnings
@@ -551,7 +551,7 @@ module RailsAiContext
           next if ref.include?("@") || ref.include?("#") || ref.include?("{")
           possible = resolve_partial_paths(file, ref)
           unless possible.any? { |p| File.exist?(File.join(Rails.root, "app", "views", p)) }
-            warnings << "render \"#{ref}\" \u2014 partial not found (checked: #{possible.first(2).join(', ')})"
+            warnings << "render \"#{ref}\" - partial not found (checked: #{possible.first(2).join(', ')})"
           end
         end
         warnings
@@ -594,7 +594,7 @@ module RailsAiContext
           next if DEVISE_HELPER_NAMES.include?(name)
           next if %w[edit new polymorphic].include?(name)
 
-          warnings << "#{helper} \u2014 route helper not found" unless valid_names.include?(name)
+          warnings << "#{helper} - route helper not found" unless valid_names.include?(name)
         end
         warnings
       end
@@ -618,7 +618,7 @@ module RailsAiContext
           next if ASSET_HELPER_PREFIXES.any? { |p| name.start_with?(p) }
           next if DEVISE_HELPER_NAMES.include?(name)
           next if %w[edit new polymorphic].include?(name)
-          warnings << "#{helper} \u2014 route helper not found" unless valid_names.include?(name)
+          warnings << "#{helper} - route helper not found" unless valid_names.include?(name)
         end
         warnings
       end
@@ -652,7 +652,7 @@ module RailsAiContext
         visitor.validates_calls.each do |vc|
           vc[:columns].each do |col|
             unless valid[:columns].include?(col)
-              warnings << "validates :#{col} \u2014 column \"#{col}\" not found in #{valid[:table]} table. Fix: add migration `rails g migration Add#{col.camelize}To#{valid[:table].camelize} #{col}:string` or check concerns"
+              warnings << "validates :#{col} - column \"#{col}\" not found in #{valid[:table]} table. Fix: add migration `rails g migration Add#{col.camelize}To#{valid[:table].camelize} #{col}:string` or check concerns"
             end
           end
         end
@@ -674,7 +674,7 @@ module RailsAiContext
             col = m[0]
             break if after.include?("#{col}:")
             next if col == col.capitalize
-            warnings << "validates :#{col} \u2014 column \"#{col}\" not found in #{valid[:table]} table" unless valid[:columns].include?(col)
+            warnings << "validates :#{col} - column \"#{col}\" not found in #{valid[:table]} table" unless valid[:columns].include?(col)
           end
         end
         warnings
@@ -745,7 +745,7 @@ module RailsAiContext
             # When JSONB columns exist, only flag _id params (FKs must be real columns)
             # Plain-word params could be keys inside JSONB columns
             next if has_json_columns && !param.end_with?("_id")
-            warnings << "permits :#{param} \u2014 not a column in #{table_name} table (check virtual attributes or add migration)"
+            warnings << "permits :#{param} - not a column in #{table_name} table (check virtual attributes or add migration)"
           end
         end
         warnings
@@ -777,8 +777,8 @@ module RailsAiContext
         visitor.callback_registrations.each do |reg|
           reg[:methods].each do |method_name|
             next if known.include?(method_name)
-            next if has_concerns # uncertain — method may come from concern
-            warnings << "#{reg[:type]} :#{method_name} \u2014 method not found in #{model_name}"
+            next if has_concerns # uncertain - method may come from concern
+            warnings << "#{reg[:type]} :#{method_name} - method not found in #{model_name}"
           end
         end
         warnings
@@ -813,7 +813,7 @@ module RailsAiContext
           action = route[:action]
           next unless action
           unless actions.include?(action)
-            warnings << "route #{route[:verb]} #{route[:path]} \u2192 #{action} \u2014 action not found in #{ctrl_class}. Fix: add `def #{action}; end` to #{ctrl_class} or remove the route"
+            warnings << "route #{route[:verb]} #{route[:path]} \u2192 #{action} - action not found in #{ctrl_class}. Fix: add `def #{action}; end` to #{ctrl_class} or remove the route"
           end
         end
         warnings
@@ -836,7 +836,7 @@ module RailsAiContext
           next unless assoc[:type] == "has_many"
           next if assoc[:through] # through associations don't need dependent
           next if assoc[:dependent] # already has dependent
-          warnings << "has_many :#{assoc[:name]} \u2014 missing :dependent option (orphaned records risk). Fix: add `dependent: :destroy` or `:nullify`"
+          warnings << "has_many :#{assoc[:name]} - missing :dependent option (orphaned records risk). Fix: add `dependent: :destroy` or `:nullify`"
         end
         warnings
       end
@@ -875,7 +875,7 @@ module RailsAiContext
 
         fk_columns.each do |col|
           unless indexed.include?(col)
-            warnings << "#{col} in #{table_name} \u2014 foreign key without index (slow queries). Fix: `rails g migration AddIndexTo#{table_name.camelize} #{col}:index`"
+            warnings << "#{col} in #{table_name} - foreign key without index (slow queries). Fix: `rails g migration AddIndexTo#{table_name.camelize} #{col}:index`"
           end
         end
         warnings
@@ -918,7 +918,7 @@ module RailsAiContext
             next if name.include?("<%") || name.include?("#") # dynamic
             next if name.include?("--") # namespaced npm package
             unless known.include?(name)
-              warnings << "data-controller=\"#{name}\" \u2014 Stimulus controller not found"
+              warnings << "data-controller=\"#{name}\" - Stimulus controller not found"
             end
           end
         end
@@ -953,7 +953,7 @@ module RailsAiContext
         ctrl_source = RailsAiContext::SafeFile.read(source_path)
         return warnings unless ctrl_source
 
-        # Detect ivars from controller — handles @a, @b = multi-assignment
+        # Detect ivars from controller - handles @a, @b = multi-assignment
         set_ivars = []
         ctrl_source.each_line do |line|
           next unless line.include?("@")
@@ -1003,7 +1003,7 @@ module RailsAiContext
           # Skip dynamic channels (containing interpolation)
           next if channel.include?("#") || channel.include?("{")
           unless subscriptions.any? { |s| s == channel || channel.include?(s) || s.include?(channel) }
-            warnings << "broadcast to \"#{channel}\" — no matching turbo_stream_from found in views"
+            warnings << "broadcast to \"#{channel}\" - no matching turbo_stream_from found in views"
           end
         end
         warnings
@@ -1019,7 +1019,7 @@ module RailsAiContext
         return warnings unless file.start_with?("app/views/") && file.end_with?(".html.erb")
 
         # Check if there's a turbo_stream version when turbo_stream_from is used
-        # (This checks from the view side — controller respond_to check is separate)
+        # (This checks from the view side - controller respond_to check is separate)
         return warnings unless content.include?("turbo_stream_from") || content.include?("turbo_frame_tag")
 
         # If view has turbo_stream_from, check the controller action has respond_to :turbo_stream
@@ -1054,7 +1054,7 @@ module RailsAiContext
             next if stripped.match?(/\[\]\.#{method}/) || stripped.match?(/\.to_a\.#{method}/)
             # Skip if preceded by pluck/select (already optimized)
             next if stripped.match?(/\.pluck\(.*\)\.#{method}/) || stripped.match?(/\.select\(.*\)\.#{method}/)
-            warnings << "line #{num}: scope chain followed by .#{method} may load all records into memory — consider .pluck or SQL"
+            warnings << "line #{num}: scope chain followed by .#{method} may load all records into memory - consider .pluck or SQL"
             break # one warning per line
           end
         end
@@ -1075,7 +1075,7 @@ module RailsAiContext
         if file.start_with?("app/controllers/") && perf[:model_all_in_controllers]&.any?
           perf[:model_all_in_controllers].each do |finding|
             next unless finding.is_a?(Hash) && finding[:file]&.end_with?(File.basename(file))
-            warnings << "#{finding[:model]}.all loaded in controller — consider pagination or scoping (line #{finding[:line]})"
+            warnings << "#{finding[:model]}.all loaded in controller - consider pagination or scoping (line #{finding[:line]})"
           end
         end
 
@@ -1084,7 +1084,7 @@ module RailsAiContext
           model_name = file.sub("app/models/", "").sub(/\.rb$/, "").tr("/", "::").camelize
           perf[:missing_fk_indexes].each do |finding|
             next unless finding.is_a?(Hash) && finding[:model] == model_name
-            warnings << "#{finding[:column]} on #{finding[:table]} — missing index on foreign key (performance)"
+            warnings << "#{finding[:column]} on #{finding[:table]} - missing index on foreign key (performance)"
           end
         end
 
@@ -1119,7 +1119,7 @@ module RailsAiContext
 
         relevant.sort_by(&:confidence).first(5).map do |w|
           loc = w.line ? "#{w.file.relative}:#{w.line}" : w.file.relative
-          "[#{w.confidence_name}] #{w.warning_type} — #{loc}: #{w.message}"
+          "[#{w.confidence_name}] #{w.warning_type} - #{loc}: #{w.message}"
         end
       rescue => e
         $stderr.puts "[rails-ai-context] check_brakeman_security failed: #{e.message}" if ENV["DEBUG"]

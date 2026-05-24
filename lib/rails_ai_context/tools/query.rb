@@ -59,7 +59,7 @@ module RailsAiContext
       #           dblink* (cross-db exfiltration), COPY ... FROM/TO PROGRAM
       #           (arbitrary command execution when COPY permissions permit).
       # MySQL:    LOAD_FILE (scalar file read outside SELECT INTO contexts).
-      # SQLite:   load_extension (shared-library load — disabled by default
+      # SQLite:   load_extension (shared-library load - disabled by default
       #           but harden in defense).
       BLOCKED_FUNCTIONS = /\b(
         pg_read_binary_file | pg_read_file |
@@ -119,7 +119,7 @@ module RailsAiContext
         end
 
         # ── ActiveRecord guard (api-only apps) ──────────────────────
-        # Must come BEFORE any code that rescues ActiveRecord::* — Ruby
+        # Must come BEFORE any code that rescues ActiveRecord::* - Ruby
         # resolves rescue class constants at raise time, and `rescue
         # ActiveRecord::ConnectionNotEstablished` crashes with NameError
         # on apps where ActiveRecord is not loaded (e.g.
@@ -179,7 +179,7 @@ module RailsAiContext
       def self.strip_sql_comments(sql)
         sql
           # MySQL version-conditional comments `/*! ... */` / `/*!12345 ... */`
-          # are NOT comments — MySQL executes their content. Unwrap them first
+          # are NOT comments - MySQL executes their content. Unwrap them first
           # so the validator sees the inner SQL (e.g. `LOAD_FILE`) instead of
           # stripping it alongside regular block comments, which would let
           # `SELECT /*!50000 LOAD_FILE('/etc/passwd') */` slip past
@@ -207,7 +207,7 @@ module RailsAiContext
 
         cleaned = strip_sql_comments(sql)
 
-        # Check multi-statement and clause patterns first — they provide more
+        # Check multi-statement and clause patterns first - they provide more
         # specific error messages than the generic keyword blocker.
         return [ false, "Blocked: multiple statements (no semicolons)" ] if cleaned.match?(MULTI_STATEMENT)
         return [ false, "Blocked: FOR UPDATE/SHARE clause" ] if cleaned.match?(BLOCKED_CLAUSES)
@@ -215,7 +215,7 @@ module RailsAiContext
         return [ false, "Blocked: SELECT INTO creates a table" ] if cleaned.match?(SELECT_INTO)
         return [ false, "Blocked: SELECT INTO OUTFILE / DUMPFILE writes to disk" ] if cleaned.match?(BLOCKED_OUTPUT)
 
-        # Block database functions that give a filesystem/network primitive —
+        # Block database functions that give a filesystem/network primitive.
         # pg_read_file, lo_import, dblink, LOAD_FILE, load_extension, etc.
         # These pass SET TRANSACTION READ ONLY but bypass sensitive_patterns.
         if (m = cleaned.match(BLOCKED_FUNCTIONS))
@@ -237,7 +237,7 @@ module RailsAiContext
 
         # Column-aliasing redaction bypass defense: reject any query that
         # textually references a sensitive column name. See the comment on
-        # SENSITIVE_COLUMN_SUFFIXES above — post-execution redaction cannot
+        # SENSITIVE_COLUMN_SUFFIXES above - post-execution redaction cannot
         # survive `SELECT password_digest AS x`.
         if (offending = references_sensitive_column?(cleaned))
           return [ false,
@@ -365,7 +365,7 @@ module RailsAiContext
         # Route through the adapter-specific safety wrappers so EXPLAIN inherits
         # the same READ ONLY transaction + statement_timeout / MAX_EXECUTION_TIME
         # the regular query path gets. Load-bearing because PostgreSQL
-        # `EXPLAIN (FORMAT JSON, ANALYZE) ...` actually executes the plan — an
+        # `EXPLAIN (FORMAT JSON, ANALYZE) ...` actually executes the plan - an
         # attacker reaches this via `explain: true` to hold a DB connection
         # indefinitely and bypass the query_timeout guard.
         result = case adapter
@@ -447,7 +447,7 @@ module RailsAiContext
             extract_pg_nodes(plan, scans, warnings) if plan
           end
         rescue JSON::ParserError
-          # Non-JSON EXPLAIN format — fall through to raw output
+          # Non-JSON EXPLAIN format - fall through to raw output
         end
 
         { scan_types: scans, warnings: warnings, raw: raw }

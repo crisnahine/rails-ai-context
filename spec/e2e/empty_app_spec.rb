@@ -2,14 +2,14 @@
 
 require_relative "e2e_helper"
 
-# Empty Rails app — no scaffold, no models, no controllers beyond
+# Empty Rails app - no scaffold, no models, no controllers beyond
 # ApplicationController, no routes beyond root. Every built-in tool MUST
 # handle this gracefully (return a structured "no X found" response, not
 # crash with NoMethodError or raise an exception).
 #
 # This is the harshest stress test for tools that assume Rails app
 # fixtures exist. If a tool crashes here, it'll crash on any greenfield
-# Rails app that hasn't started building features yet — which is exactly
+# Rails app that hasn't started building features yet - which is exactly
 # the moment a developer is most likely to install rails-ai-context.
 RSpec.describe "E2E: empty Rails app", type: :e2e do
   before(:all) do
@@ -32,7 +32,7 @@ RSpec.describe "E2E: empty Rails app", type: :e2e do
         # Crash detection: signaled OR exit code >= 2.
         expect(result.status.signaled?).to be(false), "#{short} died from signal:\n#{result}"
         expect(result.exit_status).to be < 2, "#{short} exit=#{result.exit_status}:\n#{result}"
-        # Must produce SOME output — silent failure is the worst kind.
+        # Must produce SOME output - silent failure is the worst kind.
         expect(result.output.strip).not_to be_empty, "#{short} produced no output"
       end
     end
@@ -49,7 +49,7 @@ RSpec.describe "E2E: empty Rails app", type: :e2e do
     )
     # Stub out scaffold so we get a truly bare app (no Post model).
     def builder.scaffold_sample_model!
-      # no-op — empty app deliberately has no models/scaffolds
+      # no-op - empty app deliberately has no models/scaffolds
     end
     builder.build!
   end

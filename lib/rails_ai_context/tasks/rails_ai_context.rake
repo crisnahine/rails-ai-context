@@ -49,7 +49,7 @@ def prompt_ai_tools
   end
 
   if selected.empty?
-    puts "No tools selected — using all."
+    puts "No tools selected - using all."
     selected = AI_TOOL_OPTIONS.values.map { |t| t[:key] }
   end
 
@@ -62,8 +62,8 @@ def prompt_tool_mode
   puts ""
   puts "Do you also want MCP server support?"
   puts ""
-  puts "  1. Yes — MCP primary + CLI fallback (generates per-tool MCP config files)"
-  puts "  2. No  — CLI only (no server needed)"
+  puts "  1. Yes - MCP primary + CLI fallback (generates per-tool MCP config files)"
+  puts "  2. No  - CLI only (no server needed)"
   puts ""
   print "Enter number (default: 1): "
   input = $stdin.gets&.strip || "1"
@@ -161,8 +161,8 @@ rescue => e
   nil
 end unless defined?(save_yaml_config)
 
-# Files/dirs generated per AI tool format — used for cleanup on tool removal.
-# MCP config files are NOT listed here — they use merge-safe removal via
+# Files/dirs generated per AI tool format - used for cleanup on tool removal.
+# MCP config files are NOT listed here - they use merge-safe removal via
 # McpConfigGenerator.remove to preserve other servers' entries.
 FORMAT_PATHS = {
   claude:   %w[CLAUDE.md .claude/rules],
@@ -208,9 +208,9 @@ def cleanup_removed_ai_tools(previous, current)
   end
   puts ""
   puts "Remove their generated files?"
-  puts "  y — remove all listed above"
-  puts "  n — keep all (default)"
-  puts "  1,2 — remove only specific ones by number"
+  puts "  y - remove all listed above"
+  puts "  n - keep all (default)"
+  puts "  1,2 - remove only specific ones by number"
   puts ""
   print "Enter choice: "
   input = $stdin.gets&.strip&.downcase || "n"
@@ -247,7 +247,7 @@ def cleanup_removed_ai_tools(previous, current)
       end
     end
 
-    # Merge-safe MCP config cleanup — removes only the rails-ai-context entry
+    # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
     cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Rails.root.to_s)
     cleaned.each { |f| puts "  Removed MCP entry from #{Pathname.new(f).relative_path_from(Rails.root)}" }
 
@@ -264,7 +264,7 @@ def add_ai_context_to_gitignore
 
   File.open(gitignore, "a") do |f|
     f.puts ""
-    f.puts "# rails-ai-context (JSON cache — markdown files should be committed)"
+    f.puts "# rails-ai-context (JSON cache - markdown files should be committed)"
     f.puts ".ai-context.json"
   end
   puts "✅ Updated .gitignore"
@@ -279,7 +279,7 @@ def add_ai_tool_to_initializer(format)
 
   # Find the ai_tools line (commented or uncommented)
   if content.match?(/^\s*config\.ai_tools\s*=\s*%i\[([^\]]*)\]/)
-    # Uncommented line — add format if not present
+    # Uncommented line - add format if not present
     match = content.match(/^\s*config\.ai_tools\s*=\s*%i\[([^\]]*)\]/)
     current_tools = match[1].split.map(&:strip)
     unless current_tools.include?(format_sym)
@@ -290,7 +290,7 @@ def add_ai_tool_to_initializer(format)
       puts "💾 Added :#{format_sym} to config.ai_tools"
     end
   elsif content.match?(/^\s*#\s*config\.ai_tools\s*=/)
-    # Commented line — uncomment and set to just this format
+    # Commented line - uncomment and set to just this format
     content.sub!(/^\s*#\s*config\.ai_tools\s*=.*$/, "  config.ai_tools = %i[#{format_sym}]")
     File.write(init_path, content)
     puts "💾 Set config.ai_tools = %i[#{format_sym}]"
@@ -352,7 +352,7 @@ namespace :ai do
     ai_tools = RailsAiContext.configuration.ai_tools
     previous_tools = read_previous_ai_tools_from_config
 
-    # First time — no tools configured, ask the user
+    # First time - no tools configured, ask the user
     if ai_tools.nil?
       ai_tools = prompt_ai_tools
       save_ai_tools_to_initializer(ai_tools) if ai_tools
@@ -486,7 +486,7 @@ namespace :ai do
     context = RailsAiContext.introspect
 
     puts "=" * 60
-    puts " #{context[:app_name]} — AI Context Summary"
+    puts " #{context[:app_name]} - AI Context Summary"
     puts "=" * 60
     puts ""
     puts "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}"
@@ -574,7 +574,7 @@ namespace :ai do
 
     preset = presets[name]
     puts "=" * 60
-    puts " Preset: #{name} — #{preset[:desc]}"
+    puts " Preset: #{name} - #{preset[:desc]}"
     puts "=" * 60
     puts ""
 
@@ -602,7 +602,7 @@ namespace :ai do
     context = RailsAiContext.introspect
     app_name = context[:app_name] || Rails.application.class.module_parent_name
 
-    puts "# #{app_name} — Schema Facts"
+    puts "# #{app_name} - Schema Facts"
     puts "# Generated: #{Time.now.strftime('%Y-%m-%d %H:%M')}"
     puts ""
 

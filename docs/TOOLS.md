@@ -29,13 +29,13 @@
 ## Calling tools
 
 ```bash
-# MCP — AI calls automatically via protocol
-# CLI — you call from terminal:
+# MCP - AI calls automatically via protocol
+# CLI - you call from terminal:
 rails 'ai:tool[schema]' table=users detail=full
 rails-ai-context tool schema --table users --detail full
 ```
 
-Tool name resolution is flexible — all of these work:
+Tool name resolution is flexible - all of these work:
 
 | You type | Resolves to |
 |:---------|:------------|
@@ -75,14 +75,14 @@ Search your codebase with regex, ripgrep acceleration, and sensitive file blocki
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `pattern` | string | *required* | Regex pattern to search for |
-| `path` | string | — | Subdirectory to search in (relative to Rails root) |
+| `path` | string | - | Subdirectory to search in (relative to Rails root) |
 | `match_type` | enum | `any` | `any`, `definition`, `class`, `call`, `trace` |
-| `file_type` | string | — | Filter by extension (`rb`, `erb`, `js`, etc.) |
+| `file_type` | string | - | Filter by extension (`rb`, `erb`, `js`, etc.) |
 | `exact_match` | boolean | `false` | Word boundary matching |
 | `exclude_tests` | boolean | `false` | Skip test/spec directories |
 | `group_by_file` | boolean | `false` | Group results by file with counts |
 
-> **Trace mode** returns definition + source code + every caller grouped by type + tests — replaces 4-5 sequential file reads.
+> **Trace mode** returns definition + source code + every caller grouped by type + tests - replaces 4-5 sequential file reads.
 
 ### `rails_get_edit_context`
 
@@ -91,8 +91,8 @@ Method-aware code extraction with surrounding class context.
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `file` | string | *required* | File path relative to Rails root |
-| `method_name` | string | — | Extract a specific method |
-| `line` | integer | — | Center extraction around a line number |
+| `method_name` | string | - | Extract a specific method |
+| `line` | integer | - | Center extraction around a line number |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
@@ -116,7 +116,7 @@ Composite context: schema + model + controller + routes + views for a resource.
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `resource` | string | *required* | Resource name (e.g., `users`, `Post`) |
-| `action` | string | — | Specific controller action |
+| `action` | string | - | Specific controller action |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_onboard`
@@ -139,7 +139,7 @@ Database schema with column types, indexes, defaults, encrypted hints.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `table` | string | — | Specific table (omit for overview) |
+| `table` | string | - | Specific table (omit for overview) |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_model_details`
@@ -148,7 +148,7 @@ AST-parsed model internals. Every result carries `[VERIFIED]` or `[INFERRED]` co
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `model` | string | — | Model name (e.g., `User`, `Post`) |
+| `model` | string | - | Model name (e.g., `User`, `Post`) |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 Returns: associations, validations, scopes, enums, callbacks, macros, methods, concerns.
@@ -183,8 +183,8 @@ Controller actions with inherited filters, render map, strong params. Includes s
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `controller` | string | — | Controller name (e.g., `UsersController`) |
-| `action` | string | — | Specific action |
+| `controller` | string | - | Controller name (e.g., `UsersController`) |
+| `action` | string | - | Specific action |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_routes`
@@ -193,7 +193,7 @@ Routes with code-ready helpers (`post_path(@record)`) and required params.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `controller` | string | — | Filter by controller |
+| `controller` | string | - | Filter by controller |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
@@ -208,8 +208,8 @@ View templates with instance variables, Turbo frames, Stimulus controllers, part
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `controller` | string | — | Controller name |
-| `action` | string | — | Specific action view |
+| `controller` | string | - | Controller name |
+| `action` | string | - | Specific action view |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_stimulus`
@@ -218,7 +218,7 @@ Stimulus controller data-attributes (with dashes, not underscores) + targets + v
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `controller` | string | — | Stimulus controller name |
+| `controller` | string | - | Stimulus controller name |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_partial_interface`
@@ -258,7 +258,7 @@ Test fixtures, relationships, and template matching your project's patterns.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `model` | string | — | Model to find tests for |
+| `model` | string | - | Model to find tests for |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_generate_test`
@@ -276,7 +276,7 @@ Syntax + semantic + Brakeman security validation in one call.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `files` | string | — | Comma-separated file paths |
+| `files` | string | - | Comma-separated file paths |
 | `level` | enum | `syntax` | `syntax`, `rails`, `security` |
 
 ### `rails_security_scan`
@@ -358,7 +358,7 @@ Background job queue, retries, guard clauses, broadcasts, schedules.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `job` | string | — | Specific job name |
+| `job` | string | - | Specific job name |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_get_component_catalog`
@@ -367,7 +367,7 @@ ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage ex
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `component` | string | — | Specific component name |
+| `component` | string | - | Specific component name |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
@@ -382,7 +382,7 @@ Model/service dependency graph in Mermaid or text format.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `root` | string | — | Starting node |
+| `root` | string | - | Starting node |
 | `format` | enum | `text` | `text`, `mermaid` |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
@@ -394,7 +394,7 @@ Migration code generation with duplicate/nonexistent column warnings, reversibil
 |:----------|:-----|:--------|:------------|
 | `action` | string | *required* | Migration action (e.g., `add_column`, `create_table`) |
 | `table` | string | *required* | Table name |
-| `columns` | string | — | Column definitions |
+| `columns` | string | - | Column definitions |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 ### `rails_search_docs`
@@ -427,7 +427,7 @@ Reverse file tail with level filtering and sensitive data redaction.
 |:----------|:-----|:--------|:------------|
 | `file` | string | `development.log` | Log file name |
 | `lines` | integer | `50` | Number of lines |
-| `level` | enum | — | Filter: `debug`, `info`, `warn`, `error`, `fatal` |
+| `level` | enum | - | Filter: `debug`, `info`, `warn`, `error`, `fatal` |
 
 ### `rails_diagnose`
 
@@ -436,8 +436,8 @@ One-call error diagnosis with classification, context, git blame, and log correl
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `error` | string | *required* | Error message or class |
-| `file` | string | — | File where error occurred |
-| `line` | integer | — | Line number |
+| `file` | string | - | File where error occurred |
+| `line` | integer | - | Line number |
 
 ### `rails_review_changes`
 
@@ -470,7 +470,7 @@ Session-aware context tracking across tool calls within a conversation.
 
 ## Live Resources (VFS)
 
-In addition to tools, AI clients can read structured data through **resource templates** — `rails-ai-context://` URIs introspected fresh on every request. Zero stale data.
+In addition to tools, AI clients can read structured data through **resource templates** - `rails-ai-context://` URIs introspected fresh on every request. Zero stale data.
 
 | URI Pattern | Returns |
 |:------------|:--------|

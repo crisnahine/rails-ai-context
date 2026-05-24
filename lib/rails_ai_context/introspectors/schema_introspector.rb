@@ -210,14 +210,14 @@ module RailsAiContext
           return parse_migrations
         end
 
-        # schema.rb exists but has no tables — happens on fresh Rails apps right
+        # schema.rb exists but has no tables - happens on fresh Rails apps right
         # after `db:create` where no migrations have been run yet. Return a
         # legitimate empty-schema state instead of a misleading "not found" error.
         if schema_rb_exists
           return {
             total_tables: 0,
             tables: {},
-            note: "Schema file exists but is empty — no migrations have been run yet. " \
+            note: "Schema file exists but is empty - no migrations have been run yet. " \
                   "Run `bin/rails db:migrate` after generating migrations to populate schema.rb."
           }
         end

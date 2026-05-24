@@ -42,7 +42,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Controllers (3)")
-      expect(text).to include("**PostsController** — index, show, create, update, destroy")
+      expect(text).to include("**PostsController** - index, show, create, update, destroy")
     end
 
     it "returns all controllers sorted alphabetically" do
@@ -185,8 +185,8 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
     it "returns names with action counts for detail:summary" do
       result = described_class.call(detail: "summary")
       text = result.content.first[:text]
-      expect(text).to include("**UsersController** — 3 actions")
-      expect(text).to include("**PostsController** — 2 actions")
+      expect(text).to include("**UsersController** - 3 actions")
+      expect(text).to include("**PostsController** - 2 actions")
     end
 
     it "returns everything for detail:full" do

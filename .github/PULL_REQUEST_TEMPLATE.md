@@ -8,5 +8,5 @@
 
 ## Checks
 
-- [ ] `bundle exec rspec` — 0 failures
-- [ ] `bundle exec rubocop` — 0 offenses
+- [ ] `bundle exec rspec` - 0 failures
+- [ ] `bundle exec rubocop` - 0 offenses

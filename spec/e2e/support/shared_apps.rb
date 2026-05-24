@@ -5,17 +5,17 @@ module E2E
   #
   # Several specs (mcp_stdio_protocol, mcp_http_protocol, concurrent_mcp,
   # tool_edge_cases) exercise the same `:in_gemfile` app in a read-only way
-  # — they spawn CLI / MCP subprocesses but never mutate the app tree. Each
+  # - they spawn CLI / MCP subprocesses but never mutate the app tree. Each
   # spec rebuilding its own Rails app is wasted wall-clock. This helper
   # memoizes one built app per (install_path, scaffold) key per rspec
   # process.
   #
   # Exceptions that MUST keep their own dedicated app:
-  #   - in_gemfile_install_spec — its idempotency test re-runs the generator
+  #   - in_gemfile_install_spec - its idempotency test re-runs the generator
   #     with different stdin ("a\nn\n1\nn\n" vs build's "a\n1\nn\n") and
   #     would mutate the shared fixture (rspec runs in random order, so we
   #     can't guarantee it runs last).
-  #   - empty_app_spec — deliberately built with `scaffold_sample_model!`
+  #   - empty_app_spec - deliberately built with `scaffold_sample_model!`
   #     stubbed out, so it has no Post model / controller / routes.
   #
   # Everything else that reads from an in-Gemfile install can call

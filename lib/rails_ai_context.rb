@@ -51,5 +51,5 @@ module RailsAiContext
   end
 end
 
-# Rails integration — loaded by Bundler.require after Rails is booted
+# Rails integration - loaded by Bundler.require after Rails is booted
 require_relative "rails_ai_context/engine" if defined?(Rails::Engine)

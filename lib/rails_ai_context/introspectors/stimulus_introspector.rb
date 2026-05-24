@@ -104,7 +104,7 @@ module RailsAiContext
         end
 
         # Handle simple format: name: Type (single line or multi-line)
-        # Skip 'type' and 'default' — they are keywords inside complex value definitions,
+        # Skip 'type' and 'default' - they are keywords inside complex value definitions,
         # not actual Stimulus value names
         body.scan(/(\w+)\s*:\s*([A-Z]\w+)/).each do |name, type|
           next if %w[type default].include?(name)

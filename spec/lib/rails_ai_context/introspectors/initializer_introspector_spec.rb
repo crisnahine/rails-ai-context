@@ -35,7 +35,7 @@ RSpec.describe RailsAiContext::Introspectors::InitializerIntrospector do
     it "captures block source_location for at least some initializers" do
       # Rails initializers defined in railties have Procs with source_location.
       # If the @block ivar is renamed or Proc#source_location returns nil for
-      # every entry, this assertion fails — catching a silent introspection
+      # every entry, this assertion fails - catching a silent introspection
       # degradation that other tests would miss.
       with_source = result[:initializers].count { |i| i[:source].is_a?(String) && !i[:source].empty? }
       expect(with_source).to be > 0

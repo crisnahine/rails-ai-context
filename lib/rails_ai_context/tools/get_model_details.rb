@@ -38,7 +38,7 @@ module RailsAiContext
         return text_response("Model introspection not available. Add :models to introspectors.") unless models
         return text_response("Model introspection failed: #{models[:error]}") if models[:error]
 
-        # Specific model — always full detail (strip whitespace for fuzzy input)
+        # Specific model - always full detail (strip whitespace for fuzzy input)
         if model
           model = model.strip
           key = fuzzy_find_key(models.keys, model) || model
@@ -51,7 +51,7 @@ module RailsAiContext
           return text_response(format_model(key, data))
         end
 
-        # Pagination — sort by association count (most connected first)
+        # Pagination - sort by association count (most connected first)
         all_names = models.keys.sort_by { |m| -(models[m][:associations]&.size || 0) }
         page = paginate(all_names, offset: offset, limit: limit, default_limit: 50)
         paginated = page[:items]
@@ -76,7 +76,7 @@ module RailsAiContext
             assoc_count = (data[:associations] || []).size
             val_count = (data[:validations] || []).size
             line = "- **#{name}**"
-            line += " — #{assoc_count} associations, #{val_count} validations" if assoc_count > 0 || val_count > 0
+            line += " - #{assoc_count} associations, #{val_count} validations" if assoc_count > 0 || val_count > 0
             lines << line
           end
           lines << "" << "_Use `model:\"Name\"` for full detail, or `detail:\"full\"` for association lists._#{pagination_hint}"
@@ -90,7 +90,7 @@ module RailsAiContext
             assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }.join(", ")
             line = "- **#{name}**"
             line += " (table: #{data[:table_name]})" if data[:table_name]
-            line += " — #{assocs}" unless assocs.empty?
+            line += " - #{assocs}" unless assocs.empty?
             lines << line
           end
           lines << "" << "_Use `model:\"Name\"` for validations, scopes, callbacks, and more._#{pagination_hint}"
@@ -106,7 +106,7 @@ module RailsAiContext
         lines = [ "# #{name}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
 
-        # File structure — compact one-line format
+        # File structure - compact one-line format
         structure = extract_model_structure(name)
         if structure
           lines << "**File:** `#{structure[:path]}` (#{structure[:total_lines]} lines)"
@@ -114,7 +114,7 @@ module RailsAiContext
           lines << "**Structure:** #{map}"
         end
 
-        # Schema columns — inline from schema introspection
+        # Schema columns - inline from schema introspection
         if data[:table_name]
           schema = cached_context[:schema]
           if schema.is_a?(Hash) && !schema[:error] && schema[:tables]&.key?(data[:table_name])
@@ -148,7 +148,7 @@ module RailsAiContext
           end
         end
 
-        # Validations — compress repeated inclusion lists, deduplicate same kind+attribute
+        # Validations - compress repeated inclusion lists, deduplicate same kind+attribute
         if data[:validations]&.any?
           lines << "" << "## Validations"
           # Identify belongs_to association names for labeling implicit validations
@@ -194,7 +194,7 @@ module RailsAiContext
           end
         end
 
-        # Custom validate methods (business rules) — show method body when possible
+        # Custom validate methods (business rules) - show method body when possible
         if data[:custom_validates]&.any?
           bodies = extract_custom_validate_bodies(name, data[:custom_validates])
           data[:custom_validates].each do |v|
@@ -220,7 +220,7 @@ module RailsAiContext
           end
         end
 
-        # Scopes — show lambda body so AI can chain correctly
+        # Scopes - show lambda body so AI can chain correctly
         if data[:scopes]&.any?
           lines << "" << "## Scopes"
           data[:scopes].each do |s|
@@ -240,7 +240,7 @@ module RailsAiContext
           end
         end
 
-        # Macros — surface hidden introspector data
+        # Macros - surface hidden introspector data
         macro_lines = []
         macro_lines << "- `has_secure_password`" if data[:has_secure_password]
         macro_lines << "- `encrypts` #{data[:encrypts].map { |f| ":#{f}" }.join(', ')}" if data[:encrypts]&.any?
@@ -273,7 +273,7 @@ module RailsAiContext
         if data[:normalizes_details]&.any?
           lines << "" << "## Normalizes Details"
           data[:normalizes_details].each do |nd|
-            detail_str = nd.is_a?(Hash) ? "**#{nd[:attribute]}** — #{nd[:with] || nd[:block]}" : nd.to_s
+            detail_str = nd.is_a?(Hash) ? "**#{nd[:attribute]}** - #{nd[:with] || nd[:block]}" : nd.to_s
             lines << "- #{detail_str}"
           end
         end
@@ -304,7 +304,7 @@ module RailsAiContext
           end
         end
 
-        # Concerns — filter out framework/gem internal modules
+        # Concerns - filter out framework/gem internal modules
         if data[:concerns]&.any?
           excluded_patterns = RailsAiContext.configuration.excluded_concerns
           app_concerns = data[:concerns].reject do |c|
@@ -316,7 +316,7 @@ module RailsAiContext
             app_concerns.each do |c|
               methods = extract_concern_methods(c)
               if methods&.any?
-                lines << "- **#{c}** — #{methods.join(', ')}"
+                lines << "- **#{c}** - #{methods.join(', ')}"
               else
                 lines << "- #{c}"
               end
@@ -324,7 +324,7 @@ module RailsAiContext
           end
         end
 
-        # Class methods — only show methods defined in the actual model file
+        # Class methods - only show methods defined in the actual model file
         source_class_methods = extract_source_defined_methods(name, class_methods: true)
         if source_class_methods&.any?
           lines << "" << "## Class methods"
@@ -338,7 +338,7 @@ module RailsAiContext
           end
         end
 
-        # Key instance methods — only from source file, not framework-inherited
+        # Key instance methods - only from source file, not framework-inherited
         source_instance_methods = extract_method_signatures(name)
         if source_instance_methods&.any?
           lines << "" << "## Key instance methods"
@@ -357,7 +357,7 @@ module RailsAiContext
           end
         end
 
-        # Cross-reference hints — guide AI to related tools
+        # Cross-reference hints - guide AI to related tools
         hints = []
         hints << "`rails_get_schema(table:\"#{data[:table_name]}\")` for columns/indexes" if data[:table_name]
         controller_name = "#{name.pluralize}Controller"

@@ -34,16 +34,16 @@ module RailsAiContext
 
       def render_context_overview
         lines = [
-          "# #{context[:app_name] || 'Rails App'} — Overview",
+          "# #{context[:app_name] || 'Rails App'} - Overview",
           "",
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
 
-        # Compact counts — gems and architecture are already in the root file (CLAUDE.md/AGENTS.md)
+        # Compact counts - gems and architecture are already in the root file (CLAUDE.md/AGENTS.md)
         schema = context[:schema]
         if schema.is_a?(Hash) && !schema[:error]
-          lines << "- Database: #{schema[:adapter]} — #{schema[:total_tables]} tables"
+          lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables"
         end
 
         models = context[:models]
@@ -54,12 +54,12 @@ module RailsAiContext
 
         lines.concat(full_preset_stack_lines)
 
-        # ApplicationController before_actions — apply to all controllers
+        # ApplicationController before_actions - apply to all controllers
         before_actions = detect_before_actions
         lines << "" << "**Global before_actions:** #{before_actions.join(', ')}" if before_actions.any?
 
         lines << ""
-        lines << "ALWAYS use MCP tools for context — do NOT read reference files directly."
+        lines << "ALWAYS use MCP tools for context - do NOT read reference files directly."
         lines << "Start with `detail:\"summary\"`. Read files ONLY when you will Edit them."
 
         lines.join("\n")
@@ -80,7 +80,7 @@ module RailsAiContext
           "",
           "# Database Tables (#{tables.size})",
           "",
-          "_Snapshot — may be stale after migrations. Use `rails_get_schema(table:\"name\")` for live data._",
+          "_Snapshot - may be stale after migrations. Use `rails_get_schema(table:\"name\")` for live data._",
           ""
         ]
 
@@ -122,7 +122,7 @@ module RailsAiContext
             end
             entry
           end
-          col_str = col_sample.any? ? " — #{col_sample.join(', ')}" : ""
+          col_str = col_sample.any? ? " - #{col_sample.join(', ')}" : ""
 
           # Foreign keys
           fks = (data[:foreign_keys] || []).map { |f| "#{f[:column]}→#{f[:to_table]}" }
@@ -165,7 +165,7 @@ module RailsAiContext
           "",
           "# ActiveRecord Models (#{models.size})",
           "",
-          "_Quick reference — use `rails_get_model_details(model:\"Name\")` for live data with resolved concerns and callbacks._",
+          "_Quick reference - use `rails_get_model_details(model:\"Name\")` for live data with resolved concerns and callbacks._",
           ""
         ]
 
@@ -176,7 +176,7 @@ module RailsAiContext
           table = data[:table_name]
           line = "- #{name}"
           line += " (table: #{table})" if table
-          line += " — #{assocs} assocs, #{vals} validations"
+          line += " - #{assocs} assocs, #{vals} validations"
           lines << line
 
           # Include app-specific concerns (filter out Rails/gem internals)
@@ -192,7 +192,7 @@ module RailsAiContext
           scope_names = scope_names(scopes)
           lines << "  scopes: #{scope_names.join(', ')}" if scopes.any?
 
-          # Instance methods — filter Devise/framework internals that add noise
+          # Instance methods - filter Devise/framework internals that add noise
           devise_noise = %w[after_remembered apply_to_attribute_or_variable clear_reset_password_token
                             clear_reset_password_token? current_password devise_modules devise_modules?
                             devise_respond_to_and_will_save_change_to_attribute?]

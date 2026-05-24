@@ -15,7 +15,7 @@ module E2E
     def start!
       @port = find_free_port
       # Use `rails-ai-context serve --transport http` rather than `rails server`
-      # because auto_mount defaults to false — the Rack middleware isn't
+      # because auto_mount defaults to false - the Rack middleware isn't
       # inserted into the Rails app's stack unless explicitly configured.
       # The CLI HTTP mode starts a standalone MCP HTTP server with the gem's
       # own transport, which is what users of the HTTP transport actually
@@ -44,7 +44,7 @@ module E2E
 
     # POST a JSON-RPC payload to /mcp and return the parsed response hash.
     # The MCP Streamable HTTP transport requires BOTH `application/json` AND
-    # `text/event-stream` in the Accept header — the server may respond with
+    # `text/event-stream` in the Accept header - the server may respond with
     # either a single JSON object or an SSE stream. We request both, then
     # switch on Content-Type below.
     #

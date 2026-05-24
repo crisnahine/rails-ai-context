@@ -29,7 +29,7 @@ module RailsAiContext
 
       ALL_FORMATS = (FORMAT_MAP.keys + SPLIT_ONLY_FORMATS).freeze
 
-      # Section markers live exclusively on SectionMarkerWriter — anyone
+      # Section markers live exclusively on SectionMarkerWriter - anyone
       # who needs them references SectionMarkerWriter::BEGIN_MARKER /
       # END_MARKER directly. (Re-exports were considered for back-compat
       # but no external code referenced ContextFileSerializer::BEGIN_MARKER.)
@@ -115,7 +115,7 @@ module RailsAiContext
         end
       end
 
-      # Atomic write — same temp-file + rename pattern as
+      # Atomic write - same temp-file + rename pattern as
       # SectionMarkerWriter.atomic_write. Kept here because write_plain
       # (JSON path) calls it directly without the marker layer.
       def atomic_write(filepath, content)

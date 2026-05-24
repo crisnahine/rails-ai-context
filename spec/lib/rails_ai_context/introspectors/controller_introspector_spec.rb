@@ -119,7 +119,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       let(:fixture_ctrl) { File.join(Rails.root, "app/controllers/rate_limited_controller.rb") }
 
       before do
-        # Write source file but do NOT load it — rate_limit is Rails 8+ only.
+        # Write source file but do NOT load it - rate_limit is Rails 8+ only.
         # The introspector extracts rate_limit via source parsing, not reflection.
         File.write(fixture_ctrl, <<~RUBY)
           class RateLimitedController < ApplicationController

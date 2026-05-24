@@ -1,11 +1,11 @@
 name: E2E
 
-# End-to-end harness — builds a fresh Rails app per install path
+# End-to-end harness - builds a fresh Rails app per install path
 # (in-Gemfile, standalone, zero-config), exercises the install generator,
 # every CLI tool, the MCP stdio protocol, and the MCP HTTP protocol.
 #
 # Runs on push to main and on manual dispatch. Skipped on PRs (too slow
-# for the signal-to-noise ratio — unit + hardening specs cover PR surface).
+# for the signal-to-noise ratio - unit + hardening specs cover PR surface).
 # Runs separately from ci.yml so the 30-min job doesn't fail-stop the
 # per-commit matrix.
 #
@@ -40,7 +40,7 @@ jobs:
           - ruby: "3.4"
             rails: "8.1"
 
-    name: E2E — Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }}
+    name: E2E - Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }}
 
     services:
       postgres:
@@ -63,7 +63,7 @@ jobs:
       # Share one bundler install directory across every e2e app spawned
       # in this matrix cell. TestAppBuilder#env inherits this env var, so
       # each `bundle install` inside a generated Rails app resolves gems
-      # into the shared path — first app compiles native extensions (pg,
+      # into the shared path - first app compiles native extensions (pg,
       # sqlite3, nokogiri), subsequent apps find them already installed.
       # Cached across workflow runs keyed on Rails version.
       BUNDLE_PATH: ${{ github.workspace }}/.e2e-bundle

@@ -54,7 +54,7 @@ module RailsAiContext
         private
 
         # Resolve after_commit with on: option to specific types.
-        # Returns an array of type strings — one per event.
+        # Returns an array of type strings - one per event.
         def resolve_callback_types(name, options)
           if name == :after_commit && options[:on]
             events = Array(options[:on])

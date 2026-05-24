@@ -2,7 +2,7 @@
 
 require_relative "e2e_helper"
 
-# Install path B: Standalone — `gem install rails-ai-context` into an
+# Install path B: Standalone - `gem install rails-ai-context` into an
 # isolated GEM_HOME (no Gemfile entry), then run `rails-ai-context init`
 # from inside the Rails app directory. CLAUDE.md #33 documents that this
 # path pre-loads the gem before Rails boot and restores $LOAD_PATH entries
