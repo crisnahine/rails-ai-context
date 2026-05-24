@@ -101,8 +101,8 @@ module RailsAiContext
 
         Dir.glob(File.join(dir, "**/*.rb")).filter_map do |path|
           relative = path.sub("#{dir}/", "")
-          content = RailsAiContext::SafeFile.read(path) or next
-          methods = content.scan(/^\s*def\s+(\w+)/).flatten
+          ast_data = SourceIntrospector.walk(path, { methods: Listeners::MethodsListener })
+          methods = ast_data[:methods].map { |m| m[:name] }
           {
             file: relative,
             methods: methods
@@ -206,17 +206,28 @@ module RailsAiContext
         return layouts unless Dir.exist?(controllers_dir)
 
         Dir.glob(File.join(controllers_dir, "**", "*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path)
-          next unless content
-          content.each_line do |line|
-            if (match = line.match(/\A\s*layout\s+["':]*(\w+)["']?(.*)$/))
-              entry = { layout: match[1], controller: File.basename(path, ".rb").camelize }
-              conditions = match[2].strip
-              entry[:only] = conditions.scan(/only:\s*\[?([^\]]+)\]?/).flatten.first&.scan(/:(\w+)/)&.flatten if conditions.include?("only:")
-              entry[:except] = conditions.scan(/except:\s*\[?([^\]]+)\]?/).flatten.first&.scan(/:(\w+)/)&.flatten if conditions.include?("except:")
-              entry[:condition] = conditions.strip unless conditions.empty?
-              layouts << entry
-            end
+          ast_data = SourceIntrospector.walk(path, {
+            layout_calls: -> { Listeners::GenericMacroListener.new(:layout) }
+          })
+
+          ast_data[:layout_calls].each do |macro|
+            layout_name = macro[:args]&.first&.to_s
+            # Also check options for string-based layout names
+            layout_name ||= macro[:options].values.first&.to_s if macro[:options]&.any?
+            next unless layout_name
+
+            entry = { layout: layout_name, controller: File.basename(path, ".rb").camelize }
+            opts = macro[:options] || {}
+            entry[:only] = Array(opts[:only]).map(&:to_s) if opts[:only]
+            entry[:except] = Array(opts[:except]).map(&:to_s) if opts[:except]
+
+            # Build condition string from options for backward compat
+            condition_parts = []
+            condition_parts << "only: #{opts[:only].inspect}" if opts[:only]
+            condition_parts << "except: #{opts[:except].inspect}" if opts[:except]
+            entry[:condition] = condition_parts.join(", ") if condition_parts.any?
+
+            layouts << entry
           end
         rescue => e
           $stderr.puts "[rails-ai-context] detect_conditional_layouts failed: #{e.message}" if ENV["DEBUG"]

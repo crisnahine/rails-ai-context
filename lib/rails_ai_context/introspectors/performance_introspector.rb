@@ -83,13 +83,33 @@ module RailsAiContext
           class_name = content.match(/class\s+(\w+)/)[1] rescue nil
           next unless class_name
 
+          ast = SourceIntrospector.walk(path, {
+            associations: Listeners::AssociationsListener,
+            includes: -> { Listeners::ChainedCallListener.new(:includes) }
+          })
+
+          has_many = ast[:associations].select { |a| a[:type] == :has_many }.map do |a|
+            opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
+            { name: a[:name].to_s, options: opts.empty? ? nil : opts }
+          end
+
+          belongs_to = ast[:associations].select { |a| a[:type] == :belongs_to }.map do |a|
+            opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
+            { name: a[:name].to_s, options: opts.empty? ? nil : opts }
+          end
+
+          includes_calls = ast[:includes].map { |h| h[:args].map(&:to_s).join(", ") }
+
+          # scopes_with_includes: keep regex - complex inline lambda pattern
+          scopes_with_includes = content.scan(/scope\s+:\w+.*\.includes\(/).any?
+
           {
             name: class_name,
             file: path.sub("#{root}/", ""),
-            has_many: content.scan(/has_many\s+:(\w+)(?:,\s*(.*))?/).map { |n, opts| { name: n, options: opts } },
-            belongs_to: content.scan(/belongs_to\s+:(\w+)(?:,\s*(.*))?/).map { |n, opts| { name: n, options: opts } },
-            includes_calls: content.scan(/\.includes\(([^)]+)\)/).flatten,
-            scopes_with_includes: content.scan(/scope\s+:\w+.*\.includes\(/).any?,
+            has_many: has_many,
+            belongs_to: belongs_to,
+            includes_calls: includes_calls,
+            scopes_with_includes: scopes_with_includes,
             content: content
           }
         rescue => e
@@ -401,7 +421,11 @@ module RailsAiContext
           next unless content&.match?(/< ApplicationRecord/)
 
           class_name = content.match(/class\s+(\w+)/)[1] rescue next
-          has_many_assocs = content.scan(/has_many\s+:(\w+)/).flatten
+
+          ast = SourceIntrospector.walk(path, { associations: Listeners::AssociationsListener })
+          has_many_assocs = ast[:associations]
+            .select { |a| a[:type] == :has_many }
+            .map { |a| a[:name].to_s }
 
           next unless has_many_assocs.size >= 2
 

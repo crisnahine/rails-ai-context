@@ -50,15 +50,15 @@ module RailsAiContext
 
         fields = []
         Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
           model_name = File.basename(path, ".rb").camelize
-
-          content.scan(/has_rich_text\s+:(\w+)/).each do |match|
-            fields << { model: model_name, field: match[0] }
+          ast_data = SourceIntrospector.walk(path, { macros: Listeners::MacrosListener })
+          ast_data[:macros].each do |m|
+            next unless m[:macro] == :has_rich_text
+            fields << { model: model_name, field: m[:attribute] }
           end
         end
 
-        fields.sort_by { |f| [ f[:model], f[:field] ] }
+        fields.sort_by { |f| [f[:model], f[:field]] }
       rescue => e
         $stderr.puts "[rails-ai-context] extract_rich_text_fields failed: #{e.message}" if ENV["DEBUG"]
         []

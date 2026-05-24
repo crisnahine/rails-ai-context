@@ -73,34 +73,82 @@ module RailsAiContext
         model_dir = File.join(root, "app/models")
         if Dir.exist?(model_dir)
           model_files = Dir.glob(File.join(model_dir, "**/*.rb"))
-          content = model_files.first(500).map { |f| RailsAiContext::SafeFile.read(f) || "" }.join("\n")
 
-          # STI: explicit inheritance_column, or a model that inherits from another app model
-          # with a `type` column (verified via schema.rb or model source)
+          # Collect AST-detected macros across all model files
+          all_macros = Set.new
+          all_association_options = []
+
+          model_files.first(500).each do |path|
+            ast = SourceIntrospector.walk(path, {
+              macros: -> {
+                Listeners::GenericMacroListener.new(
+                  :acts_as_paranoid, :discard, :has_paper_trail, :audited,
+                  :aasm, :state_machine, :workflow,
+                  :acts_as_tenant, :apartment,
+                  :searchkick, :pg_search, :ransack,
+                  :acts_as_taggable, :acts_as_taggable_on,
+                  :friendly_id, :sluggable,
+                  :acts_as_nested_set, :ancestry, :closure_tree
+                )
+              },
+              builtin_macros: Listeners::MacrosListener,
+              associations: Listeners::AssociationsListener
+            })
+
+            ast[:macros].each { |h| all_macros << h[:macro] }
+            ast[:builtin_macros].each { |h| all_macros << h[:macro] }
+            ast[:associations].each { |a| all_association_options << a[:options] }
+          end
+
+          # STI detection via AST: extract parent class from ClassNode, check schema
           app_model_names = model_files.filter_map { |f| File.basename(f, ".rb").camelize }
           schema_path = File.join(root, "db/schema.rb")
           schema_content = File.exist?(schema_path) ? (RailsAiContext::SafeFile.read(schema_path) || "") : ""
-          has_sti_subclass = model_files.any? do |f|
-            src = RailsAiContext::SafeFile.read(f) || ""
-            parent_match = src.match(/class\s+\w+\s*<\s*(\w+)/)
-            next false unless parent_match && app_model_names.include?(parent_match[1]) && parent_match[1] != "ApplicationRecord"
-            # Verify parent's table has a `type` column
-            parent_table = parent_match[1].underscore.pluralize
-            schema_content.match?(/create_table\s+"#{Regexp.escape(parent_table)}".*?t\.\w+\s+"type"/m)
+
+          has_sti_subclass = false
+          has_inheritance_column = false
+          has_current_attributes = false
+          has_deleted_at = false
+
+          model_files.first(500).each do |f|
+            parent = extract_parent_class(f)
+            if parent && app_model_names.include?(parent) && parent != "ApplicationRecord"
+              parent_table = parent.underscore.pluralize
+              if schema_content.match?(/create_table\s+"#{Regexp.escape(parent_table)}".*?t\.\w+\s+"type"/m)
+                has_sti_subclass = true
+              end
+            end
+
+            superclass = extract_superclass_path(f)
+            has_current_attributes = true if superclass == "ActiveSupport::CurrentAttributes"
+
+            # self.inheritance_column= is an assignment via CallNode with self receiver
+            inheritance_check = SourceIntrospector.walk(f, {
+              inh: -> { Listeners::ChainedCallListener.new(:inheritance_column=) }
+            })
+            has_inheritance_column = true if inheritance_check[:inh].any?
+
+            # deleted_at is a keyword/content check, not structural -- keep regex
+            unless has_deleted_at
+              src = RailsAiContext::SafeFile.read(f)
+              has_deleted_at = true if src&.match?(/deleted_at/)
+            end
           end
-          patterns << "sti" if content.match?(/self\.inheritance_column/) || has_sti_subclass
-          patterns << "polymorphic" if content.match?(/polymorphic:\s*true/)
-          patterns << "soft_delete" if content.match?(/acts_as_paranoid|discard|deleted_at/)
-          patterns << "versioning" if content.match?(/has_paper_trail|audited/)
-          patterns << "state_machine" if content.match?(/aasm|state_machine|workflow/)
-          patterns << "multi_tenancy" if content.match?(/acts_as_tenant|apartment/)
-          patterns << "searchable" if content.match?(/searchkick|pg_search|ransack/)
-          patterns << "taggable" if content.match?(/acts_as_taggable/)
-          patterns << "sluggable" if content.match?(/friendly_id|sluggable/)
-          patterns << "nested_set" if content.match?(/acts_as_nested_set|ancestry|closure_tree/)
-          patterns << "current_attributes" if content.match?(/< ActiveSupport::CurrentAttributes/)
-          patterns << "encrypted_attributes" if content.match?(/\bencrypts\s+:/)
-          patterns << "normalizations" if content.match?(/\bnormalizes\s+:/)
+
+          patterns << "sti" if has_inheritance_column || has_sti_subclass
+
+          patterns << "polymorphic" if all_association_options.any? { |opts| opts[:polymorphic] == true }
+          patterns << "soft_delete" if all_macros.intersect?(%i[acts_as_paranoid discard].to_set) || has_deleted_at
+          patterns << "versioning" if all_macros.intersect?(%i[has_paper_trail audited].to_set)
+          patterns << "state_machine" if all_macros.intersect?(%i[aasm state_machine workflow].to_set)
+          patterns << "multi_tenancy" if all_macros.intersect?(%i[acts_as_tenant apartment].to_set)
+          patterns << "searchable" if all_macros.intersect?(%i[searchkick pg_search ransack].to_set)
+          patterns << "taggable" if all_macros.intersect?(%i[acts_as_taggable acts_as_taggable_on].to_set)
+          patterns << "sluggable" if all_macros.intersect?(%i[friendly_id sluggable].to_set)
+          patterns << "nested_set" if all_macros.intersect?(%i[acts_as_nested_set ancestry closure_tree].to_set)
+          patterns << "current_attributes" if has_current_attributes
+          patterns << "encrypted_attributes" if all_macros.include?(:encrypts)
+          patterns << "normalizations" if all_macros.include?(:normalizes)
         end
 
         patterns << "view_components" if dir_exists?("app/components")
@@ -110,7 +158,12 @@ module RailsAiContext
         patterns
       end
 
-      ASYNC_QUERY_PATTERN = /\bload_async\b|\.async_(count|sum|minimum|maximum|average|pluck|ids|exists|find_by|find|first|last|take)\b/
+      ASYNC_QUERY_METHODS = %i[
+        load_async
+        async_count async_sum async_minimum async_maximum async_average
+        async_pluck async_ids async_exists async_find_by async_find
+        async_first async_last async_take
+      ].freeze
 
       def uses_async_queries?
         %w[app/controllers app/services app/jobs app/models].any? do |rel_dir|
@@ -118,16 +171,11 @@ module RailsAiContext
           next false unless Dir.exist?(dir)
 
           Dir.glob(File.join(dir, "**/*.rb")).first(500).any? do |f|
-            content = RailsAiContext::SafeFile.read(f) or next false
-            # Skip lines whose first non-whitespace character is `#` so we don't
-            # match deleted-code comments or TODO references like
-            # `# TODO: use load_async here`. Doesn't strip in-line trailing
-            # comments — Ruby AST parsing would be needed for that, and the
-            # false-positive rate from in-line trailing comments is tiny.
-            content.each_line.any? do |line|
-              next false if line.lstrip.start_with?("#")
-              line.match?(ASYNC_QUERY_PATTERN)
-            end
+            # AST-based detection: ignores comments automatically
+            ast = SourceIntrospector.walk(f, {
+              async: -> { Listeners::ChainedCallListener.new(*ASYNC_QUERY_METHODS) }
+            })
+            ast[:async].any?
           end
         end
       rescue => e
@@ -193,6 +241,92 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] detect_custom_directories failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # Extract the parent class name from a Ruby file via AST ClassNode.
+      # Returns a simple name like "User" (no module path).
+      def extract_parent_class(path)
+        parse_result = AstCache.parse(path)
+        find_parent_class(parse_result.value)
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_parent_class failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      # Extract the full superclass path (e.g. "ActiveSupport::CurrentAttributes").
+      def extract_superclass_path(path)
+        parse_result = AstCache.parse(path)
+        find_superclass_path(parse_result.value)
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_superclass_path failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      def find_parent_class(node)
+        case node
+        when Prism::ProgramNode
+          find_parent_class(node.statements)
+        when Prism::StatementsNode
+          node.body.each do |child|
+            result = find_parent_class(child)
+            return result if result
+          end
+          nil
+        when Prism::ClassNode
+          superclass = node.superclass
+          case superclass
+          when Prism::ConstantReadNode then superclass.name.to_s
+          when Prism::ConstantPathNode
+            # Return just the final name for simple parent matching
+            superclass.name.to_s
+          else nil
+          end
+        when Prism::ModuleNode
+          node.body&.body&.each do |child|
+            result = find_parent_class(child)
+            return result if result
+          end
+          nil
+        else nil
+        end
+      end
+
+      def find_superclass_path(node)
+        case node
+        when Prism::ProgramNode
+          find_superclass_path(node.statements)
+        when Prism::StatementsNode
+          node.body.each do |child|
+            result = find_superclass_path(child)
+            return result if result
+          end
+          nil
+        when Prism::ClassNode
+          superclass = node.superclass
+          case superclass
+          when Prism::ConstantReadNode then superclass.name.to_s
+          when Prism::ConstantPathNode then constant_path_to_string(superclass)
+          else nil
+          end
+        when Prism::ModuleNode
+          node.body&.body&.each do |child|
+            result = find_superclass_path(child)
+            return result if result
+          end
+          nil
+        else nil
+        end
+      end
+
+      def constant_path_to_string(node)
+        parts = []
+        current = node
+        while current.is_a?(Prism::ConstantPathNode)
+          parts.unshift(current.name.to_s)
+          current = current.parent
+        end
+        parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
+        parts.join("::")
       end
 
       def dir_exists?(relative_path)

@@ -72,9 +72,15 @@ module RailsAiContext
         init_path = File.join(root, "config/initializers/content_security_policy.rb")
         return { configured: false } unless File.exist?(init_path)
 
-        content = RailsAiContext::SafeFile.read(init_path) || ""
-        directives = content.scan(/policy\.(\w+)\s+(:\w+(?:\s*,\s*:\w+)*|\*?['"][^'"]+['"])/).map { |dir, val| { directive: dir, value: val.strip } }
-        report_only = content.match?(/config\.content_security_policy_report_only\s*=\s*true/)
+        parse_result = AstCache.parse(init_path)
+        directives = []
+        extract_policy_calls(parse_result.value, directives)
+
+        # report_only is an assignment: config.content_security_policy_report_only = true
+        report_only_check = SourceIntrospector.walk(init_path, {
+          report: -> { Listeners::ChainedCallListener.new(:content_security_policy_report_only=) }
+        })
+        report_only = report_only_check[:report].any?
 
         {
           configured: true,
@@ -91,12 +97,60 @@ module RailsAiContext
         init_path = File.join(root, "config/initializers/permissions_policy.rb")
         return { configured: false } unless File.exist?(init_path)
 
-        content = RailsAiContext::SafeFile.read(init_path) || ""
-        directives = content.scan(/policy\.(\w+)\s+(:\w+(?:\s*,\s*:\w+)*)/).map { |feature, allowlist| { feature: feature, allowlist: allowlist.strip } }
+        parse_result = AstCache.parse(init_path)
+        directives = []
+        extract_permissions_policy_calls(parse_result.value, directives)
+
         { configured: true, file: "config/initializers/permissions_policy.rb", directives: directives }
       rescue => e
         $stderr.puts "[rails-ai-context] extract_permissions_policy failed: #{e.message}" if ENV["DEBUG"]
         { configured: false }
+      end
+
+      # Walk AST to find policy.directive_name calls (CSP directives).
+      # These are CallNodes where the receiver is a local variable or
+      # block parameter named "policy".
+      def extract_policy_calls(node, directives)
+        case node
+        when Prism::CallNode
+          if policy_receiver?(node.receiver)
+            directive_name = node.name.to_s
+            args = node.arguments&.arguments || []
+            value = args.map { |a| format_policy_arg(a) }.join(", ")
+            directives << { directive: directive_name, value: value } unless value.empty?
+          end
+        end
+        node.child_nodes.compact.each { |child| extract_policy_calls(child, directives) }
+      end
+
+      def extract_permissions_policy_calls(node, directives)
+        case node
+        when Prism::CallNode
+          if policy_receiver?(node.receiver)
+            feature_name = node.name.to_s
+            args = node.arguments&.arguments || []
+            allowlist = args.map { |a| format_policy_arg(a) }.join(", ")
+            directives << { feature: feature_name, allowlist: allowlist } unless allowlist.empty?
+          end
+        end
+        node.child_nodes.compact.each { |child| extract_permissions_policy_calls(child, directives) }
+      end
+
+      def policy_receiver?(node)
+        case node
+        when Prism::LocalVariableReadNode then node.name == :policy
+        when Prism::CallNode then node.name == :policy && node.receiver.nil?
+        else false
+        end
+      end
+
+      def format_policy_arg(node)
+        case node
+        when Prism::SymbolNode then ":#{node.value}"
+        when Prism::StringNode then "'#{node.unescaped}'"
+        when Prism::SplatNode then "*#{format_policy_arg(node.expression)}"
+        else node.slice rescue ""
+        end
       end
 
       def extract_csrf
@@ -104,11 +158,22 @@ module RailsAiContext
         result = { default: "enabled" }
         return result unless File.exist?(app_controller)
 
-        content = RailsAiContext::SafeFile.read(app_controller) or return result
+        ast = SourceIntrospector.walk(app_controller, {
+          csrf: -> { Listeners::GenericMacroListener.new(:protect_from_forgery, :skip_forgery_protection) }
+        })
+        hits = ast[:csrf]
 
-        if (match = content.match(/protect_from_forgery\s+(.+)$/))
-          result[:protect_from_forgery] = match[1].strip
-        elsif content.include?("skip_forgery_protection")
+        protect = hits.find { |h| h[:macro] == :protect_from_forgery }
+        skip = hits.find { |h| h[:macro] == :skip_forgery_protection }
+
+        if protect
+          opts = protect[:options]
+          result[:protect_from_forgery] = opts.map { |k, v| "#{k}: #{v.inspect}" }.join(", ") if opts.any?
+          # Fall back to args string if no keyword options
+          if opts.empty? && protect[:args].any?
+            result[:protect_from_forgery] = protect[:args].map { |a| ":#{a}" }.join(", ")
+          end
+        elsif skip
           result[:default] = "skipped (skip_forgery_protection present)"
         end
 
@@ -144,18 +209,30 @@ module RailsAiContext
         return [] unless Dir.exist?(controllers_dir)
 
         findings = []
-        # Cap at 2000 files + sort — matches pattern in active_support_introspector
-        # and env_introspector. Determinism + bounded wall-clock on large apps.
         Dir.glob(File.join(controllers_dir, "**/*.rb")).sort.first(2000).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          content.scan(/^\s*allow_browser\s+([^\n]+)/).each do |match|
-            findings << { file: path.sub("#{root}/", ""), args: match[0].strip }
+          ast = SourceIntrospector.walk(path, {
+            browser: -> { Listeners::GenericMacroListener.new(:allow_browser) }
+          })
+          ast[:browser].each do |hit|
+            args_str = hit[:options].map { |k, v| "#{k}: #{format_ast_value(v)}" }.join(", ")
+            args_str = hit[:args].map { |a| ":#{a}" }.join(", ") if args_str.empty? && hit[:args].any?
+            findings << { file: path.sub("#{root}/", ""), args: args_str }
           end
         end
         findings
       rescue => e
         $stderr.puts "[rails-ai-context] extract_allow_browser failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      def format_ast_value(value)
+        case value
+        when Symbol then ":#{value}"
+        when Array then "[#{value.map { |v| format_ast_value(v) }.join(", ")}]"
+        when Hash then "{ #{value.map { |k, v| "#{k}: #{format_ast_value(v)}" }.join(", ")} }"
+        when String then "\"#{value}\""
+        else value.to_s
+        end
       end
 
       def extract_signed_gid

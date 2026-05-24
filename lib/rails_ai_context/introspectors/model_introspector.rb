@@ -366,18 +366,41 @@ module RailsAiContext
         macros.reject { |_, v| v.is_a?(Array) && v.empty? }
       end
 
-      # Extract constant definitions from source using regex.
-      # Prism constant assignment detection needs a different visitor pattern
-      # and constants are trivial, so regex is appropriate here.
+      # Extract constant definitions from source via AST.
+      # Finds ConstantWriteNode where the value is an ArrayNode
+      # (covers %w[], %i[], and literal array forms).
       def extract_constants_from_source(source_path)
         return nil unless source_path && File.exist?(source_path)
 
-        source = RailsAiContext::SafeFile.read(source_path)
-        return nil unless source
+        parse_result = AstCache.parse(source_path)
+        constants = []
+        find_constant_arrays(parse_result.value, constants)
+        constants.empty? ? nil : constants
+      end
 
-        source.scan(/\b([A-Z][A-Z_]+)\s*=\s*%[wi]\[([^\]]+)\]/).map do |name, values|
-          { name: name, values: values.split }
+      def find_constant_arrays(node, constants)
+        case node
+        when Prism::ConstantWriteNode
+          name = node.name.to_s
+          # Only capture UPPER_CASE constants (matching the old regex behavior)
+          if name.match?(/\A[A-Z][A-Z_]+\z/)
+            # Unwrap .freeze if present: STATUSES = %w[...].freeze
+            value_node = node.value
+            value_node = value_node.receiver if value_node.is_a?(Prism::CallNode) && value_node.name == :freeze
+
+            if value_node.is_a?(Prism::ArrayNode)
+              values = value_node.elements.filter_map { |el|
+                case el
+                when Prism::StringNode then el.unescaped
+                when Prism::SymbolNode then el.value
+                else nil
+                end
+              }
+              constants << { name: name, values: values } if values.any?
+            end
+          end
         end
+        node.child_nodes.compact.each { |child| find_constant_arrays(child, constants) }
       end
 
       def extract_detailed_macros_from_ast(source_data)

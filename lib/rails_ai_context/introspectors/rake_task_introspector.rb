@@ -29,44 +29,64 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path)
         return [ { file: path.sub("#{base_dir}/", ""), error: "unreadable" } ] unless content
         relative = path.sub("#{base_dir}/", "")
-        tasks = []
-        last_desc = nil
 
+        ast_data = SourceIntrospector.walk(path, { rake: -> { Listeners::RakeTaskDslListener.new } })
+        results = ast_data[:rake]
+
+        # Track namespace and desc ordering to associate descs with tasks
+        last_desc = nil
         current_namespace = []
         namespace_indents = []
-        content.each_line do |line|
+        tasks = []
+
+        # RakeTaskDslListener returns results in source order.
+        # Walk results: accumulate namespaces, track descs, emit tasks.
+        # For namespace scope tracking, fall back to indent-based tracking
+        # since the listener doesn't track block scope.
+        content.each_line.with_index(1) do |line, line_no|
           indent = line.match(/^(\s*)/)[1].length
 
-          if (ns_match = line.match(/^\s*namespace\s+:(\w+)/))
-            current_namespace.push(ns_match[1])
-            namespace_indents.push(indent)
-          elsif line.match?(/^\s*end\b/) && namespace_indents.any? && indent <= namespace_indents.last
+          if line.match?(/^\s*end\b/) && namespace_indents.any? && indent <= namespace_indents.last
+            current_namespace.pop
+            namespace_indents.pop
+          end
+        end
+
+        # Re-walk with indent tracking alongside AST results
+        current_namespace = []
+        namespace_indents = []
+        line_events = {}
+        results.each { |r| (line_events[r[:location]] ||= []) << r }
+
+        content.each_line.with_index(1) do |line, line_no|
+          indent = line.match(/^(\s*)/)[1].length
+
+          if line.match?(/^\s*end\b/) && namespace_indents.any? && indent <= namespace_indents.last
             current_namespace.pop
             namespace_indents.pop
           end
 
-          if (desc_match = line.match(/desc\s+["'](.+?)["']/))
-            last_desc = desc_match[1]
-          end
+          next unless line_events[line_no]
 
-          if (t_match = line.match(/^\s*task\s+:(\w+)/))
-            name = (current_namespace + [ t_match[1] ]).join(":")
-            entry = {
-              name: name,
-              description: last_desc,
-              file: relative
-            }
-            # Extract task dependencies (=> [:dep1, :dep2] or => :dep)
-            if (dep_match = line.match(/=>\s*(?:\[([^\]]+)\]|:(\w+))/))
-              deps = dep_match[1] ? dep_match[1].scan(/:(\w+)/).flatten : [ dep_match[2] ]
-              entry[:dependencies] = deps if deps.any?
+          line_events[line_no].each do |entry|
+            case entry[:type]
+            when :namespace
+              current_namespace.push(entry[:name])
+              namespace_indents.push(indent)
+            when :desc
+              last_desc = entry[:description]
+            when :task
+              name = (current_namespace + [ entry[:name] ]).join(":")
+              task = {
+                name: name,
+                description: last_desc,
+                file: relative
+              }
+              task[:dependencies] = entry[:deps] if entry[:deps]&.any?
+              task[:args] = entry[:args] if entry[:args]&.any?
+              tasks << task.compact
+              last_desc = nil
             end
-            # Extract task arguments (task :name, [:arg1, :arg2])
-            if (args_match = line.match(/task\s+:#{Regexp.escape(t_match[1])}\s*,\s*\[([^\]]+)\]/))
-              entry[:args] = args_match[1].scan(/:(\w+)/).flatten
-            end
-            tasks << entry.compact
-            last_desc = nil
           end
         end
 

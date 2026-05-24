@@ -57,13 +57,12 @@ module RailsAiContext
         routes_path = File.join(root, "config/routes.rb")
         return [] unless File.exist?(routes_path)
 
-        content = RailsAiContext::SafeFile.read(routes_path)
-        return [] unless content
+        ast_data = SourceIntrospector.walk(routes_path, { mounts: -> { Listeners::MountListener.new } })
         engines = []
 
-        # Match: mount Sidekiq::Web => "/sidekiq"
-        # Match: mount Sidekiq::Web, at: "/sidekiq"
-        content.scan(/mount\s+([\w:]+(?:\.\w+)?)\s*(?:=>|,\s*at:\s*)?\s*["']([^"']+)["']/).each do |engine_name, path|
+        ast_data[:mounts].each do |mount|
+          engine_name = mount[:engine]
+          path = mount[:path] || "unknown"
           info = { engine: engine_name, path: path }
           known = KNOWN_ENGINES[engine_name]
           if known
@@ -71,22 +70,6 @@ module RailsAiContext
             info[:description] = known[:description]
           end
           engines << info
-        end
-
-        # Fallback: match mount without captured path
-        content.scan(/mount\s+([\w:]+(?:\.\w+)?)[\s,]/).each do |match|
-          engine_name = match[0]
-          next if engines.any? { |e| e[:engine] == engine_name }
-
-          known = KNOWN_ENGINES[engine_name]
-          next unless known
-
-          engines << {
-            engine: engine_name,
-            path: "unknown",
-            category: known[:category].to_s,
-            description: known[:description]
-          }
         end
 
         engines.sort_by { |e| e[:engine] }

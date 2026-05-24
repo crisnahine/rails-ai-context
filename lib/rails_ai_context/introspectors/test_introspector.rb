@@ -113,8 +113,8 @@ module RailsAiContext
           names = {}
           Dir.glob(File.join(dir, "**/*.rb")).each do |path|
             file = path.sub("#{root}/", "")
-            content = RailsAiContext::SafeFile.read(path) or next
-            factories = content.scan(/factory\s+:(\w+)/).flatten
+            ast_data = SourceIntrospector.walk(path, { factories: -> { Listeners::GenericMacroListener.new(:factory) } })
+            factories = ast_data[:factories].map { |e| e[:args].first.to_s }.reject(&:empty?)
             names[file] = factories if factories.any?
           end
           return names if names.any?
@@ -212,8 +212,8 @@ module RailsAiContext
           traits = {}
           Dir.glob(File.join(dir, "**/*.rb")).each do |path|
             file = File.basename(path)
-            content = RailsAiContext::SafeFile.read(path) or next
-            found_traits = content.scan(/\btrait\s+:(\w+)/).flatten
+            ast_data = SourceIntrospector.walk(path, { traits: -> { Listeners::GenericMacroListener.new(:trait) } })
+            found_traits = ast_data[:traits].map { |e| e[:args].first.to_s }.reject(&:empty?)
             traits[file] = found_traits if found_traits.any?
           end
           return traits if traits.any?
@@ -230,9 +230,13 @@ module RailsAiContext
           support_dir = File.join(root, base, "support")
           next unless Dir.exist?(support_dir)
           Dir.glob(File.join(support_dir, "**/*.rb")).each do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            content.scan(/(?:shared_examples|shared_context|shared_examples_for)\s+["']([^"']+)["']/).each do |m|
-              shared << { name: m[0], file: path.sub("#{root}/", "") }
+            ast_data = SourceIntrospector.walk(path, {
+              shared: -> { Listeners::GenericMacroListener.new(:shared_examples, :shared_context, :shared_examples_for) }
+            })
+            ast_data[:shared].each do |entry|
+              name = entry[:args].first&.to_s
+              next unless name && !name.empty?
+              shared << { name: name, file: path.sub("#{root}/", "") }
             end
           end
         end

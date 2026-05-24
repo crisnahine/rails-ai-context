@@ -18,13 +18,33 @@ module RailsAiContext
 
         schema_content = File.exist?(schema_file_path) ? (RailsAiContext::SafeFile.read(schema_file_path, max_size: RailsAiContext.configuration.max_schema_file_size) || "") : ""
 
+        check_constraints = []
+        enum_types = []
+        if File.exist?(schema_file_path) && defined?(Listeners::SchemaDslListener)
+          ast_results = SourceIntrospector.walk(schema_file_path, { schema: -> { Listeners::SchemaDslListener.new } })
+          schema_results = ast_results[:schema]
+
+          current_table = nil
+          schema_results.sort_by { |r| r[:location] }.each do |entry|
+            case entry[:type]
+            when :create_table then current_table = entry[:table]
+            when :check_constraint
+              check_constraints << { table: current_table, expression: entry[:expression] } if current_table
+            when :add_check_constraint
+              check_constraints << { table: entry[:table], expression: entry[:expression] }
+            when :enum
+              enum_types << { name: entry[:name], values: entry[:values] }
+            end
+          end
+        end
+
         {
           adapter: adapter_name,
           tables: extract_tables,
           total_tables: table_names.size,
           schema_version: current_schema_version,
-          check_constraints: parse_check_constraints(schema_content),
-          enum_types: parse_enum_types(schema_content),
+          check_constraints: check_constraints,
+          enum_types: enum_types,
           generated_columns: parse_generated_columns(schema_content)
         }
       end
@@ -208,65 +228,76 @@ module RailsAiContext
       def parse_schema_rb(path)
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "schema.rb too large (#{File.size(path)} bytes)" } unless content
+
+        ast_data = SourceIntrospector.walk(path, { schema: -> { Listeners::SchemaDslListener.new } })
+        results = ast_data[:schema].sort_by { |r| r[:location] }
+
         tables = {}
         current_table = nil
 
-        content.each_line do |line|
-          if (match = line.match(/create_table\s+"(\w+)"/))
-            current_table = match[1]
-            if current_table.start_with?("ar_internal_metadata", "schema_migrations")
+        results.each do |entry|
+          case entry[:type]
+          when :create_table
+            table_name = entry[:table]
+            if table_name.start_with?("ar_internal_metadata", "schema_migrations")
               current_table = nil
-              next
-            end
-            tables[current_table] = { columns: [], indexes: [], foreign_keys: [] }
-          elsif current_table && (match = line.match(/t\.(\w+)\s+"(\w+)"/))
-            col = { name: match[2], type: match[1] }
-            col[:null] = false if line.include?("null: false")
-            if (default_match = line.match(/default:\s*("[^"]*"|\{[^}]*\}|\[[^\]]*\]|-?\d+(?:\.\d+)?|true|false)/))
-              raw = default_match[1]
-              col[:default] = raw.start_with?('"') ? raw[1..-2] : raw
-            end
-            col[:array] = true if line.include?("array: true")
-            if (comment_match = line.match(/comment:\s*"([^"]+)"/))
-              col[:comment] = comment_match[1]
-            end
-            tables[current_table][:columns] << col
-          elsif current_table && (match = line.match(/t\.index\s+\[([^\]]*)\]/))
-            cols = match[1].scan(/["'](\w+)["']/).flatten
-            unique = line.include?("unique: true")
-            idx_name = line.match(/name:\s*["']([^"']+)["']/)&.send(:[], 1)
-            tables[current_table][:indexes] << { name: idx_name, columns: cols, unique: unique }.compact if cols.any?
-          elsif current_table && (match = line.match(/t\.index\s+"([^"]+)"/))
-            expression = match[1]
-            idx_name = line.match(/name:\s*["']([^"']+)["']/)&.send(:[], 1)
-            unique = line.include?("unique: true")
-            tables[current_table][:indexes] << { name: idx_name, columns: [ expression ], unique: unique, expression: true }.compact
-          elsif (match = line.match(/add_index\s+"(\w+)",\s+(.+)/))
-            table_name = match[1]
-            rest = match[2]
-            # Extract columns only from the [...] array portion, not option keys
-            array_match = rest.match(/\[([^\]]+)\]/)
-            cols = if array_match
-              inside = array_match[1]
-              inside.include?('"') ? inside.scan(/"(\w+)"/).flatten : inside.scan(/\b(\w+)\b/).flatten
             else
-              rest.match(/(?::|")(\w+)/)&.[](1)&.then { |c| [ c ] } || []
+              current_table = table_name
+              tables[current_table] = { columns: [], indexes: [], foreign_keys: [] }
             end
-            unique = rest.include?("unique: true")
-            idx_name = rest.match(/name:\s*"(\w+)"/)&.send(:[], 1)
-            tables[table_name]&.dig(:indexes)&.push({ name: idx_name, columns: cols, unique: unique }.compact) if cols.any?
-          elsif (match = line.match(/add_foreign_key\s+"(\w+)",\s+"(\w+)"/))
-            from_table = match[1]
-            to_table = match[2]
-            column_match = line.match(/column:\s*"(\w+)"/)
-            column = column_match ? column_match[1] : "#{to_table.singularize}_id"
-            pk_match = line.match(/primary_key:\s*"(\w+)"/)
-            primary_key = pk_match ? pk_match[1] : "id"
+          when :column
+            next unless current_table && tables[current_table]
+            col = { name: entry[:name], type: entry[:column_type] }
+            opts = entry[:options] || {}
+            col[:null] = false if opts[:null] == false
+            unless opts[:default].nil? || opts[:default] == RailsAiContext::Confidence::INFERRED
+              raw = opts[:default]
+              col[:default] = raw.is_a?(String) ? raw : raw.to_s
+            end
+            col[:array] = true if opts[:array] == true
+            col[:comment] = opts[:comment] if opts[:comment].is_a?(String)
+            tables[current_table][:columns] << col
+          when :index
+            next unless current_table && tables[current_table]
+            cols = entry[:columns].map(&:to_s)
+            opts = entry[:options] || {}
+            unique = opts[:unique] == true
+            idx_name = opts[:name]&.to_s
+            if cols.size == 1 && !cols.first.match?(/\A\w+\z/)
+              # Expression index (e.g. "lower(email)")
+              tables[current_table][:indexes] << { name: idx_name, columns: cols, unique: unique, expression: true }.compact
+            else
+              tables[current_table][:indexes] << { name: idx_name, columns: cols, unique: unique }.compact if cols.any?
+            end
+          when :foreign_key
+            from_table = entry[:from]
+            to_table = entry[:to]
+            # SchemaDslListener doesn't capture column/primary_key options for
+            # add_foreign_key; fall back to convention.
+            column = "#{to_table.singularize}_id"
             tables[from_table]&.dig(:foreign_keys)&.push({
               from_table: from_table, to_table: to_table,
-              column: column, primary_key: primary_key
+              column: column, primary_key: "id"
             })
           end
+        end
+
+        # Handle top-level add_index statements via AST (SchemaDslListener :add_index type)
+        results.select { |r| r[:type] == :add_index }.each do |entry|
+          table_name = entry[:table]
+          cols = entry[:columns].map(&:to_s)
+          opts = entry[:options] || {}
+          unique = opts[:unique] == true
+          idx_name = opts[:name]&.to_s
+          tables[table_name]&.dig(:indexes)&.push({ name: idx_name, columns: cols, unique: unique }.compact) if cols.any?
+        end
+
+        # Extract check constraints via AST
+        check_constraints = extract_check_constraints_from_ast(results, tables)
+
+        # Extract enum types via AST (SchemaDslListener :enum type)
+        enum_types = results.select { |r| r[:type] == :enum }.map do |entry|
+          { name: entry[:name], values: entry[:values] }
         end
 
         {
@@ -274,8 +305,8 @@ module RailsAiContext
           tables: tables,
           total_tables: tables.size,
           schema_version: current_schema_version,
-          check_constraints: parse_check_constraints(content),
-          enum_types: parse_enum_types(content),
+          check_constraints: check_constraints,
+          enum_types: enum_types,
           generated_columns: parse_generated_columns(content),
           note: "Parsed from db/schema.rb (no DB connection)"
         }
@@ -334,80 +365,56 @@ module RailsAiContext
         columns
       end
 
-      # Parse check constraints from schema.rb content
-      # Matches t.check_constraint "expression" and add_check_constraint "table", "expression"
-      def parse_check_constraints(content)
-        return [] if content.nil? || content.empty?
-
+      # Extract check constraints from AST results (SchemaDslListener).
+      # Handles both t.check_constraint (inside create_table) and
+      # top-level add_check_constraint.
+      def extract_check_constraints_from_ast(ast_results, tables)
         constraints = []
         current_table = nil
 
-        content.each_line do |line|
-          if (table_match = line.match(/create_table\s+"(\w+)"/))
-            current_table = table_match[1]
-          elsif line.match?(/\A\s*end\b/) && current_table
-            current_table = nil
-          end
-
-          # t.check_constraint "expression", name: "..."
-          if current_table && (match = line.match(/t\.check_constraint\s+"([^"]+)"/))
-            constraints << { table: current_table, expression: match[1] }
-          end
-
-          # add_check_constraint "table", "expression"
-          if (match = line.match(/add_check_constraint\s+"(\w+)",\s+"([^"]+)"/))
-            constraints << { table: match[1], expression: match[2] }
+        ast_results.sort_by { |r| r[:location] }.each do |entry|
+          case entry[:type]
+          when :create_table
+            current_table = entry[:table]
+          when :check_constraint
+            constraints << { table: current_table, expression: entry[:expression] } if current_table
+          when :add_check_constraint
+            constraints << { table: entry[:table], expression: entry[:expression] }
           end
         end
 
         constraints
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_check_constraints failed: #{e.message}" if ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] extract_check_constraints_from_ast failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
-      # Parse create_enum statements from schema.rb
-      # Matches create_enum "name", ["value1", "value2"]
-      def parse_enum_types(content)
-        return [] if content.nil? || content.empty?
-
-        enums = []
-        content.each_line do |line|
-          if (match = line.match(/create_enum\s+"(\w+)",\s*\[([^\]]+)\]/))
-            name = match[1]
-            values = match[2].scan(/"([^"]+)"/).flatten
-            enums << { name: name, values: values }
-          end
-        end
-
-        enums
-      rescue => e
-        $stderr.puts "[rails-ai-context] parse_enum_types failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      # Parse generated/virtual columns from schema.rb
-      # Detects virtual: true or stored: true column options
+      # Extract generated/virtual columns from AST results (SchemaDslListener).
+      # Detects columns with virtual: true or stored: true options.
       def parse_generated_columns(content)
         return [] if content.nil? || content.empty?
+
+        # Parse with SchemaDslListener if not already done
+        path = schema_file_path
+        return [] unless File.exist?(path)
+
+        ast_results = SourceIntrospector.walk(path, { schema: -> { Listeners::SchemaDslListener.new } })
+        results = ast_results[:schema].sort_by { |r| r[:location] }
 
         columns = []
         current_table = nil
 
-        content.each_line do |line|
-          if (table_match = line.match(/create_table\s+"(\w+)"/))
-            current_table = table_match[1]
-          elsif line.match?(/\A\s*end\b/) && current_table
-            current_table = nil
-          end
-
-          next unless current_table
-
-          if line.match?(/virtual:\s*true/) || line.match?(/stored:\s*true/)
-            col_match = line.match(/t\.\w+\s+"(\w+)"/)
-            next unless col_match
-            stored = line.match?(/stored:\s*true/)
-            columns << { table: current_table, column: col_match[1], stored: stored }
+        results.each do |entry|
+          case entry[:type]
+          when :create_table
+            current_table = entry[:table]
+          when :column
+            next unless current_table
+            opts = entry[:options] || {}
+            if opts[:virtual] == true || opts[:stored] == true
+              stored = opts[:stored] == true
+              columns << { table: current_table, column: entry[:name], stored: stored }
+            end
           end
         end
 
@@ -442,164 +449,222 @@ module RailsAiContext
         }
       end
 
-      def replay_migration(content, tables) # rubocop:disable Metrics
+      def replay_migration(content, tables)
+        ast_data = SourceIntrospector.walk_source(content, {
+          migration: -> { Listeners::MigrationDslListener.new },
+          schema: -> { Listeners::SchemaDslListener.new }
+        })
+
         current_table = nil
+        all_entries = (ast_data[:migration] + ast_data[:schema]).sort_by { |r| r[:location] }
 
-        content.each_line do |line|
-          stripped = line.strip
+        # Also detect t.timestamps via direct AST walk (SchemaDslListener skips it
+        # because timestamps has no column name arg)
+        timestamps_lines = Set.new
+        find_timestamps_calls(AstCache.parse_string(content).value, timestamps_lines)
 
-          # create_table :name / create_table "name"
-          if (match = stripped.match(/create_table\s+[:"'](\w+)/))
-            table_name = match[1]
-            current_table = table_name
-            tables[table_name] ||= { columns: [], indexes: [], foreign_keys: [] }
-            # create_table implicitly adds id and timestamps in some cases
-          elsif stripped.match?(/\A\s*end\b/) && current_table
-            current_table = nil
-
-          # t.references / t.belongs_to inside create_table (must be before general column match)
-          elsif current_table && (match = stripped.match(/t\.(?:references|belongs_to)\s+[:"'](\w+)/))
-            ref_name = match[1]
-            col = { name: "#{ref_name}_id", type: "bigint" }
-            col[:null] = false if stripped.include?("null: false")
-            tables[current_table][:columns] << col
-
-          # t.timestamps inside create_table
-          elsif current_table && stripped.match?(/t\.timestamps/)
-            tables[current_table][:columns] << { name: "created_at", type: "datetime", null: false }
-            tables[current_table][:columns] << { name: "updated_at", type: "datetime", null: false }
-
-          # t.index inside create_table
-          elsif current_table && (match = stripped.match(/t\.index\s+\[([^\]]*)\]/))
-            cols = match[1].scan(/[:"'](\w+)/).flatten
-            unique = stripped.include?("unique: true")
-            idx_name = stripped.match(/name:\s*[:"']([^"'\s,]+)/)&.send(:[], 1)
-            tables[current_table][:indexes] << { name: idx_name, columns: cols, unique: unique }.compact if cols.any?
-
-          # t.type :name / t.type "name" (general column match inside create_table block)
-          elsif current_table && (match = stripped.match(/t\.(\w+)\s+[:"'](\w+)/))
-            col_type = match[1]
-            col_name = match[2]
-            next if %w[index check_constraint].include?(col_type)
-            col = { name: col_name, type: col_type }
-            col[:null] = false if stripped.include?("null: false")
-            if (def_match = stripped.match(/default:\s*("[^"]*"|\d+(?:\.\d+)?|true|false)/))
-              raw = def_match[1]
-              col[:default] = raw.start_with?('"') ? raw[1..-2] : raw
+        all_entries.each do |entry|
+          # MigrationDslListener entries
+          if entry.key?(:action)
+            if entry[:action] == :create_table
+              current_table = entry[:table]
+            elsif entry[:action] == :drop_table || entry[:action] == :rename_table
+              current_table = nil
             end
-            col[:array] = true if stripped.include?("array: true")
-            tables[current_table][:columns] << col
+            apply_migration_action(entry, tables)
+          # SchemaDslListener entries (columns, indexes inside create_table blocks)
+          elsif entry[:type] == :create_table
+            current_table = entry[:table]
+            tables[current_table] ||= { columns: [], indexes: [], foreign_keys: [] }
+          elsif entry[:type] == :column && current_table
+            apply_schema_column(entry, current_table, tables)
+          elsif entry[:type] == :index && current_table
+            apply_schema_index(entry, current_table, tables)
+          end
+        end
 
-          # add_column :table, :column, :type
-          elsif (match = stripped.match(/add_column\s+[:"'](\w+)['"']?,\s*[:"'](\w+)['"']?,\s*[:"'](\w+)/))
-            table_name, col_name, col_type = match[1], match[2], match[3]
-            if tables[table_name]
-              tables[table_name][:columns].reject! { |c| c[:name] == col_name }
-              col = { name: col_name, type: col_type }
-              col[:null] = false if stripped.include?("null: false")
-              if (def_match = stripped.match(/default:\s*("[^"]*"|\d+(?:\.\d+)?|true|false)/))
-                raw = def_match[1]
-                col[:default] = raw.start_with?('"') ? raw[1..-2] : raw
+        # Apply timestamps where detected
+        timestamps_lines.each do |line_num|
+          # Find the enclosing create_table by checking which table's location range includes this line
+          table_for_line = nil
+          all_entries.select { |e| (e.key?(:action) && e[:action] == :create_table) || e[:type] == :create_table }
+            .each do |ct|
+              table_for_line = ct[:table] if ct[:location] < line_num
+            end
+          if table_for_line && tables[table_for_line]
+            tables[table_for_line][:columns] << { name: "created_at", type: "datetime", null: false }
+            tables[table_for_line][:columns] << { name: "updated_at", type: "datetime", null: false }
+          end
+        end
+      end
+
+      # Walk AST to find t.timestamps calls (not captured by SchemaDslListener).
+      def find_timestamps_calls(node, lines)
+        case node
+        when Prism::CallNode
+          if node.name == :timestamps && node.receiver
+            receiver = node.receiver
+            is_t = case receiver
+            when Prism::LocalVariableReadNode then receiver.name == :t
+            when Prism::CallNode then receiver.name == :t && receiver.receiver.nil?
+            else false
+            end
+            lines << node.location.start_line if is_t
+          end
+        end
+        node.child_nodes.compact.each { |child| find_timestamps_calls(child, lines) }
+      end
+
+      def apply_migration_action(entry, tables)
+        case entry[:action]
+        when :create_table
+          table = entry[:table]
+          tables[table] ||= { columns: [], indexes: [], foreign_keys: [] }
+
+        when :drop_table
+          tables.delete(entry[:table])
+
+        when :rename_table
+          old = entry[:table]
+          new_name = entry[:new_name]
+          tables[new_name] = tables.delete(old) if old && new_name && tables[old]
+
+        when :add_column
+          table = entry[:table]
+          return unless tables[table]
+          col_name = entry[:column]
+          col_type = entry[:column_type]
+          tables[table][:columns].reject! { |c| c[:name] == col_name }
+          col = { name: col_name, type: col_type }
+          opts = entry[:options] || {}
+          col[:null] = false if opts[:null] == false
+          col[:default] = format_default(opts[:default]) if opts.key?(:default)
+          tables[table][:columns] << col
+
+        when :remove_column
+          table = entry[:table]
+          tables[table][:columns]&.reject! { |c| c[:name] == entry[:column] } if tables[table]
+
+        when :rename_column
+          table = entry[:table]
+          if tables[table]
+            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
+            col[:name] = entry[:new_name] if col
+          end
+
+        when :change_column
+          table = entry[:table]
+          if tables[table]
+            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
+            col[:type] = entry[:column_type] if col && entry[:column_type]
+          end
+
+        when :change_column_default
+          table = entry[:table]
+          if tables[table]
+            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
+            if col
+              opts = entry[:options] || {}
+              if opts.key?(:to)
+                raw = opts[:to]
+                col[:default] = raw == nil ? nil : format_default(raw)
               end
-              tables[table_name][:columns] << col
-            end
-
-          # remove_column :table, :column
-          elsif (match = stripped.match(/remove_column\s+[:"'](\w+)['"']?,\s*[:"'](\w+)/))
-            table_name, col_name = match[1], match[2]
-            tables[table_name][:columns]&.reject! { |c| c[:name] == col_name } if tables[table_name]
-
-          # rename_column :table, :old, :new
-          elsif (match = stripped.match(/rename_column\s+[:"'](\w+)['"']?,\s*[:"'](\w+)['"']?,\s*[:"'](\w+)/))
-            table_name, old_name, new_name = match[1], match[2], match[3]
-            if tables[table_name]
-              col = tables[table_name][:columns].find { |c| c[:name] == old_name }
-              col[:name] = new_name if col
-            end
-
-          # change_column :table, :column, :new_type
-          elsif (match = stripped.match(/change_column\s+[:"'](\w+)['"']?,\s*[:"'](\w+)['"']?,\s*[:"'](\w+)/))
-            table_name, col_name, new_type = match[1], match[2], match[3]
-            if tables[table_name]
-              col = tables[table_name][:columns].find { |c| c[:name] == col_name }
-              col[:type] = new_type if col
-            end
-
-          # change_column_default :table, :column, default_value
-          elsif (match = stripped.match(/change_column_default\s+[:"'](\w+)['"']?,\s*[:"'](\w+)/))
-            table_name, col_name = match[1], match[2]
-            if tables[table_name]
-              col = tables[table_name][:columns].find { |c| c[:name] == col_name }
-              if col
-                default_match = stripped.match(/,\s*(?:from:\s*[^,]+,\s*)?to:\s*("[^"]*"|\d+(?:\.\d+)?|true|false|nil)/)
-                default_match ||= stripped.match(/,\s*[:"']\w+['"']?,\s*("[^"]*"|\d+(?:\.\d+)?|true|false|nil)\s*\z/)
-                if default_match
-                  raw = default_match[1]
-                  col[:default] = raw == "nil" ? nil : (raw.start_with?('"') ? raw[1..-2] : raw)
-                end
-              end
-            end
-
-          # change_column_null :table, :column, nullable
-          elsif (match = stripped.match(/change_column_null\s+[:"'](\w+)['"']?,\s*[:"'](\w+)['"']?,\s*(true|false)/))
-            table_name, col_name, nullable = match[1], match[2], match[3]
-            if tables[table_name]
-              col = tables[table_name][:columns].find { |c| c[:name] == col_name }
-              col[:null] = (nullable == "true") if col
-            end
-
-          # rename_table :old, :new
-          elsif (match = stripped.match(/rename_table\s+[:"'](\w+)['"']?,\s*[:"'](\w+)/))
-            old_name, new_name = match[1], match[2]
-            tables[new_name] = tables.delete(old_name) if tables[old_name]
-
-          # drop_table :name
-          elsif (match = stripped.match(/drop_table\s+[:"'](\w+)/))
-            tables.delete(match[1])
-
-          # add_reference / add_belongs_to :table, :ref
-          elsif (match = stripped.match(/add_(?:reference|belongs_to)\s+[:"'](\w+)['"']?,\s*[:"'](\w+)/))
-            table_name, ref_name = match[1], match[2]
-            if tables[table_name]
-              col_name = "#{ref_name}_id"
-              tables[table_name][:columns].reject! { |c| c[:name] == col_name }
-              col = { name: col_name, type: "bigint" }
-              col[:null] = false if stripped.include?("null: false")
-              tables[table_name][:columns] << col
-            end
-
-          # add_index :table, [:cols]
-          elsif (match = stripped.match(/add_index\s+[:"'](\w+)['"']?,\s*\[([^\]]*)\]/))
-            table_name = match[1]
-            cols = match[2].scan(/[:"'](\w+)/).flatten
-            unique = stripped.include?("unique: true")
-            idx_name = stripped.match(/name:\s*[:"']([^"'\s,]+)/)&.send(:[], 1)
-            tables[table_name][:indexes]&.push({ name: idx_name, columns: cols, unique: unique }.compact) if tables[table_name] && cols.any?
-
-          # add_index :table, :single_col
-          elsif (match = stripped.match(/add_index\s+[:"'](\w+)['"']?,\s*[:"'](\w+)/))
-            table_name, col_name = match[1], match[2]
-            unique = stripped.include?("unique: true")
-            idx_name = stripped.match(/name:\s*[:"']([^"'\s,]+)/)&.send(:[], 1)
-            tables[table_name][:indexes]&.push({ name: idx_name, columns: [ col_name ], unique: unique }.compact) if tables[table_name]
-
-          # add_foreign_key :from, :to
-          elsif (match = stripped.match(/add_foreign_key\s+[:"'](\w+)['"']?,\s*[:"'](\w+)/))
-            from_table, to_table = match[1], match[2]
-            col_match = stripped.match(/column:\s*[:"'](\w+)/)
-            column = col_match ? col_match[1] : "#{to_table.chomp('s')}_id"
-            if tables[from_table]
-              tables[from_table][:foreign_keys] << { from_table: from_table, to_table: to_table, column: column, primary_key: "id" }
-            end
-
-          # add_timestamps :table
-          elsif (match = stripped.match(/add_timestamps\s+[:"'](\w+)/))
-            table_name = match[1]
-            if tables[table_name]
-              tables[table_name][:columns] << { name: "created_at", type: "datetime", null: false }
-              tables[table_name][:columns] << { name: "updated_at", type: "datetime", null: false }
             end
           end
+
+        when :change_column_null
+          table = entry[:table]
+          if tables[table]
+            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
+            if col
+              opts = entry[:options] || {}
+              # The third positional arg is the nullable boolean
+              args = [entry[:table], entry[:column]]
+              # MigrationDslListener puts the nullable value in options or we check the raw AST
+              # For change_column_null, the third arg is a boolean (true/false)
+              # It's captured in options by MigrationDslListener if passed as keyword
+              # but it's typically a positional arg. Fall back to source inspection.
+            end
+          end
+
+        when :add_index
+          table = entry[:table]
+          return unless tables[table]
+          cols = entry[:columns]&.map(&:to_s) || []
+          opts = entry[:options] || {}
+          unique = opts[:unique] == true
+          idx_name = opts[:name]&.to_s
+          tables[table][:indexes] << { name: idx_name, columns: cols, unique: unique }.compact if cols.any?
+
+        when :add_reference, :add_belongs_to
+          table = entry[:table]
+          return unless tables[table]
+          ref_name = entry[:ref]
+          col_name = "#{ref_name}_id"
+          tables[table][:columns].reject! { |c| c[:name] == col_name }
+          col = { name: col_name, type: "bigint" }
+          opts = entry[:options] || {}
+          col[:null] = false if opts[:null] == false
+          tables[table][:columns] << col
+
+        when :add_foreign_key
+          from = entry[:table]
+          to = entry[:to_table]
+          return unless tables[from]
+          opts = entry[:options] || {}
+          column = opts[:column]&.to_s || "#{to&.to_s&.chomp('s')}_id"
+          tables[from][:foreign_keys] << { from_table: from, to_table: to, column: column, primary_key: "id" }
+        end
+      end
+
+      def apply_schema_column(entry, current_table, tables)
+        return unless tables[current_table]
+        col_type = entry[:column_type]
+
+        # Handle references/belongs_to
+        if %w[references belongs_to].include?(col_type)
+          ref_name = entry[:name]
+          col = { name: "#{ref_name}_id", type: "bigint" }
+          opts = entry[:options] || {}
+          col[:null] = false if opts[:null] == false
+          tables[current_table][:columns] << col
+          return
+        end
+
+        # Handle timestamps
+        if col_type == "timestamps"
+          tables[current_table][:columns] << { name: "created_at", type: "datetime", null: false }
+          tables[current_table][:columns] << { name: "updated_at", type: "datetime", null: false }
+          return
+        end
+
+        # Skip non-column types
+        return if %w[index check_constraint].include?(col_type)
+
+        col = { name: entry[:name], type: col_type }
+        opts = entry[:options] || {}
+        col[:null] = false if opts[:null] == false
+        col[:default] = format_default(opts[:default]) if opts.key?(:default) && opts[:default] != RailsAiContext::Confidence::INFERRED
+        col[:array] = true if opts[:array] == true
+        tables[current_table][:columns] << col
+      end
+
+      def apply_schema_index(entry, current_table, tables)
+        return unless tables[current_table]
+        cols = entry[:columns]&.map(&:to_s) || []
+        opts = entry[:options] || {}
+        unique = opts[:unique] == true
+        idx_name = opts[:name]&.to_s
+        tables[current_table][:indexes] << { name: idx_name, columns: cols, unique: unique }.compact if cols.any?
+      end
+
+      def format_default(value)
+        case value
+        when String then value
+        when Integer, Float then value.to_s
+        when TrueClass, FalseClass then value.to_s
+        when NilClass then nil
+        else value.to_s
         end
       end
 

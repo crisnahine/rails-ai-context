@@ -86,7 +86,7 @@ module RailsAiContext
       def extract_details_from_source(path)
         source = RailsAiContext::SafeFile.read(path)
         return { error: "unreadable" } unless source
-        parent = source.match(/class\s+\S+\s*<\s*(\S+)/)&.send(:[], 1) || "Unknown"
+        parent = extract_parent_class_ast(source)
         rate_limit_raw = extract_rate_limit(source)
         details = {
           parent_class: parent,
@@ -144,27 +144,18 @@ module RailsAiContext
       end
 
       def extract_actions_from_source(source)
-        in_private = false
-        actions = []
-
-        source.each_line do |line|
-          if line.match?(/\A\s*(private|protected)\s*$/)
-            in_private = true
-          elsif line.match?(/\A\s*public\s*$/)
-            in_private = false
-          end
-
-          next if in_private
-
-          # Skip inline private/protected method definitions (e.g. `private def foo`)
-          next if line.match?(/\A\s*(?:private|protected)\s+def\s/)
-
-          if (match = line.match(/\A\s*def\s+(\w+[?!]?)/))
-            actions << match[1] unless match[1].start_with?("_")
-          end
-        end
-
-        actions.sort
+        ast_result = SourceIntrospector.walk_source(source, {
+          methods: Listeners::MethodsListener
+        })
+        methods = ast_result[:methods] || []
+        methods
+          .select { |m| m[:scope] == :instance && m[:visibility] == :public }
+          .map { |m| m[:name] }
+          .reject { |name| name.start_with?("_") }
+          .sort
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_actions_from_source AST failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
       # Hybrid approach: reflection for complete filter names (handles inheritance + skips),
@@ -233,52 +224,51 @@ module RailsAiContext
       end
 
       def extract_filters_from_source(source)
-        filters = []
-        source.each_line do |line|
-          next unless (match = line.match(
-            /\A\s*(before_action|after_action|around_action|prepend_before_action|append_before_action)\s+:(\w+[?!]?)/
-          ))
+        filter_macros = %i[
+          before_action after_action around_action
+          prepend_before_action append_before_action
+          skip_before_action skip_after_action append_after_action
+        ]
+        ast_result = SourceIntrospector.walk_source(source, {
+          filters: -> { Listeners::GenericMacroListener.new(*filter_macros) }
+        })
+        raw = ast_result[:filters] || []
+        raw.filter_map do |entry|
+          name_sym = entry[:args]&.first
+          next unless name_sym
+          kind = entry[:macro].to_s.sub(/_action\z/, "").sub(/\A(?:prepend|append|skip)_/, "")
+          filter = { name: name_sym.to_s, kind: kind }
 
-          kind = match[1].sub(/_action\z/, "").sub(/\A(?:prepend|append)_/, "")
-          filter = { name: match[2], kind: kind }
-
-          only = parse_action_constraint(line, "only")
-          except = parse_action_constraint(line, "except")
+          opts = entry[:options] || {}
+          only = normalize_constraint(opts[:only])
+          except = normalize_constraint(opts[:except])
           filter[:only] = only if only&.any?
           filter[:except] = except if except&.any?
 
-          # Extract conditional modifiers (unless:, if:)
-          if (unless_match = line.match(/unless:\s*:(\w+[?!]?)/))
-            filter[:unless] = unless_match[1]
+          if opts[:unless]
+            filter[:unless] = opts[:unless].to_s
           end
-          if (if_match = line.match(/\bif:\s*:(\w+[?!]?)/))
-            filter[:if] = if_match[1]
+          if opts[:if]
+            filter[:if] = opts[:if].to_s
           end
 
-          filters << filter
+          filter
         end
-        filters
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_filters_from_source AST failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
-      def parse_action_constraint(line, key)
-        return nil unless line.include?("#{key}:")
-
-        # %i[...] or %w[...] format
-        if (match = line.match(/#{key}:\s*%[iwIW]\[([^\]]+)\]/))
-          return match[1].split(/\s+/)
+      # Normalize constraint values from AST extraction.
+      # Could be a single symbol, an array of symbols, or a string.
+      def normalize_constraint(value)
+        case value
+        when Array then value.map(&:to_s)
+        when Symbol then [value.to_s]
+        when String then [value]
+        when nil then nil
+        else [value.to_s]
         end
-
-        # [...] format with symbols
-        if (match = line.match(/#{key}:\s*\[([^\]]+)\]/))
-          return match[1].scan(/:(\w+[?!]?)/).flatten
-        end
-
-        # Single symbol format
-        if (match = line.match(/#{key}:\s*:(\w+[?!]?)/))
-          return [ match[1] ]
-        end
-
-        nil
       end
 
       # Statically evaluate known runtime conditions to exclude inapplicable filters.
@@ -323,86 +313,160 @@ module RailsAiContext
       end
 
       def extract_concerns_from_source(source)
-        source.scan(/^\s*include\s+(\w+(?:::\w+)*)/).flatten
+        result = AstCache.parse_string(source)
+        concerns = []
+        find_include_calls(result.value, concerns)
+        concerns
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_concerns_from_source AST failed: #{e.message}" if ENV["DEBUG"]
+        []
+      end
+
+      def find_include_calls(node, concerns)
+        return unless node.respond_to?(:child_nodes)
+        if node.is_a?(Prism::CallNode) && node.receiver.nil? && node.name == :include
+          node.arguments&.arguments&.each do |arg|
+            name = constant_node_to_string(arg)
+            concerns << name unless name == "Unknown"
+          end
+        end
+        node.child_nodes.compact.each { |child| find_include_calls(child, concerns) }
       end
 
       def extract_strong_params(source)
         return [] if source.nil?
 
-        method_names = source.scan(/def\s+(\w+_params)\b/).flatten.uniq
-        method_names.map { |name| extract_permit_details(source, name) }
+        parse_result = AstCache.parse_string(source)
+        param_methods = []
+        find_param_methods(parse_result.value, param_methods)
+        param_methods
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_strong_params AST failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
+      # Also keep extract_permit_details for specs that call it directly
       def extract_permit_details(source, method_name)
         result = { name: method_name }
-        body = extract_method_body(source, method_name)
-        return result unless body
+        parse_result = AstCache.parse_string(source)
+        def_node = find_def_node(parse_result.value, method_name)
+        return result unless def_node
 
-        # Detect params.permit! (unrestricted)
-        if body.match?(/params\s*\.permit!/)
+        permit_bang = find_call_in_tree(def_node.body, :permit!)
+        if permit_bang && call_on_params?(permit_bang)
           result[:unrestricted] = true
           return result
         end
 
-        # Extract require(:model)
-        if (req = body.match(/params\s*\.require\(\s*:(\w+)\s*\)/))
-          result[:requires] = req[1]
+        permit_call = find_call_in_tree(def_node.body, :permit)
+        return result unless permit_call
+
+        # Walk up the receiver chain for require
+        require_call = find_require_in_chain(permit_call)
+        if require_call
+          req_arg = require_call.arguments&.arguments&.first
+          result[:requires] = extract_ast_value(req_arg).to_s if req_arg
         end
 
-        # Extract permit(...) — join multi-line into single string
-        permit_match = body.match(/\.permit\((.*)\)/m)
-        return result unless permit_match
-
-        permit_body = permit_match[1].gsub(/\s*\n\s*/, " ").strip
-        result.merge(parse_permit_args(permit_body))
+        result.merge(parse_permit_args_ast(permit_call))
       end
 
-      def extract_method_body(source, method_name)
-        lines = source.lines
-        start_idx = lines.index { |l| l.match?(/\bdef\s+#{Regexp.escape(method_name)}\b/) }
-        return nil unless start_idx
+      def find_param_methods(node, results)
+        return unless node.respond_to?(:child_nodes)
+        if node.is_a?(Prism::DefNode) && node.name.to_s.end_with?("_params")
+          details = extract_permit_from_def(node)
+          results << details
+        end
+        node.child_nodes.compact.each { |child| find_param_methods(child, results) }
+      end
 
-        indent = lines[start_idx].match(/^(\s*)/)[1].length
-        body_lines = [ lines[start_idx] ]
+      def extract_permit_from_def(def_node)
+        result = { name: def_node.name.to_s }
 
-        (start_idx + 1...lines.size).each do |i|
-          body_lines << lines[i]
-          break if lines[i].match?(/^\s{#{indent}}end\b/)
+        permit_bang = find_call_in_tree(def_node.body, :permit!)
+        if permit_bang && call_on_params?(permit_bang)
+          result[:unrestricted] = true
+          return result
         end
 
-        body_lines.join
+        permit_call = find_call_in_tree(def_node.body, :permit)
+        return result unless permit_call
+
+        require_call = find_require_in_chain(permit_call)
+        if require_call
+          req_arg = require_call.arguments&.arguments&.first
+          result[:requires] = extract_ast_value(req_arg).to_s if req_arg
+        end
+
+        result.merge(parse_permit_args_ast(permit_call))
       end
 
-      def parse_permit_args(permit_body)
+      def find_def_node(node, method_name)
+        return nil unless node.respond_to?(:child_nodes)
+        if node.is_a?(Prism::DefNode) && node.name.to_s == method_name
+          return node
+        end
+        node.child_nodes.compact.each do |child|
+          found = find_def_node(child, method_name)
+          return found if found
+        end
+        nil
+      end
+
+      def find_call_in_tree(node, method_name)
+        return nil unless node.respond_to?(:child_nodes)
+        if node.is_a?(Prism::CallNode) && node.name == method_name
+          return node
+        end
+        node.child_nodes.compact.each do |child|
+          found = find_call_in_tree(child, method_name)
+          return found if found
+        end
+        nil
+      end
+
+      def call_on_params?(node)
+        receiver = node.receiver
+        return false unless receiver
+        return true if receiver.is_a?(Prism::CallNode) && receiver.name == :params
+        call_on_params?(receiver) if receiver.is_a?(Prism::CallNode)
+      end
+
+      def find_require_in_chain(node)
+        receiver = node.receiver
+        return nil unless receiver.is_a?(Prism::CallNode)
+        return receiver if receiver.name == :require
+        find_require_in_chain(receiver)
+      end
+
+      def parse_permit_args_ast(permit_call)
         permits = []
         nested = {}
         arrays = []
 
-        # Tokenize: split on commas but respect nested brackets
-        tokens = split_permit_tokens(permit_body)
-
-        tokens.each do |token|
-          token = token.strip
-          if (m = token.match(/\A:(\w+)\s*=>\s*\[([^\]]*)\]\z/))
-            # Hash rocket nested: :address => [:street, :city]
-            key = m[1]
-            vals = m[2].scan(/:(\w+)/).flatten
-            if vals.any?
-              nested[key] = vals
-            else
-              arrays << key
+        args = permit_call.arguments&.arguments || []
+        args.each do |arg|
+          case arg
+          when Prism::SymbolNode
+            permits << arg.value.to_s
+          when Prism::KeywordHashNode
+            arg.elements.each do |assoc|
+              next unless assoc.is_a?(Prism::AssocNode)
+              key = extract_ast_value(assoc.key).to_s
+              val = assoc.value
+              if val.is_a?(Prism::ArrayNode)
+                inner = val.elements.map { |e| extract_ast_value(e).to_s }
+                if inner.any? { |v| v != "" && v != "inferred" }
+                  nested[key] = inner.reject { |v| v == "" || v == "inferred" }
+                else
+                  arrays << key
+                end
+              else
+                permits << key
+              end
             end
-          elsif (m = token.match(/\A(\w+):\s*\[([^\]]*)\]\z/))
-            # Ruby keyword nested: address: [:street, :city]
-            key = m[1]
-            vals = m[2].scan(/:(\w+)/).flatten
-            if vals.any?
-              nested[key] = vals
-            else
-              arrays << key
-            end
-          elsif (m = token.match(/\A:(\w+)\z/))
-            permits << m[1]
+          when Prism::AssocSplatNode
+            # **opts style - skip
           end
         end
 
@@ -413,66 +477,119 @@ module RailsAiContext
         result
       end
 
-      def split_permit_tokens(str)
-        tokens = []
-        current = +""
-        depth = 0
-
-        str.each_char do |ch|
-          case ch
-          when "[" then depth += 1; current << ch
-          when "]" then depth -= 1; current << ch
-          when ","
-            if depth == 0
-              tokens << current
-              current = +""
-            else
-              current << ch
-            end
-          else
-            current << ch
-          end
+      def extract_ast_value(node)
+        case node
+        when Prism::SymbolNode       then node.value.to_s
+        when Prism::StringNode       then node.unescaped
+        when Prism::IntegerNode      then node.value
+        when Prism::ConstantReadNode then node.name.to_s
+        else "inferred"
         end
-
-        tokens << current unless current.strip.empty?
-        tokens
       end
 
       def extract_respond_to(source)
         return [] if source.nil?
-        return [] unless source.match?(/respond_to\s+do/)
 
-        source.scan(/format\.(\w+)/).flatten.uniq.sort
+        parse_result = AstCache.parse_string(source)
+        # Only extract format calls inside respond_to blocks
+        respond_to_blocks = []
+        find_respond_to_blocks(parse_result.value, respond_to_blocks)
+        return [] if respond_to_blocks.empty?
+
+        formats = []
+        respond_to_blocks.each { |block| find_format_calls(block, formats) }
+        formats.uniq.sort
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_respond_to AST failed: #{e.message}" if ENV["DEBUG"]
+        []
+      end
+
+      def find_respond_to_blocks(node, blocks)
+        return unless node.respond_to?(:child_nodes)
+        if node.is_a?(Prism::CallNode) && node.name == :respond_to && node.block
+          blocks << node.block
+        end
+        node.child_nodes.compact.each { |child| find_respond_to_blocks(child, blocks) }
+      end
+
+      def find_format_calls(node, formats)
+        return unless node.respond_to?(:child_nodes)
+        if node.is_a?(Prism::CallNode) && node.receiver
+          receiver = node.receiver
+          is_format = case receiver
+                      when Prism::LocalVariableReadNode then receiver.name == :format
+                      when Prism::CallNode then receiver.name == :format && receiver.receiver.nil?
+                      else false
+                      end
+          formats << node.name.to_s if is_format
+        end
+        node.child_nodes.compact.each { |child| find_format_calls(child, formats) }
       end
 
       def extract_rescue_from(source)
         return [] if source.nil?
 
-        source.each_line.filter_map do |line|
-          next unless (match = line.match(/\A\s*rescue_from\s+(.+)/))
-          rest = match[1]
-          # Extract exception class(es) and handler
-          exception_part = rest.split(/,\s*with:/).first&.strip
-          handler_match = rest.match(/with:\s*:(\w+[?!]?)/)
-          handler = handler_match ? handler_match[1] : nil
-
-          exceptions = exception_part&.scan(/([A-Z][\w:]+)/)&.flatten || []
+        ast_result = SourceIntrospector.walk_source(source, {
+          rescue_from: -> { Listeners::GenericMacroListener.new(:rescue_from) }
+        })
+        raw = ast_result[:rescue_from] || []
+        raw.flat_map do |entry|
+          handler = entry[:options][:with]&.to_s
+          # Extract constant arguments (exception classes)
+          exceptions = extract_constant_args_from_source(source, entry[:location])
+          exceptions = entry[:args].map(&:to_s) if exceptions.empty?
           exceptions.map { |ex| { exception: ex, handler: handler }.compact }
-        end.flatten
+        end
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_rescue_from failed: #{e.message}" if ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] extract_rescue_from AST failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # For rescue_from, we need constants (not symbols). GenericMacroListener's
+      # extract_symbol_args skips them. Walk the AST for the specific call node
+      # at the given line to get ConstantReadNode/ConstantPathNode args.
+      def extract_constant_args_from_source(source, line_number)
+        parse_result = AstCache.parse_string(source)
+        constants = []
+        find_call_at_line(parse_result.value, :rescue_from, line_number, constants)
+        constants
+      end
+
+      def find_call_at_line(node, method_name, line_number, constants)
+        return unless node.respond_to?(:child_nodes)
+        if node.is_a?(Prism::CallNode) && node.name == method_name &&
+           node.location.start_line == line_number
+          node.arguments&.arguments&.each do |arg|
+            case arg
+            when Prism::ConstantReadNode
+              constants << arg.name.to_s
+            when Prism::ConstantPathNode
+              constants << constant_node_to_string(arg)
+            end
+          end
+          return
+        end
+        node.child_nodes.compact.each { |child| find_call_at_line(child, method_name, line_number, constants) }
       end
 
       def extract_rate_limit(source)
         return nil if source.nil?
 
-        match = source.match(/^\s*rate_limit\s+(.+)$/)
-        return nil unless match
+        ast_result = SourceIntrospector.walk_source(source, {
+          rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
+        })
+        entries = ast_result[:rate_limit] || []
+        return nil if entries.empty?
 
-        match[1].strip
+        entry = entries.first
+        line_num = entry[:location]
+        lines = source.lines
+        return nil unless line_num && line_num > 0 && line_num <= lines.size
+
+        raw_line = lines[line_num - 1].strip
+        raw_line.sub(/\Arate_limit\s+/, "")
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_rate_limit failed: #{e.message}" if ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] extract_rate_limit AST failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -492,23 +609,82 @@ module RailsAiContext
 
       def extract_turbo_stream_actions(source)
         return [] if source.nil?
-        return [] unless source.match?(/format\.turbo_stream|\.turbo_stream\.erb/)
 
+        parse_result = AstCache.parse_string(source)
         actions = []
-        current_action = nil
-        source.each_line do |line|
-          if (action_match = line.match(/\A\s*def\s+(\w+)/))
-            current_action = action_match[1]
-          end
-          if current_action && line.match?(/format\.turbo_stream/)
-            actions << current_action
-            current_action = nil # avoid duplicates within same action
-          end
-        end
+        find_turbo_stream_in_defs(parse_result.value, nil, actions)
         actions.uniq.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_turbo_stream_actions failed: #{e.message}" if ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] extract_turbo_stream_actions AST failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # Walk AST tracking which DefNode we're inside,
+      # look for format.turbo_stream calls
+      def find_turbo_stream_in_defs(node, current_def_name, actions)
+        return unless node.respond_to?(:child_nodes)
+
+        if node.is_a?(Prism::DefNode)
+          current_def_name = node.name.to_s
+        end
+
+        if node.is_a?(Prism::CallNode) && node.name == :turbo_stream && node.receiver
+          receiver = node.receiver
+          is_format = case receiver
+                      when Prism::LocalVariableReadNode then receiver.name == :format
+                      when Prism::CallNode then receiver.name == :format && receiver.receiver.nil?
+                      else false
+                      end
+          if is_format && current_def_name
+            actions << current_def_name
+          end
+        end
+
+        node.child_nodes.compact.each do |child|
+          find_turbo_stream_in_defs(child, current_def_name, actions)
+        end
+      end
+
+      # --- AST helpers ---
+
+      # Extract parent class name from source via Prism AST.
+      # Walks for ClassNode and reads superclass constant path.
+      def extract_parent_class_ast(source)
+        result = AstCache.parse_string(source)
+        find_class_superclass(result.value) || "Unknown"
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_parent_class_ast failed: #{e.message}" if ENV["DEBUG"]
+        "Unknown"
+      end
+
+      def find_class_superclass(node)
+        return nil unless node.respond_to?(:child_nodes)
+        node.child_nodes.compact.each do |child|
+          if child.is_a?(Prism::ClassNode) && child.superclass
+            return constant_node_to_string(child.superclass)
+          end
+          found = find_class_superclass(child)
+          return found if found
+        end
+        nil
+      end
+
+      def constant_node_to_string(node)
+        case node
+        when Prism::ConstantReadNode
+          node.name.to_s
+        when Prism::ConstantPathNode
+          parts = []
+          current = node
+          while current.is_a?(Prism::ConstantPathNode)
+            parts.unshift(current.name.to_s)
+            current = current.parent
+          end
+          parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
+          parts.join("::")
+        else
+          "Unknown"
+        end
       end
 
       def read_source(ctrl)

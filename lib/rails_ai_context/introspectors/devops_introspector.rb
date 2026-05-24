@@ -33,27 +33,66 @@ module RailsAiContext
         path = File.join(root, "config/puma.rb")
         return nil unless File.exist?(path)
 
-        content = RailsAiContext::SafeFile.read(path)
-        return nil unless content
+        # Walk AST directly for puma macro calls with integer/ENV arguments
+        parse_result = AstCache.parse(path)
         config = {}
-
-        if (threads_match = content.match(/threads\s+(\d+)\s*,\s*(\d+)/))
-          config[:threads_min] = threads_match[1].to_i
-          config[:threads_max] = threads_match[2].to_i
-        end
-
-        if (workers_match = content.match(/workers\s+(\d+)/))
-          config[:workers] = workers_match[1].to_i
-        end
-
-        if (port_match = content.match(/port\s+ENV.+?(\d+)/))
-          config[:port] = port_match[1].to_i
-        end
+        extract_puma_calls(parse_result.value, config)
 
         config.empty? ? nil : config
       rescue => e
         $stderr.puts "[rails-ai-context] extract_puma_config failed: #{e.message}" if ENV["DEBUG"]
         nil
+      end
+
+      # Walk AST to find threads/workers/port calls and extract their arguments.
+      def extract_puma_calls(node, config)
+        case node
+        when Prism::ProgramNode
+          extract_puma_calls(node.statements, config)
+        when Prism::StatementsNode
+          node.body.each { |child| extract_puma_calls(child, config) }
+        when Prism::CallNode
+          if node.receiver.nil?
+            args = node.arguments&.arguments || []
+            case node.name
+            when :threads
+              ints = args.select { |a| a.is_a?(Prism::IntegerNode) }.map(&:value)
+              if ints.size >= 2
+                config[:threads_min] = ints[0]
+                config[:threads_max] = ints[1]
+              end
+            when :workers
+              int_arg = args.find { |a| a.is_a?(Prism::IntegerNode) }
+              config[:workers] = int_arg.value if int_arg
+            when :port
+              # port is usually called with ENV.fetch("PORT", default_int)
+              args.each do |arg|
+                int_val = find_integer_in_node(arg)
+                if int_val
+                  config[:port] = int_val
+                  break
+                end
+              end
+            end
+          end
+        else
+          # Recurse into child nodes for blocks, if-statements, etc.
+          node.child_nodes.compact.each { |child| extract_puma_calls(child, config) }
+        end
+      end
+
+      # Recursively search an AST node for an integer literal (handles ENV.fetch("X", 3000)).
+      def find_integer_in_node(node)
+        case node
+        when Prism::IntegerNode then node.value
+        when Prism::CallNode
+          (node.arguments&.arguments || []).each do |arg|
+            val = find_integer_in_node(arg)
+            return val if val
+          end
+          nil
+        else nil
+        end
       end
 
       def extract_procfile
@@ -76,12 +115,18 @@ module RailsAiContext
         routes_path = File.join(root, "config/routes.rb")
         return nil unless File.exist?(routes_path)
 
+        # Detect rails_health_check macro via AST
+        ast_data = SourceIntrospector.walk(routes_path, {
+          health: -> { Listeners::GenericMacroListener.new(:rails_health_check) }
+        })
+        return true if ast_data[:health].any?
+
+        # Fall back to quoted route strings for custom health endpoints.
+        # These are string arguments to route macros (get, match, etc.),
+        # not bare method calls, so regex on content is appropriate.
         content = RailsAiContext::SafeFile.read(routes_path)
         return nil unless content
-        # Match health-check endpoints as quoted route strings only,
-        # to avoid false positives from comments or controller/action names.
         return true if content.match?(%r{["']/?(?:up|health|ping|status|healthz|alive|liveness|readiness)["']})
-        return true if content.include?("rails_health_check")
         nil
       rescue => e
         $stderr.puts "[rails-ai-context] detect_health_check failed: #{e.message}" if ENV["DEBUG"]

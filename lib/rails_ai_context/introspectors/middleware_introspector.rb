@@ -38,11 +38,27 @@ module RailsAiContext
           content = RailsAiContext::SafeFile.read(path) or next
           class_name = File.basename(path, ".rb").camelize
 
+          parse_result = AstCache.parse(path)
+          has_call = false
+          init_app = false
+
+          queue = [parse_result.value]
+          while (node = queue.shift)
+            if node.is_a?(Prism::DefNode)
+              has_call = true if node.name == :call
+              if node.name == :initialize
+                params = node.parameters
+                init_app = params&.requireds&.any? { |p| p.is_a?(Prism::RequiredParameterNode) && p.name == :app } || false
+              end
+            end
+            node.child_nodes.compact.each { |c| queue << c }
+          end
+
           info = {
             file: path.sub("#{root}/", ""),
             class_name: class_name,
-            has_call_method: content.match?(/def\s+call\b/),
-            initializes_app: content.match?(/def\s+initialize\s*\(\s*app/)
+            has_call_method: has_call,
+            initializes_app: init_app
           }
 
           patterns = []
@@ -87,10 +103,9 @@ module RailsAiContext
 
         additions = []
         Dir.glob(File.join(init_dir, "*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          content.scan(/config\.middleware\.(?:use|insert_before|insert_after|insert|unshift)\s+(\S+)/).each do |match|
-            name = match[0].gsub(/,.*/, "").strip
-            additions << { middleware: name, file: File.basename(path) } unless name.empty?
+          ast_data = SourceIntrospector.walk(path, { middleware: Listeners::MiddlewareConfigListener })
+          ast_data[:middleware].each do |m|
+            additions << { middleware: m[:middleware], file: File.basename(path) }
           end
         end
         additions.uniq

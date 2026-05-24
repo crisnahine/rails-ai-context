@@ -73,15 +73,18 @@ module RailsAiContext
       end
 
       def extract_class_name(content)
-        # Extract fully qualified class name (e.g., Components::Articles::Article)
-        match = content.match(/class\s+([\w:]+)/)
-        return nil unless match
+        # Use Prism AST to extract class name and simplify for display
+        parse_result = AstCache.parse_string(content)
+        class_node = find_first_class_node(parse_result.value)
+        return nil unless class_node
 
-        full_name = match[1]
+        full_name = constant_path_to_string(class_node.constant_path)
+        return nil unless full_name
+
         # Return the last meaningful segment for display, but keep namespace context
-        # e.g., "Components::Articles::Article" → "Articles::Article"
-        #        "RubyUI::Button" → "Button"
-        #        "AlertComponent" → "AlertComponent"
+        # e.g., "Components::Articles::Article" -> "Articles::Article"
+        #        "RubyUI::Button" -> "Button"
+        #        "AlertComponent" -> "AlertComponent"
         parts = full_name.split("::")
         if parts.size > 2 && parts.first == "Components"
           parts[1..].join("::")
@@ -92,24 +95,58 @@ module RailsAiContext
         end
       end
 
+      def find_first_class_node(node)
+        return node if node.is_a?(Prism::ClassNode)
+        node.child_nodes.compact.each do |child|
+          found = find_first_class_node(child)
+          return found if found
+        end
+        nil
+      end
+
+      def constant_path_to_string(node)
+        case node
+        when Prism::ConstantReadNode
+          node.name.to_s
+        when Prism::ConstantPathNode
+          parts = []
+          current = node
+          while current.is_a?(Prism::ConstantPathNode)
+            parts.unshift(current.name.to_s)
+            current = current.parent
+          end
+          parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
+          parts.join("::")
+        else
+          nil
+        end
+      end
+
       def detect_component_type(content)
-        if content.match?(/< (ViewComponent::Base|ApplicationComponent)\b/)
+        parse_result = AstCache.parse_string(content)
+        class_node = find_first_class_node(parse_result.value)
+        return :unknown unless class_node&.superclass
+
+        superclass_name = constant_path_to_string(class_node.superclass)
+        return :unknown unless superclass_name
+
+        vc_bases = %w[ViewComponent::Base ApplicationComponent]
+        phlex_bases = %w[Phlex::HTML Phlex::SVG ApplicationView]
+
+        if vc_bases.include?(superclass_name)
           :view_component
-        elsif content.match?(/< (Phlex::HTML|Phlex::SVG|ApplicationView|ApplicationComponent)\b/) ||
-              (content.match?(/< \S+/) && inherits_from_phlex_base?(content))
+        elsif phlex_bases.include?(superclass_name) || @phlex_bases&.include?(superclass_name)
+          :phlex
+        elsif inherits_from_phlex_base?(superclass_name)
           :phlex
         else
           :unknown
         end
       end
 
-      def inherits_from_phlex_base?(content)
-        parent_match = content.match(/class\s+\S+\s*<\s*(\S+)/)
-        return false unless parent_match
-
-        parent_class = parent_match[1]
+      def inherits_from_phlex_base?(superclass_name)
         @phlex_bases ||= detect_phlex_bases
-        @phlex_bases.include?(parent_class)
+        @phlex_bases.include?(superclass_name)
       end
 
       def detect_phlex_bases
@@ -117,10 +154,17 @@ module RailsAiContext
         return bases unless Dir.exist?(components_dir)
 
         Dir.glob(File.join(components_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          if content.match?(/< (Phlex::HTML|Phlex::SVG)\b/)
-            match = content.match(/class\s+(\S+)\s*</)
-            bases << match[1] if match
+          begin
+            parse_result = AstCache.parse(path)
+            class_node = find_first_class_node(parse_result.value)
+            next unless class_node&.superclass
+
+            parent = constant_path_to_string(class_node.superclass)
+            if %w[Phlex::HTML Phlex::SVG].include?(parent)
+              bases << constant_path_to_string(class_node.constant_path)
+            end
+          rescue => _e
+            next
           end
         end
 
@@ -128,57 +172,94 @@ module RailsAiContext
       end
 
       def extract_props(content)
-        # Extract from initialize method parameters
-        init_match = content.match(/def initialize\(([^)]*)\)/m)
-        return [] unless init_match
+        # Use Prism AST to extract initialize parameters
+        parse_result = AstCache.parse_string(content)
+        init_node = find_initialize_def(parse_result.value)
+        return [] unless init_node
 
-        params_str = init_match[1]
+        parameters = init_node.parameters
+        return [] unless parameters
+
         props = []
 
-        # Parse keyword arguments: name:, name: default
-        params_str.scan(/(\w+):\s*([^,)]*)?/) do |name, default|
-          prop = { name: name }
-          default = default&.strip
-          prop[:default] = default if default && !default.empty?
-          props << prop
+        # Positional required params
+        if parameters.respond_to?(:requireds)
+          parameters.requireds.each do |p|
+            next unless p.is_a?(Prism::RequiredParameterNode)
+            props << { name: p.name.to_s, positional: true }
+          end
         end
 
-        # Parse positional arguments
-        params_str.scan(/\A\s*(\w+)(?:\s*=\s*([^,)]+))?/) do |name, default|
-          next if props.any? { |p| p[:name] == name }
-          prop = { name: name, positional: true }
-          default = default&.strip
-          prop[:default] = default if default && !default.empty?
-          props << prop
+        # Positional optional params
+        if parameters.respond_to?(:optionals)
+          parameters.optionals.each do |p|
+            next unless p.is_a?(Prism::OptionalParameterNode)
+            prop = { name: p.name.to_s, positional: true }
+            prop[:default] = p.value.slice if p.value
+            props << prop
+          end
         end
 
-        # Detect **kwargs / **options splat
-        if params_str.match?(/\*\*(\w+)/)
-          splat_name = params_str.match(/\*\*(\w+)/)[1]
-          props << { name: splat_name, splat: true }
+        # Keyword required params
+        if parameters.respond_to?(:keywords)
+          parameters.keywords.each do |p|
+            case p
+            when Prism::RequiredKeywordParameterNode
+              props << { name: p.name.to_s }
+            when Prism::OptionalKeywordParameterNode
+              prop = { name: p.name.to_s }
+              prop[:default] = p.value.slice if p.value
+              props << prop
+            end
+          end
+        end
+
+        # **kwargs splat
+        if parameters.respond_to?(:keyword_rest) && parameters.keyword_rest
+          kr = parameters.keyword_rest
+          if kr.is_a?(Prism::KeywordRestParameterNode)
+            name = kr.name&.to_s || "kwargs"
+            props << { name: name, splat: true }
+          end
         end
 
         props
       end
 
+      def find_initialize_def(node)
+        return node if node.is_a?(Prism::DefNode) && node.name == :initialize
+        node.child_nodes.compact.each do |child|
+          found = find_initialize_def(child)
+          return found if found
+        end
+        nil
+      end
+
       def extract_slots(content)
         slots = []
 
-        # renders_one :name, optional lambda/class
-        content.scan(/renders_one\s+:(\w+)(?:,\s*(.+))?/) do |name, renderer|
-          slot = { name: name, type: :one }
-          slot[:renderer] = renderer.strip if renderer && !renderer.strip.empty?
+        # Use AST for renders_one / renders_many detection
+        ast_data = SourceIntrospector.walk_source(content, {
+          slot_macros: -> { Listeners::GenericMacroListener.new(:renders_one, :renders_many) }
+        })
+
+        ast_data[:slot_macros].each do |macro|
+          slot_name = macro[:args]&.first&.to_s
+          next unless slot_name
+
+          type = macro[:macro] == :renders_one ? :one : :many
+          slot = { name: slot_name, type: type }
+
+          # Check if there's a renderer argument (second arg or options)
+          remaining_args = macro[:args][1..]
+          if remaining_args&.any?
+            slot[:renderer] = remaining_args.map(&:to_s).join(", ")
+          end
+
           slots << slot
         end
 
-        # renders_many :name, optional lambda/class
-        content.scan(/renders_many\s+:(\w+)(?:,\s*(.+))?/) do |name, renderer|
-          slot = { name: name, type: :many }
-          slot[:renderer] = renderer.strip if renderer && !renderer.strip.empty?
-          slots << slot
-        end
-
-        # Phlex slots: def slot_name(&block)
+        # Phlex slots: def slot_name(&block) - keep regex for this (Phlex-specific, diminishing returns)
         if detect_component_type(content) == :phlex
           content.scan(/def\s+(\w+)\s*\(\s*&\s*\w*\s*\)/).each do |name,|
             next if %w[initialize template view_template before_template after_template].include?(name)

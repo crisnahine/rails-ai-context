@@ -175,18 +175,16 @@ module RailsAiContext
         gemfile = File.join(app.root, "Gemfile")
         return [] unless File.exist?(gemfile)
 
-        content = RailsAiContext::SafeFile.read(gemfile)
-        return [] unless content
-        local = []
-        content.each_line do |line|
-          next if line.strip.start_with?("#")
-          if (match = line.match(/gem\s+["'](\w[\w-]*)["'].*path:\s*["']([^"']+)["']/))
-            local << { name: match[1], source: "path", location: match[2] }
-          elsif (match = line.match(/gem\s+["'](\w[\w-]*)["'].*git:\s*["']([^"']+)["']/))
-            local << { name: match[1], source: "git", location: match[2] }
+        ast_data = SourceIntrospector.walk(gemfile, { gems: -> { Listeners::GemfileDslListener.new } })
+        ast_data[:gems].filter_map do |entry|
+          next unless entry[:type] == :gem
+          opts = entry[:options] || {}
+          if opts[:path]
+            { name: entry[:name], source: "path", location: opts[:path].to_s }
+          elsif opts[:git]
+            { name: entry[:name], source: "git", location: opts[:git].to_s }
           end
         end
-        local
       rescue => e
         $stderr.puts "[rails-ai-context] detect_local_gems failed: #{e.message}" if ENV["DEBUG"]
         []
@@ -196,19 +194,12 @@ module RailsAiContext
         gemfile = File.join(app.root, "Gemfile")
         return {} unless File.exist?(gemfile)
 
-        content = RailsAiContext::SafeFile.read(gemfile)
-        return {} unless content
+        ast_data = SourceIntrospector.walk(gemfile, { gems: -> { Listeners::GemfileDslListener.new } })
         groups = {}
-        current_group = nil
-        content.each_line do |line|
-          stripped = line.strip
-          next if stripped.start_with?("#")
-          if (match = stripped.match(/\Agroup\s+(.+?)\s+do\b/))
-            current_group = match[1].scan(/:(\w+)/).flatten
-          elsif stripped == "end" && current_group
-            current_group = nil
-          elsif current_group && (match = stripped.match(/\Agem\s+["'](\w[\w-]*)["']/))
-            current_group.each { |g| (groups[g] ||= []) << match[1] }
+        ast_data[:gems].each do |entry|
+          next unless entry[:type] == :gem && entry[:groups]&.any?
+          entry[:groups].each do |g|
+            (groups[g.to_s] ||= []) << entry[:name]
           end
         end
         groups

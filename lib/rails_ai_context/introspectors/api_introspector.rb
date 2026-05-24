@@ -96,10 +96,23 @@ module RailsAiContext
         cors_path = File.join(root, "config/initializers/cors.rb")
         return nil unless File.exist?(cors_path)
 
-        content = RailsAiContext::SafeFile.read(cors_path)
-        return nil unless content
-        origins = content.scan(/origins\s+(.+)$/).flatten.flat_map do |line|
-          line.scan(/["']([^"']+)["']/).flatten
+        ast_data = SourceIntrospector.walk(cors_path, {
+          origins: -> { Listeners::GenericMacroListener.new(:origins) }
+        })
+
+        origin_calls = ast_data[:origins]
+        return nil if origin_calls.empty?
+
+        # Extract origin strings from macro args
+        origins = origin_calls.flat_map { |macro| macro[:args].map(&:to_s) }
+        # GenericMacroListener extracts symbol args; for string origins we need
+        # the raw content fallback
+        if origins.empty?
+          content = RailsAiContext::SafeFile.read(cors_path)
+          return nil unless content
+          origins = content.scan(/origins\s+(.+)$/).flatten.flat_map do |line|
+            line.scan(/["']([^"']+)["']/).flatten
+          end
         end
 
         { file: "config/initializers/cors.rb", origins: origins }
@@ -158,12 +171,14 @@ module RailsAiContext
         init_path = File.join(root, "config/initializers/rack_attack.rb")
         return { rack_attack: true } if File.exist?(init_path)
 
-        # Rails 8 rate limiting
+        # Rails 8 rate limiting - use AST to detect rate_limit macro calls
         controllers_dir = File.join(root, "app/controllers")
         if Dir.exist?(controllers_dir)
           Dir.glob(File.join(controllers_dir, "**/*.rb")).each do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            return { rails_rate_limiting: true } if content.match?(/rate_limit\b/)
+            ast_data = SourceIntrospector.walk(path, {
+              rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
+            })
+            return { rails_rate_limiting: true } if ast_data[:rate_limit].any?
           end
         end
 

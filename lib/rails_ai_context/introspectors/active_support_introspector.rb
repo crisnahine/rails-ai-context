@@ -50,10 +50,16 @@ module RailsAiContext
           modules = Dir.glob(File.join(dir, "**/*.rb")).sort.filter_map do |path|
             content = RailsAiContext::SafeFile.read(path) or next
             mod_name = File.basename(path, ".rb").camelize
+
+            ast = SourceIntrospector.walk(path, {
+              concern_macros: -> { Listeners::GenericMacroListener.new(:included, :class_methods) }
+            })
+            hits = ast[:concern_macros]
+
             entry = { name: mod_name, file: path.sub("#{root}/", "") }
             entry[:uses_active_support_concern] = true if content.include?("ActiveSupport::Concern")
-            entry[:included_blocks] = content.scan(/^\s*included\s+do\b/).size
-            entry[:class_methods_block] = content.include?("class_methods do")
+            entry[:included_blocks] = hits.count { |h| h[:macro] == :included }
+            entry[:class_methods_block] = hits.any? { |h| h[:macro] == :class_methods }
             entry
           end
           result[rel_dir] = modules if modules.any?

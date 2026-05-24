@@ -54,29 +54,76 @@ module RailsAiContext
         return [] unless Dir.exist?(jobs_dir)
 
         Dir.glob(File.join(jobs_dir, "**/*.rb")).filter_map do |path|
-          source = RailsAiContext::SafeFile.read(path) or next
+          next unless File.exist?(path) && File.size(path) > 0
 
-          # Extract class name
-          class_match = source.match(/class\s+(\S+)\s*</)
-          next unless class_match
-          name = class_match[1]
+          ast = SourceIntrospector.walk(path, {
+            macros: -> {
+              Listeners::GenericMacroListener.new(
+                :queue_as, :retry_on, :discard_on,
+                :before_enqueue, :after_enqueue,
+                :before_perform, :after_perform,
+                :around_perform, :around_enqueue
+              )
+            },
+            methods: Listeners::MethodsListener
+          })
+
+          # Extract class name from AST
+          parse_result = AstCache.parse(path)
+          name = extract_class_name(parse_result.value)
+          next unless name
           next if name == "ApplicationJob"
 
           # Extract queue_as
-          queue_match = source.match(/queue_as\s+:(\w+)/)
-          queue = queue_match ? queue_match[1] : nil
+          queue_hit = ast[:macros].find { |m| m[:macro] == :queue_as }
+          queue = queue_hit[:args].first.to_s if queue_hit && queue_hit[:args].any?
 
-          # Extract retry_on declarations
-          retry_on = source.scan(/retry_on\s+(.+?)$/).map { |m| m[0].strip }
+          # Extract retry_on declarations (need source text for full arg string)
+          retry_on_hits = ast[:macros].select { |m| m[:macro] == :retry_on }
+          discard_on_hits = ast[:macros].select { |m| m[:macro] == :discard_on }
 
-          # Extract discard_on declarations
-          discard_on = source.scan(/discard_on\s+(.+?)$/).map { |m| m[0].strip }
+          # For retry_on/discard_on, reconstruct the argument text from source
+          # since the full argument string includes constants and keyword args
+          retry_on = []
+          discard_on = []
+          if retry_on_hits.any? || discard_on_hits.any?
+            source = RailsAiContext::SafeFile.read(path)
+            if source
+              lines = source.lines
+              retry_on_hits.each do |hit|
+                line = lines[hit[:location] - 1]&.strip
+                retry_on << line.sub(/\Aretry_on\s+/, "") if line
+              end
+              discard_on_hits.each do |hit|
+                line = lines[hit[:location] - 1]&.strip
+                discard_on << line.sub(/\Adiscard_on\s+/, "") if line
+              end
+            end
+          end
 
-          # Extract perform method signature
-          perform_match = source.match(/def\s+perform\s*\(([^)]*)\)/)
-          perform_signature = perform_match ? perform_match[1].strip : nil
+          # Extract perform method signature from AST
+          perform_method = ast[:methods].find { |m| m[:name] == "perform" && m[:scope] == :instance }
+          perform_signature = nil
+          if perform_method && perform_method[:params]&.any?
+            perform_signature = perform_method[:params].map { |p|
+              case p[:type]
+              when :required then p[:name]
+              when :optional then "#{p[:name]} = {}"
+              when :rest then "*#{p[:name]}"
+              when :keyword then "#{p[:name]}:"
+              when :keyword_rest then "**#{p[:name]}"
+              when :block then "&#{p[:name]}"
+              else p[:name]
+              end
+            }.join(", ")
+          end
 
-          callbacks = source.scan(/\b(before_enqueue|after_enqueue|before_perform|after_perform|around_perform|around_enqueue)\b/).flatten.uniq
+          # Extract job callbacks
+          callback_names = %i[before_enqueue after_enqueue before_perform after_perform around_perform around_enqueue]
+          callbacks = ast[:macros]
+            .select { |m| callback_names.include?(m[:macro]) }
+            .map { |m| m[:macro].to_s }
+            .uniq
 
           job = { name: name }
           job[:queue] = queue if queue
@@ -89,6 +136,37 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] extract_jobs_from_source failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # Walk a Prism AST tree to find the first class name.
+      def extract_class_name(node)
+        case node
+        when Prism::ProgramNode
+          extract_class_name(node.statements)
+        when Prism::StatementsNode
+          node.body.each do |child|
+            result = extract_class_name(child)
+            return result if result
+          end
+          nil
+        when Prism::ClassNode
+          name_parts = []
+          current = node.constant_path
+          while current.is_a?(Prism::ConstantPathNode)
+            name_parts.unshift(current.name.to_s)
+            current = current.parent
+          end
+          name_parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
+          name_parts.join("::")
+        when Prism::ModuleNode
+          node.body&.body&.each do |child|
+            result = extract_class_name(child)
+            return result if result
+          end
+          nil
+        else
+          nil
+        end
       end
 
       def extract_solid_queue_recurring

@@ -70,21 +70,24 @@ module RailsAiContext
         return nil unless content&.match?(/shard/i)
 
         result = { detected: true }
-        # Extract shard names from database.yml
+        # Extract shard names from database.yml (keep regex - YAML, not Ruby)
         shard_names = content.scan(/^\s{4,}(\w*shard\w*):/).flatten.uniq
         result[:shard_names] = shard_names if shard_names.any?
 
-        # Extract shard config from model source (connects_to shards: { ... })
+        # Extract shard config from model source via AST
         models_dir = File.join(root, "app/models")
         if Dir.exist?(models_dir)
           Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-            src = RailsAiContext::SafeFile.read(path) or next
-            if (match = src.match(/connects_to\s+.*shards:\s*\{([^}]+)\}/m))
-              shard_keys = match[1].scan(/(\w+):/).flatten
-              result[:shard_keys] = shard_keys if shard_keys.any?
-              result[:shard_count] = shard_keys.size
-              break
-            end
+            ast = SourceIntrospector.walk(path, {
+              connects: -> { Listeners::GenericMacroListener.new(:connects_to) }
+            })
+            hit = ast[:connects].find { |h| h[:options][:shards].is_a?(Hash) }
+            next unless hit
+
+            shard_keys = hit[:options][:shards].keys.map(&:to_s)
+            result[:shard_keys] = shard_keys if shard_keys.any?
+            result[:shard_count] = shard_keys.size
+            break
           end
         end
 
@@ -100,18 +103,20 @@ module RailsAiContext
 
         connections = []
         Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
           model_name = File.basename(path, ".rb").camelize
 
-          if (match = content.match(/connects_to\s+(.*?\n(?:\s+.*\n)*)/m))
-            connects_to_text = match[1].strip.gsub(/\s+/, " ")
-            connections << {
-              model: model_name,
-              connects_to: connects_to_text
-            }
+          ast = SourceIntrospector.walk(path, {
+            connects_to: -> { Listeners::GenericMacroListener.new(:connects_to) },
+            connected_to: -> { Listeners::GenericMacroListener.new(:connected_to) }
+          })
+
+          if ast[:connects_to].any?
+            hit = ast[:connects_to].first
+            connects_to_text = hit[:options].map { |k, v| "#{k}: #{format_connects_value(v)}" }.join(", ")
+            connections << { model: model_name, connects_to: connects_to_text }
           end
 
-          if content.match?(/connected_to\b/)
+          if ast[:connected_to].any?
             connections << { model: model_name, uses_connected_to: true } unless connections.any? { |c| c[:model] == model_name }
           end
         rescue => e
@@ -120,6 +125,19 @@ module RailsAiContext
         end
 
         connections.sort_by { |c| c[:model] }
+      end
+
+      def format_connects_value(value)
+        case value
+        when Hash
+          "{ #{value.map { |k, v| "#{k}: #{format_connects_value(v)}" }.join(", ")} }"
+        when Symbol
+          ":#{value}"
+        when Array
+          "[#{value.map { |v| format_connects_value(v) }.join(", ")}]"
+        else
+          value.to_s
+        end
       end
 
       def parse_database_yml

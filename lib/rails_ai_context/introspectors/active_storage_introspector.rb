@@ -36,19 +36,15 @@ module RailsAiContext
 
         attachments = []
         Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
           model_name = File.basename(path, ".rb").camelize
-
-          content.scan(/has_one_attached\s+:(\w+)/).each do |match|
-            attachments << { model: model_name, name: match[0], type: "has_one_attached" }
-          end
-
-          content.scan(/has_many_attached\s+:(\w+)/).each do |match|
-            attachments << { model: model_name, name: match[0], type: "has_many_attached" }
+          ast_data = SourceIntrospector.walk(path, { macros: Listeners::MacrosListener })
+          ast_data[:macros].each do |m|
+            next unless %i[has_one_attached has_many_attached].include?(m[:macro])
+            attachments << { model: model_name, name: m[:attribute], type: m[:macro].to_s }
           end
         end
 
-        attachments.sort_by { |a| [ a[:model], a[:name] ] }
+        attachments.sort_by { |a| [a[:model], a[:name]] }
       rescue => e
         $stderr.puts "[rails-ai-context] extract_attachments failed: #{e.message}" if ENV["DEBUG"]
         []
@@ -72,14 +68,13 @@ module RailsAiContext
         return validations unless Dir.exist?(models_dir)
 
         Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
           model = File.basename(path, ".rb").camelize
-          content.each_line do |line|
-            if (match = line.match(/validates?\s+:(\w+),.*content_type:/))
-              validations << { model: model, attachment: match[1], type: "content_type" }
-            end
-            if (match = line.match(/validates?\s+:(\w+),.*size:/))
-              validations << { model: model, attachment: match[1], type: "size" }
+          ast_data = SourceIntrospector.walk(path, { validations: Listeners::ValidationsListener })
+          ast_data[:validations].each do |v|
+            attrs = v[:attributes] || []
+            attrs.each do |attr|
+              validations << { model: model, attachment: attr, type: "content_type" } if v[:options].key?(:content_type)
+              validations << { model: model, attachment: attr, type: "size" } if v[:options].key?(:size)
             end
           end
         end
@@ -95,10 +90,12 @@ module RailsAiContext
         return variants unless Dir.exist?(models_dir)
 
         Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
           model = File.basename(path, ".rb").camelize
-          content.scan(/\.variant\s*\(\s*:(\w+)/).each do |name|
-            variants << { model: model, name: name[0] }
+          ast_data = SourceIntrospector.walk(path, { variants: Listeners::VariantCallListener })
+          ast_data[:variants].each do |v|
+            v[:args].each do |name|
+              variants << { model: model, name: name.to_s }
+            end
           end
         end
         variants

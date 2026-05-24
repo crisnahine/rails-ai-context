@@ -124,11 +124,46 @@ module RailsAiContext
         models_dir = File.join(root, "app/models")
         return [] unless Dir.exist?(models_dir)
 
+        target_bases = %w[ActiveSupport::CurrentAttributes Rails::CurrentAttributes]
+
         Dir.glob(File.join(models_dir, "**/*.rb")).filter_map do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          if content.match?(/< ActiveSupport::CurrentAttributes|< Rails::CurrentAttributes/)
+          parse_result = AstCache.parse(path)
+          class_node = find_first_class_node(parse_result.value)
+          next unless class_node&.superclass
+
+          superclass_name = constant_path_to_string(class_node.superclass)
+          if target_bases.include?(superclass_name)
             File.basename(path, ".rb").camelize
           end
+        rescue => _e
+          next
+        end
+      end
+
+      def find_first_class_node(node)
+        return node if node.is_a?(Prism::ClassNode)
+        node.child_nodes.compact.each do |child|
+          found = find_first_class_node(child)
+          return found if found
+        end
+        nil
+      end
+
+      def constant_path_to_string(node)
+        case node
+        when Prism::ConstantReadNode
+          node.name.to_s
+        when Prism::ConstantPathNode
+          parts = []
+          current = node
+          while current.is_a?(Prism::ConstantPathNode)
+            parts.unshift(current.name.to_s)
+            current = current.parent
+          end
+          parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
+          parts.join("::")
+        else
+          nil
         end
       end
 

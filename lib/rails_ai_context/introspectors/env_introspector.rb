@@ -121,10 +121,12 @@ module RailsAiContext
           dir = File.join(root, rel)
           next unless Dir.exist?(dir)
 
-          # Sort before slicing — see rationale in active_support_introspector.
+          # Sort before slicing - see rationale in active_support_introspector.
           Dir.glob(File.join(dir, "**/*.rb")).sort.first(2000).each do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            content.scan(/\bENV\s*(?:\.fetch)?\s*[\[\(]\s*["']([A-Z][A-Z0-9_]{1,})["']/).flatten.each do |name|
+            ast_data = SourceIntrospector.walk(path, { env: -> { Listeners::EnvAccessListener.new } })
+            ast_data[:env].each do |entry|
+              name = entry[:key]
+              next unless name.match?(/\A[A-Z][A-Z0-9_]{1,}\z/)
               next if KNOWN_ENV_VARS.any? { |spec| spec[:name] == name }
               refs[name] ||= []
               refs[name] << path.sub("#{root}/", "") unless refs[name].size >= 3

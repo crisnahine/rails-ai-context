@@ -33,7 +33,7 @@ module RailsAiContext
         auth = {}
 
         # Devise
-        devise_models = scan_models_for(/devise\s+(.+)$/)
+        devise_models = scan_models_for_devise
         auth[:devise] = devise_models if devise_models.any?
 
         # Rails 8 built-in auth (`bin/rails generate authentication`)
@@ -41,7 +41,7 @@ module RailsAiContext
         auth[:rails_auth] = rails_auth if rails_auth
 
         # has_secure_password
-        secure_pw = scan_models_for(/has_secure_password/)
+        secure_pw = scan_models_for_macro(:has_secure_password)
         auth[:has_secure_password] = secure_pw.map { |m| m[:model] } if secure_pw.any?
 
         # OmniAuth providers
@@ -85,19 +85,18 @@ module RailsAiContext
         return [] unless Dir.exist?(controllers_dir)
 
         Dir.glob(File.join(controllers_dir, "**/*.rb")).flat_map do |path|
-          content = RailsAiContext::SafeFile.read(path) or next []
-          next [] unless content.match?(/\ballow_unauthenticated_access\b/)
+          ast = SourceIntrospector.walk(path, { macros: -> { Listeners::GenericMacroListener.new(:allow_unauthenticated_access) } })
+          hits = ast[:macros]
+          next [] if hits.empty?
 
           relative = path.sub("#{root}/", "")
-          # Capture every `only:` / `except:` declaration in the file. A single
-          # controller can have multiple (e.g. `only:` + `except:` mixed via concerns).
-          scoped = content.scan(/allow_unauthenticated_access\s+(only|except):\s*(\[?[^\n]+)/)
-
-          if scoped.empty?
-            [ { file: relative, scope: "all actions" } ]
-          else
-            scoped.map do |kw, value|
-              { file: relative, scope: "#{kw}: #{strip_trailing_comment(value).strip}" }
+          hits.map do |hit|
+            opts = hit[:options] || {}
+            if opts.empty?
+              { file: relative, scope: "all actions" }
+            else
+              scope_parts = opts.map { |k, v| "#{k}: #{format_scope_value(v)}" }
+              { file: relative, scope: scope_parts.join(", ") }
             end
           end
         end.compact.sort_by { |h| h[:file] }
@@ -106,12 +105,17 @@ module RailsAiContext
         []
       end
 
-      # Strip a trailing `# comment` from a captured scope value while preserving
-      # `#` characters that appear inside string literals or array element syntax.
-      # Conservative: only strips when the `#` is preceded by whitespace, which
-      # matches the common style (`only: %i[index] # comment`).
-      def strip_trailing_comment(value)
-        value.sub(/\s+#.*\z/, "")
+      # Format a scope value extracted by the AST listener (symbol, array of
+      # symbols, or arbitrary value) into the string form the tests expect.
+      def format_scope_value(value)
+        case value
+        when Array
+          "%i[#{value.map { |v| v.to_s.delete_prefix(":") }.join(" ")}]"
+        when Symbol
+          ":#{value}"
+        else
+          value.to_s
+        end
       end
 
       def detect_authorization
@@ -155,16 +159,12 @@ module RailsAiContext
 
         result = {}
         Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          next unless content.match?(/\bdevise\b/)
+          ast = SourceIntrospector.walk(path, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
+          hits = ast[:devise]
+          next if hits.empty?
 
           model_name = File.basename(path, ".rb").camelize
-          # Extract devise modules, handling multiline declarations with trailing commas
-          # Join continuation lines (lines starting with whitespace + colon after a line ending with comma)
-          devise_block = content.scan(/devise\s+((?:.*,\s*\n)*.*?)$/m).flatten.first
-          next unless devise_block
-
-          modules = devise_block.scan(/:(\w+)/).flatten
+          modules = hits.flat_map { |h| h[:args].map(&:to_s) }
           result[model_name] = modules if modules.any?
         end
 
@@ -230,10 +230,11 @@ module RailsAiContext
         return [] unless Dir.exist?(controllers_dir)
 
         Dir.glob(File.join(controllers_dir, "**/*.rb")).filter_map do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          if content.match?(/authenticate_with_http_token|authenticate_or_request_with_http_token/)
-            path.sub("#{root}/", "")
-          end
+          ast = SourceIntrospector.walk(path, {
+            token: -> { Listeners::GenericMacroListener.new(:authenticate_with_http_token, :authenticate_or_request_with_http_token) }
+          })
+          next if ast[:token].empty?
+          path.sub("#{root}/", "")
         end.sort
       rescue => e
         $stderr.puts "[rails-ai-context] detect_http_token_auth failed: #{e.message}" if ENV["DEBUG"]
@@ -242,22 +243,35 @@ module RailsAiContext
 
       def detect_omniauth_providers
         providers = []
+
+        # Scan initializers for config.omniauth and provider calls
         initializers = Dir.glob(File.join(app.root, "config", "initializers", "*.rb"))
         initializers.each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          content.scan(/config\.omniauth\s+:(\w+)/).each { |m| providers << m[0] }
-          content.scan(/provider\s+:(\w+)/).each { |m| providers << m[0] unless %w[developer].include?(m[0]) }
+          ast = SourceIntrospector.walk(path, {
+            omniauth: -> { Listeners::ChainedCallListener.new(:omniauth) },
+            provider: -> { Listeners::GenericMacroListener.new(:provider) }
+          })
+          ast[:omniauth].each do |hit|
+            hit[:args].each { |a| providers << a.to_s }
+          end
+          ast[:provider].each do |hit|
+            hit[:args].each { |a| providers << a.to_s unless a.to_s == "developer" }
+          end
         end
-        # Also check model files for omniauth_providers
+
+        # Also check model files for devise omniauth_providers option
         models_dir = File.join(app.root, "app", "models")
         if Dir.exist?(models_dir)
           Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            content.scan(/omniauth_providers:\s*\[([^\]]+)\]/).each do |m|
-              m[0].scan(/:(\w+)/).each { |p| providers << p[0] }
+            ast = SourceIntrospector.walk(path, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
+            ast[:devise].each do |hit|
+              op_val = hit[:options][:omniauth_providers]
+              next unless op_val.is_a?(Array)
+              op_val.each { |p| providers << p.to_s }
             end
           end
         end
+
         providers.uniq
       rescue => e
         $stderr.puts "[rails-ai-context] detect_omniauth_providers failed: #{e.message}" if ENV["DEBUG"]
@@ -282,22 +296,42 @@ module RailsAiContext
         {}
       end
 
-      def scan_models_for(pattern)
+      def scan_models_for_devise
         models_dir = File.join(root, "app/models")
         return [] unless Dir.exist?(models_dir)
 
         results = []
         Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          matches = content.scan(pattern)
-          next if matches.empty?
+          ast = SourceIntrospector.walk(path, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
+          next if ast[:devise].empty?
 
           model_name = File.basename(path, ".rb").camelize
-          results << { model: model_name, matches: matches.flatten.map(&:strip) }
+          # Format matches the same way the old regex did: ":<module>, :<module>, ..."
+          matches = ast[:devise].map { |h| h[:args].map { |a| ":#{a}" }.join(", ") }
+          results << { model: model_name, matches: matches }
         end
         results.sort_by { |r| r[:model] }
       rescue => e
-        $stderr.puts "[rails-ai-context] scan_models_for failed: #{e.message}" if ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] scan_models_for_devise failed: #{e.message}" if ENV["DEBUG"]
+        []
+      end
+
+      def scan_models_for_macro(macro_name)
+        models_dir = File.join(root, "app/models")
+        return [] unless Dir.exist?(models_dir)
+
+        results = []
+        Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
+          ast = SourceIntrospector.walk(path, { macros: Listeners::MacrosListener })
+          hits = ast[:macros].select { |m| m[:macro] == macro_name }
+          next if hits.empty?
+
+          model_name = File.basename(path, ".rb").camelize
+          results << { model: model_name }
+        end
+        results.sort_by { |r| r[:model] }
+      rescue => e
+        $stderr.puts "[rails-ai-context] scan_models_for_macro failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

@@ -40,9 +40,40 @@ module RailsAiContext
         path = File.join(root, "config/importmap.rb")
         return [] unless File.exist?(path)
 
-        content = RailsAiContext::SafeFile.read(path)
-        return [] unless content
-        content.scan(/pin\s+["']([^"']+)["']/).flatten.sort
+        ast_data = SourceIntrospector.walk(path, {
+          pins: -> { Listeners::GenericMacroListener.new(:pin, :pin_all_from) }
+        })
+
+        # GenericMacroListener captures symbol args, but pin uses string args.
+        # Extract pin names from the raw AST results or fall back to parsing
+        # the string arguments from the macro call.
+        pin_names = ast_data[:pins].filter_map do |macro|
+          # pin/pin_all_from first arg is typically a string, captured as symbol by listener
+          macro[:args]&.first&.to_s
+        end
+
+        # If no names extracted via AST (string args not captured as symbols),
+        # fall back to reading the parse result directly
+        if pin_names.empty?
+          begin
+            parse_result = AstCache.parse(path)
+            queue = [parse_result.value]
+            while (node = queue.shift)
+              if node.is_a?(Prism::CallNode) && node.receiver.nil? &&
+                 %i[pin pin_all_from].include?(node.name)
+                first_arg = node.arguments&.arguments&.first
+                if first_arg.is_a?(Prism::StringNode)
+                  pin_names << first_arg.unescaped
+                end
+              end
+              node.child_nodes.compact.each { |c| queue << c }
+            end
+          rescue => _e
+            # Fall through to empty
+          end
+        end
+
+        pin_names.sort
       rescue => e
         $stderr.puts "[rails-ai-context] extract_importmap_pins failed: #{e.message}" if ENV["DEBUG"]
         []

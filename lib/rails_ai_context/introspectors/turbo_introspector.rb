@@ -88,12 +88,12 @@ module RailsAiContext
 
         broadcasts = []
         Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
           model_name = File.basename(path, ".rb").camelize
+          ast = SourceIntrospector.walk(path, { macros: Listeners::MacrosListener })
+          broadcast_hits = ast[:macros].select { |m| %i[broadcasts broadcasts_to broadcasts_refreshes_to].include?(m[:macro]) }
+          next if broadcast_hits.empty?
 
-          broadcast_methods = content.scan(/\b(broadcasts_to|broadcasts_refreshes_to|broadcasts)\b/).flatten.uniq
-          next if broadcast_methods.empty?
-
+          broadcast_methods = broadcast_hits.map { |h| h[:macro].to_s }.uniq
           broadcasts << { model: model_name, methods: broadcast_methods }
         end
 
@@ -189,6 +189,9 @@ module RailsAiContext
         { detected: false, native_helpers: [], native_navigation: [], native_conditionals: 0 }
       end
 
+      # `include Turbo::Native::Navigation` passes a constant path, not a
+      # symbol, so GenericMacroListener won't capture the argument. Keep
+      # regex for this specific constant-reference check.
       def detect_native_include(controllers_dir)
         return false unless Dir.exist?(controllers_dir)
 

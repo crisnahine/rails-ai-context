@@ -33,16 +33,15 @@ module RailsAiContext
           relative = path.sub("#{dir}/", "")
           next if relative == "application_mailbox.rb"
 
-          content = RailsAiContext::SafeFile.read(path) or next
           name = File.basename(path, ".rb").camelize
+          ast_data = SourceIntrospector.walk(path, { mailbox: Listeners::MailboxRoutingListener })
 
-          routing = content.scan(/routing\s+(.+?)\s+=>\s+:(\w+)/).map do |match|
-            { pattern: match[0], action: match[1] }
+          routing = ast_data[:mailbox].select { |r| r[:type] == :routing }.map do |r|
+            { pattern: r[:pattern], action: r[:action] }
           end
 
-          # Extract callbacks
-          callbacks = content.scan(/\b(before_processing|after_processing|around_processing)\s+:(\w+)/).map do |type, method|
-            { type: type, method: method }
+          callbacks = ast_data[:mailbox].select { |r| r[:type] == :callback }.map do |r|
+            { type: r[:callback_type], method: r[:method] }
           end
 
           entry = { name: name, file: relative, routing: routing }
@@ -51,7 +50,7 @@ module RailsAiContext
         rescue => e
           $stderr.puts "[rails-ai-context] extract_mailboxes failed: #{e.message}" if ENV["DEBUG"]
           nil
-        end.sort_by { |m| m[:name] }
+        end.compact.sort_by { |m| m[:name] }
       end
     end
   end
