@@ -11,9 +11,13 @@ require_relative "e2e_helper"
 # than spawning one stdio server per consumer.
 RSpec.describe "E2E: MCP HTTP protocol", type: :e2e do
   before(:all) do
-    # Read-only spec — reuse the shared in-Gemfile fixture.
     @builder = E2E.shared_app(install_path: :in_gemfile)
     @http = E2E::HttpServerHarness.new(@builder).start!
+    @init_response = @http.jsonrpc("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "e2e-harness", version: "0.0.0" }
+    })
   end
 
   after(:all) do
@@ -21,19 +25,11 @@ RSpec.describe "E2E: MCP HTTP protocol", type: :e2e do
   end
 
   it "initialize returns server capabilities over HTTP" do
-    response = @http.jsonrpc("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "e2e-harness", version: "0.0.0" }
-    })
-    expect(response["result"]).to be_a(Hash)
-    expect(response["result"]["capabilities"]).to have_key("tools")
+    expect(@init_response["result"]).to be_a(Hash)
+    expect(@init_response["result"]["capabilities"]).to have_key("tools")
   end
 
   it "tools/list returns the full tool registry over HTTP" do
-    @http.jsonrpc("initialize", {
-      protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "0" }
-    })
     response = @http.jsonrpc("tools/list")
     tools = response.dig("result", "tools")
     expect(tools).to be_a(Array)
@@ -41,9 +37,6 @@ RSpec.describe "E2E: MCP HTTP protocol", type: :e2e do
   end
 
   it "tools/call works over HTTP for rails_get_schema" do
-    @http.jsonrpc("initialize", {
-      protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "0" }
-    })
     response = @http.jsonrpc("tools/call", { name: "rails_get_schema", arguments: {} })
     content = response.dig("result", "content")
     expect(content).to be_a(Array)
