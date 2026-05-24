@@ -23,22 +23,34 @@ module RailsAiContext
         methods:      Listeners::MethodsListener
       }.freeze
 
-      # Introspect a file on disk (cached parse).
+      # Introspect a file on disk (cached parse) with default listeners.
       def self.call(path)
         result = AstCache.parse(path)
-        dispatch(result)
+        walk_dispatch(result, LISTENER_MAP)
       end
 
-      # Introspect a source string (no caching).
+      # Introspect a source string (no caching) with default listeners.
       def self.from_source(source)
         result = AstCache.parse_string(source)
-        dispatch(result)
+        walk_dispatch(result, LISTENER_MAP)
       end
 
-      def self.dispatch(parse_result)
+      # Walk a file with a custom listener map. Returns { key => results_array }.
+      def self.walk(path, listener_map = LISTENER_MAP)
+        result = AstCache.parse(path)
+        walk_dispatch(result, listener_map)
+      end
+
+      # Walk a source string with a custom listener map. Returns { key => results_array }.
+      def self.walk_source(source, listener_map = LISTENER_MAP)
+        result = AstCache.parse_string(source)
+        walk_dispatch(result, listener_map)
+      end
+
+      def self.walk_dispatch(parse_result, listener_map)
         dispatcher = Prism::Dispatcher.new
-        listeners  = LISTENER_MAP.transform_values { |klass|
-          listener = klass.new
+        listeners  = listener_map.transform_values { |spec|
+          listener = spec.is_a?(Proc) ? spec.call : spec.new
           register_listener(dispatcher, listener)
           listener
         }
@@ -47,10 +59,10 @@ module RailsAiContext
 
         listeners.transform_values(&:results)
       rescue => e
-        $stderr.puts "[rails-ai-context] SourceIntrospector dispatch failed: #{e.message}" if ENV["DEBUG"]
-        LISTENER_MAP.keys.each_with_object({}) { |key, h| h[key] = [] }
+        $stderr.puts "[rails-ai-context] SourceIntrospector walk_dispatch failed: #{e.message}" if ENV["DEBUG"]
+        listener_map.keys.each_with_object({}) { |key, h| h[key] = [] }
       end
-      private_class_method :dispatch
+      private_class_method :walk_dispatch
 
       # Register a listener for all events it responds to.
       def self.register_listener(dispatcher, listener)
@@ -63,6 +75,8 @@ module RailsAiContext
         events << :on_class_node_leave  if listener.respond_to?(:on_class_node_leave)
         events << :on_module_node_enter if listener.respond_to?(:on_module_node_enter)
         events << :on_module_node_leave if listener.respond_to?(:on_module_node_leave)
+        events << :on_block_node_enter  if listener.respond_to?(:on_block_node_enter)
+        events << :on_block_node_leave  if listener.respond_to?(:on_block_node_leave)
 
         dispatcher.register(listener, *events) if events.any?
       end

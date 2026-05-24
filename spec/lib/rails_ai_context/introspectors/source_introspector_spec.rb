@@ -159,6 +159,66 @@ RSpec.describe RailsAiContext::Introspectors::SourceIntrospector do
       end
     end
 
+    context "with a custom listener map" do
+      it "returns only the requested listeners" do
+        source = <<~RUBY
+          class User < ApplicationRecord
+            has_many :posts
+            encrypts :ssn
+          end
+        RUBY
+
+        result = described_class.walk_source(source, {
+          associations: RailsAiContext::Introspectors::Listeners::AssociationsListener,
+          macros: RailsAiContext::Introspectors::Listeners::MacrosListener
+        })
+
+        expect(result).to have_key(:associations)
+        expect(result).to have_key(:macros)
+        expect(result).not_to have_key(:validations)
+        expect(result[:associations].first[:name]).to eq(:posts)
+        expect(result[:macros].first[:macro]).to eq(:encrypts)
+      end
+    end
+  end
+
+  describe ".walk" do
+    it "parses a file path with a custom listener map" do
+      path = File.join(Rails.root, "app/models/user.rb")
+      result = described_class.walk(path, {
+        associations: RailsAiContext::Introspectors::Listeners::AssociationsListener
+      })
+
+      expect(result[:associations]).to be_an(Array)
+      expect(result[:associations]).not_to be_empty
+    end
+  end
+
+  describe ".walk_source" do
+    it "defaults to LISTENER_MAP when no map given" do
+      source = <<~RUBY
+        class Post < ApplicationRecord
+          belongs_to :user
+          validates :title, presence: true
+        end
+      RUBY
+
+      result = described_class.walk_source(source)
+      expect(result).to have_key(:associations)
+      expect(result).to have_key(:validations)
+    end
+
+    it "returns empty arrays on parse failure" do
+      result = described_class.walk_source("this is not valid ruby {{{{", {
+        macros: RailsAiContext::Introspectors::Listeners::MacrosListener
+      })
+      expect(result[:macros]).to eq([])
+    end
+  end
+
+  describe ".from_source" do
+    subject(:result) { described_class.from_source(source) }
+
     context "with legacy enum syntax" do
       let(:source) do
         <<~RUBY
