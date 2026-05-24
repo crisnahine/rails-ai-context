@@ -21,7 +21,6 @@ module RailsAiContext
           }
         end
       end
-
     end
   end
 end

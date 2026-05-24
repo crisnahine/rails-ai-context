@@ -77,14 +77,14 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GemfileDslListener do
     rspec = gems.find { |g| g[:name] == "rspec" }
     rails = gems.find { |g| g[:name] == "rails" }
 
-    expect(rspec[:groups]).to eq([:test])
+    expect(rspec[:groups]).to eq([ :test ])
     expect(rails[:groups]).to eq([])
   end
 
   it "detects gem with inline group option" do
     results = parse_and_dispatch('gem "web-console", group: :development')
     gems = results.select { |r| r[:type] == :gem }
-    expect(gems.first[:groups]).to eq([:development])
+    expect(gems.first[:groups]).to eq([ :development ])
   end
 
   it "detects source declarations" do

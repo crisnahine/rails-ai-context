@@ -24,7 +24,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ChainedCallListener do
 
     expect(results.size).to eq(1)
     expect(results.first[:method]).to eq("variant")
-    expect(results.first[:args]).to eq([:thumb])
+    expect(results.first[:args]).to eq([ :thumb ])
   end
 
   it "ignores receiver-less calls" do
@@ -84,6 +84,6 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::VariantCallListener do
   it "detects variant calls without constructor args" do
     results = parse_and_dispatch("image.variant(:thumb)")
     expect(results.size).to eq(1)
-    expect(results.first[:args]).to eq([:thumb])
+    expect(results.first[:args]).to eq([ :thumb ])
   end
 end

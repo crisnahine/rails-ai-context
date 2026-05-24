@@ -579,7 +579,7 @@ module RailsAiContext
             if col
               opts = entry[:options] || {}
               # The third positional arg is the nullable boolean
-              args = [entry[:table], entry[:column]]
+              args = [ entry[:table], entry[:column] ]
               # MigrationDslListener puts the nullable value in options or we check the raw AST
               # For change_column_null, the third arg is a boolean (true/false)
               # It's captured in options by MigrationDslListener if passed as keyword

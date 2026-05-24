@@ -26,7 +26,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
 
   it "extracts symbol args" do
     results = parse_and_dispatch("before_action :auth, :set_locale", :before_action)
-    expect(results.first[:args]).to eq([:auth, :set_locale])
+    expect(results.first[:args]).to eq([ :auth, :set_locale ])
   end
 
   it "extracts keyword options" do
@@ -60,6 +60,6 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
     })
 
     expect(result[:devise].size).to eq(1)
-    expect(result[:devise].first[:args]).to eq([:confirmable, :registerable])
+    expect(result[:devise].first[:args]).to eq([ :confirmable, :registerable ])
   end
 end

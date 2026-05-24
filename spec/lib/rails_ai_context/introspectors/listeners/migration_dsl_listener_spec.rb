@@ -34,13 +34,13 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MigrationDslListener do
     results = parse_and_dispatch('add_index "users", "email", unique: true')
     expect(results.size).to eq(1)
     expect(results.first).to include(action: :add_index, table: "users")
-    expect(results.first[:columns]).to eq(["email"])
+    expect(results.first[:columns]).to eq([ "email" ])
     expect(results.first[:options]).to include(unique: true)
   end
 
   it "detects add_index with multiple columns" do
     results = parse_and_dispatch('add_index "users", ["first_name", "last_name"]')
-    expect(results.first[:columns]).to eq(["first_name", "last_name"])
+    expect(results.first[:columns]).to eq([ "first_name", "last_name" ])
   end
 
   it "detects rename_column" do
@@ -79,7 +79,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MigrationDslListener do
     RUBY
 
     actions = results.map { |r| r[:action] }
-    expect(actions).to eq([:create_table, :add_column, :add_reference, :add_index])
+    expect(actions).to eq([ :create_table, :add_column, :add_reference, :add_index ])
   end
 
   it "detects drop_table" do

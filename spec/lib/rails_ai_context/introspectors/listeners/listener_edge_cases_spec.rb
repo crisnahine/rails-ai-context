@@ -19,7 +19,7 @@ RSpec.describe "Listener edge cases" do
     it "extracts a string arg as a symbol (gem \"rails\" style)" do
       results = parse_and_dispatch('gem "rails"', :gem)
       expect(results.size).to eq(1)
-      expect(results.first[:args]).to eq([:rails])
+      expect(results.first[:args]).to eq([ :rails ])
     end
   end
 
@@ -39,7 +39,7 @@ RSpec.describe "Listener edge cases" do
       results = parse_and_dispatch("a.b.c.variant(:thumb)", :variant)
       expect(results.size).to eq(1)
       expect(results.first[:method]).to eq("variant")
-      expect(results.first[:args]).to eq([:thumb])
+      expect(results.first[:args]).to eq([ :thumb ])
     end
   end
 

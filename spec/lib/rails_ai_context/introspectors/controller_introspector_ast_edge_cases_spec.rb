@@ -555,9 +555,9 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       entry = sp.first
       expect(entry[:name]).to eq("complex_params")
       expect(entry[:requires]).to eq("post")
-      expect(entry[:permits]).to eq(["title"])
-      expect(entry[:arrays]).to eq(["tags"])
-      expect(entry[:nested]).to eq({ "images" => ["url", "caption"] })
+      expect(entry[:permits]).to eq([ "title" ])
+      expect(entry[:arrays]).to eq([ "tags" ])
+      expect(entry[:nested]).to eq({ "images" => [ "url", "caption" ] })
     end
   end
 

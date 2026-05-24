@@ -57,7 +57,7 @@ module RailsAiContext
         if pin_names.empty?
           begin
             parse_result = AstCache.parse(path)
-            queue = [parse_result.value]
+            queue = [ parse_result.value ]
             while (node = queue.shift)
               if node.is_a?(Prism::CallNode) && node.receiver.nil? &&
                  %i[pin pin_all_from].include?(node.name)

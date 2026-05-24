@@ -90,10 +90,10 @@ module RailsAiContext
                 e.is_a?(Prism::SymbolNode) ? e.value.to_s : nil
               }
               deps = resolve_deps(assoc.value)
-              return [task_args, deps]
+              return [ task_args, deps ]
             end
           end
-          [[], []]
+          [ [], [] ]
         end
 
         def extract_task_deps(args)
@@ -106,7 +106,7 @@ module RailsAiContext
 
         def extract_hash_task(hash_node)
           assoc = hash_node.elements.first
-          return [nil, []] unless assoc.is_a?(Prism::AssocNode)
+          return [ nil, [] ] unless assoc.is_a?(Prism::AssocNode)
 
           name = case assoc.key
           when Prism::SymbolNode then assoc.key.value.to_s
@@ -115,7 +115,7 @@ module RailsAiContext
           end
 
           deps = resolve_deps(assoc.value)
-          [name, deps]
+          [ name, deps ]
         end
 
         def extract_deps_from_hash_values(hash_node)
@@ -127,8 +127,8 @@ module RailsAiContext
 
         def resolve_deps(node)
           case node
-          when Prism::SymbolNode then [node.value.to_s]
-          when Prism::StringNode then [node.unescaped]
+          when Prism::SymbolNode then [ node.value.to_s ]
+          when Prism::StringNode then [ node.unescaped ]
           when Prism::ArrayNode
             node.elements.filter_map { |e|
               case e

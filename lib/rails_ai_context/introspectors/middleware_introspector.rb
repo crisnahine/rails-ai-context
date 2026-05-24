@@ -42,7 +42,7 @@ module RailsAiContext
           has_call = false
           init_app = false
 
-          queue = [parse_result.value]
+          queue = [ parse_result.value ]
           while (node = queue.shift)
             if node.is_a?(Prism::DefNode)
               has_call = true if node.name == :call

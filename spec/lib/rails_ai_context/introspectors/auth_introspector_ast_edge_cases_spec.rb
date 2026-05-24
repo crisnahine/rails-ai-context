@@ -104,7 +104,7 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector, "AST edge cases"
     end
 
     after do
-      [session_model, current_model, controller_file].each { |f| FileUtils.rm_f(f) }
+      [ session_model, current_model, controller_file ].each { |f| FileUtils.rm_f(f) }
     end
 
     it "produces two separate entries for the same controller" do

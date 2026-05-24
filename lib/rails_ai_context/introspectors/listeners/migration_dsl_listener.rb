@@ -149,9 +149,9 @@ module RailsAiContext
           when Prism::ArrayNode
             node.elements.filter_map { |e| string_or_symbol(e) }
           when Prism::StringNode
-            [node.unescaped]
+            [ node.unescaped ]
           when Prism::SymbolNode
-            [node.value]
+            [ node.value ]
           else []
           end
         end

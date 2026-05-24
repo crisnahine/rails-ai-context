@@ -264,10 +264,10 @@ module RailsAiContext
       def normalize_constraint(value)
         case value
         when Array then value.map(&:to_s)
-        when Symbol then [value.to_s]
-        when String then [value]
+        when Symbol then [ value.to_s ]
+        when String then [ value ]
         when nil then nil
-        else [value.to_s]
+        else [ value.to_s ]
         end
       end
 
@@ -517,10 +517,10 @@ module RailsAiContext
         if node.is_a?(Prism::CallNode) && node.receiver
           receiver = node.receiver
           is_format = case receiver
-                      when Prism::LocalVariableReadNode then receiver.name == :format
-                      when Prism::CallNode then receiver.name == :format && receiver.receiver.nil?
-                      else false
-                      end
+          when Prism::LocalVariableReadNode then receiver.name == :format
+          when Prism::CallNode then receiver.name == :format && receiver.receiver.nil?
+          else false
+          end
           formats << node.name.to_s if is_format
         end
         node.child_nodes.compact.each { |child| find_format_calls(child, formats) }
@@ -631,10 +631,10 @@ module RailsAiContext
         if node.is_a?(Prism::CallNode) && node.name == :turbo_stream && node.receiver
           receiver = node.receiver
           is_format = case receiver
-                      when Prism::LocalVariableReadNode then receiver.name == :format
-                      when Prism::CallNode then receiver.name == :format && receiver.receiver.nil?
-                      else false
-                      end
+          when Prism::LocalVariableReadNode then receiver.name == :format
+          when Prism::CallNode then receiver.name == :format && receiver.receiver.nil?
+          else false
+          end
           if is_format && current_def_name
             actions << current_def_name
           end

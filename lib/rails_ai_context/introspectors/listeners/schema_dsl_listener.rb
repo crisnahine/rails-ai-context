@@ -204,9 +204,9 @@ module RailsAiContext
               end
             }
           when Prism::StringNode
-            [arg.unescaped]
+            [ arg.unescaped ]
           when Prism::SymbolNode
-            [arg.value]
+            [ arg.value ]
           else []
           end
         end

@@ -52,14 +52,14 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::SchemaDslListener do
     results = parse_and_dispatch('t.index ["email"], unique: true')
     indexes = results.select { |r| r[:type] == :index }
     expect(indexes.size).to eq(1)
-    expect(indexes.first[:columns]).to eq(["email"])
+    expect(indexes.first[:columns]).to eq([ "email" ])
     expect(indexes.first[:options]).to include(unique: true)
   end
 
   it "detects composite index" do
     results = parse_and_dispatch('t.index ["user_id", "created_at"]')
     indexes = results.select { |r| r[:type] == :index }
-    expect(indexes.first[:columns]).to eq(["user_id", "created_at"])
+    expect(indexes.first[:columns]).to eq([ "user_id", "created_at" ])
   end
 
   it "detects add_foreign_key" do
@@ -73,7 +73,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::SchemaDslListener do
     results = parse_and_dispatch('create_enum "status", ["draft", "published", "archived"]')
     enums = results.select { |r| r[:type] == :enum }
     expect(enums.size).to eq(1)
-    expect(enums.first).to include(name: "status", values: ["draft", "published", "archived"])
+    expect(enums.first).to include(name: "status", values: [ "draft", "published", "archived" ])
   end
 
   it "detects a full schema block" do

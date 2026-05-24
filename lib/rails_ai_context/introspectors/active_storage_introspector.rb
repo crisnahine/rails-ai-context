@@ -44,7 +44,7 @@ module RailsAiContext
           end
         end
 
-        attachments.sort_by { |a| [a[:model], a[:name]] }
+        attachments.sort_by { |a| [ a[:model], a[:name] ] }
       rescue => e
         $stderr.puts "[rails-ai-context] extract_attachments failed: #{e.message}" if ENV["DEBUG"]
         []

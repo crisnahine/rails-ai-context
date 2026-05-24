@@ -35,19 +35,19 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RakeTaskDslListener do
     results = parse_and_dispatch("task seed: :environment")
     tasks = results.select { |r| r[:type] == :task }
     expect(tasks.size).to eq(1)
-    expect(tasks.first).to include(name: "seed", deps: ["environment"])
+    expect(tasks.first).to include(name: "seed", deps: [ "environment" ])
   end
 
   it "detects task with array dependencies" do
     results = parse_and_dispatch("task seed: [:environment, :setup]")
     tasks = results.select { |r| r[:type] == :task }
-    expect(tasks.first[:deps]).to eq(["environment", "setup"])
+    expect(tasks.first[:deps]).to eq([ "environment", "setup" ])
   end
 
   it "detects task with arguments and dependency" do
     results = parse_and_dispatch("task :import, [:limit, :offset] => :environment")
     tasks = results.select { |r| r[:type] == :task }
-    expect(tasks.first).to include(name: "import", args: ["limit", "offset"], deps: ["environment"])
+    expect(tasks.first).to include(name: "import", args: [ "limit", "offset" ], deps: [ "environment" ])
   end
 
   it "detects a full rake file with namespace, desc, and task" do
