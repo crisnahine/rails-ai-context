@@ -43,6 +43,11 @@ Every introspector that scans `.rb` files has been migrated from regex-based pat
 - The `AstCache` provides thread-safe LRU caching of parse results, so repeated walks of the same file are free.
 - New listeners are composable -- introspectors mix and match listeners via `SourceIntrospector.walk(path, { key: Listener })` without coupling.
 
+### Fixed
+
+- Avoid false-positive route helper warnings when `rails_validate` sees locally defined Ruby methods ending in `_path` or `_url` (#83, thanks @curi).
+- Preserve newline-separated staged file names in the generated pre-commit validation hook (#83).
+
 ### Tests
 
 - 2257 unit examples (up from 2154), 0 failures

@@ -107,4 +107,23 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).not_to include("\n  config.tool_mode = :mcp   # MCP primary + CLI fallback")
     end
   end
+
+  describe "#install_validation_hook" do
+    let(:hook_path) { File.join(tmpdir, ".git/hooks/pre-commit") }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, ".git"))
+      allow(generator).to receive(:ask).and_return("y")
+    end
+
+    it "passes staged files to validation without collapsing newlines into spaces" do
+      generator.install_validation_hook
+
+      content = File.read(hook_path)
+
+      expect(content).to include("files=$(printf '%s\\n' \"$changed_files\" | tr '\\n' ',')")
+      expect(content).to include("rails 'ai:tool[validate]' files=\"$files\"")
+      expect(content).not_to include("echo $changed_files")
+    end
+  end
 end

@@ -550,7 +550,8 @@ module RailsAiContext
           fi
 
           if command -v rails &> /dev/null; then
-            rails 'ai:tool[validate]' files="$(echo $changed_files | tr '\\n' ',')" 2>/dev/null
+            files=$(printf '%s\\n' "$changed_files" | tr '\\n' ',')
+            rails 'ai:tool[validate]' files="$files" 2>/dev/null
             exit_code=$?
             if [ $exit_code -ne 0 ]; then
               echo ""
