@@ -56,7 +56,7 @@ module RailsAiContext
 
       # Generate help for a specific tool from its input_schema.
       def self.tool_help(tool_class)
-        schema = tool_class.input_schema_value&.schema || {}
+        schema = tool_class.input_schema_value&.to_h || {}
         properties = schema[:properties] || {}
         required = schema[:required] || []
 
@@ -93,8 +93,12 @@ module RailsAiContext
 
       private
 
+      # InputSchema#to_h is stable across the mcp gem's >= 0.8, < 2.0 range;
+      # the older #schema accessor was removed in mcp 0.20.0. to_h returns a
+      # symbol-keyed hash carrying the :properties and :required this runner
+      # reads (newer mcp also merges a benign :$schema key we ignore).
       def tool_schema
-        tool_class.input_schema_value&.schema || {}
+        tool_class.input_schema_value&.to_h || {}
       end
 
       # Resolve tool name: tries short → medium → full form.

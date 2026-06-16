@@ -189,6 +189,42 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     end
   end
 
+  describe "mcp >= 0.20.0 compatibility (issue #85)" do
+    # mcp 0.20.0 removed MCP::Tool::InputSchema#schema, leaving only #to_h.
+    # This double mimics that surface: #to_h works, #schema raises.
+    # The locked dev mcp still exposes both, so the double is the only way to
+    # reproduce the break version-independently.
+    let(:schema_only_to_h) do
+      double(
+        "InputSchema020",
+        to_h: {
+          type: "object",
+          properties: {
+            table: { type: "string", description: "Table name" },
+            detail: { type: "string", enum: %w[summary standard full], description: "Detail level" }
+          },
+          required: [ "table" ]
+        }
+      )
+    end
+
+    it "tool_help reads the schema via to_h, not the removed #schema accessor" do
+      allow(RailsAiContext::Tools::GetSchema).to receive(:input_schema_value).and_return(schema_only_to_h)
+      help = described_class.tool_help(RailsAiContext::Tools::GetSchema)
+      expect(help).to include("--table")
+      expect(help).to include("[required]")
+    end
+
+    it "run builds and validates kwargs via to_h, not the removed #schema accessor" do
+      allow(RailsAiContext::Tools::GetSchema).to receive(:input_schema_value).and_return(schema_only_to_h)
+      runner = described_class.new("rails_get_schema", [ "--detail", "summary" ])
+      output = nil
+      expect { output = runner.run }.not_to raise_error
+      expect(output).to be_a(String)
+      expect(output).not_to be_empty
+    end
+  end
+
   describe "integration - real tool calls" do
     it "runs schema tool" do
       runner = described_class.new("schema", [ "--detail", "summary" ])
