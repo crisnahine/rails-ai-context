@@ -204,11 +204,17 @@ module RailsAiContext
 
         if parent_filters.any? || filters.any? || skipped_filters.any?
           lines << "" << "## Applicable Filters"
-          parent_filters.each do |f|
+          # Dedupe parent vs own filters by name - `filters` is reflection-derived
+          # for loaded controllers and already includes the inherited chain, so
+          # listing parent_filters separately would double-list them.
+          applicable_names = filters.map { |f| f[:name] }.to_set
+          parent_names = parent_filters.map { |f| f[:name] }.to_set
+          parent_filters.reject { |f| applicable_names.include?(f[:name]) }.each do |f|
             lines << "- `#{f[:kind]}` **#{f[:name]}** _(from #{info[:parent_class]})_"
           end
           filters.each do |f|
             line = "- `#{f[:kind]}` **#{f[:name]}**"
+            line += " _(from #{info[:parent_class]})_" if parent_names.include?(f[:name])
             line += " (only: #{f[:only].join(', ')})" if f[:only]&.any?
             lines << line
           end
@@ -484,16 +490,26 @@ module RailsAiContext
           lines << info[:actions].map { |a| "- `#{a}`" }.join("\n")
         end
 
-        # Show full filter chain including inherited from parent controller
+        # Show full filter chain including inherited from parent controller.
+        # `all_filters` is reflection-derived for loaded controllers and already
+        # includes the inherited chain; `parent_filters` re-parses the parent
+        # source. Listing both verbatim double-lists inherited filters (e.g.
+        # set_current_user appearing twice), so dedupe by name: surface only the
+        # parent filters missing from the own list (covers source-only
+        # controllers whose own list lacks the chain), then annotate the
+        # inherited entries in the own list rather than repeating them.
         all_filters = info[:filters] || []
         parent_filters = detect_parent_filters(info[:parent_class])
         if parent_filters.any? || all_filters.any?
           lines << "" << "## Filters"
-          parent_filters.each do |f|
+          all_names = all_filters.map { |f| f[:name] }.to_set
+          parent_names = parent_filters.map { |f| f[:name] }.to_set
+          parent_filters.reject { |f| all_names.include?(f[:name]) }.each do |f|
             lines << "- `#{f[:kind]}` **#{f[:name]}** _(from #{info[:parent_class]})_"
           end
           all_filters.each do |f|
             detail = "- `#{f[:kind]}` **#{f[:name]}**"
+            detail += " _(from #{info[:parent_class]})_" if parent_names.include?(f[:name])
             detail += " (only: #{f[:only].join(', ')})" if f[:only]&.any?
             lines << detail
           end

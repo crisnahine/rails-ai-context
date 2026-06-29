@@ -135,35 +135,56 @@ module RailsAiContext
           [ "## Database", "", "_Not available: #{e.message}_", "" ]
         end
 
+        # Rails-managed bookkeeping tables - real tables, but noise in a
+        # "table sizes" view aimed at application data (matches the schema
+        # introspector, which also skips them).
+        INTERNAL_TABLES = %w[schema_migrations ar_internal_metadata].freeze
+
         def gather_table_sizes(conn, adapter)
-          case adapter
-          when /postgresql/
-            sql = "SELECT relname AS name, pg_total_relation_size(relid) AS bytes FROM pg_stat_user_tables ORDER BY bytes DESC"
-            conn.select_all(sql).map { |r| { name: r["name"], bytes: r["bytes"].to_i } }
-          when /mysql/
-            sql = "SELECT table_name AS name, (data_length + index_length) AS bytes FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() ORDER BY bytes DESC"
-            conn.select_all(sql).map { |r| { name: r["name"], bytes: r["bytes"].to_i } }
-          when /sqlite/
-            # Try dbstat virtual table first, fall back to whole-DB size
-            begin
-              result = conn.select_all("SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC")
-              return result.map { |r| { name: r["name"], bytes: r["bytes"].to_i } } if result.any?
-            rescue => e
-              $stderr.puts "[rails-ai-context] gather_table_sizes failed: #{e.message}" if ENV["DEBUG"]
-              nil
+          rows =
+            case adapter
+            when /postgresql/
+              sql = "SELECT relname AS name, pg_total_relation_size(relid) AS bytes FROM pg_stat_user_tables ORDER BY bytes DESC"
+              conn.select_all(sql).map { |r| { name: r["name"], bytes: r["bytes"].to_i } }
+            when /mysql/
+              sql = "SELECT table_name AS name, (data_length + index_length) AS bytes FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() ORDER BY bytes DESC"
+              conn.select_all(sql).map { |r| { name: r["name"], bytes: r["bytes"].to_i } }
+            when /sqlite/
+              gather_sqlite_table_sizes(conn)
             end
-            # Fallback: whole database size
-            page_count = conn.select_value("PRAGMA page_count").to_i
-            page_size = conn.select_value("PRAGMA page_size").to_i
-            total = page_count * page_size
-            tables = conn.select_values("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-            tables.map { |t| { name: t, bytes: total / [ tables.size, 1 ].max } }
-          else
-            nil
-          end
+          return nil unless rows
+
+          rows.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
         rescue => e
           $stderr.puts "[rails-ai-context] gather_table_sizes failed: #{e.message}" if ENV["DEBUG"]
           nil
+        end
+
+        def gather_sqlite_table_sizes(conn)
+          # dbstat lists every b-tree: user tables, their indexes, and SQLite
+          # internals (sqlite_schema, sqlite_autoindex_*, sqlite_sequence).
+          # Restrict to real application tables so indexes and internal objects
+          # don't crowd out (or get mistaken for) the tables agents care about.
+          app_tables = conn.select_values(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+          ).to_set
+
+          begin
+            result = conn.select_all("SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC")
+            rows = result.filter_map do |r|
+              { name: r["name"], bytes: r["bytes"].to_i } if app_tables.include?(r["name"])
+            end
+            return rows if rows.any?
+          rescue => e
+            $stderr.puts "[rails-ai-context] gather_sqlite_table_sizes (dbstat) failed: #{e.message}" if ENV["DEBUG"]
+          end
+
+          # Fallback: whole-DB size split across user tables (dbstat unavailable).
+          page_count = conn.select_value("PRAGMA page_count").to_i
+          page_size = conn.select_value("PRAGMA page_size").to_i
+          total = page_count * page_size
+          tables = app_tables.to_a.sort
+          tables.map { |t| { name: t, bytes: total / [ tables.size, 1 ].max } }
         end
 
         def gather_pending_migrations

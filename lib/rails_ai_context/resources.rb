@@ -121,6 +121,19 @@ module RailsAiContext
 
         server.resources_read_handler do |params|
           handle_read(params)
+        rescue RailsAiContext::Error => e
+          # handle_read / VFS raise RailsAiContext::Error for unknown URIs and
+          # blocked paths (traversal, sensitive files). Left unhandled, the MCP
+          # SDK collapses them into a generic "-32603 Internal error" that hides
+          # the URI. On mcp >= 0.20 re-raise as the SDK's ResourceNotFoundError
+          # so the client gets a proper "-32602 Resource not found: <uri>" with
+          # the URI in error data (the uniform message also avoids leaking why a
+          # blocked path was rejected). That class doesn't exist on older but
+          # still-supported mcp (gemspec allows >= 0.8), so fall back to the
+          # original error there - same behavior as before this wrapper.
+          raise e unless defined?(MCP::Server::ResourceNotFoundError)
+
+          raise MCP::Server::ResourceNotFoundError.new(params[:uri])
         end
       end
 

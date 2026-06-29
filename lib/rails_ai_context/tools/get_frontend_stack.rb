@@ -110,7 +110,12 @@ module RailsAiContext
           lines << "- **Framework:** #{data[:framework]}#{version_suffix(data[:version])}" if data[:framework]
           lines << "- **Mounting strategy:** #{data[:mounting_strategy]}" if data[:mounting_strategy]
           lines << "- **Build tool:** #{data[:build_tool]}" if data[:build_tool]
-          lines << "- **State management:** #{data[:state_management]}" if data[:state_management]
+          # state_management is an array for JS-framework apps and a string for
+          # others; an empty array is truthy in Ruby, so guard on presence and
+          # join arrays to avoid rendering a literal "[]".
+          state_management = data[:state_management]
+          state_management = state_management.join(", ") if state_management.is_a?(Array)
+          lines << "- **State management:** #{state_management}" if state_management.present?
           lines << "- **Package manager:** #{data[:package_manager]}" if data[:package_manager]
 
           # TypeScript

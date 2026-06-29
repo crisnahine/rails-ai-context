@@ -52,7 +52,25 @@ module RailsAiContext
       private
 
       def active_record_connected?
-        defined?(ActiveRecord::Base) && ActiveRecord::Base.connected?
+        return false unless defined?(ActiveRecord::Base)
+
+        # ActiveRecord::Base.connected? only reports whether a connection has
+        # ALREADY been checked out on this thread. On a freshly booted MCP
+        # server - before any query runs - it is false even when the database
+        # is fully reachable, which wrongly forces the static schema.rb parse.
+        # That parse omits the implicit `id` primary key and reports
+        # schema.rb-approximate types instead of the live column metadata,
+        # undercutting the gem's "live, zero stale data" promise.
+        return true if ActiveRecord::Base.connected?
+
+        # Force a real connection. In Rails 8 a lazily checked-out connection
+        # reports active? => nil until it actually materializes, so a trivial
+        # query is the reliable reachability probe. The rescue below falls back
+        # to static parsing when the database is genuinely unreachable (no DB
+        # configured, db:create not run, server down). SELECT 1 is valid on
+        # sqlite3, postgresql, mysql2, and trilogy.
+        ActiveRecord::Base.connection.select_value("SELECT 1")
+        true
       rescue => e
         $stderr.puts "[rails-ai-context] active_record_connected? failed: #{e.message}" if ENV["DEBUG"]
         false

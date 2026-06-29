@@ -1,5 +1,5 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  VERSION = "5.11.2"
+  VERSION = "5.12.0"
 end

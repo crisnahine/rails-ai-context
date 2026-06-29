@@ -159,7 +159,11 @@ module RailsAiContext
                 lines << "- **Inherited filters:** #{parent_filters.map { |f| "#{f[:name]} _(from #{info[:parent_class]})_" }.join(', ')}"
               end
 
-              filters = (info[:filters] || []).select { |f| f.is_a?(Hash) }.map do |f|
+              # `info[:filters]` is reflection-derived and already includes the
+              # inherited chain, so drop the ones already shown on the Inherited
+              # line to avoid listing them twice (e.g. set_current_user).
+              parent_names = parent_filters.map { |f| f[:name] }.to_set
+              filters = (info[:filters] || []).select { |f| f.is_a?(Hash) && !parent_names.include?(f[:name]) }.map do |f|
                 label = "#{f[:kind]} #{f[:name]}"
                 label += " only: #{Array(f[:only]).join(', ')}" if f[:only]&.any?
                 label += " except: #{Array(f[:except]).join(', ')}" if f[:except]&.any?

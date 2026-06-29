@@ -221,7 +221,13 @@ module RailsAiContext
           end
 
           if in_gems && (match = line.match(/^\s{4}(\S+)\s+\((.+)\)/))
-            gems[match[1]] = match[2]
+            # Bundler writes platform-specific gems as "name (1.2.3-x86_64-linux-musl)",
+            # listing one line per platform in a multi-platform lockfile. Last-write-wins
+            # would otherwise surface an arbitrary, often wrong, platform suffix (e.g.
+            # x86_64-linux-musl on an arm64-darwin machine). RubyGems versions never
+            # contain a hyphen, so the text before the first "-" is the clean version;
+            # the platform tail is an install detail, not useful AI context.
+            gems[match[1]] = match[2].split("-", 2).first
           end
         end
 

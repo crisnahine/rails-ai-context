@@ -261,7 +261,14 @@ module RailsAiContext
           end
 
           lines << ""
-          lines << "Total: #{routes[:total_routes]} routes across #{app_ctrls.size} controllers."
+          # total_routes counts every route incl. framework engines (action_mailbox,
+          # active_storage, etc.), so pairing it with the app-controller count
+          # misrepresents the app (e.g. "46 routes across 3 controllers"). Report
+          # the app route count and note the framework total separately.
+          app_route_count = app_ctrls.values.sum { |route_list| route_list.size }
+          total = routes[:total_routes].to_i
+          framework_note = total > app_route_count ? " (#{total} total including framework routes)" : ""
+          lines << "Total: #{app_route_count} app routes across #{app_ctrls.size} controllers#{framework_note}."
           lines << ""
           lines
         end

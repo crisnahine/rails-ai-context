@@ -377,6 +377,21 @@ module RailsAiContext
           basename                                                  # status_badge
         ].uniq
 
+        # Implicit object/collection rendering resolves to this partial via
+        # to_partial_path: `render @post`, `render post`, `render @posts`,
+        # `render posts` all hit posts/_post. These are extremely common and
+        # carry no quoted partial name, so the explicit-string match above
+        # misses them. Only treat the partial as a conventional resource
+        # partial (posts/_post) when its directory is the pluralized basename
+        # or it is top-level, to avoid matching unrelated variables.
+        plural = basename.pluralize
+        implicit_names =
+          if dir_prefix.empty? || dir_prefix.split("/").last == plural
+            [ basename, plural ].uniq
+          else
+            []
+          end
+
         view_files = Dir.glob(File.join(views_dir, "**", "*.{erb,haml,slim}")).sort
 
         view_files.each do |file|
@@ -387,6 +402,7 @@ module RailsAiContext
           relative = file.sub("#{root}/", "")
 
           content.each_line.with_index(1) do |line, line_num|
+            matched_line = false
             search_patterns.each do |search_name|
               # Match render "partial_name" or render partial: "partial_name"
               # Allow content before search_name (e.g. "shared/status_badge" matches "status_badge")
@@ -407,7 +423,26 @@ module RailsAiContext
                 locals: locals_passed,
                 snippet: line.strip
               }
+              matched_line = true
               break # one match per line is enough
+            end
+
+            next if matched_line
+
+            # Implicit object/collection render: `render @post`, `render post`,
+            # `render @posts`. The variable is a bareword or ivar (no quotes),
+            # and \b guards against prefixes like post_path / posts_controller.
+            implicit_names.each do |var|
+              next unless line.match?(/render\s+@?#{Regexp.escape(var)}\b/)
+              next if line.match?(/render\s.*["']/) # a quoted render is explicit, handled above
+
+              sites << {
+                file: relative,
+                line: line_num,
+                locals: [],
+                snippet: line.strip
+              }
+              break
             end
           end
         end

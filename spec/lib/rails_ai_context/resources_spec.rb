@@ -162,8 +162,18 @@ RSpec.describe RailsAiContext::Resources do
       expect(parsed["error"]).to match(/not found/)
     end
 
-    it "raises for a completely unknown URI" do
-      expect { read_handler.call(uri: "rails://unknown_resource") }.to raise_error(/Unknown resource/)
+    it "raises a not-found error for a completely unknown URI" do
+      # On mcp >= 0.20 the handler re-raises internal RailsAiContext::Error as the
+      # SDK's ResourceNotFoundError so clients get a proper "-32602 Resource not
+      # found: <uri>" instead of a generic "Internal error" with the URI stripped.
+      # On older but still-supported mcp the original error propagates unchanged.
+      if defined?(MCP::Server::ResourceNotFoundError)
+        expect { read_handler.call(uri: "rails://unknown_resource") }
+          .to raise_error(MCP::Server::ResourceNotFoundError, %r{Resource not found: rails://unknown_resource})
+      else
+        expect { read_handler.call(uri: "rails://unknown_resource") }
+          .to raise_error(RailsAiContext::Error, /Unknown resource/)
+      end
     end
 
     it "delegates rails-ai-context:// URIs to VFS" do

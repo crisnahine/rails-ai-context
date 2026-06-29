@@ -106,10 +106,13 @@ module RailsAiContext
       private_class_method def self.format_summary(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: nil)
         total_broadcasts = model_broadcasts.size + rb_broadcasts.size
         turbo_data = cached_context[:turbo]
-        turbo_stream_response_count = turbo_data.is_a?(Hash) && !turbo_data[:error] ? turbo_data[:turbo_stream_responses]&.size.to_i : 0
+        turbo_usable = turbo_data.is_a?(Hash) && !turbo_data[:error]
+        turbo_stream_response_count = turbo_usable ? turbo_data[:turbo_stream_responses]&.size.to_i : 0
+        turbo_stream_template_count = turbo_usable ? turbo_data[:turbo_streams]&.size.to_i : 0
 
         lines = [ "# Turbo Map", "" ]
-        lines << "- **Turbo Stream responses:** #{turbo_stream_response_count} (controller `.turbo_stream.erb` templates)" if turbo_stream_response_count > 0
+        lines << "- **Turbo Stream responses:** #{turbo_stream_response_count} (controllers responding with `turbo_stream` format)" if turbo_stream_response_count > 0
+        lines << "- **Turbo Stream templates:** #{turbo_stream_template_count} (`.turbo_stream.erb` view templates)" if turbo_stream_template_count > 0
         lines << "- **Model broadcasts:** #{model_broadcasts.size} (via `broadcasts`, `broadcasts_to`, etc.)"
         lines << "- **Explicit broadcasts:** #{rb_broadcasts.size} (via `broadcast_*_to` calls in .rb files)"
         lines << "- **Stream subscriptions:** #{view_subscriptions.size} (`turbo_stream_from` in views)"
@@ -149,6 +152,18 @@ module RailsAiContext
             turbo_data[:turbo_stream_responses].first(15).each do |resp|
               lines << "- `#{resp}`"
             end
+            lines << ""
+          end
+
+          # .turbo_stream.erb response templates - the most common scaffold-style
+          # Turbo Stream pattern. The introspector collects these via its view
+          # scan; without rendering them here, an app whose streams are driven
+          # entirely by templates wrongly reports "no Turbo Streams detected".
+          if turbo_data[:turbo_streams]&.any?
+            actions = turbo_data[:stream_actions]
+            action_summary = actions.is_a?(Hash) && actions.any? ? " (actions: #{actions.map { |a, n| "#{a}×#{n}" }.join(', ')})" : ""
+            lines << "## Turbo Stream Templates (#{turbo_data[:turbo_streams].size})#{action_summary}"
+            turbo_data[:turbo_streams].first(20).each { |tpl| lines << "- `#{tpl}`" }
             lines << ""
           end
         end
@@ -200,8 +215,9 @@ module RailsAiContext
         end
 
         has_turbo_stream_responses = turbo_data.is_a?(Hash) && turbo_data[:turbo_stream_responses]&.any?
+        has_stream_templates = turbo_data.is_a?(Hash) && turbo_data[:turbo_streams]&.any?
 
-        if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses
+        if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
           if filter_label
             lines << "_No Turbo usage matching #{filter_label}. Try without filter to see all Turbo Streams and Frames._"
           else
@@ -238,6 +254,15 @@ module RailsAiContext
             turbo_data[:turbo_stream_responses].each do |resp|
               lines << "- `#{resp}`"
             end
+            lines << ""
+          end
+
+          # .turbo_stream.erb response templates (scaffold-style Turbo Streams).
+          if turbo_data[:turbo_streams]&.any?
+            lines << "## Turbo Stream Templates (#{turbo_data[:turbo_streams].size})"
+            turbo_data[:turbo_streams].each { |tpl| lines << "- `#{tpl}`" }
+            actions = turbo_data[:stream_actions]
+            lines << "- **Actions used:** #{actions.map { |a, n| "#{a}×#{n}" }.join(', ')}" if actions.is_a?(Hash) && actions.any?
             lines << ""
           end
         end
@@ -321,8 +346,9 @@ module RailsAiContext
         end
 
         has_turbo_stream_responses = turbo_data.is_a?(Hash) && turbo_data[:turbo_stream_responses]&.any?
+        has_stream_templates = turbo_data.is_a?(Hash) && turbo_data[:turbo_streams]&.any?
 
-        if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses
+        if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
           if filter_label
             lines << "_No Turbo usage matching #{filter_label}. Try without filter to see all Turbo Streams and Frames._"
           else

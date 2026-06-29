@@ -194,7 +194,40 @@ module RailsAiContext
             result[:method_name] = m[1]
           end
 
+          # When the error is a bare message with no "ClassName:" prefix - e.g. a
+          # line copied from a browser error page, or Ruby 3.4+'s
+          # "undefined method 'x' for an instance of Y" phrasing that drops the
+          # trailing "(NoMethodError)" - infer the class from the message
+          # signature. classify_error matches on "exception_class message", so a
+          # recovered class name resolves both the header and the classification.
+          result[:exception_class] ||= infer_exception_class(result[:message])
+
           result
+        end
+
+        # Map a raw error message (no class prefix) to its Ruby/Rails exception
+        # class by signature. Returns nil when nothing matches so the caller
+        # keeps the "Unknown" fallback. Order matters: the NameError
+        # "undefined local variable or method" phrasing is checked before the
+        # NoMethodError "undefined method" phrasing it shares a prefix with.
+        EXCEPTION_SIGNATURES = [
+          [ /undefined local variable or method\b/, "NameError" ],
+          [ /uninitialized constant\b/, "NameError" ],
+          [ /undefined method\b/, "NoMethodError" ],
+          [ /wrong number of arguments|missing keywords?:|unknown keywords?:/, "ArgumentError" ],
+          [ /couldn't find .+ with/i, "ActiveRecord::RecordNotFound" ],
+          [ /param is missing or the value is empty/i, "ActionController::ParameterMissing" ],
+          [ /no route matches/i, "ActionController::RoutingError" ],
+          [ /no such column|no such table|relation ".+" does not exist|column .+ does not exist/i, "ActiveRecord::StatementInvalid" ]
+        ].freeze
+
+        def infer_exception_class(message)
+          return nil if message.nil? || message.empty?
+
+          EXCEPTION_SIGNATURES.each do |pattern, klass|
+            return klass if message.match?(pattern)
+          end
+          nil
         end
 
         def classify_error(parsed)

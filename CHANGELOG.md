@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.12.0] - 2026-06-29
+
+### Fixed
+
+Live-usage audit of the full MCP surface (all 38 tools over stdio + HTTP, the CLI tool runner, and the 9 resources / 5 resource templates) against a real Rails 8 app surfaced 15 correctness and edge-case defects, now fixed:
+
+- **`rails_get_schema` (and every schema-backed tool) now reads the live database.** The schema introspector treated `ActiveRecord::Base.connected?` as "is a DB reachable", but that is `false` on a freshly booted server before any query runs, so it silently fell back to static `schema.rb` parsing -- which omits the implicit `id` primary key and reports schema.rb-approximate types. It now probes the connection (`SELECT 1`) and uses live column metadata, falling back to static parsing only when the database is genuinely unreachable. `rails_get_model_details`, `rails_get_context`, `rails_get_controllers` schema hints, and `rails_analyze_feature` all benefit.
+- **`rails_get_view`** resolves a logical `controller/action` path (e.g. `posts/index`) to its template instead of reporting "View not found" for a file it then lists in the same hint.
+- **`rails_diagnose`** classifies Ruby 3.4+ `undefined method 'x' for an instance of Y` errors (and other bare, class-prefix-less messages) by inferring the exception class from the message signature.
+- **`rails_get_turbo_map`** now reports `.turbo_stream.erb` response templates and their stream actions. Apps using the common scaffold-style Turbo Stream pattern no longer show "No Turbo Streams or Frames detected".
+- **`rails_get_partial_interface`** detects implicit object/collection render sites (`render @post`, `render post`, `render @posts`), not just explicit `render "posts/post"` calls.
+- **`rails_get_controllers`** and **`rails_analyze_feature`** no longer list an inherited `before_action` twice (once as inherited, once from the reflection-derived full chain).
+- **`rails_runtime_info`** "Table Sizes" lists real application tables instead of SQLite internal objects (`sqlite_schema`, `sqlite_autoindex_*`, `sqlite_sequence`) and index b-trees that were crowding out the app tables.
+- **`rails_get_gems`** strips the platform suffix from versions (`sqlite3 2.9.5`, not `sqlite3 2.9.5-x86_64-linux-musl`) on multi-platform lockfiles.
+- **`rails_get_test_info`** falls back to `Gemfile.lock` to report the test framework (minitest/rspec) when no `test/` or `spec/` directory exists yet, instead of "unknown".
+- **`rails_get_frontend_stack`** no longer renders a literal `[]` for empty state-management data.
+- **`rails_onboard`** reports the app route count instead of pairing the framework-inclusive total with the app-controller count ("14 app routes across 3 controllers", not "46 routes across 3 controllers").
+- **MCP resources** return a proper `-32602 Resource not found: <uri>` for unknown URIs and blocked paths instead of a generic "Internal error" with the URI stripped (on `mcp >= 0.20`; older mcp keeps prior behavior). Path traversal and sensitive-file access remain blocked.
+- **CLI `--json`** flag is honored in any position (`tool NAME args --json`), not only before the tool name.
+- **CLI presets** (`architecture`, `debugging`, `migration`) now chain tools that produce useful output with zero arguments, instead of calling tools whose required arguments were never supplied.
+
 ## [5.11.2] - 2026-06-16
 
 ### Fixed

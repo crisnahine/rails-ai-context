@@ -41,7 +41,15 @@ class RailsAiContextCLI < Thor
         return
       end
 
-      runner = ::RailsAiContext::CLI::ToolRunner.new(name, args, json_mode: options[:json])
+      # `--json` is consumed as the Thor option only when it precedes the tool
+      # name; `stop_on_unknown_option! :tool` passes it through into `args` when
+      # it follows the name (the natural CLI position). Honor both placements by
+      # also stripping it from args here, mirroring the --help handling above.
+      json_mode = options[:json]
+      json_mode = true if args.delete("--json")
+      json_mode = true if args.delete("-j")
+
+      runner = ::RailsAiContext::CLI::ToolRunner.new(name, args, json_mode: json_mode)
       puts runner.run
     rescue SystemExit
       raise # let exit() propagate (from boot_rails!)
@@ -190,29 +198,34 @@ class RailsAiContextCLI < Thor
 
     desc "preset NAME", "Run a multi-tool preset (architecture, debugging, migration)"
     def preset(name = nil)
+      # Each preset chains tools that produce useful output with ZERO
+      # user-supplied arguments. Tools that require a target (analyze_feature
+      # needs a feature, migration_advisor needs an action+table, validate needs
+      # file paths) are deliberately excluded - in a no-arg preset they only
+      # emit "please provide X" prompts.
       presets = {
         "architecture" => {
-          desc: "Full feature analysis across all layers",
+          desc: "Architecture overview across all layers",
           tools: [
-            { name: "analyze_feature", params: {} },
+            { name: "onboard", params: {} },
             { name: "dependency_graph", params: {} },
             { name: "performance_check", params: {} }
           ]
         },
         "debugging" => {
-          desc: "Diagnose recent issues and validate current state",
+          desc: "Diagnose recent issues and inspect live state",
           tools: [
             { name: "read_logs", params: { level: "ERROR", lines: 100 } },
             { name: "review_changes", params: {} },
-            { name: "validate", params: {} }
+            { name: "runtime_info", params: {} }
           ]
         },
         "migration" => {
-          desc: "Schema overview with migration advice and validation",
+          desc: "Schema overview with migration status and index advice",
           tools: [
             { name: "get_schema", params: { detail: "summary" } },
-            { name: "migration_advisor", params: { action: "status" } },
-            { name: "validate", params: {} }
+            { name: "runtime_info", params: { section: "database" } },
+            { name: "performance_check", params: { category: "indexes" } }
           ]
         }
       }

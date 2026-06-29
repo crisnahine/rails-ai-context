@@ -268,10 +268,22 @@ module RailsAiContext
         full_path = views_dir.join(path)
 
         unless File.exist?(full_path)
-          dir = File.dirname(path)
-          siblings = Dir.glob(File.join(views_dir, dir, "*")).map { |f| "#{dir}/#{File.basename(f)}" }.sort.first(10)
-          hint = siblings.any? ? " Files in #{dir}/: #{siblings.join(', ')}" : ""
-          return text_response("View not found: #{path}.#{hint}")
+          # Agents (and this tool's own description) naturally address a view by
+          # its logical "controller/action" path with no extension, e.g.
+          # "posts/index". Resolve that to the concrete template
+          # ("posts/index.html.erb") before giving up. Only attempts resolution
+          # for safe, extension-less path shapes so the glob can't be abused;
+          # the resolved path still runs the realpath/sensitive/size checks below.
+          resolved = resolve_template_path(path, views_dir)
+          if resolved
+            path = resolved
+            full_path = views_dir.join(path)
+          else
+            dir = File.dirname(path)
+            siblings = Dir.glob(File.join(views_dir, dir, "*")).map { |f| "#{dir}/#{File.basename(f)}" }.sort.first(10)
+            hint = siblings.any? ? " Files in #{dir}/: #{siblings.join(', ')}" : ""
+            return text_response("View not found: #{path}.#{hint}")
+          end
         end
         # Containment check with separator + post-realpath sensitive recheck.
         # Mirrors the v5.8.1 fix in vfs.rb / get_edit_context.rb. Without
@@ -302,6 +314,26 @@ module RailsAiContext
         return text_response("Could not read file: #{path}") unless content
         content = compress_tailwind(strip_svg(content))
         text_response("# #{path}\n\n```erb\n#{content}\n```")
+      end
+
+      # Resolve a logical, extension-less view path ("posts/index") to a
+      # concrete template relative path ("posts/index.html.erb"). Returns nil
+      # when the path already carries an extension, contains glob-unsafe
+      # characters, or matches no template - so the caller falls back to its
+      # not-found hint. Prefers an .html.* format when several exist (the page
+      # an agent almost always means), otherwise the first match alphabetically.
+      private_class_method def self.resolve_template_path(path, views_dir)
+        # Restrict to safe "segment/segment" shapes with no extension so the
+        # Dir.glob below stays literal (no *, ?, [] or dot to expand).
+        return nil unless path.match?(%r{\A[\w\-]+(?:/[\w\-]+)*\z})
+
+        matches = Dir.glob(File.join(views_dir, "#{path}.*"))
+          .reject { |f| File.directory?(f) }
+          .map { |f| f.sub("#{views_dir}/", "") }
+          .sort
+        return nil if matches.empty?
+
+        matches.find { |m| m.include?(".html.") || m.end_with?(".html") } || matches.first
       end
 
       # Strip inline SVG blocks - they're visual noise that buries the signal AI needs.

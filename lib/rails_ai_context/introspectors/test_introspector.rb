@@ -46,8 +46,31 @@ module RailsAiContext
         elsif Dir.exist?(File.join(root, "test"))
           "minitest"
         else
-          "unknown"
+          # No test/spec directory yet (e.g. an app scaffolded with --skip-test,
+          # or before the first test is written). The framework is still
+          # knowable from the bundle: rspec-rails means RSpec, otherwise a Rails
+          # app uses its bundled minitest default. Reporting "unknown" here
+          # contradicts gems/generate_test, which both already resolve it.
+          detect_framework_from_lockfile || "unknown"
         end
+      end
+
+      # Resolve the test framework from Gemfile.lock when no test directory
+      # exists. rspec-rails wins (it replaces the convention); otherwise
+      # minitest, which ships with every Rails app. Returns nil when there is
+      # no lockfile or no recognizable test gem.
+      def detect_framework_from_lockfile
+        lock_path = File.join(root, "Gemfile.lock")
+        return nil unless File.exist?(lock_path)
+
+        content = RailsAiContext::SafeFile.read(lock_path) || ""
+        return "rspec" if content.match?(/^\s{4}rspec-rails\s/)
+        return "minitest" if content.match?(/^\s{4}minitest\s/)
+
+        nil
+      rescue => e
+        $stderr.puts "[rails-ai-context] detect_framework_from_lockfile failed: #{e.message}" if ENV["DEBUG"]
+        nil
       end
 
       def detect_factories
