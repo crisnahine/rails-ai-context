@@ -590,6 +590,16 @@ class RailsAiContextCLI < Thor
       # captured specs already exist in Gem.loaded_specs and our `||=` skips them).
       pre_boot_specs = capture_standalone_specs
 
+      # Standalone mode on Ruby 3.4+: this CLI process lazily activates the
+      # newest/default version of stdlib gems (e.g. psych via `require "yaml"`,
+      # date via transitive requires) BEFORE the app's Bundler.setup runs inside
+      # `require config_path`. If the app resolves a different version, Bundler
+      # raises `Gem::LoadError: already activated psych 5.4.0, but your Gemfile
+      # requires psych 5.3.1`. Clear the pre-activated specs so Bundler activates
+      # the versions the app resolves. No-op under `bundle exec`, so in-Gemfile
+      # mode is unaffected.
+      drop_conflicting_gem_activations!
+
       require config_path
 
       # Restore paths and specs that Bundler.setup stripped (standalone mode).
@@ -627,6 +637,31 @@ class RailsAiContextCLI < Thor
         # silently — the downstream `require` produces a clearer error.
         next
       end
+    end
+
+    # Remove activated gem specs whose version differs from the app's
+    # Gemfile.lock pin, so the app's Bundler.setup can activate the locked
+    # version instead of raising `Gem::LoadError: already activated`. Only the
+    # in-memory spec registration is removed; already-loaded stdlib code stays,
+    # which is safe (require is idempotent and the affected gems - psych, date,
+    # bigdecimal, stringio - keep stable APIs across the involved versions).
+    # No-op under `bundle exec` (BUNDLE_BIN_PATH set): Bundler already governs
+    # activation there, so in-Gemfile mode is untouched.
+    def drop_conflicting_gem_activations!
+      return if ENV["BUNDLE_BIN_PATH"]
+      return unless defined?(Gem) && Gem.respond_to?(:loaded_specs)
+
+      # Drop every pre-activated spec except bundler (which is mid-execution),
+      # so the app's Bundler.setup activates each gem at the version IT resolves
+      # rather than colliding with whatever RubyGems pre-activated. Without this,
+      # `require config_path` raises `Gem::LoadError: already activated psych
+      # 5.4.0, but your Gemfile requires psych 5.3.1`. Only the in-memory spec
+      # registration is removed; already-loaded code stays (require is
+      # idempotent). The gem's own spec and its MCP deps are captured before
+      # this call and restored after boot (see capture_standalone_specs).
+      Gem.loaded_specs.delete_if { |name, _| name != "bundler" }
+    rescue => e
+      $stderr.puts "[rails-ai-context] drop_conflicting_gem_activations! failed: #{e.message}" if ENV["DEBUG"]
     end
 end
 

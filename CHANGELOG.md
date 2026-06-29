@@ -25,6 +25,7 @@ Live-usage audit of the full MCP surface (all 38 tools over stdio + HTTP, the CL
 - **MCP resources** return a proper `-32602 Resource not found: <uri>` for unknown URIs and blocked paths instead of a generic "Internal error" with the URI stripped (on `mcp >= 0.20`; older mcp keeps prior behavior). Path traversal and sensitive-file access remain blocked.
 - **CLI `--json`** flag is honored in any position (`tool NAME args --json`), not only before the tool name.
 - **CLI presets** (`architecture`, `debugging`, `migration`) now chain tools that produce useful output with zero arguments, instead of calling tools whose required arguments were never supplied.
+- **Standalone/zero-config CLI on Ruby 3.4+** no longer crashes with `Gem::LoadError: already activated psych 5.4.0, but your Gemfile requires psych 5.3.1` (or the equivalent for `date`). The standalone executable pre-activates Ruby 3.4's newer default-gem versions before the app's `Bundler.setup` runs; it now clears those pre-activated specs first so Bundler activates the versions the app resolves. No-op under `bundle exec` (in-Gemfile mode is unaffected).
 
 ## [5.11.2] - 2026-06-16
 
