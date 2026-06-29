@@ -8,10 +8,10 @@ module RailsAiContext
       class SchemaDslListener < BaseListener
         COLUMN_TYPES = %w[
           string integer text boolean datetime date decimal float binary
-          references belongs_to jsonb json uuid bigint timestamp time
+          references belongs_to jsonb json uuid bigint timestamp timestamptz time
           inet cidr macaddr hstore ltree numrange tsrange daterange
           bit bit_varying money oid xml point line lseg box path
-          polygon circle interval serial virtual primary_key
+          polygon circle interval serial tsvector virtual primary_key
         ].to_set.freeze
 
         def on_call_node_enter(node)
