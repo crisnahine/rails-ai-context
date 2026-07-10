@@ -250,9 +250,10 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
         text = result.content.first[:text]
         expect(text).to include("OrdersController: build → save → render json")
         expect(text).to include("render json: @record, status: :created")
-        expect(text).to include("render json: @record.errors, status: :unprocessable_entity")
+        # Skeleton mirrors the failure status the controller actually renders.
+        expect(text).to include("render json: @record.errors, status: :unprocessable_content")
         expect(text).not_to include("redirect_to @record")
-        expect(text).not_to include("render :new, status: :unprocessable_entity")
+        expect(text).not_to include("render :new")
       end
     end
 
@@ -282,7 +283,9 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
         text = result.content.first[:text]
         expect(text).to include("ArticlesController: build → save → redirect/render")
         expect(text).to include('redirect_to @record, notice: "[success message]"')
-        expect(text).to include("render :new, status: :unprocessable_entity")
+        # Rails 7.1+ scaffolds render :unprocessable_content; the skeleton
+        # follows the detected symbol instead of hardcoding the pre-7.1 one.
+        expect(text).to include("render :new, status: :unprocessable_content")
         expect(text).not_to include("render json: @record")
       end
     end

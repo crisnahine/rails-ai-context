@@ -188,6 +188,7 @@ module RailsAiContext
         not_found_patterns = []
         create_flows = []
         create_flow_parts_seen = []
+        create_error_statuses = []
         json_response_count = 0
         html_response_count = 0
         show_only_controllers = []
@@ -249,6 +250,11 @@ module RailsAiContext
               if flow_parts.size >= 2
                 create_flows << "#{controller_name.camelize}: #{flow_parts.join(' → ')}"
                 create_flow_parts_seen.concat(flow_parts)
+                # Record the failure-branch status this create action renders,
+                # skipping success statuses so :created does not shadow it.
+                error_status = create_block.scan(/status:\s*:(\w+)/).flatten
+                  .find { |s| !%w[created ok found see_other].include?(s) }
+                create_error_statuses << error_status if error_status
               end
             end
           end
@@ -292,6 +298,10 @@ module RailsAiContext
           # When both styles appear across controllers, follow whichever is
           # more common so the skeleton reflects the dominant convention.
           use_json_skeleton = has_json_render && json_response_count >= html_response_count
+          # Rails 7.1 renamed the 422 status symbol: newer scaffolds render
+          # :unprocessable_content, older apps :unprocessable_entity. Mirror
+          # whichever the app's own create actions use most.
+          failure_status = create_error_statuses.tally.max_by { |_, count| count }&.first || "unprocessable_entity"
 
           sections << "```ruby"
           sections << "def create"
@@ -317,9 +327,9 @@ module RailsAiContext
             end
             sections << "  else"
             if use_json_skeleton
-              sections << "    render json: @record.errors, status: :unprocessable_entity"
+              sections << "    render json: @record.errors, status: :#{failure_status}"
             elsif has_redirect_render
-              sections << "    render :new, status: :unprocessable_entity"
+              sections << "    render :new, status: :#{failure_status}"
             else
               sections << "    # failure"
             end

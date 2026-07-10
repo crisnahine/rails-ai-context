@@ -418,9 +418,13 @@ module RailsAiContext
           attrs = Array(sp && sp[:permits]).map(&:to_s)
           attrs = schema_content_columns(table) if attrs.empty?
 
-          unique_attrs = Array(model_data[:validations])
+          # Uniqueness constraints come from two places: model validations and
+          # unique database indexes. A column with only a unique index (no
+          # validation) still rejects duplicate inserts, so treat both alike.
+          validation_uniques = Array(model_data[:validations])
             .select { |v| v[:kind] == "uniqueness" }
-            .flat_map { |v| Array(v[:attributes]).map(&:to_s) } & attrs
+            .flat_map { |v| Array(v[:attributes]).map(&:to_s) }
+          unique_attrs = (validation_uniques + unique_index_columns(table)).uniq & attrs
 
           {
             name: singular,
@@ -559,11 +563,14 @@ module RailsAiContext
             "# Destroy a fresh record: deleting a fixture row can violate foreign keys other fixtures hold on it.",
             "#{res[:name]} = #{res[:model]}.create!(#{subject}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res)})"
           ]
+          # String uniques are already randomized by destroy_attr_overrides;
+          # only non-string uniques still need a hand-picked fresh value.
+          unhandled_uniques = res[:unique_attrs].reject { |a| %w[string text].include?(schema_column_type(res[:table], a)) }
           minitest_request_test(label, "delete", resolved, res,
             res[:json_api] ? "assert_response :success" : "assert_response :redirect",
             difference: "\"#{res[:model]}.count\", -1",
             setup_lines: setup_lines,
-            todos: res[:unique_attrs].any? ? [ "confirm the fresh record satisfies uniqueness validations" ] : [])
+            todos: unhandled_uniques.any? ? [ "confirm the fresh record satisfies uniqueness validations" ] : [])
         end
 
         def minitest_generic_test(route, name_by_path, res, tests_data, subject)
@@ -877,7 +884,7 @@ module RailsAiContext
 
         def placeholder_attrs_literal(res)
           pairs = res[:attrs].map do |attr|
-            "#{attr}: #{PLACEHOLDER_VALUES.fetch(schema_column_type(res[:table], attr).to_s, 'nil')}"
+            "#{attr}: #{attr_value_expr(res, attr, :placeholder)}"
           end
           "{ #{pairs.join(', ')} }"
         end
@@ -903,6 +910,15 @@ module RailsAiContext
           cols = (tables[table] || tables[table.to_sym] || {})[:columns] || []
           col = cols.find { |c| c[:name].to_s == column }
           (col && col[:type]).to_s
+        end
+
+        # Columns covered by a unique database index. Posting a fixture row's
+        # own value for one of these raises RecordNotUnique even when the
+        # model declares no uniqueness validation.
+        def unique_index_columns(table)
+          tables = (cached_context[:schema] || {})[:tables] || {}
+          indexes = (tables[table] || tables[table.to_sym] || {})[:indexes] || []
+          indexes.select { |i| i[:unique] }.flat_map { |i| Array(i[:columns]).map(&:to_s) }
         end
 
         def devise_app?(tests_data)
