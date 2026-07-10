@@ -20,6 +20,11 @@ module RailsAiContext
   module BootManager
     class BootError < StandardError; end
 
+    # A dedicated subclass for the timeout case lets callers (the CLI's
+    # failure branch) distinguish "boot never finished" from other boot
+    # failures without parsing error message text.
+    class BootTimeoutError < BootError; end
+
     DEFAULT_TIMEOUT = 60
 
     Result = Struct.new(:status, :error, keyword_init: true) do
@@ -51,6 +56,11 @@ module RailsAiContext
         Timeout.timeout(timeout) { require environment_rb }
       end
       Result.new(status: :booted)
+    rescue Timeout::Error
+      # Timeout::Error's own message ("execution expired") names neither the
+      # app nor the configured limit - wrap it so a slow-booting app produces
+      # actionable guidance instead of a cryptic stdlib message.
+      Result.new(status: :failed, error: BootTimeoutError.new("Boot did not finish within #{timeout}s"))
     rescue StandardError, ScriptError => e
       Result.new(status: :failed, error: e)
     end

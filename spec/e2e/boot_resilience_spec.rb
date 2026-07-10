@@ -85,4 +85,67 @@ RSpec.describe "E2E: boot resilience", type: :e2e do
       end
     end
   end
+
+  describe "app that writes via the STDOUT constant during boot" do
+    # $stdout.puts is the common case, but some initializers, gem banners, or
+    # subprocess output bypass the $stdout global and write straight to fd 1
+    # via the STDOUT constant. Both must be caught for the stdio transport to
+    # stay clean.
+    let(:noisy_initializer) do
+      <<~RUBY
+        puts "BOOT NOISE via $stdout global"
+        STDOUT.puts "BOOT NOISE via STDOUT constant"
+      RUBY
+    end
+
+    it "keeps the stdio MCP handshake parseable with zero non-JSON bytes on stdout" do
+      with_initializer("zz_constant_write.rb", noisy_initializer) do
+        client = E2E::McpStdioClient.new(@builder).start!
+        begin
+          response = client.request("initialize", {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "e2e-harness", version: "0.0.0" }
+          })
+          expect(response["result"]).to be_a(Hash), "handshake corrupted: #{response.inspect}"
+
+          client.notify("notifications/initialized")
+          tools = client.request("tools/list")
+          expect(tools.dig("result", "tools")).to be_an(Array)
+        ensure
+          client.stop!
+        end
+      end
+    end
+
+    it "keeps CLI tool stdout parseable in json mode" do
+      with_initializer("zz_constant_write.rb", noisy_initializer) do
+        result = @cli.cli_tool("schema", [ "--json" ])
+        expect(result.success?).to be(true), result.to_s
+        expect(result.stdout).not_to include("BOOT NOISE")
+        expect { JSON.parse(result.stdout) }.not_to raise_error
+      end
+    end
+  end
+
+  describe "app that hangs during boot" do
+    it "fails with a friendly timeout message naming the configured limit, not the raw Timeout::Error" do
+      with_initializer("zz_slow.rb", "sleep 5\n") do
+        result = @cli.cli_tool("schema", extra_env: { "RAILS_AI_CONTEXT_BOOT_TIMEOUT" => "2" })
+        expect(result.exit_status).to eq(1), result.to_s
+        expect(result.stderr).to include("did not finish within 2s")
+        expect(result.stderr).to include("RAILS_AI_CONTEXT_BOOT_TIMEOUT")
+        expect(result.stderr).not_to include("Timeout::Error: execution expired")
+      end
+    end
+
+    it "adds a doctor-specific hint on top of the timeout message" do
+      with_initializer("zz_slow.rb", "sleep 5\n") do
+        result = @cli.cli("doctor", extra_env: { "RAILS_AI_CONTEXT_BOOT_TIMEOUT" => "2" })
+        expect(result.exit_status).to eq(1), result.to_s
+        expect(result.stderr).to include("did not finish within 2s")
+        expect(result.stderr).to include("doctor needs a bootable app")
+      end
+    end
+  end
 end

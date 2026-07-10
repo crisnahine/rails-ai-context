@@ -52,11 +52,14 @@ RSpec.describe RailsAiContext::BootManager do
     expect(result.error).to be_a(ScriptError)
   end
 
-  it "times out a hanging boot" do
+  it "times out a hanging boot with a friendly message, not the raw Timeout::Error" do
     dir = app_with_environment("sleep 5\n")
     result = described_class.boot!(app_root: dir, timeout: 1)
     expect(result).not_to be_booted
-    expect(result.error).to be_a(Timeout::Error)
+    expect(result.error).to be_a(described_class::BootTimeoutError)
+    expect(result.failure_summary).to include("did not finish within 1s")
+    expect(result.failure_summary).not_to include("Timeout::Error")
+    expect(result.failure_summary).not_to include("execution expired")
   end
 
   it "fails with a clear message when no Rails app exists" do

@@ -140,7 +140,7 @@ class RailsAiContextCLI < Thor
 
     desc "doctor", "Run diagnostic checks and report AI readiness score"
     def doctor
-      boot_rails!
+      boot_rails!(context: "doctor")
       result = ::RailsAiContext::Doctor.new.run
       result[:checks].each do |check|
         icon = case check.status
@@ -576,7 +576,7 @@ class RailsAiContextCLI < Thor
     # capture references BEFORE Rails boot runs and re-register them afterwards.
     STANDALONE_REQUIRED_GEMS = %w[mcp json-schema addressable public_suffix].freeze
 
-    def boot_rails!
+    def boot_rails!(context: nil)
       config_path = File.join(Dir.pwd, "config", "environment.rb")
       unless File.exist?(config_path)
         $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
@@ -627,9 +627,18 @@ class RailsAiContextCLI < Thor
         else
           $stderr.puts "  Run with DEBUG=1 for the full backtrace."
         end
-        $stderr.puts "  Common causes: missing ENV vars or credentials, an initializer"
-        $stderr.puts "  that needs a service (database, Redis), or a syntax error."
-        $stderr.puts "  If the app is healthy but slow to boot, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, default 60)."
+
+        if result.error.is_a?(::RailsAiContext::BootManager::BootTimeoutError)
+          $stderr.puts "  The app took longer than #{timeout}s to boot. Raise the limit with"
+          $stderr.puts "  RAILS_AI_CONTEXT_BOOT_TIMEOUT=<seconds> (current: #{timeout}s)."
+        else
+          $stderr.puts "  Common causes: missing ENV vars or credentials, an initializer"
+          $stderr.puts "  that needs a service (database, Redis), or a syntax error."
+          $stderr.puts "  If the app is healthy but slow to boot, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, default 60)."
+        end
+
+        $stderr.puts "  doctor needs a bootable app; fix the boot error above first." if context == "doctor"
+
         exit 1
       end
 
