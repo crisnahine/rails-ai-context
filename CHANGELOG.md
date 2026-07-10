@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added - Boot resilience
+
+- **Friendly boot-failure diagnostics.** Every CLI command (`tool`, `doctor`, `serve`, `context`, etc.) now boots the host app through `BootManager`, which catches `StandardError` and `ScriptError` alike. When the app can't boot -- a missing ENV var, an unreachable database or Redis, a syntax error in an initializer -- the CLI prints a one-line cause plus common-cause hints and exits 1, instead of a raw Thor backtrace. Boot is bounded by a 60-second timeout so a hanging initializer fails loudly rather than wedging the process; the timeout is configurable via `RAILS_AI_CONTEXT_BOOT_TIMEOUT`. Set `DEBUG=1` for the full backtrace.
+- **stdout quarantine on every stdio launch path.** The stdio MCP transport carries JSON-RPC on stdout, so anything the host app prints while booting (initializer `puts`, deprecation warnings) used to corrupt the handshake and leave the client reporting a dead server. `OutputGuard` now redirects `$stdout` to `$stderr` for the duration of boot on every stdio launch path -- the `rails-ai-context serve` binary, the `rails ai:serve` rake task, and standalone mode.
+- **Unexpected tool errors return in-band MCP error results instead of protocol errors.** Every registered tool's `call` is now wrapped so an unhandled exception produces an `isError: true` tool response (error class, origin line, and a recovery hint) rather than escaping to the MCP SDK, which turned it into a JSON-RPC -32603 protocol error that most AI clients silently swallow. Exceptions that still escape at the SDK level get a stderr backtrace via a new `exception_reporter`.
+- **Aggregate tools flag partial context.** `rails_get_context` and `rails_onboard` append a "Partial context" note listing which introspectors failed when any did, so an AI client can tell missing data from empty data. The note is appended after the truncation decision, so it survives response truncation instead of being cut off with the rest of the body.
+- **Generated MCP configs launch the quarantined CLI command.** All 5 generated config formats (Claude Code, Cursor, VS Code, OpenCode, and Codex CLI) now point at `bundle exec rails-ai-context serve` instead of `bundle exec rails ai:serve`, so new installs get stdout quarantine from before `Bundler.require` runs. `rails ai:serve` still works and now quarantines its own boot output too.
+
+### Fixed
+
+- Introspector fault isolation no longer crashes when `Rails.logger` is nil (early-boot rake tasks, engine dummy apps). The failure-logging call that the rescue exists to protect now falls back to `$stderr` via `RailsAiContext.log_warn` instead of raising `NoMethodError` on a nil logger.
+- `BaseTool.abstract!` now works when called on a subclass. It read `registry_mutex` and `descendants` off `self`, but those are ivars set on `BaseTool` itself -- a subclass has no ivar storage of its own to read them from, so the call silently failed to deregister the tool. It now reaches back to `BaseTool` explicitly.
+
 ## [5.13.0] - 2026-07-10
 
 ### Added
