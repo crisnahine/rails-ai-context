@@ -154,8 +154,15 @@ def save_yaml_config(ai_tools, tool_mode)
     "ai_tools" => Array(ai_tools).map(&:to_s),
     "tool_mode" => tool_mode.to_s
   }
-  File.write(yaml_path, YAML.dump(content))
-  puts "💾 Saved .rails-ai-context.yml (standalone config)"
+  new_content = YAML.dump(content)
+  existed = File.exist?(yaml_path)
+
+  if existed && File.read(yaml_path) == new_content
+    puts "💾 .rails-ai-context.yml (unchanged)"
+  else
+    File.write(yaml_path, new_content)
+    puts "💾 #{existed ? 'Updated' : 'Saved'} .rails-ai-context.yml (standalone config)"
+  end
 rescue => e
   $stderr.puts "[rails-ai-context] save_yaml_config failed: #{e.message}" if ENV["DEBUG"]
   nil
@@ -260,13 +267,20 @@ def add_ai_context_to_gitignore
   return unless File.exist?(gitignore)
 
   content = File.read(gitignore)
-  return if content.include?(".ai-context.json")
-
-  File.open(gitignore, "a") do |f|
-    f.puts ""
-    f.puts "# rails-ai-context (JSON cache - markdown files should be committed)"
-    f.puts ".ai-context.json"
+  lines = []
+  unless content.include?(".ai-context.json")
+    lines << ""
+    lines << "# rails-ai-context (JSON cache - markdown files should be committed)"
+    lines << ".ai-context.json"
   end
+  unless content.include?(".codex/config.toml")
+    lines << ""
+    lines << "# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)"
+    lines << ".codex/config.toml"
+  end
+  return if lines.empty?
+
+  File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
   puts "✅ Updated .gitignore"
 end unless defined?(add_ai_context_to_gitignore)
 
@@ -390,14 +404,21 @@ namespace :ai do
       print_result(result)
     else
       puts "📝 Writing context files for: #{ai_tools.map(&:to_s).join(', ')}..."
-      ai_tools.each do |fmt|
-        result = RailsAiContext.generate_context(format: fmt)
-        print_result(result)
-      end
+      # One call for every selected format so ContextFileSerializer's
+      # cross-format dedup applies (opencode and codex share AGENTS.md and
+      # its split rules - generating one format at a time defeats that dedup
+      # and reports the same file as both written and unchanged).
+      result = RailsAiContext.generate_context(format: ai_tools)
+      print_result(result)
     end
 
     puts ""
-    puts "Done! Commit these files so your team benefits."
+    if Array(ai_tools).include?(:codex)
+      puts "Done! Commit context files and MCP configs so your team benefits."
+      puts "(.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)"
+    else
+      puts "Done! Commit these files so your team benefits."
+    end
     puts "Change AI tools: config/initializers/rails_ai_context.rb (config.ai_tools)"
     puts ""
     puts "Standalone (no Gemfile needed):"

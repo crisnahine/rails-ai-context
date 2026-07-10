@@ -126,4 +126,59 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).not_to include("echo $changed_files")
     end
   end
+
+  describe "#create_yaml_config" do
+    let(:yaml_path) { File.join(tmpdir, ".rails-ai-context.yml") }
+
+    it "creates the file and reports Created on first run" do
+      expect { generator.create_yaml_config }.to output(/Created \.rails-ai-context\.yml/).to_stdout
+      expect(File.read(yaml_path)).to include("ai_tools:")
+    end
+
+    it "reports unchanged and does not rewrite the file when content is identical" do
+      generator.create_yaml_config
+      mtime_before = File.mtime(yaml_path)
+
+      expect { generator.create_yaml_config }.to output(/\.rails-ai-context\.yml \(unchanged\)/).to_stdout
+      expect(File.mtime(yaml_path)).to eq(mtime_before)
+    end
+
+    it "reports Updated when the selection changed" do
+      generator.create_yaml_config
+      generator.instance_variable_set(:@selected_formats, %i[claude])
+
+      expect { generator.create_yaml_config }.to output(/Updated \.rails-ai-context\.yml/).to_stdout
+      expect(File.read(yaml_path)).to include("- claude")
+      expect(File.read(yaml_path)).not_to include("- copilot")
+    end
+  end
+
+  describe "#add_to_gitignore" do
+    let(:gitignore_path) { File.join(tmpdir, ".gitignore") }
+
+    it "does not create .gitignore when the project doesn't have one" do
+      generator.add_to_gitignore
+      expect(File.exist?(gitignore_path)).to be(false)
+    end
+
+    it "appends both .ai-context.json and .codex/config.toml when .gitignore exists" do
+      File.write(gitignore_path, "*.log\n")
+
+      generator.add_to_gitignore
+
+      content = File.read(gitignore_path)
+      expect(content).to include(".ai-context.json")
+      expect(content).to include(".codex/config.toml")
+    end
+
+    it "does not duplicate entries that are already present" do
+      File.write(gitignore_path, "*.log\n.ai-context.json\n.codex/config.toml\n")
+
+      expect { generator.add_to_gitignore }.to output("").to_stdout
+
+      content = File.read(gitignore_path)
+      expect(content.scan(".ai-context.json").size).to eq(1)
+      expect(content.scan(".codex/config.toml").size).to eq(1)
+    end
+  end
 end

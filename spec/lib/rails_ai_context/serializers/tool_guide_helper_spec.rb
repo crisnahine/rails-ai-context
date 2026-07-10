@@ -1,13 +1,15 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
   let(:test_class) do
     Class.new do
       include RailsAiContext::Serializers::ToolGuideHelper
       # Make private methods accessible for testing
-      public :cli_cmd, :tool_call_inline
+      public :cli_cmd, :tool_call_inline, :standalone_install?
     end
   end
 
@@ -64,6 +66,28 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       lines = helper.tools_intro
       expect(lines.join("\n")).to include("introspection tools")
       expect(lines.join("\n")).not_to include("MCP tools")
+    end
+
+    it "points at the rake task by default (in-Gemfile install)" do
+      lines = helper.tools_intro
+      expect(lines.join("\n")).to include("rails ai:serve")
+    end
+
+    context "standalone install (gem missing from Gemfile.lock)" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        File.write(File.join(tmpdir, "Gemfile.lock"), "    rails (7.1.0)\n")
+        allow(Bundler).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "points at the rails-ai-context CLI binary instead of the rake task" do
+        lines = helper.tools_intro
+        expect(lines.join("\n")).to include("rails-ai-context serve")
+        expect(lines.join("\n")).not_to include("rails ai:serve")
+      end
     end
   end
 
@@ -180,6 +204,83 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
 
     it "generates zsh-safe rake command with params" do
       expect(helper.cli_cmd("schema", "table=users")).to eq("rails 'ai:tool[schema]' table=users")
+    end
+
+    context "when the gem is not in the app's Gemfile.lock (standalone install)" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        File.write(File.join(tmpdir, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rails (7.1.0)
+
+          DEPENDENCIES
+            rails
+        LOCK
+        allow(Bundler).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "generates the CLI binary form instead of the rake form" do
+        expect(helper.cli_cmd("schema", "table=users")).to eq("rails-ai-context tool schema table=users")
+      end
+    end
+
+    context "when the gem is in the app's Gemfile.lock (in-Gemfile install)" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        File.write(File.join(tmpdir, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rails (7.1.0)
+              rails-ai-context (5.13.0)
+
+          DEPENDENCIES
+            rails
+            rails-ai-context
+        LOCK
+        allow(Bundler).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "keeps generating the rake form" do
+        expect(helper.cli_cmd("schema", "table=users")).to eq("rails 'ai:tool[schema]' table=users")
+      end
+    end
+  end
+
+  describe "#standalone_install?" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before { allow(Bundler).to receive(:root).and_return(Pathname.new(tmpdir)) }
+    after  { FileUtils.remove_entry(tmpdir) }
+
+    it "is false when the Gemfile.lock lists rails-ai-context" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails-ai-context (5.13.0)\n")
+      expect(helper.standalone_install?).to be(false)
+    end
+
+    it "is true when the Gemfile.lock does not list rails-ai-context" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails (7.1.0)\n")
+      expect(helper.standalone_install?).to be(true)
+    end
+
+    it "defaults to false (in-Gemfile) when there is no Gemfile.lock at all" do
+      expect(helper.standalone_install?).to be(false)
+    end
+
+    it "memoizes the result for the lifetime of the instance" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails (7.1.0)\n")
+      expect(helper.standalone_install?).to be(true)
+
+      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails-ai-context (5.13.0)\n")
+      expect(helper.standalone_install?).to be(true), "expected the memoized value to stick within one instance"
     end
   end
 

@@ -497,8 +497,15 @@ module RailsAiContext
         }
 
         require "yaml"
-        File.write(yaml_path, YAML.dump(content))
-        say "Created .rails-ai-context.yml (standalone config)", :green
+        new_content = YAML.dump(content)
+        existed = File.exist?(yaml_path)
+
+        if existed && File.read(yaml_path) == new_content
+          say ".rails-ai-context.yml (unchanged)", :yellow
+        else
+          File.write(yaml_path, new_content)
+          say "#{existed ? 'Updated' : 'Created'} .rails-ai-context.yml (standalone config)", :green
+        end
       end
 
       def add_to_gitignore
@@ -506,15 +513,20 @@ module RailsAiContext
         return unless File.exist?(gitignore)
 
         content = File.read(gitignore)
-        append = []
-        append << ".ai-context.json" unless content.include?(".ai-context.json")
+        lines = []
+        unless content.include?(".ai-context.json")
+          lines << ""
+          lines << "# rails-ai-context (JSON cache - markdown files should be committed)"
+          lines << ".ai-context.json"
+        end
+        unless content.include?(".codex/config.toml")
+          lines << ""
+          lines << "# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)"
+          lines << ".codex/config.toml"
+        end
 
-        if append.any?
-          File.open(gitignore, "a") do |f|
-            f.puts ""
-            f.puts "# rails-ai-context (JSON cache - markdown files should be committed)"
-            append.each { |line| f.puts line }
-          end
+        if lines.any?
+          File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
           say "Updated .gitignore", :green
         end
       end
@@ -581,14 +593,16 @@ module RailsAiContext
           @selected_formats, root: Rails.root
         )
 
-        @selected_formats.each do |fmt|
-          begin
-            result = RailsAiContext.generate_context(format: fmt)
-            (result[:written] || []).each { |f| say "  ✅ #{f}", :green }
-            (result[:skipped] || []).each { |f| say "  ⏭️  #{f} (unchanged)", :yellow }
-          rescue => e
-            say "  ❌ #{fmt}: #{e.message}", :red
-          end
+        # Generate every selected format in ONE call so ContextFileSerializer's
+        # cross-format dedup applies (opencode and codex share AGENTS.md and
+        # its split rules - generating them one format at a time defeats that
+        # dedup and reports the same file as both written and unchanged).
+        begin
+          result = RailsAiContext.generate_context(format: @selected_formats)
+          (result[:written] || []).each { |f| say "  ✅ #{f}", :green }
+          (result[:skipped] || []).each { |f| say "  ⏭️  #{f} (unchanged)", :yellow }
+        rescue => e
+          say "  ❌ #{@selected_formats.join(', ')}: #{e.message}", :red
         end
       end
 
@@ -636,7 +650,11 @@ module RailsAiContext
         say "  rails-ai-context init          # interactive setup"
         say "  rails-ai-context serve         # start MCP server"
         say ""
-        say "Commit context files and MCP config files so your team benefits!", :green
+        if @selected_formats.include?(:codex)
+          say "Commit context files and MCP configs so your team benefits! (.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)", :green
+        else
+          say "Commit context files and MCP config files so your team benefits!", :green
+        end
       end
     end
   end

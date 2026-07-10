@@ -43,7 +43,7 @@ module RailsAiContext
           ]
         else
           [
-            "This project has #{tool_count} MCP tools via `rails ai:serve`.",
+            "This project has #{tool_count} MCP tools via `#{serve_cmd}`.",
             "**MANDATORY - use these instead of reading files.** They return ground truth from the running app:",
             "real schema, real associations, real filters - not guesses from file reads.",
             "Read files ONLY when you are about to Edit them.",
@@ -305,11 +305,45 @@ module RailsAiContext
 
       private
 
-      # Generate zsh-safe CLI command: rails 'ai:tool[name]' params
+      # Generate zsh-safe CLI command. In-Gemfile installs go through the rake
+      # task (`rails 'ai:tool[name]'`); standalone installs (gem not in the
+      # host app's Gemfile) have no rake tasks at all, so they use the CLI
+      # binary directly (`rails-ai-context tool name`).
       def cli_cmd(tool_name, params = nil)
-        cmd = "rails 'ai:tool[#{tool_name}]'"
+        cmd = standalone_install? ? "rails-ai-context tool #{tool_name}" : "rails 'ai:tool[#{tool_name}]'"
         cmd += " #{params}" if params
         cmd
+      end
+
+      # `rails ai:serve` for in-Gemfile installs; `rails-ai-context serve` for
+      # standalone installs where the rake task does not exist.
+      def serve_cmd
+        standalone_install? ? "rails-ai-context serve" : "rails ai:serve"
+      end
+
+      # A standalone install runs the gem via its own CLI binary (`gem install`
+      # + `rails-ai-context init`) rather than through the host app's Bundler
+      # group, so none of the rake tasks this gem ships are available. Detected
+      # by scanning the resolved Gemfile.lock for a rails-ai-context spec line -
+      # the same approach Tools::MigrationAdvisor uses to detect optional gems
+      # like strong_migrations. Falls back to treating the install as
+      # in-Gemfile (the common case) when the lock file can't be read.
+      def standalone_install?
+        return @standalone_install if defined?(@standalone_install)
+
+        root = if defined?(Bundler)
+          Bundler.root.to_s
+        elsif defined?(Rails) && Rails.respond_to?(:root) && Rails.root
+          Rails.root.to_s
+        else
+          Dir.pwd
+        end
+
+        content = RailsAiContext::SafeFile.read(File.join(root, "Gemfile.lock"))
+        @standalone_install = content ? !content.include?("rails-ai-context (") : false
+      rescue => e
+        $stderr.puts "[rails-ai-context] standalone_install? detection failed: #{e.message}" if ENV["DEBUG"]
+        @standalone_install = false
       end
 
       # Inline tool call for workflow steps (shorter format).

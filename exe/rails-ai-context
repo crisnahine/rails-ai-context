@@ -110,10 +110,13 @@ class RailsAiContextCLI < Thor
           result = ::RailsAiContext.generate_context(format: :all)
           print_context_result(result)
         else
-          ai_tools.each do |fmt|
-            result = ::RailsAiContext.generate_context(format: fmt)
-            print_context_result(result)
-          end
+          # One call for every selected format so ContextFileSerializer's
+          # cross-format dedup applies (opencode and codex share AGENTS.md
+          # and its split rules - generating one format at a time defeats
+          # that dedup and reports the same file as both written and
+          # unchanged).
+          result = ::RailsAiContext.generate_context(format: ai_tools)
+          print_context_result(result)
         end
       end
     rescue SystemExit
@@ -194,11 +197,13 @@ class RailsAiContextCLI < Thor
 
       $stderr.puts ""
       $stderr.puts "Generating AI context files..."
-      ai_tools.each do |fmt|
-        result = ::RailsAiContext.generate_context(format: fmt)
-        (result[:written] || []).each { |f| $stderr.puts "  Written: #{f}" }
-        (result[:skipped] || []).each { |f| $stderr.puts "  Skipped: #{f} (unchanged)" }
-      end
+      # One call for every selected format so ContextFileSerializer's
+      # cross-format dedup applies (opencode and codex share AGENTS.md and
+      # its split rules - generating one format at a time defeats that
+      # dedup and reports the same file as both written and unchanged).
+      result = ::RailsAiContext.generate_context(format: ai_tools)
+      (result[:written] || []).each { |f| $stderr.puts "  Written: #{f}" }
+      (result[:skipped] || []).each { |f| $stderr.puts "  Skipped: #{f} (unchanged)" }
 
       # --- Instructions ---
       show_standalone_instructions(ai_tools, tool_mode)
@@ -491,13 +496,20 @@ class RailsAiContextCLI < Thor
       return unless File.exist?(gitignore)
 
       content = File.read(gitignore)
-      return if content.include?(".ai-context.json")
-
-      File.open(gitignore, "a") do |f|
-        f.puts ""
-        f.puts "# rails-ai-context (JSON cache — markdown files should be committed)"
-        f.puts ".ai-context.json"
+      lines = []
+      unless content.include?(".ai-context.json")
+        lines << ""
+        lines << "# rails-ai-context (JSON cache - markdown files should be committed)"
+        lines << ".ai-context.json"
       end
+      unless content.include?(".codex/config.toml")
+        lines << ""
+        lines << "# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)"
+        lines << ".codex/config.toml"
+      end
+      return if lines.empty?
+
+      File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
       $stderr.puts "Updated .gitignore"
     end
 
@@ -507,8 +519,15 @@ class RailsAiContextCLI < Thor
         "ai_tools" => ai_tools.map(&:to_s),
         "tool_mode" => tool_mode.to_s
       }
-      File.write(yaml_path, YAML.dump(content))
-      $stderr.puts "Created .rails-ai-context.yml"
+      new_content = YAML.dump(content)
+      existed = File.exist?(yaml_path)
+
+      if existed && File.read(yaml_path) == new_content
+        $stderr.puts ".rails-ai-context.yml (unchanged)"
+      else
+        File.write(yaml_path, new_content)
+        $stderr.puts "#{existed ? 'Updated' : 'Created'} .rails-ai-context.yml"
+      end
     end
 
     def write_mcp_configs(ai_tools, tool_mode)
