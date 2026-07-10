@@ -53,7 +53,7 @@ class RailsAiContextCLI < Thor
       puts runner.run
     rescue SystemExit
       raise # let exit() propagate (from boot_rails!)
-    rescue => e
+    rescue StandardError, ScriptError => e
       $stderr.puts "Error: #{e.message}"
       exit 1
     end
@@ -72,7 +72,7 @@ class RailsAiContextCLI < Thor
       ::RailsAiContext.start_mcp_server(transport: transport)
     rescue SystemExit
       raise
-    rescue => e
+    rescue StandardError, ScriptError => e
       $stderr.puts "Error: #{e.message}"
       exit 1
     end
@@ -110,7 +110,7 @@ class RailsAiContextCLI < Thor
       end
     rescue SystemExit
       raise
-    rescue => e
+    rescue StandardError, ScriptError => e
       $stderr.puts "Error: #{e.message}"
       exit 1
     end
@@ -264,7 +264,7 @@ class RailsAiContextCLI < Thor
       end
     rescue SystemExit
       raise
-    rescue => e
+    rescue StandardError, ScriptError => e
       $stderr.puts "Error: #{e.message}"
       exit 1
     end
@@ -331,7 +331,7 @@ class RailsAiContextCLI < Thor
       puts "Run `rails-ai-context inspect` for full JSON introspection."
     rescue SystemExit
       raise
-    rescue => e
+    rescue StandardError, ScriptError => e
       $stderr.puts "Error: #{e.message}"
       exit 1
     end
@@ -576,6 +576,8 @@ class RailsAiContextCLI < Thor
         exit 1
       end
 
+      require_relative "../lib/rails_ai_context/boot_manager"
+
       # Save $LOAD_PATH before Rails boot.
       # Bundler.setup (in config/boot.rb) strips $LOAD_PATH to Gemfile-only gems.
       # In standalone mode (gem not in Gemfile), this removes our gem and mcp paths.
@@ -593,14 +595,29 @@ class RailsAiContextCLI < Thor
       # Standalone mode on Ruby 3.4+: this CLI process lazily activates the
       # newest/default version of stdlib gems (e.g. psych via `require "yaml"`,
       # date via transitive requires) BEFORE the app's Bundler.setup runs inside
-      # `require config_path`. If the app resolves a different version, Bundler
+      # the boot require. If the app resolves a different version, Bundler
       # raises `Gem::LoadError: already activated psych 5.4.0, but your Gemfile
       # requires psych 5.3.1`. Clear the pre-activated specs so Bundler activates
       # the versions the app resolves. No-op under `bundle exec`, so in-Gemfile
       # mode is unaffected.
       drop_conflicting_gem_activations!
 
-      require config_path
+      timeout = Integer(ENV.fetch("RAILS_AI_CONTEXT_BOOT_TIMEOUT",
+                                  ::RailsAiContext::BootManager::DEFAULT_TIMEOUT))
+      result = ::RailsAiContext::BootManager.boot!(app_root: Dir.pwd, timeout: timeout)
+
+      unless result.booted?
+        $stderr.puts "Error: Rails app failed to boot in #{Dir.pwd}"
+        $stderr.puts "  #{result.failure_summary}"
+        if ENV["DEBUG"]
+          Array(result.error.backtrace).first(15).each { |line| $stderr.puts "    #{line}" }
+        else
+          $stderr.puts "  Run with DEBUG=1 for the full backtrace."
+        end
+        $stderr.puts "  Common causes: missing ENV vars or credentials, an initializer"
+        $stderr.puts "  that needs a service (database, Redis), or a syntax error."
+        exit 1
+      end
 
       # Restore paths and specs that Bundler.setup stripped (standalone mode).
       # For Gemfile users, both restorations are no-ops.
