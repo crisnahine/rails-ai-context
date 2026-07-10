@@ -50,6 +50,28 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(list).to include("validate")
       expect(list).to include("rails 'ai:tool[NAME]'")
     end
+
+    it "truncates a long description at a word boundary with an ellipsis" do
+      list = described_class.tool_list
+      full_description = RailsAiContext::Tools::AnalyzeFeature.description_value.to_s
+      expected = described_class.truncate_at_word(full_description, 79)
+      expect(list).to include(expected)
+      # The old bug cut mid-word with no "...": guard against that regressing.
+      expect(list).not_to include(full_description[0..79])
+    end
+  end
+
+  describe ".truncate_at_word" do
+    it "leaves short text unchanged" do
+      expect(described_class.truncate_at_word("short text", 79)).to eq("short text")
+    end
+
+    it "truncates long text at the last whole word and appends an ellipsis" do
+      text = "Full-stack feature analysis: models, controllers, routes, services, jobs, views, tests"
+      result = described_class.truncate_at_word(text, 79)
+      expect(result).to eq("Full-stack feature analysis: models, controllers, routes, services, jobs,...")
+      expect(text).to start_with(result.delete_suffix("..."))
+    end
   end
 
   describe ".tool_help" do

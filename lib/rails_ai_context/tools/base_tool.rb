@@ -425,6 +425,23 @@ module RailsAiContext
           $stderr.puts "[rails-ai-context] safe_glob failed: #{e.message}" if ENV["DEBUG"]
           []
         end
+
+        # Merge duplicate PUT/PATCH entries for the same path+action into a
+        # single "PATCH|PUT" entry (Rails generates both for every `resources`
+        # update route). Shared so route counts stay consistent across every
+        # tool that reports how many routes an app has.
+        def dedupe_put_patch_routes(actions)
+          deduped = []
+          actions.each do |r|
+            existing = deduped.find { |d| d[:path] == r[:path] && d[:action] == r[:action] }
+            if existing && %w[PUT PATCH].include?(r[:verb]) && %w[PUT PATCH].include?(existing[:verb])
+              existing[:verb] = "PATCH|PUT"
+            else
+              deduped << r.dup
+            end
+          end
+          deduped
+        end
       end
     end
   end

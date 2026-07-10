@@ -63,7 +63,7 @@ module RailsAiContext
         end
 
         # Combine PUT/PATCH duplicates (Rails generates both for update routes)
-        by_controller = by_controller.transform_values { |actions| dedupe_put_patch(actions) }
+        by_controller = by_controller.transform_values { |actions| dedupe_put_patch_routes(actions) }
         filtered_total = by_controller.values.sum(&:size)
 
         case detail
@@ -179,18 +179,6 @@ module RailsAiContext
         else
           text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
-      end
-      private_class_method def self.dedupe_put_patch(actions)
-        deduped = []
-        actions.each do |r|
-          existing = deduped.find { |d| d[:path] == r[:path] && d[:action] == r[:action] }
-          if existing && %w[PUT PATCH].include?(r[:verb]) && %w[PUT PATCH].include?(existing[:verb])
-            existing[:verb] = "PATCH|PUT"
-          else
-            deduped << r.dup
-          end
-        end
-        deduped
       end
     end
   end

@@ -317,6 +317,75 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe "#check_security_gitignore" do
+    subject(:check) { doctor.send(:check_security_gitignore) }
+
+    let(:root) { Rails.application.root }
+    let(:master_key_path) { File.join(root, "config/master.key") }
+    let(:env_path) { File.join(root, ".env") }
+    let(:gitignore_path) { File.join(root, ".gitignore") }
+
+    before do
+      allow(File).to receive(:exist?).and_call_original
+      allow(File).to receive(:read).and_call_original
+    end
+
+    context "when no sensitive files are present" do
+      before do
+        allow(File).to receive(:exist?).with(env_path).and_return(false)
+        allow(File).to receive(:exist?).with(master_key_path).and_return(false)
+      end
+
+      it "passes without needing a .gitignore" do
+        expect(check.status).to eq(:pass)
+      end
+    end
+
+    context "when a sensitive file exists but .gitignore is missing" do
+      before do
+        allow(File).to receive(:exist?).with(env_path).and_return(false)
+        allow(File).to receive(:exist?).with(master_key_path).and_return(true)
+        allow(File).to receive(:exist?).with(gitignore_path).and_return(false)
+      end
+
+      it "reports the missing .gitignore, not a missing entry" do
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("No .gitignore found")
+        expect(check.message).to include("config/master.key")
+        expect(check.fix).to include("Create .gitignore with")
+        expect(check.fix).to include("config/master.key")
+      end
+    end
+
+    context "when .gitignore exists but is missing an entry" do
+      before do
+        allow(File).to receive(:exist?).with(env_path).and_return(false)
+        allow(File).to receive(:exist?).with(master_key_path).and_return(true)
+        allow(File).to receive(:exist?).with(gitignore_path).and_return(true)
+        allow(File).to receive(:read).with(gitignore_path).and_return("log/\ntmp/\n")
+      end
+
+      it "reports the file is not gitignored" do
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("config/master.key not in .gitignore")
+        expect(check.fix).to include("Add to .gitignore")
+      end
+    end
+
+    context "when .gitignore exists and covers the sensitive file" do
+      before do
+        allow(File).to receive(:exist?).with(env_path).and_return(false)
+        allow(File).to receive(:exist?).with(master_key_path).and_return(true)
+        allow(File).to receive(:exist?).with(gitignore_path).and_return(true)
+        allow(File).to receive(:read).with(gitignore_path).and_return("config/master.key\n")
+      end
+
+      it "passes" do
+        expect(check.status).to eq(:pass)
+      end
+    end
+  end
+
   describe "#check_context_freshness" do
     subject(:check) { doctor.send(:check_context_freshness) }
 

@@ -37,13 +37,25 @@ module RailsAiContext
         lines = [ "Available tools:", "" ]
         available_tools.each do |tool|
           short = short_name(tool.tool_name)
-          desc = tool.description_value.to_s[0..79]
+          desc = truncate_at_word(tool.description_value.to_s, 79)
           lines << "  #{short.ljust(24)} #{desc}"
         end
         lines << ""
         lines << "Usage: rails 'ai:tool[NAME]' param=value"
         lines << "       rails-ai-context tool NAME --param value"
         lines.join("\n")
+      end
+
+      # Truncate at the last whole word within `limit` chars and append "..."
+      # so descriptions never cut off mid-word. Returns `text` unchanged when
+      # it already fits.
+      def self.truncate_at_word(text, limit)
+        return text if text.length <= limit
+
+        cut = text[0...limit]
+        boundary = cut.rindex(" ")
+        cut = cut[0...boundary] if boundary
+        "#{cut}..."
       end
 
       # Filtered tool list respecting skip_tools config.

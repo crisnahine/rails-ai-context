@@ -352,7 +352,8 @@ module RailsAiContext
 
       if errors.empty?
         Check.new(name: "Introspector health", status: :pass,
-          message: "All #{config.introspectors.size} introspectors return data",
+          message: "All #{config.introspectors.size} introspectors return data " \
+            "(these feed the #{Server.builtin_tools.size} MCP tools)",
           fix: nil)
       else
         Check.new(name: "Introspector health", status: :warn,
@@ -441,26 +442,32 @@ module RailsAiContext
     # ── Security checks ───────────────────────────────────────────────
 
     def check_security_gitignore
-      issues = []
       gitignore_path = File.join(app.root, ".gitignore")
-      gitignore = File.exist?(gitignore_path) ? File.read(gitignore_path) : ""
+      gitignore_exists = File.exist?(gitignore_path)
 
-      env_path = File.join(app.root, ".env")
-      if File.exist?(env_path) && !gitignore.include?(".env")
-        issues << ".env exists but not in .gitignore"
+      sensitive_files = []
+      sensitive_files << ".env" if File.exist?(File.join(app.root, ".env"))
+      sensitive_files << "config/master.key" if File.exist?(File.join(app.root, "config/master.key"))
+
+      return Check.new(name: "Secrets in .gitignore", status: :pass, message: "No sensitive files to check", fix: nil) if sensitive_files.empty?
+
+      unless gitignore_exists
+        return Check.new(name: "Secrets in .gitignore", status: :fail,
+          message: "No .gitignore found - #{sensitive_files.join(', ')} would be committed to version control",
+          fix: "Create .gitignore with: #{sensitive_files.map { |f| "`#{f}`" }.join(', ')}")
       end
 
-      master_key = File.join(app.root, "config/master.key")
-      if File.exist?(master_key) && !gitignore.include?("master.key")
-        issues << "config/master.key not in .gitignore"
-      end
+      gitignore = File.read(gitignore_path)
+      issues = []
+      issues << ".env exists but not in .gitignore" if sensitive_files.include?(".env") && !gitignore.include?(".env")
+      issues << "config/master.key not in .gitignore" if sensitive_files.include?("config/master.key") && !gitignore.include?("master.key")
 
       if issues.empty?
         Check.new(name: "Secrets in .gitignore", status: :pass, message: "Sensitive files properly gitignored", fix: nil)
       else
         Check.new(name: "Secrets in .gitignore", status: :fail,
           message: issues.join("; "),
-          fix: "Add to .gitignore: `.env`, `config/master.key`")
+          fix: "Add to .gitignore: #{issues.map { |i| "`#{i.split(' ').first}`" }.join(', ')}")
       end
     end
 

@@ -35,8 +35,7 @@ class RailsAiContextCLI < Thor
     option :list, type: :boolean, default: false, desc: "List available tools"
     def tool(name = nil, *args)
       if options[:list] || name.nil?
-        boot_rails!
-        puts ::RailsAiContext::CLI::ToolRunner.tool_list
+        print_tool_list
         return
       end
 
@@ -587,6 +586,44 @@ class RailsAiContextCLI < Thor
     def print_context_result(result)
       (result[:written] || []).each { |f| $stderr.puts "  Written: #{f}" }
       (result[:skipped] || []).each { |f| $stderr.puts "  Skipped: #{f} (unchanged)" }
+    end
+
+    # The tool list only needs tool names/descriptions/schemas - none of that
+    # depends on a booted app (routes loaded, DB connected, etc.), so it
+    # shouldn't require one. Boot normally when there's an app to boot (so
+    # config-driven filtering like skip_tools/custom_tools still applies);
+    # otherwise load the gem standalone and list from that. Only execution
+    # (running a specific tool) genuinely needs a live app.
+    def print_tool_list
+      config_path = File.join(Dir.pwd, "config", "environment.rb")
+      if File.exist?(config_path) && try_boot_for_list
+        puts ::RailsAiContext::CLI::ToolRunner.tool_list
+        return
+      end
+
+      begin
+        require "rails_ai_context"
+        puts ::RailsAiContext::CLI::ToolRunner.tool_list
+        puts ""
+        puts "Run inside a Rails app to execute tools."
+      rescue LoadError, StandardError => e
+        $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
+        $stderr.puts "Run this command from your Rails app root directory."
+        $stderr.puts "  (gem also failed to load standalone: #{e.message})" if ENV["DEBUG"]
+        exit 1
+      end
+    end
+
+    # Attempts the normal boot path, catching the `exit 1` boot_rails! raises
+    # on a missing app or a failed boot (both come through as SystemExit).
+    # Returns true only when the app booted successfully; other `tool`
+    # subcommands don't have a fallback so they call boot_rails! directly and
+    # let that exit propagate.
+    def try_boot_for_list
+      boot_rails!
+      true
+    rescue SystemExit
+      false
     end
 
     # Gems that the MCP SDK reads from `Gem.loaded_specs` at tool-call time

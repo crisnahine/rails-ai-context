@@ -250,9 +250,12 @@ module RailsAiContext
           lines = [ "## Key Flows", "" ]
           by_ctrl = routes[:by_controller] || {}
 
-          # Find controllers with most actions (most important flows)
-          internal_prefixes = %w[action_mailbox/ active_storage/ rails/ conductor/ devise/ turbo/]
-          app_ctrls = by_ctrl.reject { |k, _| internal_prefixes.any? { |p| k.downcase.start_with?(p) } }
+          # Find controllers with most actions (most important flows). Uses the
+          # same excluded-prefix config and PUT/PATCH dedup as rails_get_routes
+          # so the route counts the two tools report agree with each other.
+          prefixes = RailsAiContext.configuration.excluded_route_prefixes
+          app_ctrls = by_ctrl.reject { |k, _| prefixes.any? { |p| k.downcase.start_with?(p) } }
+            .transform_values { |route_list| dedupe_put_patch_routes(route_list) }
           top_ctrls = app_ctrls.sort_by { |_, routes_list| -routes_list.size }.first(5)
 
           top_ctrls.each do |ctrl, ctrl_routes|

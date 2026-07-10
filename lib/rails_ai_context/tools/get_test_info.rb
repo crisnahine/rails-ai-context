@@ -240,7 +240,7 @@ module RailsAiContext
                 "- #{line.strip}"
               end
             end
-            return "# #{rel} (#{test_names.size} tests)\n\n#{test_names.join("\n")}"
+            return "# #{rel} (#{test_names.size} #{test_names.size == 1 ? 'test' : 'tests'})\n\n#{test_names.join("\n")}"
           end
 
           return "# #{rel}\n\n```ruby\n#{content}\n```"

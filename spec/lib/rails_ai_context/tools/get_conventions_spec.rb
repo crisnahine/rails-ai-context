@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetConventions do
   before { described_class.reset_cache! }
@@ -155,6 +157,75 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Custom strategy")
+    end
+  end
+
+  describe "App Patterns - create action flow detection" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:controllers_dir) { File.join(tmpdir, "app", "controllers") }
+
+    before do
+      FileUtils.mkdir_p(controllers_dir)
+      allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(described_class).to receive(:cached_context).and_return({ conventions: {} })
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    context "with no auth detected" do
+      before do
+        File.write(File.join(controllers_dir, "posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            def create
+              @post = Post.new(post_params)
+              if @post.save
+                redirect_to @post, notice: "Created!"
+              else
+                render :new, status: :unprocessable_entity
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "shows detected flow lines without a current_user guard" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("### Create Action Pattern (follow this for new actions)")
+        expect(text).to include("PostsController: build → save → redirect/render")
+        expect(text).to include("@record = [Model].new([params_method])")
+        expect(text).not_to include("current_user")
+      end
+    end
+
+    context "with auth (permission checks) detected" do
+      before do
+        File.write(File.join(controllers_dir, "comments_controller.rb"), <<~RUBY)
+          class CommentsController < ApplicationController
+            def create
+              unless can_comment?
+                redirect_to root_path, alert: "Not allowed"
+                return
+              end
+
+              @comment = Comment.new(comment_params)
+              if @comment.save
+                redirect_to @comment, notice: "Created!"
+              else
+                render :new, status: :unprocessable_entity
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "shows the permission-guard skeleton" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("### Create Action Pattern (follow this for new actions)")
+        expect(text).to include("unless current_user.can_[permission]?")
+        expect(text).to include("@record = current_user.[association].build([params_method])")
+      end
     end
   end
 end

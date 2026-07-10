@@ -350,7 +350,7 @@ module RailsAiContext
             test_count = source.each_line.count do |line|
               line.match?(/^\s*(?:test|it|specify)\s+["']/) || line.match?(/^\s*def\s+test_/)
             end
-            lines << "- `#{relative}` (#{test_count} tests)"
+            lines << "- `#{relative}` (#{test_count} #{test_count == 1 ? 'test' : 'tests'})"
           end
           lines << ""
           found

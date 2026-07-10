@@ -91,7 +91,7 @@ module RailsAiContext
           if paginated.empty? && total > 0
             return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
           end
-          lines = [ "# Schema Summary (#{total} tables)", "" ]
+          lines = [ "# Schema Summary (#{total} #{total == 1 ? 'table' : 'tables'})", "" ]
           lines << "**Adapter:** #{schema[:adapter]}" if schema[:adapter]
           paginated.each do |name|
             data = tables[name]
@@ -114,7 +114,7 @@ module RailsAiContext
           if paginated.empty?
             return text_response("No tables at offset #{offset}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
           end
-          lines = [ "# Schema (#{total} tables, showing #{paginated.size})", "" ]
+          lines = [ "# Schema (#{total} #{total == 1 ? 'table' : 'tables'}, showing #{paginated.size})", "" ]
           paginated.each do |name|
             data = tables[name]
             timestamp_cols = %w[id created_at updated_at]
@@ -184,7 +184,7 @@ module RailsAiContext
           if paginated.empty? && total > 0
             return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
           end
-          lines = [ "# Schema Full Detail (#{paginated.size} of #{total} tables)", "" ]
+          lines = [ "# Schema Full Detail (#{paginated.size} of #{total} #{total == 1 ? 'table' : 'tables'})", "" ]
           paginated.each do |name|
             lines << format_table_markdown(name, tables[name])
             lines << ""
