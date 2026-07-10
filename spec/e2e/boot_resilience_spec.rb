@@ -1,0 +1,88 @@
+# frozen_string_literal: true
+
+require_relative "e2e_helper"
+
+# Apps that boot noisily or not at all are a mainstream shape (missing ENV,
+# unreachable services, syntax errors). The gem must respond with a friendly
+# diagnostic - never a raw Thor backtrace - and boot output must never
+# corrupt the stdio JSON-RPC channel. A dedicated app (not the shared
+# fixture) because these examples mutate config/initializers.
+RSpec.describe "E2E: boot resilience", type: :e2e do
+  before(:all) do
+    @builder = E2E::TestAppBuilder.new(
+      parent_dir: E2E.root,
+      name: "boot_resilience_app",
+      install_path: :in_gemfile
+    ).build!
+    @cli = E2E::CliRunner.new(@builder)
+    @initializer_dir = File.join(@builder.app_path, "config", "initializers")
+  end
+
+  def with_initializer(name, content)
+    path = File.join(@initializer_dir, name)
+    File.write(path, content)
+    yield
+  ensure
+    File.delete(path) if File.exist?(path)
+  end
+
+  describe "app that raises during boot" do
+    it "tool command fails with a friendly diagnostic, not a Thor backtrace" do
+      with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING: REDIS_URL is not set"\n)) do
+        result = @cli.cli_tool("schema")
+        expect(result.exit_status).to eq(1), result.to_s
+        expect(result.stderr).to include("failed to boot")
+        expect(result.stderr).to include("FATAL_ENV_MISSING")
+        expect(result.stderr).not_to include("thor")
+      end
+    end
+
+    it "doctor fails with the same friendly diagnostic" do
+      with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING"\n)) do
+        result = @cli.cli("doctor")
+        expect(result.exit_status).to eq(1), result.to_s
+        expect(result.stderr).to include("failed to boot")
+      end
+    end
+
+    it "handles a syntax error in an initializer" do
+      with_initializer("zz_broken_syntax.rb", "def broken(\n") do
+        result = @cli.cli_tool("schema")
+        expect(result.exit_status).to eq(1), result.to_s
+        expect(result.stderr).to include("failed to boot")
+        expect(result.stderr).to match(/SyntaxError|broken_syntax/)
+      end
+    end
+  end
+
+  describe "app that prints to stdout during boot" do
+    it "keeps the stdio MCP handshake parseable" do
+      with_initializer("zz_chatty.rb", %(puts "BOOT NOISE that must not reach stdout"\n)) do
+        client = E2E::McpStdioClient.new(@builder).start!
+        begin
+          response = client.request("initialize", {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "e2e-harness", version: "0.0.0" }
+          })
+          expect(response["result"]).to be_a(Hash), "handshake corrupted: #{response.inspect}"
+
+          client.notify("notifications/initialized")
+          tools = client.request("tools/list")
+          expect(tools.dig("result", "tools")).to be_an(Array)
+        ensure
+          client.stop!
+        end
+      end
+    end
+
+    it "keeps CLI tool stdout parseable in json mode" do
+      with_initializer("zz_chatty.rb", %(puts "BOOT NOISE that must not reach stdout"\n)) do
+        result = @cli.cli_tool("schema", [ "--json" ])
+        expect(result.success?).to be(true), result.to_s
+        expect(result.stdout).not_to include("BOOT NOISE")
+        expect { JSON.parse(result.stdout) }.not_to raise_error
+      end
+    end
+  end
+end
