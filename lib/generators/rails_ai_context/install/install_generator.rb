@@ -1,6 +1,32 @@
 # frozen_string_literal: true
 
 require "json"
+require "thor/line_editor"
+
+# Thor's interactive `ask` reads the line through Reline once the `readline`
+# library is available, and Reline writes cursor control escape sequences
+# (hide/show cursor, clear line) to support in-place editing - it does this
+# even when neither end of the process is attached to a real terminal.
+# Restrict it to genuine TTY sessions so piped or redirected runs (CI, `rails
+# generate ... < /dev/null`, captured logs) get plain prompt text instead of
+# raw escape codes; Thor already falls back to a plain, escape-free reader
+# when this returns false.
+class Thor
+  module LineEditor
+    class Readline
+      def self.available?
+        return false unless $stdin.tty? && $stdout.tty?
+
+        begin
+          require "readline"
+        rescue LoadError
+        end
+
+        Object.const_defined?(:Readline)
+      end
+    end
+  end
+end
 
 module RailsAiContext
   module Generators

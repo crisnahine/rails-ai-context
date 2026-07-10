@@ -230,14 +230,14 @@ class RailsAiContextCLI < Thor
 
       preset = presets[name]
       $stderr.puts "=" * 60
-      $stderr.puts " Preset: #{name} — #{preset[:desc]}"
+      $stderr.puts " Preset: #{name} - #{preset[:desc]}"
       $stderr.puts "=" * 60
       $stderr.puts ""
 
       preset[:tools].each do |tool_spec|
         begin
           $stderr.puts "-" * 40
-          $stderr.puts "Running: #{tool_spec[:name]}"
+          puts "Running: #{tool_spec[:name]}"
           $stderr.puts "-" * 40
           runner = ::RailsAiContext::CLI::ToolRunner.new(
             tool_spec[:name],

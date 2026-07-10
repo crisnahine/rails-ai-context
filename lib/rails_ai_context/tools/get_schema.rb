@@ -97,7 +97,7 @@ module RailsAiContext
             data = tables[name]
             col_count = data[:columns]&.size || 0
             idx_count = data[:indexes]&.size || 0
-            lines << "- **#{name}** - #{col_count} columns, #{idx_count} indexes"
+            lines << "- **#{name}** - #{col_count} #{col_count == 1 ? 'column' : 'columns'}, #{idx_count} #{idx_count == 1 ? 'index' : 'indexes'}"
           end
           if offset + limit < total
             lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more, or `table:\"name\"` for full detail._"

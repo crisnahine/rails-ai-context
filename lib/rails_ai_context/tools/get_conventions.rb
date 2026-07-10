@@ -35,7 +35,7 @@ module RailsAiContext
         if conventions[:directory_structure]&.any?
           lines << "" << "## Directory structure"
           conventions[:directory_structure].sort_by { |k, _| k }.each do |dir, count|
-            lines << "- `#{dir}/` → #{count} files"
+            lines << "- `#{dir}/` → #{count} #{count == 1 ? 'file' : 'files'}"
           end
         end
 
