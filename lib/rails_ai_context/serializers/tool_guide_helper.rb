@@ -190,7 +190,7 @@ module RailsAiContext
         [
           "### Common mistakes - avoid these",
           "",
-          "- **Don't read db/schema.rb** - use `get_schema`. It adds [indexed]/[unique] hints you'd miss.",
+          "- **Don't read #{schema_dump_path}** - use `get_schema`. It adds [indexed]/[unique] hints you'd miss.",
           "- **Don't read model files for reference** - use `get_model_details`. It resolves concerns, inherited methods, and implicit belongs_to validations.",
           "- **Prefer `#{search_tool}` over Grep** for method tracing and cross-layer search. It excludes sensitive files, supports `match_type:\"trace\"`, and paginates.",
           "- **Don't call tools without a target** - `get_model_details()` without `model:` returns a paginated list, not an error. Always specify what you want.",
@@ -208,7 +208,7 @@ module RailsAiContext
             "### Rules",
             "",
             "1. **Use composite tools first** - `#{cli_cmd("context")}` and `#{cli_cmd("analyze_feature")}` before individual tools",
-            "2. **NEVER read reference files** - db/schema.rb, config/routes.rb, model files, test files - tools are better",
+            "2. **NEVER read reference files** - #{schema_dump_path}, config/routes.rb, model files, test files - tools are better",
             "3. **Prefer `#{cli_cmd("search_code")}`** for tracing and cross-layer search - standard search tools are fine for simple targeted lookups",
             "4. **Read files ONLY to Edit them** - not for reference",
             "5. **Validate EVERY edit** - `#{cli_cmd("validate", "files=... level=rails")}`",
@@ -220,7 +220,7 @@ module RailsAiContext
             "### Rules",
             "",
             "1. **Use composite tools first** - `rails_get_context` and `rails_analyze_feature` before individual tools",
-            "2. **NEVER read reference files** - db/schema.rb, config/routes.rb, model files, test files - tools are better",
+            "2. **NEVER read reference files** - #{schema_dump_path}, config/routes.rb, model files, test files - tools are better",
             "3. **Prefer `rails_search_code`** for tracing and cross-layer search - standard search tools are fine for simple targeted lookups",
             "4. **Read files ONLY to Edit them** - not for reference",
             "5. **Validate EVERY edit** - `rails_validate(files:[...], level:\"rails\")`",
@@ -338,6 +338,20 @@ module RailsAiContext
       end
 
       private
+
+      # Apps with `config.active_record.schema_format = :sql` dump the schema
+      # to db/structure.sql instead of db/schema.rb; guidance that names the
+      # wrong file sends the AI hunting for a file that does not exist.
+      def schema_dump_path
+        sql_format = if defined?(ActiveRecord::Base) && ActiveRecord::Base.respond_to?(:schema_format)
+          ActiveRecord::Base.schema_format == :sql
+        end
+        if sql_format.nil?
+          root = defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
+          sql_format = !File.exist?(File.join(root, "db/schema.rb")) && File.exist?(File.join(root, "db/structure.sql"))
+        end
+        sql_format ? "db/structure.sql" : "db/schema.rb"
+      end
 
       # Generate zsh-safe CLI command. In-Gemfile installs go through the rake
       # task (`rails 'ai:tool[name]'`); standalone installs (gem not in the
