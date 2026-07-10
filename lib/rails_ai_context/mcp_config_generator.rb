@@ -169,8 +169,10 @@ module RailsAiContext
         lines << 'command = "rails-ai-context"'
         lines << 'args = ["serve"]'
       else
+        # Same command shape as mcp_json_entry: the CLI binary quarantines app
+        # boot output away from stdout starting before Bundler.require.
         lines << 'command = "bundle"'
-        lines << 'args = ["exec", "rails", "ai:serve"]'
+        lines << 'args = ["exec", "rails-ai-context", "serve"]'
       end
 
       # Codex CLI env_clear()s the process environment. Capture the current Ruby

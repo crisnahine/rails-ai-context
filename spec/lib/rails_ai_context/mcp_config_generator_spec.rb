@@ -79,7 +79,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           content = File.read(path)
           expect(content).to include("[mcp_servers.rails-ai-context]")
           expect(content).to include('command = "bundle"')
-          expect(content).to include('args = ["exec", "rails", "ai:serve"]')
+          expect(content).to include('args = ["exec", "rails-ai-context", "serve"]')
           # Env section captures PATH for Codex sandbox compatibility
           expect(content).to include("[mcp_servers.rails-ai-context.env]")
           expect(content).to include("PATH = ")
