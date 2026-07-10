@@ -15,12 +15,13 @@ module RailsAiContext
       class ToolNotFoundError < StandardError; end
       class InvalidArgumentError < StandardError; end
 
-      attr_reader :tool_class, :raw_args, :json_mode
+      attr_reader :tool_class, :raw_args, :json_mode, :error
 
       def initialize(tool_name, raw_args, json_mode: false)
         @tool_class = resolve_tool(tool_name)
         @raw_args = raw_args
         @json_mode = json_mode
+        @error = false
       end
 
       def run
@@ -128,7 +129,10 @@ module RailsAiContext
         suggestion = Tools::BaseTool.find_closest_match(name, short_names)
         msg = "Unknown tool '#{name}'."
         msg += " Did you mean '#{suggestion}'?" if suggestion
-        msg += "\n\nRun with --list to see all available tools."
+        # This message reaches both the CLI (`--list` works) and the rake
+        # task (`--list` does not - it's a Thor-only option), so name both
+        # working invocations instead of one that fails half the time.
+        msg += "\n\nSee all tools: rails 'ai:tool' (rake) or rails-ai-context tool --list (CLI)."
         raise ToolNotFoundError, msg
       end
 
@@ -273,12 +277,14 @@ module RailsAiContext
         end
       end
 
-      # Extract text from MCP::Tool::Response.
+      # Extract text from MCP::Tool::Response and record whether the tool
+      # reported failure (isError), so callers can set a non-zero exit code.
       def extract_output(response)
         text = response.content.first&.dig(:text) || ""
+        @error = response.respond_to?(:error?) && response.error?
         if json_mode
           require "json"
-          JSON.pretty_generate(tool: tool_class.tool_name, output: text)
+          JSON.pretty_generate(tool: tool_class.tool_name, output: text, error: @error)
         else
           text
         end

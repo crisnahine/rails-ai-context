@@ -18,6 +18,20 @@ RSpec.describe "E2E: tool input edge cases", type: :e2e do
       expect(result.success?).to be(false)
       expect(result.output).to match(/Unknown tool|did you mean/i)
     end
+
+    it "the CLI hint (`rails-ai-context tool not_a_tool`) shows both working list invocations" do
+      result = @cli.cli_tool("not_a_tool")
+      expect(result.success?).to be(false), result.to_s
+      expect(result.output).to include("rails 'ai:tool'")
+      expect(result.output).to include("rails-ai-context tool --list")
+    end
+
+    it "the rake hint (`rails ai:tool[tests]`) exits non-zero and shows both working list invocations, not a bare --list" do
+      result = @cli.rake_tool("tests")
+      expect(result.success?).to be(false), result.to_s
+      expect(result.output).to include("rails 'ai:tool'")
+      expect(result.output).to include("rails-ai-context tool --list")
+    end
   end
 
   describe "unknown parameter" do

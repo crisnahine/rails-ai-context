@@ -332,6 +332,7 @@ namespace :ai do
 
     runner = RailsAiContext::CLI::ToolRunner.new(name, params, json_mode: json_mode)
     puts runner.run
+    exit 1 if runner.error
   rescue RailsAiContext::CLI::ToolRunner::ToolNotFoundError => e
     $stderr.puts "Error: #{e.message}"
     exit 1

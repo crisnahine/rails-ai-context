@@ -50,10 +50,17 @@ module RailsAiContext
       mcp_config = MCP::Configuration.new(
         # Anything that still escapes a tool (schema validation bugs, SDK-level
         # failures) gets a stderr backtrace instead of vanishing into a bare
-        # JSON-RPC internal error.
+        # JSON-RPC internal error. Routine protocol-level errors (unknown
+        # tool, invalid params) are expected traffic, not bugs - the mcp gem
+        # already turns them into a proper JSON-RPC error response, so here
+        # they get one quiet line instead of a scary 10-line backtrace.
         exception_reporter: lambda { |exception, _server_context|
-          $stderr.puts "[rails-ai-context] unhandled exception: #{exception.class}: #{exception.message}"
-          Array(exception.backtrace).first(10).each { |line| $stderr.puts "    #{line}" }
+          if exception.is_a?(MCP::Server::RequestHandlerError) && exception.error_type != :internal_error
+            $stderr.puts "[rails-ai-context] request error (#{exception.error_type}): #{exception.message}"
+          else
+            $stderr.puts "[rails-ai-context] unhandled exception: #{exception.class}: #{exception.message}"
+            Array(exception.backtrace).first(10).each { |line| $stderr.puts "    #{line}" }
+          end
         },
         instrumentation_callback: Instrumentation.callback
       )

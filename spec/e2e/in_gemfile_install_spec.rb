@@ -104,6 +104,12 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       result = @cli.cli("inspect")
       expect(result.success?).to be(true), result.to_s
     end
+
+    it "an unknown command exits non-zero without a Thor deprecation warning" do
+      result = @cli.cli("frobnicate")
+      expect(result.success?).to be(false), result.to_s
+      expect(result.stderr).not_to match(/exit_on_failure/)
+    end
   end
 
   describe "CLI tool invocations" do

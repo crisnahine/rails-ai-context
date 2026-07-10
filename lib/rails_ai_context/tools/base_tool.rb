@@ -238,6 +238,10 @@ module RailsAiContext
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
         def find_closest_match(input, available)
           return nil if available.empty?
+          # A blank query matches everything via substring ("".include? anything),
+          # so it would otherwise surface an arbitrary "Did you mean" suggestion
+          # for input that isn't a typo at all - just missing.
+          return nil if input.to_s.strip.empty?
           downcased = input.downcase
           underscored = input.underscore.downcase
 

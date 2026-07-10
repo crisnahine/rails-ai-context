@@ -110,6 +110,14 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
         .to raise_error(described_class::ToolNotFoundError, /Unknown tool/)
     end
 
+    it "points to both the rake and CLI ways to list tools, not a rake-incompatible --list flag" do
+      expect { described_class.new("nonexistent", []) }
+        .to raise_error(described_class::ToolNotFoundError) { |e|
+          expect(e.message).to include("rails 'ai:tool'")
+          expect(e.message).to include("rails-ai-context tool --list")
+        }
+    end
+
     it "suggests close matches on typo" do
       expect { described_class.new("schem", []) }
         .to raise_error(described_class::ToolNotFoundError, /Did you mean/)
@@ -186,6 +194,41 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       parsed = JSON.parse(output)
       expect(parsed["tool"]).to eq("rails_get_conventions")
       expect(parsed["output"]).to be_a(String)
+    end
+
+    it "includes error: false for a successful call" do
+      runner = described_class.new("conventions", [], json_mode: true)
+      output = runner.run
+      expect(JSON.parse(output)["error"]).to eq(false)
+    end
+  end
+
+  describe "#error" do
+    it "defaults to false before any call" do
+      runner = described_class.new("conventions", [])
+      expect(runner.error).to eq(false)
+    end
+
+    it "stays false for a successful tool call" do
+      runner = described_class.new("conventions", [])
+      runner.run
+      expect(runner.error).to eq(false)
+    end
+
+    it "stays false for an informational not-found response (deliberate non-goal)" do
+      # "Model not found" is a friendly text response, not an isError result -
+      # scripts should not treat it as a failure worth a non-zero exit.
+      runner = described_class.new("model_details", [ "--model", "TotallyNotAModel" ])
+      output = runner.run
+      expect(output).to include("not found")
+      expect(runner.error).to eq(false)
+    end
+
+    it "becomes true when the tool response reports isError" do
+      runner = described_class.new("conventions", [])
+      response = instance_double(MCP::Tool::Response, content: [ { type: "text", text: "boom" } ], error?: true)
+      runner.send(:extract_output, response)
+      expect(runner.error).to eq(true)
     end
   end
 

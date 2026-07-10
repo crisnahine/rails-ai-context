@@ -14,6 +14,14 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       result = described_class.call(model: "NonExistentModel")
       expect(result).to be_a(MCP::Tool::Response)
     end
+
+    it "does not offer a fuzzy suggestion for a blank model param" do
+      # An empty model: "" means "missing", not "typo" - it must not fuzzy-match
+      # the first model in the app just because "".include?(anything) is true.
+      result = described_class.call(model: "")
+      text = result.content.first[:text]
+      expect(text).not_to include("Did you mean")
+    end
   end
 
   describe "cross_reference_ivars" do

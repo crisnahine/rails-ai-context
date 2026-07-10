@@ -20,6 +20,13 @@ require "yaml"
 # Top-level class to avoid conflict with RailsAiContext::CLI module (which contains ToolRunner).
 # The library uses RailsAiContext::CLI as a module namespace; this exe needs a class for Thor.
 class RailsAiContextCLI < Thor
+    # Without this, Thor exits 0 on an unrecognized command (and warns on
+    # stderr that it will default to exit 1 in Thor 2.0). Scripts and AI
+    # agents rely on a non-zero exit to detect a bad command.
+    def self.exit_on_failure?
+      true
+    end
+
     # Let Thor pass unknown options through to ToolRunner for the tool command
     stop_on_unknown_option! :tool
 
@@ -51,6 +58,7 @@ class RailsAiContextCLI < Thor
 
       runner = ::RailsAiContext::CLI::ToolRunner.new(name, args, json_mode: json_mode)
       puts runner.run
+      exit 1 if runner.error
     rescue SystemExit
       raise # let exit() propagate (from boot_rails!)
     rescue StandardError, ScriptError => e
