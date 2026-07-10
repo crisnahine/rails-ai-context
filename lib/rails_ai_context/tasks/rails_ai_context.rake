@@ -614,7 +614,7 @@ namespace :ai do
         cols = meta[:columns]&.size || 0
         indexes = meta[:indexes]&.size || 0
         fks = meta[:foreign_keys]&.size || 0
-        puts "- #{name} (#{cols} cols, #{indexes} indexes, #{fks} FKs)"
+        puts "- #{name} (#{cols} cols, #{indexes} #{indexes == 1 ? 'index' : 'indexes'}, #{fks} #{fks == 1 ? 'FK' : 'FKs'})"
       end
       puts ""
     end
