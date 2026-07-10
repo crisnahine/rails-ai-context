@@ -48,6 +48,13 @@ module RailsAiContext
       end
 
       mcp_config = MCP::Configuration.new(
+        # Anything that still escapes a tool (schema validation bugs, SDK-level
+        # failures) gets a stderr backtrace instead of vanishing into a bare
+        # JSON-RPC internal error.
+        exception_reporter: lambda { |exception, _server_context|
+          $stderr.puts "[rails-ai-context] unhandled exception: #{exception.class}: #{exception.message}"
+          Array(exception.backtrace).first(10).each { |line| $stderr.puts "    #{line}" }
+        },
         instrumentation_callback: Instrumentation.callback
       )
 

@@ -19,6 +19,7 @@ module RailsAiContext
       def self.inherited(subclass)
         super
         subclass.instance_variable_set(:@abstract, false)
+        subclass.singleton_class.prepend(SafeCall)
         # Thread-safe append. Mutex is NOT held during eager_load!'s const_get
         # (which triggers inherited), so no recursive locking risk here.
         BaseTool.registry_mutex.synchronize { BaseTool.descendants << subclass }
@@ -28,9 +29,12 @@ module RailsAiContext
         attr_reader :descendants, :registry_mutex
 
         # Mark a tool class as abstract (excluded from registration).
+        # Reaches back to BaseTool explicitly: registry_mutex/descendants are
+        # ivars on the BaseTool object, and a subclass calling this method
+        # has no ivar storage of its own to read them from.
         def abstract!
           @abstract = true
-          registry_mutex.synchronize { descendants.delete(self) }
+          BaseTool.registry_mutex.synchronize { BaseTool.descendants.delete(self) }
         end
 
         def abstract?
