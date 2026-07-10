@@ -13,7 +13,7 @@ require_relative "e2e_helper"
 # walks, and model-file parsing volume. Bumping to 1500 burned ~3x the
 # time for linear-scan behavior already stressed at 500.
 #
-# Running all 38 tools against 500 models would still take minutes. We
+# Running all 39 tools against 500 models would still take minutes. We
 # sample the tools most likely to scale poorly: schema (DB walk),
 # model_details (model walk), routes (routes walk), context/onboard
 # (aggregate), analyze_feature (multi-dir scans), turbo_map (model +

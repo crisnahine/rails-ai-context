@@ -270,6 +270,7 @@ module RailsAiContext
         [ 'rails_dependency_graph(model:"X")', "dependency_graph", "model=X", "Model association graph as Mermaid diagram" ],
         [ 'rails_migration_advisor(action:"X", table:"Y")', "migration_advisor", "action=X table=Y", "Generate migration code, flag irreversible ops" ],
         [ "rails_get_frontend_stack", "frontend_stack", nil, "React/Vue/Svelte/Angular, Inertia, TypeScript, package manager" ],
+        [ "rails_get_api", "api", nil, "API layer: api_only mode, serializers, GraphQL, versioning, rate limiting, CORS, pagination" ],
         [ 'rails_search_docs(query:"X")', "search_docs", "query=X", "Bundled topic index with weighted keyword search, on-demand GitHub fetch" ],
         [ 'rails_query(sql:"X")', "query", "sql=X", "Safe read-only SQL queries with timeout, row limit, column redaction" ],
         [ 'rails_read_logs(level:"X")', "read_logs", "level=X", "Reverse file tail with level filtering and sensitive data redaction" ],
