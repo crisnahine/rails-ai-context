@@ -20,7 +20,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
           entry = content["mcpServers"]["rails-ai-context"]
           expect(entry["command"]).to eq("bundle")
-          expect(entry["args"]).to eq([ "exec", "rails", "ai:serve" ])
+          expect(entry["args"]).to eq([ "exec", "rails-ai-context", "serve" ])
         end
       end
 
@@ -50,7 +50,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
           entry = content["servers"]["rails-ai-context"]
           expect(entry["command"]).to eq("bundle")
-          expect(entry["args"]).to eq([ "exec", "rails", "ai:serve" ])
+          expect(entry["args"]).to eq([ "exec", "rails-ai-context", "serve" ])
         end
       end
 
@@ -64,7 +64,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
           entry = content["mcp"]["rails-ai-context"]
           expect(entry["type"]).to eq("local")
-          expect(entry["command"]).to eq([ "bundle", "exec", "rails", "ai:serve" ])
+          expect(entry["command"]).to eq([ "bundle", "exec", "rails-ai-context", "serve" ])
           expect(entry).not_to have_key("args")
         end
       end

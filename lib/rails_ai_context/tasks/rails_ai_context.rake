@@ -465,7 +465,12 @@ namespace :ai do
   end
 
   desc "Start the MCP server (stdio transport, auto-discovered by configured AI tools)"
-  task serve: :environment do
+  task :serve do
+    # Boot inside the task so app boot output (initializer puts, deprecation
+    # warnings) is quarantined to stderr - stdout carries the JSON-RPC stream.
+    RailsAiContext::OutputGuard.quarantine_stdout do
+      Rake::Task["environment"].invoke
+    end
     require "rails_ai_context"
 
     RailsAiContext.start_mcp_server(transport: :stdio)
