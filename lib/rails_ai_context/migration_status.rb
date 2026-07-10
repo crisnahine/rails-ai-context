@@ -42,10 +42,11 @@ module RailsAiContext
         return ActiveRecord::MigrationContext.new(migrate_dir, pool.schema_migration, pool.internal_metadata)
       end
 
-      # Rails 7.0: migration_context lived on the connection, not the pool.
-      conn = ActiveRecord::Base.connection
-      return conn.migration_context if conn.respond_to?(:migration_context)
-
+      # Rails 7.0: MigrationContext.new(migrations_paths, schema_migration =
+      # SchemaMigration) - construct with OUR migrate_dir for the same reason
+      # as above. The connection's own migration_context resolves the app's
+      # configured migrations_paths and ignores the directory being asked
+      # about, silently reporting zero pending migrations.
       ActiveRecord::MigrationContext.new(migrate_dir)
     end
   end
