@@ -2,10 +2,15 @@
 
 require "zeitwerk"
 
+# Provide Data.define on Ruby 3.1 (no-op on 3.2+) before any value object is
+# autoloaded. Defines a top-level constant, so it stays outside Zeitwerk.
+require_relative "rails_ai_context/polyfill/data"
+
 loader = Zeitwerk::Loader.for_gem(warn_on_extra_files: false)
 loader.inflector.inflect("devops_introspector" => "DevOpsIntrospector", "cli" => "CLI", "vfs" => "VFS")
 loader.ignore("#{__dir__}/generators")
 loader.ignore("#{__dir__}/rails-ai-context.rb")
+loader.ignore("#{__dir__}/rails_ai_context/polyfill")
 loader.setup
 
 module RailsAiContext

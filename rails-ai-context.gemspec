@@ -23,7 +23,7 @@ Gem::Specification.new do |spec|
   spec.homepage      = "https://github.com/crisnahine/rails-ai-context"
   spec.license       = "MIT"
 
-  spec.required_ruby_version = ">= 3.2.0"
+  spec.required_ruby_version = ">= 3.1.0"
 
   spec.metadata["homepage_uri"]      = spec.homepage
   spec.metadata["source_code_uri"]   = "#{spec.homepage}/tree/main"
@@ -60,12 +60,12 @@ Gem::Specification.new do |spec|
 
   # Core dependencies
   spec.add_dependency "mcp", ">= 0.8", "< 2.0"    # Official MCP Ruby SDK; schemas read via Tool#to_h (stable 0.8 to 1.x)
-  spec.add_dependency "railties", ">= 7.1", "< 9.0"
+  spec.add_dependency "railties", ">= 7.0", "< 9.0"
   spec.add_dependency "thor", ">= 1.0", "< 3.0"
   spec.add_dependency "zeitwerk", "~> 2.6"         # Autoloading
 
   # AST foundation (Phase 1: Ground Truth Engine)
-  spec.add_dependency "prism", ">= 0.28"           # Ruby parser - stdlib in 3.3+, gem for 3.2
+  spec.add_dependency "prism", ">= 0.28"           # Ruby parser - stdlib in 3.3+, gem for 3.1-3.2
   spec.add_dependency "concurrent-ruby", ">= 1.2"  # Thread-safe AST cache via Concurrent::Map
 
   # Dev dependencies
