@@ -232,6 +232,34 @@ RSpec.describe RailsAiContext::Tools::Query do
       # apply_row_limit uses [limit, HARD_ROW_CAP].min, so effective_limit = 1000
       expect(result).to include("LIMIT 1000")
     end
+
+    # SHOW/DESCRIBE/EXPLAIN are inherently bounded and don't accept a LIMIT
+    # clause - appending one turns a valid, explicitly-allowed statement into
+    # a syntax error on MySQL/Postgres.
+    it "does not append LIMIT to SHOW" do
+      result = described_class.send(:apply_row_limit, "SHOW TABLES", 100)
+      expect(result).to eq("SHOW TABLES")
+    end
+
+    it "does not append LIMIT to DESCRIBE" do
+      result = described_class.send(:apply_row_limit, "DESCRIBE products", 100)
+      expect(result).to eq("DESCRIBE products")
+    end
+
+    it "does not append LIMIT to DESC (DESCRIBE alias)" do
+      result = described_class.send(:apply_row_limit, "DESC products", 100)
+      expect(result).to eq("DESC products")
+    end
+
+    it "does not append LIMIT to EXPLAIN" do
+      result = described_class.send(:apply_row_limit, "EXPLAIN SELECT * FROM users", 100)
+      expect(result).to eq("EXPLAIN SELECT * FROM users")
+    end
+
+    it "matches SHOW/DESCRIBE/EXPLAIN case-insensitively with leading whitespace" do
+      result = described_class.send(:apply_row_limit, "  show tables", 100)
+      expect(result).to eq("  show tables")
+    end
   end
 
   describe ".call" do
@@ -689,6 +717,73 @@ RSpec.describe RailsAiContext::Tools::Query do
       result = described_class.call(sql: "INSERT INTO users (email) VALUES ('x')", explain: true)
       text = result.content.first[:text]
       expect(text).to include("Blocked")
+    end
+  end
+
+  describe "Trilogy adapter dispatch" do
+    # Rails 8's default MySQL adapter reports adapter_name "Trilogy", not
+    # "Mysql2". Every place that dispatches on adapter name must match both,
+    # or Trilogy apps silently skip the READ ONLY transaction + statement
+    # timeout and fall through to the unsafe "unknown adapter" path.
+    before do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("Trilogy")
+    end
+
+    it "routes regular queries through the MySQL safety wrapper, not the unknown-adapter fallback" do
+      fake_result = ActiveRecord::Result.new(%w[x], [ [ 1 ] ])
+      expect(described_class).to receive(:execute_mysql).and_return(fake_result)
+
+      result = described_class.call(sql: "SELECT 1 AS x")
+      expect(result.content.first[:text]).to include("1")
+    end
+
+    it "issues EXPLAIN FORMAT=TRADITIONAL (not the bare EXPLAIN MySQL 8.3+/9.x would render as TREE)" do
+      explain_result = ActiveRecord::Result.new(
+        %w[id select_type table type possible_keys key key_len ref rows filtered Extra],
+        [ [ 1, "SIMPLE", "products", "ALL", nil, nil, nil, nil, 5, 100.0, "" ] ]
+      )
+      expect(described_class).to receive(:execute_mysql)
+        .with(anything, a_string_matching(/\AEXPLAIN FORMAT=TRADITIONAL SELECT/), anything)
+        .and_return(explain_result)
+
+      result = described_class.call(sql: "SELECT * FROM products WHERE sku = 'x'", explain: true)
+      text = result.content.first[:text]
+      expect(text).to include("EXPLAIN Analysis")
+      expect(text).to include("full table scan")
+    end
+  end
+
+  describe "redaction skip for schema-metadata statements" do
+    # MySQL's DESCRIBE returns a literal column named "Key" (PRI/UNI/MUL) -
+    # not actual secret data, but it matches the generic sensitive-suffix
+    # heuristic (ends_with "key") used to redact real query results, so
+    # DESCRIBE/SHOW/EXPLAIN output must skip column-name-based redaction
+    # entirely.
+    it "does not redact DESCRIBE's Key column" do
+      fake_result = ActiveRecord::Result.new(
+        %w[Field Type Null Key Default Extra],
+        [ [ "id", "bigint", "NO", "PRI", nil, "auto_increment" ] ]
+      )
+      expect(described_class).to receive(:execute_sqlite).and_return(fake_result)
+
+      result = described_class.call(sql: "DESCRIBE products")
+      text = result.content.first[:text]
+      expect(text).to include("PRI")
+      expect(text).not_to include("REDACTED")
+    end
+
+    it "still redacts sensitive columns for plain SELECT queries" do
+      # "cache_key" ends with the generic sensitive suffix "key" but isn't in
+      # the pre-execution textual blocklist, so it reaches post-execution
+      # redaction rather than being rejected outright - unlike DESCRIBE's
+      # "Key" column, this one really is a data column and must be redacted.
+      fake_result = ActiveRecord::Result.new(%w[id cache_key], [ [ 1, "sekret" ] ])
+      expect(described_class).to receive(:execute_sqlite).and_return(fake_result)
+
+      result = described_class.call(sql: "SELECT id, cache_key FROM users")
+      text = result.content.first[:text]
+      expect(text).to include("REDACTED")
+      expect(text).not_to include("sekret")
     end
   end
 

@@ -100,5 +100,32 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(annotations.read_only_hint).to eq(true)
       expect(annotations.destructive_hint).to eq(false)
     end
+
+    describe "cache section coherence (MemoryStore)" do
+      it "shows real MemoryStore stats instead of the generic not-available message" do
+        allow(Rails).to receive(:cache).and_return(ActiveSupport::Cache::MemoryStore.new)
+
+        result = described_class.call(section: "cache")
+        text = result.content.first[:text]
+        expect(text).to include("MemoryStore")
+        expect(text).to include("entries=")
+        expect(text).not_to include("Stats not available for MemoryStore")
+      end
+    end
+  end
+
+  describe ".gather_table_sizes (private)" do
+    # Rails 8's default MySQL adapter reports adapter_name "Trilogy", not
+    # "Mysql2" - matching only /mysql/ here would silently drop table sizes
+    # for every Trilogy app (returns nil instead of querying INFORMATION_SCHEMA).
+    it "queries INFORMATION_SCHEMA.TABLES for the trilogy adapter" do
+      conn = double("connection")
+      allow(conn).to receive(:select_all)
+        .with(a_string_matching(/INFORMATION_SCHEMA\.TABLES/))
+        .and_return([ { "name" => "products", "bytes" => 1024 } ])
+
+      result = described_class.send(:gather_table_sizes, conn, "trilogy")
+      expect(result).to eq([ { name: "products", bytes: 1024 } ])
+    end
   end
 end

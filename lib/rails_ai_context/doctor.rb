@@ -75,16 +75,11 @@ module RailsAiContext
     end
 
     def check_pending_migrations
-      return nil unless defined?(ActiveRecord::Base) && ActiveRecord::Base.connected?
+      return nil unless defined?(ActiveRecord::Base)
 
-      context = ActiveRecord::MigrationContext.new(File.join(app.root, "db/migrate"))
-      pending = if context.respond_to?(:pending_migrations)
-        # Rails 7.1+
-        context.pending_migrations
-      else
-        # Rails 7.0 and earlier
-        ActiveRecord::Migrator.new(:up, context.migrations).pending_migrations
-      end
+      pending = RailsAiContext::MigrationStatus.pending(File.join(app.root, "db/migrate"))
+      return nil unless pending
+
       if pending.empty?
         Check.new(name: "Pending migrations", status: :pass, message: "No pending migrations", fix: nil)
       else
@@ -92,10 +87,6 @@ module RailsAiContext
           message: "#{pending.size} pending migration(s) - schema data will be stale",
           fix: "Run `rails db:migrate`")
       end
-    rescue => e
-      $stderr.puts "[rails-ai-context] check_pending_migrations failed: #{e.message}" if ENV["DEBUG"]
-      # Can't check pending migrations in this environment
-      nil
     end
 
     def check_models

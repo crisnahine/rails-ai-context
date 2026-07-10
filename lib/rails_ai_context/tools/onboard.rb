@@ -577,7 +577,7 @@ module RailsAiContext
             if gems_data.is_a?(Hash) && !gems_data[:error]
               notable = gems_data[:notable_gems] || []
               adapter = "PostgreSQL" if notable.any? { |g| g[:name] == "pg" }
-              adapter = "MySQL" if notable.any? { |g| g[:name] == "mysql2" }
+              adapter = "MySQL" if notable.any? { |g| %w[mysql2 trilogy].include?(g[:name]) }
               adapter = "SQLite" if notable.any? { |g| g[:name] == "sqlite3" }
             end
           end

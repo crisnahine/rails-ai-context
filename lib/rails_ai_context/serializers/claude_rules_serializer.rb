@@ -74,7 +74,7 @@ module RailsAiContext
         lines = [
           "---",
           "paths:",
-          '  - "db/schema.rb"',
+          "  - \"#{schema_reference_path}\"",
           '  - "db/migrate/**"',
           "---",
           "",
@@ -150,6 +150,21 @@ module RailsAiContext
         end
 
         lines.join("\n")
+      end
+
+      # Apps with `config.active_record.schema_format = :sql` dump the schema
+      # to db/structure.sql instead of db/schema.rb - the auto-attach glob
+      # above must point at whichever file the app actually has, or this
+      # rule never triggers on a :sql app since db/schema.rb is never opened.
+      def schema_reference_path
+        root = defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
+
+        sql_format = if defined?(ActiveRecord::Base) && ActiveRecord::Base.respond_to?(:schema_format)
+          ActiveRecord::Base.schema_format == :sql
+        end
+        sql_format = !File.exist?(File.join(root, "db/schema.rb")) && File.exist?(File.join(root, "db/structure.sql")) if sql_format.nil?
+
+        sql_format ? "db/structure.sql" : "db/schema.rb"
       end
 
       def render_models_reference

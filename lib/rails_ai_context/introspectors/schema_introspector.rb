@@ -184,12 +184,10 @@ module RailsAiContext
       end
 
       def current_schema_version
-        if File.exist?(schema_file_path)
-          content = RailsAiContext::SafeFile.read(schema_file_path, max_size: RailsAiContext.configuration.max_schema_file_size)
-          return nil unless content
-          match = content.match(/version:\s*([\d_]+)/)
-          match ? match[1].delete("_") : nil
-        end
+        RailsAiContext::SchemaVersion.current(app.root.to_s)
+      rescue => e
+        $stderr.puts "[rails-ai-context] current_schema_version failed: #{e.message}" if ENV["DEBUG"]
+        nil
       end
 
       def schema_file_path
