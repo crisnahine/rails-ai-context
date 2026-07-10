@@ -24,14 +24,15 @@ module RailsAiContext
       def self.call(detail: "standard", server_context: nil)
         ctx = cached_context
 
-        case detail
+        body = case detail
         when "quick"
-          text_response(compose_quick(ctx))
+          compose_quick(ctx)
         when "full"
-          text_response(compose_full(ctx))
+          compose_full(ctx)
         else
-          text_response(compose_standard(ctx))
+          compose_standard(ctx)
         end
+        text_response("#{body}#{introspection_warnings_note(ctx)}")
       rescue => e
         text_response("Onboard error: #{e.message}")
       end

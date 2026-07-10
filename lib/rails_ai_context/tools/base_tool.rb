@@ -223,6 +223,18 @@ module RailsAiContext
           text_response(lines.join("\n"))
         end
 
+        # One-line banner listing introspectors that failed during context
+        # generation. Aggregate tools append this so AI clients know which
+        # sections are missing rather than empty.
+        def introspection_warnings_note(ctx)
+          warnings = ctx.is_a?(Hash) ? ctx[:_warnings] : nil
+          return nil unless warnings.is_a?(Array) && warnings.any?
+
+          failed = warnings.map { |w| w[:introspector] }.compact.join(", ")
+          "\n\n---\n_Partial context: introspection failed for #{failed}. " \
+            "Data from those sections is missing, not empty._"
+        end
+
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
         def find_closest_match(input, available)
           return nil if available.empty?

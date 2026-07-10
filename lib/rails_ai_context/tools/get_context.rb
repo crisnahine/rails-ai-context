@@ -54,7 +54,11 @@ module RailsAiContext
         if include.is_a?(Array) && include.any?
           base_text = result.content.first[:text]
           extra = append_includes(include)
-          return text_response(base_text + extra)
+          result = text_response(base_text + extra)
+        end
+
+        if (note = introspection_warnings_note(begin; cached_context; rescue StandardError; nil; end))
+          result = text_response(result.content.first[:text] + note)
         end
 
         result
