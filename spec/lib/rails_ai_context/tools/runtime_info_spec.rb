@@ -60,7 +60,7 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
     it "handles graceful degradation when Sidekiq not loaded" do
       result = described_class.call(section: "jobs")
       text = result.content.first[:text]
-      expect(text).to include("not loaded")
+      expect(text).to match(/only implemented for Sidekiq|no queue adapter detected/)
     end
 
     context "when ActiveRecord is not defined" do

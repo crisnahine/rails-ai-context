@@ -54,18 +54,18 @@ module RailsAiContext
           schema = ctx[:schema]
           if schema.is_a?(Hash) && !schema[:error]
             table_count = schema[:total_tables] || 0
-            stats << "#{table_count} tables" if table_count > 0
+            stats << count_phrase(table_count, "table") if table_count > 0
           end
 
           models = ctx[:models]
           if models.is_a?(Hash) && !models[:error] && models.any?
-            stats << "#{models.size} models"
+            stats << count_phrase(models.size, "model")
           end
 
           jobs = ctx[:jobs]
           if jobs.is_a?(Hash) && !jobs[:error]
             job_count = (jobs[:jobs] || []).size
-            stats << "#{job_count} jobs" if job_count > 0
+            stats << count_phrase(job_count, "job") if job_count > 0
           end
 
           parts << "- #{stats.join(', ')}" if stats.any?
@@ -128,7 +128,7 @@ module RailsAiContext
           if schema.is_a?(Hash) && !schema[:error]
             # Prefer live adapter from config over static_parse from schema introspector
             adapter = resolve_db_adapter(ctx, schema)
-            db = "#{adapter} (#{schema[:total_tables]} tables)"
+            db = "#{adapter} (#{count_phrase(schema[:total_tables].to_i, 'table')})"
           else
             db = "unknown"
           end
@@ -160,24 +160,28 @@ module RailsAiContext
 
           lines = [ "## Data Model", "" ]
           top = central_models(models, 7)
-          lines << "The app has #{models.size} models. The central ones are:"
+          central_intro = models.size == 1 ? "" : " The central ones are:"
+          lines << "The app has #{count_phrase(models.size, 'model')}.#{central_intro}"
           lines << ""
 
           top.each do |name|
             data = models[name]
             next unless data.is_a?(Hash) && !data[:error]
             assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }
-            val_count = (data[:validations] || []).size
+            validations = data[:validations] || []
             desc = "**#{name}**"
             desc += " (table: `#{data[:table_name]}`)" if data[:table_name]
             desc += " - #{assocs.first(4).join(', ')}" if assocs.any?
             desc += ", +#{assocs.size - 4} more" if assocs.size > 4
-            desc += ". #{val_count} validations." if val_count > 0
+            if validations.any?
+              implicit_note = all_implicit_belongs_to_validations?(data) ? " (implicit belongs_to)" : ""
+              desc += ". #{count_phrase(validations.size, 'validation')}#{implicit_note}."
+            end
             lines << "- #{desc}"
           end
 
           remaining = models.size - top.size
-          lines << "- _...and #{remaining} more models._" if remaining > 0
+          lines << "- _...and #{remaining} more #{remaining == 1 ? 'model' : 'models'}._" if remaining > 0
           lines << ""
           lines
         end
@@ -265,14 +269,16 @@ module RailsAiContext
           end
 
           lines << ""
-          # total_routes counts every route incl. framework engines (action_mailbox,
-          # active_storage, etc.), so pairing it with the app-controller count
-          # misrepresents the app (e.g. "46 routes across 3 controllers"). Report
-          # the app route count and note the framework total separately.
+          # A single "total" invites mismatches with `rails routes` (the router
+          # also holds internal and controller-less routes we never report), so
+          # count app routes and framework-engine routes separately - both from
+          # the same by_controller data, with the same PUT/PATCH dedup.
           app_route_count = app_ctrls.values.sum { |route_list| route_list.size }
-          total = routes[:total_routes].to_i
-          framework_note = total > app_route_count ? " (#{total} total including framework routes)" : ""
-          lines << "Total: #{app_route_count} app routes across #{app_ctrls.size} controllers#{framework_note}."
+          framework_count = by_ctrl
+            .select { |k, _| prefixes.any? { |p| k.downcase.start_with?(p) } }
+            .values.sum { |route_list| dedupe_put_patch_routes(route_list).size }
+          framework_note = framework_count > 0 ? " (plus #{count_phrase(framework_count, 'framework route')})" : ""
+          lines << "Total: #{count_phrase(app_route_count, 'app route')} across #{count_phrase(app_ctrls.size, 'controller')}#{framework_note}."
           lines << ""
           lines
         end
@@ -289,10 +295,10 @@ module RailsAiContext
           lines = [ "## Background Jobs & Async", "" ]
           if job_list.any?
             names = job_list.map { |j| j[:name] || j[:class_name] }.compact.first(8)
-            lines << "#{job_list.size} background jobs: #{names.join(', ')}#{job_list.size > 8 ? ', ...' : ''}."
+            lines << "#{count_phrase(job_list.size, 'background job')}: #{names.join(', ')}#{job_list.size > 8 ? ', ...' : ''}."
           end
-          lines << "#{mailers.size} mailers." if mailers.any?
-          lines << "#{channels.size} Action Cable channels." if channels.any?
+          lines << "#{count_phrase(mailers.size, 'mailer')}." if mailers.any?
+          lines << "#{count_phrase(channels.size, 'Action Cable channel')}." if channels.any?
           lines << ""
           lines
         end
@@ -320,7 +326,7 @@ module RailsAiContext
             count = stimulus[:total_controllers] || stimulus[:controllers]&.size || 0
             if count > 0
               lines << "## Frontend" << "" unless has_content
-              lines << "Stimulus: #{count} controllers for interactive behavior."
+              lines << "Stimulus: #{count_phrase(count, 'controller')} for interactive behavior."
               has_content = true
             end
           end
@@ -352,7 +358,7 @@ module RailsAiContext
 
           factories = tests[:factories]
           fixtures = tests[:fixtures]
-          lines << "Data setup: #{factories ? "FactoryBot (#{factories[:count]} factories)" : fixtures ? "fixtures (#{fixtures[:count]} files)" : "inline"}."
+          lines << "Data setup: #{factories ? "FactoryBot (#{count_phrase(factories[:count].to_i, 'factory')})" : fixtures ? "fixtures (#{count_phrase(fixtures[:count].to_i, 'file')})" : "inline"}."
 
           ci = tests[:ci_config]
           lines << "CI: #{ci.join(', ')}." if ci&.any?
@@ -368,6 +374,9 @@ module RailsAiContext
 
         def section_getting_started(ctx)
           test_cmd = (ctx[:tests].is_a?(Hash) && ctx[:tests][:framework] == "rspec") ? "bundle exec rspec" : "rails test"
+          # bin/dev only exists in apps generated with a JS/CSS watcher;
+          # recommending it elsewhere sends readers to a missing script.
+          server_cmd = File.exist?(Rails.root.join("bin", "dev")) ? "bin/dev  # or rails server" : "rails server"
           [
             "## Getting Started", "",
             "```bash",
@@ -375,7 +384,7 @@ module RailsAiContext
             "cd #{ctx[:app_name]&.underscore || 'app'}",
             "bundle install",
             "rails db:setup",
-            "bin/dev  # or rails server",
+            server_cmd,
             "#{test_cmd}  # verify everything works",
             "```", ""
           ]
@@ -557,6 +566,31 @@ module RailsAiContext
         end
 
         # ── Helpers ──────────────────────────────────────────────────────
+
+        # "1 model" / "3 models" - raw interpolation reads wrong at count 1
+        def count_phrase(count, noun)
+          "#{count} #{count == 1 ? noun : noun.pluralize}"
+        end
+
+        # True when every validation on the model is the presence validator
+        # ActiveRecord adds automatically for required belongs_to associations.
+        # Those aren't hand-written rules, so the count deserves a qualifier.
+        def all_implicit_belongs_to_validations?(data)
+          validations = data[:validations] || []
+          return false if validations.empty?
+
+          belongs_to_names = (data[:associations] || [])
+            .select { |a| a.is_a?(Hash) && a[:type].to_s == "belongs_to" }
+            .map { |a| a[:name].to_s }
+          return false if belongs_to_names.empty?
+
+          validations.all? do |v|
+            next false unless v.is_a?(Hash)
+            kind = (v[:kind] || v["kind"]).to_s
+            attrs = Array(v[:attributes] || v["attributes"]).map(&:to_s)
+            kind == "presence" && attrs.any? && attrs.all? { |attr| belongs_to_names.include?(attr) }
+          end
+        end
 
         # Resolve the DB adapter name, preferring live config over schema introspection
         def resolve_db_adapter(ctx, schema)

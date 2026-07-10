@@ -67,7 +67,8 @@ module RailsAiContext
             all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
             suggestion = find_closest_match(ctrl_lower, all_dirs)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
-            return text_response("No views for '#{controller}'.#{hint} Directories with views: #{all_dirs.join(', ')}")
+            dirs_note = all_dirs.any? ? " Directories with views: #{all_dirs.join(', ')}" : " No view directories found (API-only apps typically have none)."
+            return text_response("No views for '#{controller}'.#{hint}#{dirs_note}")
           end
 
           templates = filtered_templates

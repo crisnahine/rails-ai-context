@@ -48,8 +48,12 @@ module RailsAiContext
         by_controller = routes[:by_controller] || {}
         offset = [ offset.to_i, 0 ].max
 
-        # Filter out internal Rails routes by default
+        # Filter out internal Rails routes by default, remembering how many
+        # were dropped so headers can say the count is app-only, not the total.
+        excluded_framework_count = 0
         if app_only
+          framework_ctrls = by_controller.select { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
+          excluded_framework_count = framework_ctrls.values.sum { |actions| dedupe_put_patch_routes(actions).size }
           by_controller = by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
         end
 
@@ -65,6 +69,10 @@ module RailsAiContext
         # Combine PUT/PATCH duplicates (Rails generates both for update routes)
         by_controller = by_controller.transform_values { |actions| dedupe_put_patch_routes(actions) }
         filtered_total = by_controller.values.sum(&:size)
+        count_label = "#{filtered_total} #{filtered_total == 1 ? 'route' : 'routes'}"
+        if excluded_framework_count > 0 && controller.nil?
+          count_label += ", excluding #{excluded_framework_count} framework #{excluded_framework_count == 1 ? 'route' : 'routes'}"
+        end
 
         case detail
         when "summary"
@@ -72,7 +80,7 @@ module RailsAiContext
           app_routes = controller ? by_controller : by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
           framework_routes = controller ? {} : by_controller.select { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
 
-          lines = [ "# Routes Summary (#{filtered_total} routes)", "" ]
+          lines = [ "# Routes Summary (#{count_label})", "" ]
 
           # Group sibling routes with identical verb patterns (e.g., bonus/*)
           grouped = app_routes.keys.sort.group_by do |ctrl|
@@ -120,7 +128,7 @@ module RailsAiContext
           flat_routes = app_routes.sort.flat_map { |ctrl, actions| actions.map { |r| r.merge(_ctrl: ctrl) } }
           page = paginate(flat_routes, offset: offset, limit: limit, default_limit: 150)
 
-          lines = [ "# Routes (#{filtered_total} routes)", "" ]
+          lines = [ "# Routes (#{count_label})", "" ]
           current_ctrl = nil
 
           page[:items].each do |r|
@@ -165,7 +173,7 @@ module RailsAiContext
           flat_routes = by_controller.sort.flat_map { |ctrl, actions| actions.map { |r| r.merge(_ctrl: ctrl) } }
           page = paginate(flat_routes, offset: offset, limit: limit, default_limit: 200)
 
-          lines = [ "# Routes Full Detail (#{filtered_total} routes)", "" ]
+          lines = [ "# Routes Full Detail (#{count_label})", "" ]
           lines << "| Verb | Path | Controller#Action | Name |"
           lines << "|------|------|-------------------|------|"
           page[:items].each do |r|

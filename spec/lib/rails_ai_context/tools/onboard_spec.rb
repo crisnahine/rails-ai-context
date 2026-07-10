@@ -190,7 +190,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         RailsAiContext::Tools::GetRoutes.reset_cache!
 
         routes_text = RailsAiContext::Tools::GetRoutes.call(detail: "standard").content.first[:text]
-        routes_total = routes_text[/# Routes \((\d+) routes\)/, 1].to_i
+        routes_total = routes_text[/# Routes \((\d+) route/, 1].to_i
         expect(routes_total).to be > 0
 
         onboard_text = described_class.call(detail: "standard").content.first[:text]

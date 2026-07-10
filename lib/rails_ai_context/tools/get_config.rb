@@ -6,7 +6,7 @@ module RailsAiContext
       tool_name "rails_get_config"
       description "Get Rails app configuration: cache store, session store, timezone, queue adapter, custom middleware, initializers. " \
         "Use when: configuring caching, checking session/queue setup, or seeing what initializers exist. " \
-        "No parameters needed. Returns only non-default middleware and notable initializers."
+        "No parameters needed. Returns non-default middleware and all initializers."
 
       input_schema(properties: {})
 
@@ -66,16 +66,12 @@ module RailsAiContext
         end
 
         if data[:initializers]&.any?
-          # Filter out standard Rails initializers that every app has
-          standard_inits = %w[
-            content_security_policy.rb filter_parameter_logging.rb
-            inflections.rb permissions_policy.rb assets.rb
-            new_framework_defaults.rb cors.rb wrap_parameters.rb
-          ]
-          notable = data[:initializers].reject { |i| standard_inits.include?(i) }
-          if notable.any?
-            lines << "" << "## Initializers"
-            notable.each { |i| lines << "- `#{i}`" }
+          # List every initializer - stock ones often carry active code
+          # (filter_parameter_logging, assets), so hiding them misleads.
+          lines << "" << "## Initializers"
+          data[:initializers].each do |i|
+            note = initializer_note(i)
+            lines << (note ? "- `#{i}` - #{note}" : "- `#{i}`")
           end
         end
 
@@ -85,6 +81,37 @@ module RailsAiContext
         end
 
         text_response(lines.join("\n"))
+      end
+
+      # One-line descriptions for initializers Rails generates in every app.
+      STOCK_INITIALIZER_NOTES = {
+        "assets.rb" => "asset pipeline paths/version",
+        "content_security_policy.rb" => "Content-Security-Policy headers",
+        "cors.rb" => "cross-origin request rules",
+        "filter_parameter_logging.rb" => "hides sensitive params in logs",
+        "inflections.rb" => "custom singular/plural rules",
+        "permissions_policy.rb" => "browser feature permissions",
+        "wrap_parameters.rb" => "JSON params wrapping"
+      }.freeze
+
+      # A short note for a config/initializers file: flags files that are
+      # entirely commented out, otherwise describes known stock initializers.
+      private_class_method def self.initializer_note(name)
+        path = Rails.root.join("config", "initializers", name).to_s
+        if File.exist?(path)
+          content = RailsAiContext::SafeFile.read(path)
+          if content
+            active = content.each_line.any? do |line|
+              stripped = line.strip
+              !stripped.empty? && !stripped.start_with?("#")
+            end
+            return "all commented out" unless active
+          end
+        end
+        return "framework default toggles" if name.start_with?("new_framework_defaults")
+        STOCK_INITIALIZER_NOTES[name]
+      rescue StandardError
+        nil
       end
 
       private_class_method def self.detect_database

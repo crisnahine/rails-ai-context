@@ -291,7 +291,13 @@ module RailsAiContext
               lines << "_Sidekiq stats error: #{e.message}_"
             end
           else
-            lines << "_Sidekiq not loaded. Queue stats unavailable._"
+            # Name the adapter the app actually uses so "no stats" reads as a
+            # tool limitation, not as the app having no queue backend.
+            if adapter_name.start_with?("not ")
+              lines << "_Queue stats unavailable: no queue adapter detected._"
+            else
+              lines << "_Live queue stats are only implemented for Sidekiq; this app uses the #{adapter_name} adapter._"
+            end
           end
 
           lines << ""

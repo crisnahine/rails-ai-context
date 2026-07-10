@@ -602,66 +602,7 @@ namespace :ai do
     require "rails_ai_context"
 
     context = RailsAiContext.introspect
-    app_name = context[:app_name] || Rails.application.class.module_parent_name
-
-    puts "# #{app_name} - Schema Facts"
-    puts "# Generated: #{Time.now.strftime('%Y-%m-%d %H:%M')}"
-    puts ""
-
-    # Tables overview
-    if context[:schema] && !context[:schema][:error]
-      tables = context[:schema][:tables] || {}
-      puts "## Tables (#{tables.size})"
-      tables.each do |name, meta|
-        cols = meta[:columns]&.size || 0
-        indexes = meta[:indexes]&.size || 0
-        fks = meta[:foreign_keys]&.size || 0
-        puts "- #{name} (#{cols} cols, #{indexes} #{indexes == 1 ? 'index' : 'indexes'}, #{fks} #{fks == 1 ? 'FK' : 'FKs'})"
-      end
-      puts ""
-    end
-
-    # Associations
-    if context[:models] && !context[:models][:error]
-      puts "## Associations"
-      context[:models].each do |model_name, meta|
-        next if meta[:error]
-        assocs = meta[:associations] || []
-        next if assocs.empty?
-        grouped = assocs.group_by { |a| a[:type] || a["type"] }
-        parts = grouped.map do |type, list|
-          names = list.map { |a| a[:name] || a["name"] }
-          "#{type} :#{names.join(', :')}"
-        end
-        puts "- #{model_name}: #{parts.join(' | ')}"
-      end
-      puts ""
-    end
-
-    # Gems / dependencies
-    if context[:gems] && !context[:gems][:error]
-      notable = context[:gems][:gems]&.select { |g| g[:category] != "other" }&.first(15)
-      if notable&.any?
-        puts "## Key Dependencies"
-        notable.each do |g|
-          puts "- #{g[:name]} (#{g[:category]})"
-        end
-        puts ""
-      end
-    end
-
-    # Architecture
-    if context[:conventions] && !context[:conventions][:error]
-      arch = context[:conventions][:architecture] || []
-      if arch.any?
-        puts "## Architecture"
-        arch.each { |a| puts "- #{a}" }
-        puts ""
-      end
-    end
-
-    puts "---"
-    puts "Run `rails ai:inspect` for full JSON introspection."
+    puts RailsAiContext::FactsFormatter.render(context, inspect_hint: "rails ai:inspect")
   end
 
   desc "Run diagnostic checks and report AI readiness score"
