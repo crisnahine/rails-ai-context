@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `rails_query` no longer fails on MySQL with `Transaction characteristics can't be changed while a transaction is in progress`. `execute_mysql` issued `SET TRANSACTION READ ONLY` inside `conn.transaction`, but Rails materializes the lazy `BEGIN` before the first in-block statement, so MySQL (error 1568) rejected the SET on every call -- a 100% failure rate for plain queries and `explain: true`. The SET now runs before the transaction opens; without `GLOBAL`/`SESSION` scope it applies only to the next transaction, which the query transaction immediately consumes, so the read-only guard still holds and nothing leaks onto the pooled connection. PostgreSQL (where `SET TRANSACTION` applies to the current transaction) and SQLite are unaffected. (#89)
+
 ## [5.12.0] - 2026-06-29
 
 ### Fixed
