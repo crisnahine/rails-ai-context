@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.14.0] - 2026-07-11
+
+### Added
+
+- **New `rails_get_api` tool (CLI: `api`)** exposing the API-layer introspection that was previously invisible on demand: API-only mode, serialization strategy (Jbuilder templates, serializer classes), GraphQL, versioning, rate limiting, OpenAPI specs, CORS, and pagination. On API-only apps the API layer was the least-served layer while six view tools returned nothing; this closes that gap. Tool count is now 39.
+- **`doctor --strict`** exits 1 when any check fails, giving CI a real gate. Default behavior is unchanged: doctor is a readiness report and exits 0.
+- **`rails_generate_test` scaffolds tests that pass out of the box.** Generated controller tests use the app's real routes, fixtures, and strong params; destroy tests create a fresh record instead of deleting a fixture row other fixtures hold foreign keys on; create/update params mutate values for columns backed by a unique index (a fixture's own value would collide). Verified by running the generated tests for real on scaffold HTML and API-only JSON controllers.
 
 ### Added - Boot resilience
 
@@ -46,6 +52,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The install generator no longer emits raw terminal escape sequences (cursor hide/show, line clears) when stdin or stdout isn't a real terminal (`rails generate rails_ai_context:install < /dev/null`, captured CI logs). Thor's line editor now falls back to its plain, escape-free reader outside a genuine interactive TTY session.
 - **The generated initializer no longer crashes `bin/rails test` on path:/git: Gemfile installs scoped to `group :development`.** Bundler evaluates a path:/git: gemspec in-process during dependency resolution in every environment, so `require_relative "lib/rails_ai_context/version"` defines a VERSION-only stub `RailsAiContext` module even in environments where `Bundler.require` correctly skips the gem. The initializer's `if defined?(RailsAiContext)` guard was satisfied by that stub and called `.configure` on it anyway, raising `NoMethodError`. The guard now also checks `RailsAiContext.respond_to?(:configure)`; re-running the install generator upgrades an existing initializer's bare guard in place, and `doctor` warns when one is still on the old guard.
 - **`DEBUGGER__::TrapInterceptor` no longer shows up as a model concern.** The `debug` gem, default in Rails 7.0+ Gemfiles, prepends this module onto `Kernel`, so it appeared in every model's ancestors. It's now excluded the same way other framework-internal modules are.
+- **The `rails-ai-context://routes/{controller}` MCP resource returns real routes.** It filtered a flat `:routes` list that the route introspector never emits (routes are grouped under `:by_controller`), so every read returned an empty array. It now reads the real shape, merges the controller name back into each entry, and dedupes PUT/PATCH update pairs into one `PATCH|PUT` entry so the resource reports the same counts as the routes tool.
+- MCP resource contents use the spec field name `mimeType` instead of snake_case `mime_type`.
+- **Rails-internal routes are excluded correctly.** The route introspector guarded on `route.respond_to?(:internal?)`, but `ActionDispatch::Journey::Route` exposes the flag as a plain `internal` attribute, so the guard never matched and Rails' info/mailers/welcome routes leaked into route listings as "framework routes". The tool and the MCP resource now agree on route counts, and the routes header notes how many framework routes were excluded.
+- **`.mcp.json` content is stable across entry points.** The standalone `init` wrote `rails-ai-context serve` while the in-Gemfile generator and `ai:context` rake task wrote `bundle exec rails-ai-context serve`, so alternating commands rewrote the file on every run. All writers now derive the command from the detected install mode.
+- **`rails_validate` failures exit non-zero.** A failed validation ("0/1 files passed", real Prism diagnostics) is now an MCP error result, so the CLI exits 1 and CI can gate on it; passing validations still exit 0. `rails_query`'s genuine SQL execution errors (unknown column, syntax error) get the same treatment, while policy guardrail messages ("Blocked: contains UPDATE") remain informational at exit 0.
+- `rails-ai-context preset bogus` exits 1 with the available-presets list instead of exiting 0.
+- **`rails_get_conventions` renders the status symbol actually detected in the app's controllers** (`:unprocessable_content` on Rails 7.1+ scaffolds) instead of hardcoding `:unprocessable_entity` in a skeleton labeled "Detected in".
+- `rails_get_frontend_stack` reads the introspector's real output keys, so the Framework and Testing lines (React/Vue/Jest and friends) render again; they had been silently dropped for every app.
+- `rails_search_code` marks match lines with a `>` prefix and indents context lines, so matches are distinguishable in captured output; a legend line explains the markers.
+- `rails_diagnose` classifies an undefined method on a model by checking the model's real associations and columns, reporting "no association or column named X" instead of the generic nil-reference guidance.
+- `rails_review_changes` no longer leaks git's raw "fatal: not a git repository" stderr line above its own friendly message when run outside a repository.
+- The config tool lists every file in `config/initializers/`, not just the gem's own initializer.
+- CLI copy is install-mode aware everywhere: `tool --list`, per-tool help, unknown-tool errors, and the generated git pre-commit hook show only invocation forms that exist in the current install (standalone installs have no rake tasks). The `tree` command shows the binary name as its root and `inspect` under its public name.
+- Assorted output honesty from the final QA sweep: onboard only recommends `bin/dev` when the app has one, names the real queue adapter instead of mentioning Sidekiq on non-Sidekiq apps, labels implicit `belongs_to` validations as such, and pluralizes counts correctly; the view tool omits its "Directories with views:" enumeration when there are none; the standalone `facts` command matches the rake task's singular/plural forms and prints `_none_` instead of a bare Associations header; `rails_get_partial_interface` no longer lists ERB block parameters (`|form|`, `|error|`) as partial locals.
 
 ## [5.13.0] - 2026-07-10
 

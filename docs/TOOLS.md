@@ -2,7 +2,7 @@
 
 # MCP Tools Reference
 
-**All 38 read-only tools, with every parameter.**
+**All 39 read-only tools, with every parameter.**
 
 [Quickstart](QUICKSTART.md) · [Recipes](RECIPES.md) · [Custom Tools](CUSTOM_TOOLS.md) · [CLI Reference](CLI.md)
 
@@ -59,7 +59,7 @@ Individual lookup tools accept a **`detail`** parameter: `summary` (compact), `s
 | [Controllers & Routes](#controllers--routes) | `get_controllers`, `get_routes` |
 | [Views & Frontend](#views--frontend) | `get_view`, `get_stimulus`, `get_partial_interface`, `get_turbo_map`, `get_frontend_stack` |
 | [Testing & Quality](#testing--quality) | `get_test_info`, `generate_test`, `validate`, `security_scan`, `performance_check` |
-| [App Config & Services](#app-config--services) | `get_conventions`, `get_config`, `get_gems`, `get_env`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog` |
+| [App Config & Services](#app-config--services) | `get_api`, `get_conventions`, `get_config`, `get_gems`, `get_env`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog` |
 | [Data & Debugging](#data--debugging) | `dependency_graph`, `migration_advisor`, `search_docs`, `query`, `read_logs`, `diagnose`, `review_changes`, `runtime_info`, `session_context` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
@@ -302,6 +302,14 @@ N+1 query risks, missing indexes, missing counter_cache, eager load candidates.
 ---
 
 ## App Config & Services
+
+### `rails_get_api`
+
+API layer: api_only mode, serialization strategy (Jbuilder, serializers), GraphQL, versioning, rate limiting, OpenAPI specs, CORS, pagination.
+
+| Parameter | Type | Default | Description |
+|:----------|:-----|:--------|:------------|
+| `detail` | enum | `standard` | `summary` (one-liner), `standard` (per-area breakdown), `full` (adds OpenAPI spec paths) |
 
 ### `rails_get_conventions`
 

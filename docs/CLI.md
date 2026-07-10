@@ -17,7 +17,7 @@
 | In-Gemfile (Rake) | `rails ai:` | `rails 'ai:tool[schema]' table=users` |
 | Standalone (Thor) | `rails-ai-context` | `rails-ai-context tool schema --table users` |
 
-Both provide the same 38 tools and functionality.
+Both provide the same 39 tools and functionality.
 
 ---
 
