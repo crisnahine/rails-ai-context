@@ -34,7 +34,10 @@ module RailsAiContext
         app.routes_reloader&.execute_if_updated rescue nil
 
         app.routes.routes.filter_map do |route|
-          next if route.respond_to?(:internal?) && route.internal?
+          # Journey::Route exposes the flag as a plain attribute reader
+          # (`internal`), not a predicate - a respond_to?(:internal?) guard
+          # never matches and would let Rails' info/mailers routes through.
+          next if route.respond_to?(:internal) && route.internal
           next if route.defaults[:controller].blank?
 
           route_path = route.path.spec.to_s.gsub("(.:format)", "")

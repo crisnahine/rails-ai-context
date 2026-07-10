@@ -440,9 +440,9 @@ module RailsAiContext
 
         # Merge duplicate PUT/PATCH entries for the same path+action into a
         # single "PATCH|PUT" entry (Rails generates both for every `resources`
-        # update route). Shared so route counts stay consistent across every
-        # tool that reports how many routes an app has.
-        def dedupe_put_patch_routes(actions)
+        # update route). Public: the VFS routes resource uses it too, so route
+        # counts stay consistent across every surface that reports them.
+        public def dedupe_put_patch_routes(actions)
           deduped = []
           actions.each do |r|
             existing = deduped.find { |d| d[:path] == r[:path] && d[:action] == r[:action] }

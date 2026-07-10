@@ -184,12 +184,14 @@ module RailsAiContext
         # The route introspector groups routes as {controller_name => [entries]}
         # under :by_controller (there is no flat :routes list). Entries omit the
         # controller because it is the grouping key, so merge it back in to keep
-        # each row self-describing in the flattened output.
+        # each row self-describing in the flattened output. PUT/PATCH update
+        # pairs merge into one PATCH|PUT entry so this resource reports the
+        # same counts as the routes tool.
         by_controller = routes_data[:by_controller] || {}
         routes = by_controller.flat_map { |name, entries|
           next [] unless name.to_s.include?(controller)
 
-          Array(entries).map { |entry| entry.merge(controller: name.to_s) }
+          Tools::BaseTool.dedupe_put_patch_routes(Array(entries)).map { |entry| entry.merge(controller: name.to_s) }
         }
 
         data = { filtered_by: controller, total_routes: routes.size, routes: routes }
