@@ -145,6 +145,7 @@ class RailsAiContextCLI < Thor
     end
 
     desc "doctor", "Run diagnostic checks and report AI readiness score"
+    option :strict, type: :boolean, default: false, desc: "Exit 1 when any check fails (CI gate)"
     def doctor
       boot_rails!(context: "doctor")
       result = ::RailsAiContext::Doctor.new.run
@@ -159,6 +160,12 @@ class RailsAiContextCLI < Thor
       end
       $stderr.puts ""
       $stderr.puts "AI Readiness Score: #{result[:score]}/100"
+
+      failed = result[:checks].count { |c| c.status == :fail }
+      if options[:strict] && failed > 0
+        $stderr.puts "#{failed} check#{'s' unless failed == 1} failed (--strict)"
+        exit 1
+      end
     end
 
     desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml and .mcp.json)"

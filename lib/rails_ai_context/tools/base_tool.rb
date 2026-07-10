@@ -351,6 +351,18 @@ module RailsAiContext
           end
         end
 
+        # Helper: wrap text in an MCP::Tool::Response flagged as an error
+        # (isError: true) so MCP clients and the CLI treat the call as failed
+        # (non-zero exit). Mirrors the SafeCall rescue wrapper. Use for genuine
+        # execution failures only - policy blocks and guidance messages stay
+        # informational via text_response.
+        def error_response(text)
+          # A failed call must not leak its recorded params into the next
+          # call's session entry.
+          Thread.current[:rails_ai_context_call_params] = nil
+          MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
+        end
+
         private
 
         def session_key(tool_name, params)

@@ -5,13 +5,15 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::GetFrontendStack do
   before { described_class.reset_cache! }
 
+  # Mirrors the shape FrontendFrameworkIntrospector actually emits:
+  # frameworks: is a hash of framework symbol => version requirement,
+  # testing: and state_management: are arrays, mounting_strategy: a symbol.
   let(:frontend_data) do
     {
-      framework: "React",
-      version: "19.0.0",
-      mounting_strategy: "Inertia",
-      build_tool: "Vite",
-      state_management: "Zustand",
+      frameworks: { react: "^19.0.0" },
+      mounting_strategy: :inertia,
+      build_tool: "vite",
+      state_management: %w[Zustand],
       package_manager: "yarn",
       typescript: {
         enabled: true,
@@ -22,12 +24,13 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
           "@hooks" => "src/hooks"
         }
       },
-      testing_frameworks: %w[Vitest React-Testing-Library],
+      testing: %w[Vitest React-Testing-Library],
       frontend_roots: [
         { path: "app/frontend", component_count: 32 },
         { path: "app/frontend/admin", component_count: 15 }
       ],
       monorepo: {
+        detected: true,
         tool: "yarn workspaces",
         workspaces: %w[packages/ui packages/shared]
       },
@@ -278,7 +281,7 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
     context "with minimal data" do
       it "handles missing optional fields gracefully" do
         allow(described_class).to receive(:cached_context).and_return({
-          frontend_frameworks: { framework: "Vue", version: "3.4.0" }
+          frontend_frameworks: { frameworks: { vue: "3.4.0" } }
         })
         result = described_class.call(detail: "full")
         text = result.content.first[:text]
@@ -290,9 +293,22 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         expect(text).not_to include("Build Plugins")
       end
 
+      it "does not render a Monorepo section for the always-present undetected monorepo hash" do
+        allow(described_class).to receive(:cached_context).and_return({
+          frontend_frameworks: {
+            frameworks: { vue: "3.4.0" },
+            monorepo: { detected: false, tool: nil, workspaces: [] }
+          }
+        })
+        result = described_class.call(detail: "full")
+        text = result.content.first[:text]
+
+        expect(text).not_to include("Monorepo")
+      end
+
       it "returns a summary without component count when no roots" do
         allow(described_class).to receive(:cached_context).and_return({
-          frontend_frameworks: { framework: "Vue", version: "3.4.0", build_tool: "Vite" }
+          frontend_frameworks: { frameworks: { vue: "3.4.0" }, build_tool: "vite" }
         })
         result = described_class.call(detail: "summary")
         text = result.content.first[:text]
@@ -307,14 +323,13 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
       let(:empty_frontend_data) do
         {
           frontend_roots: [],
-          framework: nil,
-          version: nil,
+          frameworks: {},
           mounting_strategy: nil,
           build_tool: nil,
           state_management: [],
           package_manager: nil,
           typescript: { enabled: false },
-          testing_frameworks: []
+          testing: []
         }
       end
 
@@ -342,13 +357,13 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
       let(:hotwire_only_data) do
         {
           frontend_roots: [],
-          framework: nil,
+          frameworks: {},
           mounting_strategy: nil,
           build_tool: nil,
           state_management: [],
           package_manager: nil,
           typescript: { enabled: false },
-          testing_frameworks: []
+          testing: []
         }
       end
 

@@ -683,5 +683,14 @@ namespace :ai do
 
     puts ""
     puts "AI Readiness Score: #{result[:score]}/100"
+
+    # STRICT=1 turns doctor into a CI gate: exit 1 when any check fails.
+    if %w[1 true yes].include?(ENV["STRICT"].to_s.downcase)
+      failed = result[:checks].count { |c| c.status == :fail }
+      if failed > 0
+        puts "#{failed} check#{'s' unless failed == 1} failed (STRICT mode)"
+        exit 1
+      end
+    end
   end
 end

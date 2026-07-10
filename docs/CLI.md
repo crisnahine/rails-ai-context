@@ -98,6 +98,8 @@ Run 23 diagnostic checks and report AI readiness score.
 ```bash
 rails ai:doctor
 rails-ai-context doctor
+rails-ai-context doctor --strict   # exit 1 when any check fails (CI gate)
+rails ai:doctor STRICT=1           # rake equivalent
 ```
 
 Checks include: schema existence, pending migrations, model files, routes, MCP config validity, introspector health, ripgrep availability, Prism gem, Brakeman gem, listen gem, gitignore security, auto_mount security, schema size, view count, and more.

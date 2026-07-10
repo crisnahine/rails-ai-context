@@ -231,6 +231,9 @@ module RailsAiContext
         end
 
         def classify_error(parsed)
+          model_specific = classify_undefined_method_on_model(parsed)
+          return model_specific if model_specific
+
           error_str = "#{parsed[:exception_class]} #{parsed[:message]}"
 
           ERROR_CLASSIFICATIONS.each do |pattern, info|
@@ -242,6 +245,82 @@ module RailsAiContext
             likely: "Unable to automatically classify this error. Review the full error message and stack trace.",
             fix: "1. Check the error message for clues about what went wrong\n2. Use `rails_search_code` to find the failing code\n3. Use `rails_read_logs(level:\"ERROR\")` for more context"
           }
+        end
+
+        # Patterns that name the receiver of a NoMethodError:
+        #   "undefined method 'x' for an instance of Article"  (Ruby 3.3+)
+        #   "undefined method `x' for #<Article id: 1>"        (Ruby <= 3.2)
+        #   "undefined method 'x' for class Article"           (class receiver, 3.3+)
+        #   "undefined method `x' for Article:Class"           (class receiver, <= 3.2)
+        RECEIVER_PATTERNS = [
+          /for an instance of ([A-Z]\w*(?:::\w+)*)/,
+          /for #<([A-Z]\w*(?:::\w+)*)/,
+          /for class ([A-Z]\w*(?:::\w+)*)/,
+          /for ([A-Z]\w*(?:::\w+)*):Class/
+        ].freeze
+
+        # An undefined method on an ActiveRecord model deserves a schema-aware
+        # diagnosis instead of the generic nil-receiver advice: check the
+        # method against the model's real associations, columns, and declared
+        # methods, and say directly when none of them define it. Returns nil
+        # (falling through to the generic classifications) when the receiver
+        # is not a known model or the method does exist on it.
+        def classify_undefined_method_on_model(parsed)
+          method_name = parsed[:method_name]
+          return nil unless method_name
+          return nil unless parsed[:message].to_s.match?(/undefined method/)
+
+          receiver = extract_receiver_class(parsed[:message].to_s)
+          return nil unless receiver
+
+          models = cached_context[:models]
+          return nil unless models.is_a?(Hash)
+          model_data = models[receiver]
+          return nil unless model_data.is_a?(Hash) && !model_data[:error]
+
+          known = known_model_methods(model_data)
+          # "published?" / "save!" resolve through the bare attribute name, so
+          # compare without the trailing punctuation too.
+          base_name = method_name.to_s.sub(/[?!]\z/, "")
+          return nil if known.include?(base_name) || known.include?(method_name.to_s)
+
+          suggestion = find_closest_match(base_name, known)
+          likely = "No association/column named `#{base_name}` on #{receiver}. " \
+                   "The model defines neither an association nor an attribute with that name, " \
+                   "so the method does not exist."
+          likely += " Did you mean `#{suggestion}`?" if suggestion
+
+          {
+            type: :undefined_method_on_model,
+            likely: likely,
+            fix: "1. Run `rails_get_model_details(model:\"#{receiver}\")` to see #{receiver}'s real associations and columns\n" \
+                 "2. Check for a typo in the method name or a missing association declaration (has_many/belongs_to)\n" \
+                 "3. If the data lives on another model, add the association or a delegate"
+          }
+        end
+
+        def extract_receiver_class(message)
+          RECEIVER_PATTERNS.each do |pattern|
+            if (m = message.match(pattern))
+              return m[1]
+            end
+          end
+          nil
+        end
+
+        # Everything legitimately callable on the model that introspection
+        # knows about: associations, table columns, and declared methods.
+        def known_model_methods(model_data)
+          names = Array(model_data[:associations]).filter_map { |a| (a[:name] || a["name"])&.to_s }
+          names += Array(model_data[:instance_methods]).map(&:to_s)
+          names += Array(model_data[:class_methods]).map(&:to_s)
+          names += Array(model_data[:scopes]).filter_map { |s| s.is_a?(Hash) ? (s[:name] || s["name"])&.to_s : s.to_s }
+
+          table = model_data[:table_name].to_s
+          columns = cached_context.dig(:schema, :tables, table, :columns)
+          names += Array(columns).filter_map { |c| (c[:name] || c["name"])&.to_s }
+
+          names.uniq
         end
 
         def gather_context(parsed, classification, file, line, action) # rubocop:disable Metrics

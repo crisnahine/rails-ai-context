@@ -189,10 +189,14 @@ module RailsAiContext
         elsif e.message.match?(/could not find|does not exist|Unknown database/i)
           text_response("Database not found: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Run `bin/rails db:create` to create the database\n- Check `config/database.yml` for the correct database name\n- Try `RAILS_ENV=test` if the development DB is remote")
         else
-          text_response("SQL error: #{clean_error_message(e.message)}")
+          # Genuine execution failure (unknown column, bad table, syntax
+          # error) - flag as an error result so MCP clients and the CLI
+          # (exit 1) treat it as failed. Policy blocks ("Blocked: ...") and
+          # unavailable-database guidance stay informational above.
+          error_response("SQL error: #{clean_error_message(e.message)}")
         end
       rescue => e
-        text_response("Query failed: #{clean_error_message(e.message)}")
+        error_response("Query failed: #{clean_error_message(e.message)}")
       end
 
       # ── SQL comment stripping ───────────────────────────────────────

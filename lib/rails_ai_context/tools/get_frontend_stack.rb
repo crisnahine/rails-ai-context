@@ -49,9 +49,10 @@ module RailsAiContext
 
         def build_summary(data)
           parts = []
-          parts << "#{data[:framework]}#{version_suffix(data[:version])}" if data[:framework].present?
-          parts << data[:mounting_strategy] if data[:mounting_strategy].present?
-          parts << data[:build_tool] if data[:build_tool].present?
+          framework = framework_label(data)
+          parts << framework if framework
+          parts << display_name(data[:mounting_strategy]) if data[:mounting_strategy].present?
+          parts << display_name(data[:build_tool]) if data[:build_tool].present?
 
           if data[:typescript].is_a?(Hash) && data[:typescript][:enabled]
             parts << "TypeScript"
@@ -107,9 +108,10 @@ module RailsAiContext
         def build_standard(data)
           lines = [ "# Frontend Stack", "" ]
 
-          lines << "- **Framework:** #{data[:framework]}#{version_suffix(data[:version])}" if data[:framework]
-          lines << "- **Mounting strategy:** #{data[:mounting_strategy]}" if data[:mounting_strategy]
-          lines << "- **Build tool:** #{data[:build_tool]}" if data[:build_tool]
+          framework = framework_label(data)
+          lines << "- **Framework:** #{framework}" if framework
+          lines << "- **Mounting strategy:** #{display_name(data[:mounting_strategy])}" if data[:mounting_strategy]
+          lines << "- **Build tool:** #{display_name(data[:build_tool])}" if data[:build_tool]
           # state_management is an array for JS-framework apps and a string for
           # others; an empty array is truthy in Ruby, so guard on presence and
           # join arrays to avoid rendering a literal "[]".
@@ -131,9 +133,9 @@ module RailsAiContext
           end
 
           # Testing frameworks
-          has_testing = data[:testing_frameworks].is_a?(Array) && data[:testing_frameworks].any?
+          has_testing = data[:testing].is_a?(Array) && data[:testing].any?
           if has_testing
-            lines << "- **Testing:** #{data[:testing_frameworks].join(', ')}"
+            lines << "- **Testing:** #{data[:testing].join(', ')}"
           end
 
           # Hotwire stack - enrich with Stimulus/Turbo data for importmap apps.
@@ -149,7 +151,7 @@ module RailsAiContext
           # Hotwire, no frontend directories. Without this check the only
           # line printed would be "TypeScript: disabled," which reads as if
           # a JS frontend exists that simply opted out of TypeScript.
-          no_frontend_evidence = !data[:framework] && !data[:mounting_strategy] && !data[:build_tool] &&
+          no_frontend_evidence = !framework && !data[:mounting_strategy] && !data[:build_tool] &&
             !state_management.present? && !data[:package_manager] && !ts_enabled &&
             !has_testing && !has_hotwire && !has_frontend_roots
 
@@ -191,8 +193,10 @@ module RailsAiContext
             end
           end
 
-          # Monorepo info
-          if data[:monorepo].is_a?(Hash) && data[:monorepo].any?
+          # Monorepo info. The introspector always emits the monorepo hash
+          # (with detected:/tool:/workspaces: keys), so key presence alone
+          # doesn't mean a monorepo exists - require an actual tool.
+          if data[:monorepo].is_a?(Hash) && data[:monorepo][:tool]
             lines << "" << "## Monorepo" << ""
             lines << "- **Tool:** #{data[:monorepo][:tool]}" if data[:monorepo][:tool]
             if data[:monorepo][:workspaces].is_a?(Array) && data[:monorepo][:workspaces].any?
@@ -219,8 +223,23 @@ module RailsAiContext
           lines.join("\n")
         end
 
-        def version_suffix(version)
-          version ? " #{version}" : ""
+        # The introspector emits frameworks as a hash of framework symbol =>
+        # package.json version requirement (e.g. { react: "^19.0.0" }), not a
+        # singular framework/version pair. Render the primary (first) entry,
+        # stripping range operators from the version.
+        def framework_label(data)
+          frameworks = data[:frameworks]
+          return nil unless frameworks.is_a?(Hash) && frameworks.any?
+
+          sym, version = frameworks.first
+          label = display_name(sym)
+          clean_version = version.to_s.delete("^0-9.")
+          clean_version.empty? ? label : "#{label} #{clean_version}"
+        end
+
+        # :vite_rails -> "Vite Rails", "vite" -> "Vite"
+        def display_name(value)
+          value.to_s.split("_").map(&:capitalize).join(" ")
         end
 
         def total_component_count(data)

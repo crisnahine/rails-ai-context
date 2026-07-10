@@ -170,12 +170,27 @@ module RailsAiContext
         showing = paginated.size.to_s
         header = "# Search: `#{original_pattern}`\n**#{total} total results**#{" in #{path}" if path}, showing #{showing}\n"
 
+        # When context lines are interleaved with matches, prefix matches with
+        # '>' and context with a space so they stay distinguishable. Pure-match
+        # output (context_lines: 0, Ruby fallback) keeps the plain format.
+        mixed = paginated.any? { |r| r[:match] == false }
+        header += "`>` = match line\n" if mixed
+
         if group_by_file
-          text_response(header + "\n" + format_grouped(paginated) + pagination)
+          text_response(header + "\n" + format_grouped(paginated, mixed) + pagination)
         else
-          output = paginated.map { |r| "#{r[:file]}:#{r[:line_number]}: #{r[:content].strip}" }.join("\n")
+          output = paginated.map { |r|
+            "#{line_marker(r, mixed)}#{r[:file]}:#{r[:line_number]}: #{r[:content].strip}"
+          }.join("\n")
           text_response("#{header}\n```\n#{output}\n```#{pagination}")
         end
+      end
+
+      # "> " for match lines, "  " for context lines; empty when the result
+      # set has no context lines to distinguish from.
+      private_class_method def self.line_marker(result, mixed)
+        return "" unless mixed
+        result[:match] == false ? "  " : "> "
       end
 
       # Build a Regexp, applying the ReDoS timeout only on runtimes that
@@ -198,9 +213,11 @@ module RailsAiContext
         cmd = [ "rg", "--no-heading", "--line-number", "--sort=path", "--max-count", max_results.to_s ]
         if ctx_lines > 0
           cmd.push("-C", ctx_lines.to_s)
-          # Use colon separator for context lines so parse_rg_output handles them correctly
-          # (default '-' separator is ambiguous with filenames containing dashes)
-          cmd.push("--field-context-separator", ":")
+          # Tab-separate context lines so parse_rg_output can tell them apart
+          # from match lines (colon-separated). The default '-' separator is
+          # ambiguous with filenames containing dashes; tabs never appear in
+          # file paths or line numbers.
+          cmd.push("--field-context-separator", "\t")
         end
 
         RailsAiContext.configuration.excluded_paths.each do |p|
@@ -278,7 +295,7 @@ module RailsAiContext
 
           (RailsAiContext::SafeFile.read(file) || "").lines.each_with_index do |line, idx|
             if line.match?(regex)
-              results << { file: relative, line_number: idx + 1, content: line }
+              results << { file: relative, line_number: idx + 1, content: line, match: true }
               return results if results.size >= max_results
             end
           end
@@ -291,30 +308,32 @@ module RailsAiContext
 
 
       # Group results by file for cleaner output
-      private_class_method def self.format_grouped(results)
+      private_class_method def self.format_grouped(results, mixed = false)
         grouped = results.group_by { |r| r[:file] }
         lines = []
         grouped.each do |file, matches|
-          lines << "## #{file} (#{matches.size} matches)"
+          match_count = matches.count { |r| r[:match] != false }
+          lines << "## #{file} (#{match_count} matches)"
           lines << "```"
-          matches.each { |r| lines << "#{r[:line_number]}: #{r[:content].strip}" }
+          matches.each { |r| lines << "#{line_marker(r, mixed)}#{r[:line_number]}: #{r[:content].strip}" }
           lines << "```"
           lines << ""
         end
         lines.join("\n")
       end
 
+      # Match lines arrive colon-separated, context lines tab-separated (see
+      # --field-context-separator above), so each result carries a :match flag
+      # the renderers use to mark actual matches distinctly from context.
       private_class_method def self.parse_rg_output(output, root)
         output.lines.filter_map do |line|
           next if line.strip == "--" # Skip group separators from -C context output
-          match = line.match(/^(.+?):(\d+):(.*)$/)
-          next unless match
 
-          {
-            file: match[1].sub("#{root}/", ""),
-            line_number: match[2].to_i,
-            content: match[3]
-          }
+          if (m = line.match(/^([^\t]+)\t(\d+)\t(.*)$/))
+            { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: false }
+          elsif (m = line.match(/^(.+?):(\d+):(.*)$/))
+            { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: true }
+          end
         end
       end
 

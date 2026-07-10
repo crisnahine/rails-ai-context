@@ -95,6 +95,33 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).not_to include("name_error")
     end
 
+    it "classifies an undefined method on a model against its real associations and columns" do
+      result = described_class.call(error: "undefined method 'bogus_assoc' for an instance of Post")
+      text = result.content.first[:text]
+      expect(text).to include("undefined_method_on_model")
+      expect(text).to include("No association/column named `bogus_assoc` on Post")
+    end
+
+    it "handles the pre-3.3 receiver-inspect NoMethodError phrasing" do
+      result = described_class.call(error: "NoMethodError: undefined method `bogus_assoc' for #<Post id: 1>")
+      text = result.content.first[:text]
+      expect(text).to include("undefined_method_on_model")
+    end
+
+    it "falls back to nil_reference when the method is a real association" do
+      result = described_class.call(error: "NoMethodError: undefined method `comments` for an instance of Post")
+      text = result.content.first[:text]
+      expect(text).to include("nil_reference")
+      expect(text).not_to include("undefined_method_on_model")
+    end
+
+    it "falls back to nil_reference when the receiver is not a model" do
+      result = described_class.call(error: "NoMethodError: undefined method `bogus` for an instance of SomeRandomClass")
+      text = result.content.first[:text]
+      expect(text).to include("nil_reference")
+      expect(text).not_to include("undefined_method_on_model")
+    end
+
     it "truncates oversized output to within MAX_TOTAL_OUTPUT" do
       # Stub gather_context to return a very large section
       allow(described_class).to receive(:gather_context).and_return(

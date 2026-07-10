@@ -338,6 +338,27 @@ RSpec.describe RailsAiContext::Tools::Query do
       end
     end
 
+    context "error flagging" do
+      it "flags genuine SQL execution errors as error results" do
+        result = described_class.call(sql: "SELECT definitely_not_a_column FROM users")
+        text = result.content.first[:text]
+        expect(text).to include("SQL error:")
+        expect(result.error?).to be true
+      end
+
+      it "keeps policy blocks informational (no error flag)" do
+        result = described_class.call(sql: "UPDATE users SET email = 'x'")
+        text = result.content.first[:text]
+        expect(text).to include("Blocked")
+        expect(result.error?).to be false
+      end
+
+      it "keeps successful queries unflagged" do
+        result = described_class.call(sql: "SELECT 1 AS test")
+        expect(result.error?).to be false
+      end
+    end
+
     context "with empty or nil SQL" do
       it "returns error for nil sql" do
         result = described_class.call(sql: nil)
