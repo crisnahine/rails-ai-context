@@ -110,8 +110,17 @@ RSpec.describe "E2E: massive Rails app (500 models)", type: :e2e do
       timestamp = (base + 1).to_s
       migration_path = File.join(migrate_dir, "#{timestamp}_create_many_tables.rb")
 
+      # Match the migration version to the app's Rails so the file loads on
+      # every supported version (Rails 7.0 rejects a "7.1" version string with
+      # "Unknown migration version"). Read it from the scaffold migration this
+      # app already generated rather than hardcoding a version.
+      sample_migration = Dir.glob(File.join(migrate_dir, "*_*.rb")).min
+      migration_version = sample_migration &&
+        File.read(sample_migration)[/ActiveRecord::Migration\[(\d+\.\d+)\]/, 1]
+      migration_version ||= "#{ActiveRecord::VERSION::MAJOR}.#{ActiveRecord::VERSION::MINOR}"
+
       File.open(migration_path, "w") do |f|
-        f.puts "class CreateManyTables < ActiveRecord::Migration[7.1]"
+        f.puts "class CreateManyTables < ActiveRecord::Migration[#{migration_version}]"
         f.puts "  def change"
         (1..n).each do |i|
           num = i.to_s.rjust(4, "0")

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Ruby 3.1 and Rails 7.0 are now supported.** `required_ruby_version` drops to `>= 3.1.0` and the `railties` floor to `>= 7.0`, widening the test matrix to Ruby 3.1-4.0 x Rails 7.0-8.1. Rails 7.0 is exercised on Ruby 3.1, its only supported pairing (7.0 predates official Ruby 3.2+ support). Reaching parity required:
+  - A vendored `Data.define` backport (`lib/rails_ai_context/polyfill/data.rb`) for the value objects `Doctor::Check`, `SchemaHint`, and `HydrationResult`. `Data` is a Ruby 3.2+ class; the shim is inert on 3.2+ (guarded on `Data.respond_to?(:define)`) and activates only on 3.1, preserving keyword construction, the `super`-forwarding custom initialize, frozen instances, and value equality.
+  - `rails_search_code` no longer passes the Ruby 3.2+ `timeout:` keyword to `Regexp.new` on Ruby 3.1, where it raised `TypeError: no implicit conversion of Hash into String` and broke every search. The per-pattern ReDoS timeout is applied only when the runtime supports it (`Regexp.respond_to?(:timeout)`); 3.1 builds the pattern without it.
+  - Every version-sensitive Rails call in the 40 introspectors was already `respond_to?`/`defined?`-guarded or rescue-wrapped, so no introspector changed to run on Rails 7.0.
+  - The dev/test Gemfile pins `sqlite3 ~> 1.4` on Rails 7.0 (whose adapter predates the sqlite3 2.x line) and always loads `logger` (concurrent-ruby 1.3.5 dropped the implicit `require "logger"` that Rails < 7.1 relies on at boot).
+
 ## [5.12.1] - 2026-07-10
 
 ### Fixed

@@ -64,7 +64,8 @@ The `ToolRunner` (`lib/rails_ai_context/cli/tool_runner.rb`) handles CLI executi
 ## Code Style
 
 - Follow `rubocop-rails-omakase` style (run `bundle exec rubocop`)
-- Ruby 3.2+ features welcome (pattern matching, etc.)
+- Target Ruby 3.1 (the gem's floor). Ruby 3.2+ features (`Data.define`, `Regexp` `timeout:`, etc.) need a runtime-guarded fallback so 3.1 keeps working
+- Support Rails 7.0 through 8.1. Guard Rails 7.1+ APIs with `respond_to?`/`defined?` so introspectors degrade cleanly on 7.0
 - Every introspector must return a Hash and never raise - wrap errors in `{ error: msg }`
 - MCP tools return `MCP::Tool::Response` objects
 - All tools must be prefixed with `rails_` and annotated as read-only

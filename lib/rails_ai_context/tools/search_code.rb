@@ -5,6 +5,10 @@ require "open3"
 module RailsAiContext
   module Tools
     class SearchCode < BaseTool
+      # Per-pattern Regexp timeout (a ReDoS guard) is Ruby 3.2+. Ruby 3.1 has
+      # no per-match timeout, so the pattern is built without one there.
+      REGEXP_TIMEOUT_SUPPORTED = Regexp.respond_to?(:timeout)
+
       tool_name "rails_search_code"
       description "Search the Rails codebase with smart modes. " \
         "Use match_type:\"trace\" to see where a method is defined, who calls it, and what it calls - in one call. " \
@@ -102,7 +106,7 @@ module RailsAiContext
 
         # Validate regex syntax early
         begin
-          Regexp.new(search_pattern, timeout: 1)
+          build_regexp(search_pattern, timeout: 1)
         rescue RegexpError => e
           return text_response("Invalid regex pattern: #{e.message}")
         end
@@ -171,6 +175,17 @@ module RailsAiContext
         else
           output = paginated.map { |r| "#{r[:file]}:#{r[:line_number]}: #{r[:content].strip}" }.join("\n")
           text_response("#{header}\n```\n#{output}\n```#{pagination}")
+        end
+      end
+
+      # Build a Regexp, applying the ReDoS timeout only on runtimes that
+      # support it (Ruby 3.2+). Keeps a single construction path for both the
+      # syntax-validation probe and the actual Ruby-fallback search.
+      private_class_method def self.build_regexp(pattern, options = nil, timeout:)
+        if REGEXP_TIMEOUT_SUPPORTED
+          Regexp.new(pattern, options, timeout: timeout)
+        else
+          Regexp.new(pattern, options)
         end
       end
 
@@ -244,7 +259,7 @@ module RailsAiContext
       private_class_method def self.search_with_ruby(pattern, search_path, file_type, max_results, root, exclude_tests: false)
         results = []
         begin
-          regex = Regexp.new(pattern, Regexp::IGNORECASE, timeout: 2)
+          regex = build_regexp(pattern, Regexp::IGNORECASE, timeout: 2)
         rescue RegexpError => e
           return [ { file: "error", line_number: 0, content: "Invalid regex: #{e.message}" } ]
         end
