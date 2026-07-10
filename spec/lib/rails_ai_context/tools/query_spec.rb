@@ -692,6 +692,81 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "MySQL execution (execute_mysql)" do
+    # The Combustion test app runs on SQLite, so execute_mysql is exercised
+    # against a fake connection that enforces MySQL's rule: transaction
+    # characteristics cannot change once a transaction is in progress
+    # (error 1568, ER_CANT_CHANGE_TX_CHARACTERISTICS). Rails materializes
+    # the lazy BEGIN before the first in-block statement reaches the server,
+    # so a SET TRANSACTION issued inside `conn.transaction` always arrives
+    # mid-transaction and fails. Regression coverage for #89.
+    let(:query_result) { ActiveRecord::Result.new(%w[x], [ [ 1 ] ]) }
+
+    let(:fake_mysql_conn_class) do
+      Class.new do
+        attr_reader :statements
+
+        def initialize(result)
+          @result = result
+          @statements = []
+          @in_transaction = false
+        end
+
+        def execute(sql)
+          if @in_transaction && sql.match?(/\ASET\s+TRANSACTION/i)
+            raise ActiveRecord::StatementInvalid,
+              "Mysql2::Error: Transaction characteristics can't be changed " \
+              "while a transaction is in progress"
+          end
+          @statements << sql
+        end
+
+        def transaction
+          @statements << "BEGIN"
+          @in_transaction = true
+          yield
+          @statements << "COMMIT"
+        rescue ActiveRecord::Rollback
+          @statements << "ROLLBACK"
+        ensure
+          @in_transaction = false
+        end
+
+        def select_all(sql)
+          @statements << sql
+          @result
+        end
+      end
+    end
+
+    let(:conn) { fake_mysql_conn_class.new(query_result) }
+
+    it "issues SET TRANSACTION READ ONLY before the transaction opens" do
+      result = described_class.send(:execute_mysql, conn, "SELECT 1 AS x", 5)
+
+      expect(result).to eq(query_result)
+      set_index = conn.statements.index { |s| s.match?(/\ASET\s+TRANSACTION READ ONLY/i) }
+      begin_index = conn.statements.index("BEGIN")
+      expect(set_index).not_to be_nil
+      expect(begin_index).not_to be_nil
+      expect(set_index).to be < begin_index
+    end
+
+    it "injects the MAX_EXECUTION_TIME hint for the per-query timeout" do
+      described_class.send(:execute_mysql, conn, "SELECT 1 AS x", 5)
+
+      select = conn.statements.find { |s| s.match?(/\ASELECT/i) }
+      expect(select).to include("MAX_EXECUTION_TIME(5000)")
+    end
+
+    it "rolls the transaction back instead of committing" do
+      described_class.send(:execute_mysql, conn, "SELECT 1 AS x", 5)
+
+      expect(conn.statements).to include("ROLLBACK")
+      expect(conn.statements).not_to include("COMMIT")
+    end
+  end
+
   describe "CSV format" do
     it "escapes newlines in cell values" do
       columns = %w[id note]

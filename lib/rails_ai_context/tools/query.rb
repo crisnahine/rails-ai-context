@@ -307,9 +307,16 @@ module RailsAiContext
           sql
         end
 
+        # The SET must run BEFORE the transaction opens: Rails materializes
+        # the lazy BEGIN ahead of the first in-block statement, and MySQL
+        # rejects changing transaction characteristics mid-transaction
+        # (error 1568). Without GLOBAL/SESSION scope the SET applies only to
+        # the next transaction, which the block below immediately consumes,
+        # so the read-only characteristic cannot leak onto the pooled
+        # connection. (#89)
         result = nil
+        conn.execute("SET TRANSACTION READ ONLY")
         conn.transaction do
-          conn.execute("SET TRANSACTION READ ONLY")
           result = conn.select_all(hinted_sql)
           raise ActiveRecord::Rollback
         end
