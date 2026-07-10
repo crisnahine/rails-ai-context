@@ -39,7 +39,7 @@ class RailsAiContextCLI < Thor
     # and `-v` fall through to "Could not find command" instead of the `version` task.
     map %w[--version -v] => :version
 
-    desc "tool [NAME]", "Run an MCP tool (38 available). Use --list to see all."
+    desc "tool [NAME]", "Run an MCP tool. Use --list to see all."
     option :json, type: :boolean, default: false, desc: "Output as JSON envelope"
     option :list, type: :boolean, default: false, desc: "List available tools"
     def tool(name = nil, *args)

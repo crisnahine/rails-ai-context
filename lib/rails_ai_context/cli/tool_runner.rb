@@ -45,9 +45,11 @@ module RailsAiContext
         # would point users at a command that does not exist.
         if RailsAiContext::InstallMode.standalone?
           lines << "Usage: rails-ai-context tool NAME --param value"
+          lines << "JSON envelope: rails-ai-context tool NAME --json"
         else
           lines << "Usage: rails 'ai:tool[NAME]' param=value"
           lines << "       rails-ai-context tool NAME --param value"
+          lines << "JSON envelope: rails-ai-context tool NAME --json, or JSON=1 rails 'ai:tool[NAME]'"
         end
         lines.join("\n")
       end
