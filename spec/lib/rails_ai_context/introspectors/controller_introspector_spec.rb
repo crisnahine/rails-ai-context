@@ -233,6 +233,41 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:unrestricted]).to be true
     end
 
+    it "parses params.expect with a keyword array" do
+      source = <<~RUBY
+        def article_params
+          params.expect(article: [ :title, :body, :published ])
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "article_params")
+      expect(result[:requires]).to eq("article")
+      expect(result[:permits]).to contain_exactly("title", "body", "published")
+    end
+
+    it "parses params.expect with nested attributes" do
+      source = <<~RUBY
+        def user_params
+          params.expect(user: [ :name, address: [ :street, :city ] ])
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "user_params")
+      expect(result[:requires]).to eq("user")
+      expect(result[:permits]).to eq([ "name" ])
+      expect(result[:nested]).to eq({ "address" => %w[street city] })
+    end
+
+    it "parses params.expect with a doubly-wrapped array-of-hashes" do
+      source = <<~RUBY
+        def post_params
+          params.expect(post: [ :title, comments: [ [ :body ] ] ])
+        end
+      RUBY
+      result = introspector.send(:extract_permit_details, source, "post_params")
+      expect(result[:requires]).to eq("post")
+      expect(result[:permits]).to eq([ "title" ])
+      expect(result[:nested]).to eq({ "comments" => [ "body" ] })
+    end
+
     it "returns name only when method has no permit call" do
       source = <<~RUBY
         def post_params

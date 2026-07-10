@@ -119,6 +119,27 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       expect(text).to include("1 high")
     end
 
+    it "does not claim the app looks good when a category filter hides issues elsewhere" do
+      response = described_class.call(category: "counter_cache")
+      text = response.content.first[:text]
+      expect(text).to include("No issues found in category 'counter_cache'")
+      expect(text).not_to include("Your app looks good!")
+    end
+
+    it "shows the unqualified good-news message only with no filters and zero issues" do
+      allow(described_class).to receive(:cached_context).and_return({
+        performance: {
+          n_plus_one_risks: [], missing_counter_cache: [], missing_fk_indexes: [],
+          model_all_in_controllers: [], eager_load_candidates: []
+        },
+        models: {}
+      })
+
+      response = described_class.call
+      text = response.content.first[:text]
+      expect(text).to include("No performance issues detected. Your app looks good!")
+    end
+
     it "handles N+1 items without risk field gracefully" do
       # Backward compatibility: old-format data without risk field
       performance_data[:n_plus_one_risks] = [

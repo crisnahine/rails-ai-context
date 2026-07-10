@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetConventions do
   before { described_class.reset_cache! }
@@ -155,6 +157,137 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Custom strategy")
+    end
+  end
+
+  describe "App Patterns - create action flow detection" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:controllers_dir) { File.join(tmpdir, "app", "controllers") }
+
+    before do
+      FileUtils.mkdir_p(controllers_dir)
+      allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(described_class).to receive(:cached_context).and_return({ conventions: {} })
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    context "with no auth detected" do
+      before do
+        File.write(File.join(controllers_dir, "posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            def create
+              @post = Post.new(post_params)
+              if @post.save
+                redirect_to @post, notice: "Created!"
+              else
+                render :new, status: :unprocessable_entity
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "shows detected flow lines without a current_user guard" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("### Create Action Pattern (follow this for new actions)")
+        expect(text).to include("PostsController: build → save → redirect/render")
+        expect(text).to include("@record = [Model].new([params_method])")
+        expect(text).not_to include("current_user")
+      end
+    end
+
+    context "with auth (permission checks) detected" do
+      before do
+        File.write(File.join(controllers_dir, "comments_controller.rb"), <<~RUBY)
+          class CommentsController < ApplicationController
+            def create
+              unless can_comment?
+                redirect_to root_path, alert: "Not allowed"
+                return
+              end
+
+              @comment = Comment.new(comment_params)
+              if @comment.save
+                redirect_to @comment, notice: "Created!"
+              else
+                render :new, status: :unprocessable_entity
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "shows the permission-guard skeleton" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("### Create Action Pattern (follow this for new actions)")
+        expect(text).to include("unless current_user.can_[permission]?")
+        expect(text).to include("@record = current_user.[association].build([params_method])")
+      end
+    end
+
+    context "with an API-only controller that only renders json" do
+      before do
+        File.write(File.join(controllers_dir, "orders_controller.rb"), <<~RUBY)
+          class OrdersController < ApplicationController
+            def create
+              @order = Order.new(order_params)
+
+              if @order.save
+                render json: @order, status: :created, location: @order
+              else
+                render json: @order.errors, status: :unprocessable_content
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "shows a render-json skeleton, not the HTML redirect/render one" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("OrdersController: build → save → render json")
+        expect(text).to include("render json: @record, status: :created")
+        # Skeleton mirrors the failure status the controller actually renders.
+        expect(text).to include("render json: @record.errors, status: :unprocessable_content")
+        expect(text).not_to include("redirect_to @record")
+        expect(text).not_to include("render :new")
+      end
+    end
+
+    context "with a scaffolded controller that responds to both html and json" do
+      before do
+        File.write(File.join(controllers_dir, "articles_controller.rb"), <<~RUBY)
+          class ArticlesController < ApplicationController
+            def create
+              @article = Article.new(article_params)
+
+              respond_to do |format|
+                if @article.save
+                  format.html { redirect_to @article, notice: "Article was successfully created." }
+                  format.json { render :show, status: :created, location: @article }
+                else
+                  format.html { render :new, status: :unprocessable_content }
+                  format.json { render json: @article.errors, status: :unprocessable_content }
+                end
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "still shows the HTML redirect/render skeleton (redirect_to means it really has a view layer)" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("ArticlesController: build → save → redirect/render")
+        expect(text).to include('redirect_to @record, notice: "[success message]"')
+        # Rails 7.1+ scaffolds render :unprocessable_content; the skeleton
+        # follows the detected symbol instead of hardcoding the pre-7.1 one.
+        expect(text).to include("render :new, status: :unprocessable_content")
+        expect(text).not_to include("render json: @record")
+      end
     end
   end
 end

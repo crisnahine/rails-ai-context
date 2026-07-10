@@ -344,7 +344,6 @@ module RailsAiContext
           lines << "" << "## Key instance methods"
           source_instance_methods.first(25).each { |s| lines << "- `#{s}`" }
         elsif data[:instance_methods]&.any?
-          lines << "" << "## Key instance methods"
           # Fallback: filter association-generated and framework methods
           assoc_names = (data[:associations] || []).flat_map do |a|
             n = a[:name].to_s
@@ -353,6 +352,7 @@ module RailsAiContext
           end
           filtered = data[:instance_methods].reject { |m| assoc_names.include?(m) || m.end_with?("=") }
           if filtered.any?
+            lines << "" << "## Key instance methods"
             lines << filtered.first(25).map { |m| "- `#{m}`" }.join("\n")
           end
         end

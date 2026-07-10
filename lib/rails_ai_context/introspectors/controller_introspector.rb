@@ -352,23 +352,7 @@ module RailsAiContext
         def_node = find_def_node(parse_result.value, method_name)
         return result unless def_node
 
-        permit_bang = find_call_in_tree(def_node.body, :permit!)
-        if permit_bang && call_on_params?(permit_bang)
-          result[:unrestricted] = true
-          return result
-        end
-
-        permit_call = find_call_in_tree(def_node.body, :permit)
-        return result unless permit_call
-
-        # Walk up the receiver chain for require
-        require_call = find_require_in_chain(permit_call)
-        if require_call
-          req_arg = require_call.arguments&.arguments&.first
-          result[:requires] = extract_ast_value(req_arg).to_s if req_arg
-        end
-
-        result.merge(parse_permit_args_ast(permit_call))
+        extract_permit_from_def(def_node).merge(name: method_name)
       end
 
       def find_param_methods(node, results)
@@ -390,15 +374,20 @@ module RailsAiContext
         end
 
         permit_call = find_call_in_tree(def_node.body, :permit)
-        return result unless permit_call
+        if permit_call
+          require_call = find_require_in_chain(permit_call)
+          if require_call
+            req_arg = require_call.arguments&.arguments&.first
+            result[:requires] = extract_ast_value(req_arg).to_s if req_arg
+          end
 
-        require_call = find_require_in_chain(permit_call)
-        if require_call
-          req_arg = require_call.arguments&.arguments&.first
-          result[:requires] = extract_ast_value(req_arg).to_s if req_arg
+          return result.merge(parse_permit_args_ast(permit_call))
         end
 
-        result.merge(parse_permit_args_ast(permit_call))
+        expect_call = find_call_in_tree(def_node.body, :expect)
+        return result unless expect_call && call_on_params?(expect_call)
+
+        result.merge(parse_expect_args_ast(expect_call))
       end
 
       def find_def_node(node, method_name)
@@ -475,6 +464,70 @@ module RailsAiContext
         result[:nested] = nested if nested.any?
         result[:arrays] = arrays if arrays.any?
         result
+      end
+
+      # params.expect(article: [ :title, :body ]) combines require + permit in
+      # one call. Map it to the same shape permit produces: the hash key
+      # becomes :requires and the array members become :permits.
+      def parse_expect_args_ast(expect_call)
+        result = {}
+        permits = []
+        nested = {}
+
+        args = expect_call.arguments&.arguments || []
+        args.each do |arg|
+          case arg
+          when Prism::SymbolNode
+            permits << arg.value.to_s
+          when Prism::KeywordHashNode, Prism::HashNode
+            arg.elements.each do |assoc|
+              next unless assoc.is_a?(Prism::AssocNode)
+              key = extract_ast_value(assoc.key).to_s
+              if assoc.value.is_a?(Prism::ArrayNode)
+                result[:requires] ||= key
+                collect_expect_array(assoc.value, key, permits, nested)
+              else
+                permits << key
+              end
+            end
+          end
+        end
+
+        result[:permits] = permits if permits.any?
+        result[:nested] = nested if nested.any?
+        result
+      end
+
+      def collect_expect_array(array_node, key, permits, nested)
+        array_node.elements.each do |el|
+          case el
+          when Prism::SymbolNode
+            permits << el.value.to_s
+          when Prism::ArrayNode
+            # Doubly-wrapped array marks an array-of-hashes attribute
+            nested[key] = expect_symbol_values(el)
+          when Prism::KeywordHashNode, Prism::HashNode
+            el.elements.each do |inner|
+              next unless inner.is_a?(Prism::AssocNode)
+              inner_key = extract_ast_value(inner.key).to_s
+              if inner.value.is_a?(Prism::ArrayNode)
+                nested[inner_key] = expect_symbol_values(inner.value)
+              else
+                permits << inner_key
+              end
+            end
+          end
+        end
+      end
+
+      def expect_symbol_values(array_node)
+        array_node.elements.flat_map do |el|
+          case el
+          when Prism::SymbolNode then [ el.value.to_s ]
+          when Prism::ArrayNode then expect_symbol_values(el)
+          else []
+          end
+        end
       end
 
       def extract_ast_value(node)

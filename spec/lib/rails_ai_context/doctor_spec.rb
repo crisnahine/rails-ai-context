@@ -222,6 +222,60 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe "#check_initializer_guard" do
+    subject(:check) { doctor.send(:check_initializer_guard) }
+
+    let(:root) { Rails.application.root }
+    let(:initializer_path) { File.join(root, "config/initializers/rails_ai_context.rb") }
+
+    before do
+      allow(File).to receive(:exist?).and_call_original
+      allow(File).to receive(:read).and_call_original
+    end
+
+    context "when no initializer exists" do
+      before { allow(File).to receive(:exist?).with(initializer_path).and_return(false) }
+
+      it "returns nil" do
+        expect(check).to be_nil
+      end
+    end
+
+    context "when the initializer uses the bare defined? guard" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          if defined?(RailsAiContext)
+            RailsAiContext.configure do |config|
+            end
+          end
+        RUBY
+      end
+
+      it "warns with a fix" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("defined?(RailsAiContext)")
+        expect(check.fix).to include("respond_to?(:configure)")
+      end
+    end
+
+    context "when the initializer already guards with respond_to?" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
+            RailsAiContext.configure do |config|
+            end
+          end
+        RUBY
+      end
+
+      it "returns nil" do
+        expect(check).to be_nil
+      end
+    end
+  end
+
   describe "#check_mcp_json" do
     subject(:check) { doctor.send(:check_mcp_json) }
 
@@ -313,6 +367,75 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.status).to eq(:fail)
         expect(check.message).to include("1 of 1")
         expect(check.message).to include(".mcp.json")
+      end
+    end
+  end
+
+  describe "#check_security_gitignore" do
+    subject(:check) { doctor.send(:check_security_gitignore) }
+
+    let(:root) { Rails.application.root }
+    let(:master_key_path) { File.join(root, "config/master.key") }
+    let(:env_path) { File.join(root, ".env") }
+    let(:gitignore_path) { File.join(root, ".gitignore") }
+
+    before do
+      allow(File).to receive(:exist?).and_call_original
+      allow(File).to receive(:read).and_call_original
+    end
+
+    context "when no sensitive files are present" do
+      before do
+        allow(File).to receive(:exist?).with(env_path).and_return(false)
+        allow(File).to receive(:exist?).with(master_key_path).and_return(false)
+      end
+
+      it "passes without needing a .gitignore" do
+        expect(check.status).to eq(:pass)
+      end
+    end
+
+    context "when a sensitive file exists but .gitignore is missing" do
+      before do
+        allow(File).to receive(:exist?).with(env_path).and_return(false)
+        allow(File).to receive(:exist?).with(master_key_path).and_return(true)
+        allow(File).to receive(:exist?).with(gitignore_path).and_return(false)
+      end
+
+      it "reports the missing .gitignore, not a missing entry" do
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("No .gitignore found")
+        expect(check.message).to include("config/master.key")
+        expect(check.fix).to include("Create .gitignore with")
+        expect(check.fix).to include("config/master.key")
+      end
+    end
+
+    context "when .gitignore exists but is missing an entry" do
+      before do
+        allow(File).to receive(:exist?).with(env_path).and_return(false)
+        allow(File).to receive(:exist?).with(master_key_path).and_return(true)
+        allow(File).to receive(:exist?).with(gitignore_path).and_return(true)
+        allow(File).to receive(:read).with(gitignore_path).and_return("log/\ntmp/\n")
+      end
+
+      it "reports the file is not gitignored" do
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("config/master.key not in .gitignore")
+        expect(check.fix).to include("Add to .gitignore")
+      end
+    end
+
+    context "when .gitignore exists and covers the sensitive file" do
+      before do
+        allow(File).to receive(:exist?).with(env_path).and_return(false)
+        allow(File).to receive(:exist?).with(master_key_path).and_return(true)
+        allow(File).to receive(:exist?).with(gitignore_path).and_return(true)
+        allow(File).to receive(:read).with(gitignore_path).and_return("config/master.key\n")
+      end
+
+      it "passes" do
+        expect(check.status).to eq(:pass)
       end
     end
   end

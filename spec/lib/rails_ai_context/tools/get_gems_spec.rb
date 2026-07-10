@@ -155,4 +155,46 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       expect(api_pos).to be < auth_pos
     end
   end
+
+  describe "solid_queue config hint" do
+    let(:root) { Rails.application.root }
+
+    before do
+      gems_data[:notable_gems] = [
+        { name: "solid_queue", version: "1.0.0", category: "jobs", note: "Background jobs via SolidQueue" }
+      ]
+      allow(File).to receive(:exist?).and_call_original
+    end
+
+    it "shows no config hint when neither queue.yml nor recurring.yml exist" do
+      allow(File).to receive(:exist?).with(File.join(root, "config/queue.yml")).and_return(false)
+      allow(File).to receive(:exist?).with(File.join(root, "config/recurring.yml")).and_return(false)
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("**solid_queue**")
+      expect(text).not_to include("config/solid_queue.yml")
+      expect(text).not_to include("(config:")
+    end
+
+    it "shows only the config files that actually exist" do
+      allow(File).to receive(:exist?).with(File.join(root, "config/queue.yml")).and_return(true)
+      allow(File).to receive(:exist?).with(File.join(root, "config/recurring.yml")).and_return(false)
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("(config: config/queue.yml)")
+      expect(text).not_to include("config/recurring.yml")
+      expect(text).not_to include("config/solid_queue.yml")
+    end
+
+    it "shows both config files when both exist" do
+      allow(File).to receive(:exist?).with(File.join(root, "config/queue.yml")).and_return(true)
+      allow(File).to receive(:exist?).with(File.join(root, "config/recurring.yml")).and_return(true)
+
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("(config: config/queue.yml, config/recurring.yml)")
+    end
+  end
 end

@@ -323,6 +323,17 @@ module RailsAiContext
           new_record? persisted? errors model_name
         ])
 
+        # Block parameters (form_with do |form|, errors.each do |error|) are
+        # yielded inside the template, not passed as render locals - names
+        # declared between pipes must not be reported as expected locals.
+        block_params = Set.new
+        source.scan(/(?:\bdo|\{)\s*\|([^|]+)\|/).each do |(params_str)|
+          params_str.split(",").each do |param|
+            name = param[/[a-z_]\w*/]
+            block_params << name if name
+          end
+        end
+
         # High-confidence local detection only - avoids false positives from HTML/CSS text
         source.scan(/<%[=\-]?\s*(.+?)\s*-?%>/m).each do |match|
           code = match[0]
@@ -331,7 +342,7 @@ module RailsAiContext
           # 1. Standalone ERB output: <%= local_name %> or <%= local_name.method %>
           if (m = code.match(/\A\s*([a-z_]\w*)\s*(?:\z|\.|\()/))
             name = m[1]
-            locals << name unless known_non_locals.include?(name)
+            locals << name unless known_non_locals.include?(name) || block_params.include?(name)
           end
 
           # 2. defined?(local) guard pattern
@@ -519,7 +530,7 @@ module RailsAiContext
           parts = relative.split("/")
           parts[-1] = parts[-1].delete_prefix("_").sub(/\..*\z/, "")
           parts.join("/")
-        end.sort.first(30)
+        end.uniq.sort.first(30)
       rescue => e
         $stderr.puts "[rails-ai-context] find_available_partials failed: #{e.message}" if ENV["DEBUG"]
         []

@@ -93,15 +93,15 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       expect(text).not_to include("ActionDispatch::HostAuthorization")
     end
 
-    it "shows notable initializers, filtering standard ones" do
+    it "lists all initializers, including stock ones" do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Initializers")
       expect(text).to include("stripe.rb")
       expect(text).to include("sidekiq.rb")
-      # Standard initializers should be filtered out
-      expect(text).not_to match(/^- `filter_parameter_logging.rb`/)
-      expect(text).not_to match(/^- `inflections.rb`/)
+      # Stock initializers often carry active code, so they are listed too
+      expect(text).to match(/^- `filter_parameter_logging.rb`/)
+      expect(text).to match(/^- `inflections.rb`/)
     end
 
     it "shows CurrentAttributes" do

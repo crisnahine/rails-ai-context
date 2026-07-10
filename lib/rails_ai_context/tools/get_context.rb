@@ -38,7 +38,7 @@ module RailsAiContext
 
       def self.call(controller: nil, action: nil, model: nil, feature: nil, include: nil, server_context: nil)
         set_call_params(controller: controller, action: action, model: model, feature: feature)
-        result = if controller && action
+        base_text = if controller && action
           controller_action_context(controller, action)
         elsif controller
           controller_context(controller)
@@ -51,13 +51,15 @@ module RailsAiContext
         end
 
         # Append additional context sections if include: is specified
-        if include.is_a?(Array) && include.any?
-          base_text = result.content.first[:text]
-          extra = append_includes(include)
-          return text_response(base_text + extra)
+        base_text += append_includes(include) if include.is_a?(Array) && include.any?
+
+        ctx = begin
+          cached_context
+        rescue StandardError
+          nil
         end
 
-        result
+        text_response(base_text, suffix: introspection_warnings_note(ctx))
       end
 
       private_class_method def self.controller_action_context(controller_name, action_name)
@@ -106,7 +108,11 @@ module RailsAiContext
         other_templates.each do |tmpl|
           view_ivars.merge(extract_ivars_from_view_text(view_text, action: tmpl))
         end
-        ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates)
+        # `render json:`/`render xml:` responses are right there in the controller
+        # source - an ivar rendered that way is consumed even though there's no
+        # view template to cross-reference it against.
+        view_ivars.merge(extract_api_rendered_ivars(ctrl_text))
+        ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates, api_only: api_only?)
         lines << "" << ivar_check if ivar_check
 
         # Hydrate: inject schema hints for models referenced in controller + view ivars
@@ -120,9 +126,9 @@ module RailsAiContext
           end
         end
 
-        text_response(lines.join("\n"))
+        lines.join("\n")
       rescue => e
-        text_response("Error assembling context: #{e.message}")
+        "Error assembling context: #{e.message}"
       end
 
       private_class_method def self.extract_ivars_from_text(text)
@@ -160,23 +166,55 @@ module RailsAiContext
         ivars
       end
 
-      private_class_method def self.cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: [])
+      # Extract ivars consumed by `render json: @foo` / `render xml: @foo` (and
+      # `render json: @foo.errors`, whose leading `@foo` is what's actually set).
+      # These responses live in the controller source itself - no view template
+      # exists to cross-reference them against.
+      private_class_method def self.extract_api_rendered_ivars(ctrl_text)
+        Set.new(ctrl_text.scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten)
+      end
+
+      # True when the app runs in API-only mode (no view layer), so ivar
+      # cross-referencing can drop "view" language that wouldn't be truthful.
+      # Prefers cached introspection data; falls back to the live app config
+      # when the cache is unavailable.
+      private_class_method def self.api_only?
+        ctx = begin
+          cached_context
+        rescue StandardError
+          nil
+        end
+        return true if ctx.is_a?(Hash) && ctx.dig(:api, :api_only) == true
+
+        arch = ctx.is_a?(Hash) ? ctx.dig(:conventions, :architecture) : nil
+        return true if arch.is_a?(Array) && arch.include?("api_only")
+
+        rails_app.config.api_only == true
+      rescue StandardError
+        false
+      end
+
+      private_class_method def self.cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: [], api_only: false)
         return nil if ctrl_ivars.empty? && view_ivars.empty?
 
         lines = [ "## Instance Variable Cross-Check" ]
         all = (ctrl_ivars | view_ivars).sort
+
+        used_label = api_only ? "used in response" : "used in view"
+        missing_label = api_only ? "referenced in response but NOT set in controller" : "used in view but NOT set in controller"
+        unused_label = api_only ? "set in controller but not rendered in response" : "set in controller but not used in view"
 
         missing_ivars = []
         all.each do |ivar|
           in_ctrl = ctrl_ivars.include?(ivar)
           in_view = view_ivars.include?(ivar)
           if in_ctrl && in_view
-            lines << "- \u2713 @#{ivar} - set in controller, used in view"
+            lines << "- \u2713 @#{ivar} - set in controller, #{used_label}"
           elsif in_view && !in_ctrl
-            lines << "- \u2717 @#{ivar} - used in view but NOT set in controller"
+            lines << "- \u2717 @#{ivar} - #{missing_label}"
             missing_ivars << ivar
           elsif in_ctrl && !in_view
-            lines << "- \u26A0 @#{ivar} - set in controller but not used in view"
+            lines << "- \u26A0 @#{ivar} - #{unused_label}"
           end
         end
 
@@ -214,9 +252,9 @@ module RailsAiContext
           lines << "" << "---" << "" << view_text
         end
 
-        text_response(lines.join("\n"))
+        lines.join("\n")
       rescue => e
-        text_response("Error assembling context: #{e.message}")
+        "Error assembling context: #{e.message}"
       end
 
       private_class_method def self.model_context(model_name)
@@ -234,7 +272,7 @@ module RailsAiContext
 
         # If model not found, fail fast - don't leak partial results from sub-tools
         if model_text.include?("not found")
-          return model_result
+          return model_result.content.first[:text]
         end
 
         lines << model_text
@@ -255,9 +293,9 @@ module RailsAiContext
           lines << "" << "---" << "" << test_text
         end
 
-        text_response(lines.join("\n"))
+        lines.join("\n")
       rescue => e
-        text_response("Error assembling context: #{e.message}")
+        "Error assembling context: #{e.message}"
       end
 
       INCLUDE_MAP = {
@@ -354,10 +392,10 @@ module RailsAiContext
           end
         end
 
-        text_response(lines.join("\n"))
+        lines.join("\n")
       rescue => e
         # Fall back to plain analyze_feature on error
-        AnalyzeFeature.call(feature: feature_name)
+        AnalyzeFeature.call(feature: feature_name).content.first[:text]
       end
     end
   end

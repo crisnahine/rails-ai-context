@@ -254,6 +254,7 @@ module RailsAiContext
         def generate_minitest_model(name, data, _patterns, tests_data)
           file_path = "test/models/#{name.underscore}_test.rb"
           factory = find_factory_name(name, tests_data)
+          table = data[:table_name] || name.underscore.pluralize
           lines = []
           lines << "# #{file_path}"
           lines << ""
@@ -265,16 +266,15 @@ module RailsAiContext
           lines << "class #{name}Test < ActiveSupport::TestCase"
 
           setup_var = name.underscore
-          fixtures = tests_data[:fixtures]
-          fixture_names = tests_data[:fixture_names] || {}
+          fixture_key = fixture_key_for(table, tests_data)
           # Determine data setup: factory > fixture > inline
           lines << "  setup do"
           if factory
             lines << "    @#{setup_var} = create(:#{factory})"
-          elsif fixtures
-            fixture_key = resolve_fixture_key(name, fixture_names)
-            lines << "    @#{setup_var} = #{name.underscore.pluralize}(#{fixture_key})"
+          elsif fixture_key
+            lines << "    @#{setup_var} = #{table}(:#{fixture_key})"
           else
+            lines << "    # TODO: no #{table} fixture found; build a valid record here"
             lines << "    @#{setup_var} = #{name}.new"
           end
           lines << "  end"
@@ -351,6 +351,7 @@ module RailsAiContext
             lines << ""
           end
 
+          lines.pop if lines.last == ""
           lines << "end"
           lines << "```"
 
@@ -358,6 +359,26 @@ module RailsAiContext
         end
 
         # ── Controller test generation ───────────────────────────────────
+
+        RESTFUL_ACTION_ORDER = %w[index new create show edit update destroy].freeze
+
+        # Literal attribute values by schema column type, used when there is
+        # no fixture record to copy values from.
+        PLACEHOLDER_VALUES = {
+          "string" => "\"MyString\"",
+          "text" => "\"MyText\"",
+          "integer" => "1",
+          "bigint" => "1",
+          "float" => "1.5",
+          "decimal" => "\"9.99\"",
+          "boolean" => "false",
+          "date" => "Date.current",
+          "datetime" => "Time.current",
+          "time" => "Time.current",
+          "json" => "{}",
+          "jsonb" => "{}",
+          "uuid" => "SecureRandom.uuid"
+        }.freeze
 
         def generate_controller_test(ctrl_name, framework, patterns, tests_data)
           ctrl_name = ctrl_name.strip
@@ -369,148 +390,539 @@ module RailsAiContext
           by_ctrl = routes[:by_controller] || {}
           ctrl_routes = by_ctrl[snake] || by_ctrl[snake.pluralize] || []
 
+          res = resource_info(ctrl_class, snake, tests_data)
+
           if framework == "rspec"
-            generate_rspec_request(ctrl_class, snake, ctrl_routes, patterns, tests_data)
+            generate_rspec_request(ctrl_class, snake, ctrl_routes, patterns, tests_data, res)
           else
-            generate_minitest_controller(ctrl_class, snake, ctrl_routes, tests_data)
+            generate_minitest_controller(ctrl_class, snake, ctrl_routes, tests_data, res)
           end
         end
 
-        def generate_rspec_request(ctrl_class, snake, routes, patterns, tests_data)
-          file_path = "spec/requests/#{snake}_spec.rb"
-          factory = find_factory_name(snake.singularize.camelize, tests_data)
-          has_devise = tests_data[:test_helper_setup]&.any? { |h| h.include?("Devise") }
+        # Everything the request templates need to emit runnable requests:
+        # the backing model, its fixture, the strong-params key, and the
+        # permitted attributes (from strong params, falling back to schema
+        # content columns).
+        def resource_info(ctrl_class, snake, tests_data)
+          models = cached_context[:models] || {}
+          singular = snake.split("/").last.singularize
+          model_key = fuzzy_find_key(models.keys, snake.singularize.camelize) ||
+            fuzzy_find_key(models.keys, singular.camelize)
+          model_data = model_key ? models[model_key] : nil
+          model_data = {} unless model_data.is_a?(Hash)
+          table = model_data[:table_name] || singular.pluralize
 
-          lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
-          lines << "RSpec.describe \"#{ctrl_class}\", type: :request do"
+          info = ((cached_context[:controllers] || {})[:controllers] || {})[ctrl_class] || {}
+          strong_params = Array(info[:strong_params])
+          sp = strong_params.find { |p| p[:name] == "#{singular}_params" } || strong_params.first
+          attrs = Array(sp && sp[:permits]).map(&:to_s)
+          attrs = schema_content_columns(table) if attrs.empty?
 
-          if has_devise
-            lines << "  include Devise::Test::IntegrationHelpers"
-            lines << ""
-            lines << "  let(:user) { create(:user) }"
-            lines << "  before { sign_in user }"
-          end
+          # Uniqueness constraints come from two places: model validations and
+          # unique database indexes. A column with only a unique index (no
+          # validation) still rejects duplicate inserts, so treat both alike.
+          validation_uniques = Array(model_data[:validations])
+            .select { |v| v[:kind] == "uniqueness" }
+            .flat_map { |v| Array(v[:attributes]).map(&:to_s) }
+          unique_attrs = (validation_uniques + unique_index_columns(table)).uniq & attrs
 
-          if factory
-            lines << "  let(:#{snake.singularize}) { create(:#{factory}) }"
-          end
-
-          routes.each do |r|
-            verb = (r[:verb] || "GET").downcase
-            path = r[:path] || "/#{snake}"
-            action = r[:action] || "index"
-            helper = r[:name] ? "#{r[:name]}_path" : "\"#{path}\""
-
-            lines << ""
-            lines << "  describe \"#{r[:verb]} #{r[:path]}\" do"
-
-            case action
-            when "index"
-              lines << "    it \"returns success\" do"
-              lines << "      get #{helper}"
-              lines << "      expect(response).to have_http_status(:ok)"
-              lines << "    end"
-            when "show"
-              lines << "    it \"returns the #{snake.singularize}\" do"
-              lines << "      get #{helper}#{"(id: #{snake.singularize}.id)" if r[:name]}"
-              lines << "      expect(response).to have_http_status(:ok)"
-              lines << "    end"
-            when "create"
-              lines << "    context \"with valid params\" do"
-              lines << "      it \"creates a new #{snake.singularize}\" do"
-              lines << "        expect {"
-              lines << "          post #{helper}, params: { #{snake.singularize}: valid_attributes }"
-              lines << "        }.to change(#{snake.singularize.camelize}, :count).by(1)"
-              lines << "      end"
-              lines << "    end"
-              lines << ""
-              lines << "    context \"with invalid params\" do"
-              lines << "      it \"does not create\" do"
-              lines << "        expect {"
-              lines << "          post #{helper}, params: { #{snake.singularize}: invalid_attributes }"
-              lines << "        }.not_to change(#{snake.singularize.camelize}, :count)"
-              lines << "      end"
-              lines << "    end"
-            when "update"
-              lines << "    it \"updates the #{snake.singularize}\" do"
-              lines << "      patch #{helper}#{"(id: #{snake.singularize}.id)" if r[:name]}, params: { #{snake.singularize}: { name: \"Updated\" } }"
-              lines << "      expect(response).to redirect_to(#{snake.singularize})"
-              lines << "    end"
-            when "destroy"
-              lines << "    it \"destroys the #{snake.singularize}\" do"
-              lines << "      #{snake.singularize} # ensure exists"
-              lines << "      expect {"
-              lines << "        delete #{helper}#{"(id: #{snake.singularize}.id)" if r[:name]}"
-              lines << "      }.to change(#{snake.singularize.camelize}, :count).by(-1)"
-              lines << "    end"
-            else
-              lines << "    it \"returns success\" do"
-              lines << "      #{verb} #{helper}"
-              lines << "      expect(response).to have_http_status(:ok)"
-              lines << "    end"
-            end
-
-            lines << "  end"
-          end
-
-          if routes.empty?
-            lines << "  it \"has tests\" do"
-            lines << "    # No routes found for #{ctrl_class}. Add route-specific tests here."
-            lines << "  end"
-          end
-
-          lines << "end"
-          lines << "```"
-          text_response(lines.join("\n"))
+          {
+            name: singular,
+            model: model_key,
+            table: table,
+            fixture_key: fixture_key_for(table, tests_data),
+            param_key: (sp && sp[:requires]) || singular,
+            attrs: attrs.sort,
+            json_api: info[:api_controller] == true || info[:respond_to_formats] == [ "json" ],
+            unique_attrs: unique_attrs
+          }
         end
 
-        def generate_minitest_controller(ctrl_class, snake, routes, tests_data)
+        def generate_minitest_controller(ctrl_class, snake, routes, tests_data, res)
           file_path = "test/controllers/#{snake}_controller_test.rb"
           lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
           lines << "class #{ctrl_class}Test < ActionDispatch::IntegrationTest"
 
-          has_devise = tests_data[:test_helper_setup]&.any? { |h| h.include?("Devise") }
-          if has_devise
-            fixture_names = tests_data[:fixture_names] || {}
-            user_fixture_key = resolve_fixture_key("User", fixture_names)
-            lines << "  include Devise::Test::IntegrationHelpers"
-            lines << ""
+          lines << "  include Devise::Test::IntegrationHelpers" if devise_app?(tests_data)
+
+          setup = minitest_setup_lines(res, tests_data)
+          if setup.any?
             lines << "  setup do"
-            lines << "    @user = users(#{user_fixture_key})"
-            lines << "    sign_in @user"
+            setup.each { |l| lines << "    #{l}" }
             lines << "  end"
           end
 
-          routes.each do |r|
-            action = r[:action] || "index"
-            path = r[:path] || "/#{snake}"
-            verb = (r[:verb] || "GET").downcase
-
-            # Extract dynamic segments (e.g. :post_id, :id) from the path
-            param_names = path.scan(/:(\w+)/).flatten
-            quoted_path = path.gsub(/:(\w+)/, '#{\\1}')
-
+          name_by_path = route_names_by_path(routes)
+          dedupe_routes(routes).each do |route|
             lines << ""
-            lines << "  test \"#{r[:verb]} #{r[:path]} works\" do"
-            fixture_names = tests_data[:fixture_names] || {}
-            param_names.each do |param|
-              if param == "id"
-                fk = resolve_fixture_key(snake.singularize.camelize, fixture_names)
-                lines << "    #{param} = #{snake.pluralize}(#{fk}).id"
-              elsif param.end_with?("_id")
-                resource = param.delete_suffix("_id")
-                fk = resolve_fixture_key(resource.camelize, fixture_names)
-                lines << "    #{param} = #{resource.pluralize}(#{fk}).id"
-              end
-            end
-            lines << "    #{verb} \"#{quoted_path}\""
-            lines << "    assert_response :success"
+            lines.concat(minitest_route_test(route, name_by_path, res, tests_data))
+          end
+
+          if routes.empty?
+            lines << "  test \"#{ctrl_class} responds\" do"
+            lines << "    skip \"TODO: no routes found for #{ctrl_class}; add tests once routes exist\""
             lines << "  end"
           end
 
           lines << "end"
           lines << "```"
           text_response(lines.join("\n"))
+        end
+
+        def minitest_setup_lines(res, tests_data)
+          lines = []
+          if devise_app?(tests_data)
+            user_key = fixture_key_for("users", tests_data) || "one"
+            lines << "@user = users(:#{user_key})"
+            lines << "sign_in @user"
+          end
+          if res[:model] && res[:fixture_key]
+            lines << "@#{res[:name]} = #{res[:table]}(:#{res[:fixture_key]})"
+          end
+          lines
+        end
+
+        def minitest_route_test(route, name_by_path, res, tests_data)
+          action = (route[:action] || "index").to_s
+          subject = res[:model] && res[:fixture_key] ? "@#{res[:name]}" : nil
+
+          return minitest_generic_test(route, name_by_path, res, tests_data, subject) unless res[:model]
+
+          case action
+          when "index", "new"
+            minitest_get_test(route, name_by_path, res, tests_data, "should get #{action}", subject)
+          when "show"
+            minitest_member_get_test(route, name_by_path, res, tests_data, "should show #{res[:name]}", subject)
+          when "edit"
+            minitest_member_get_test(route, name_by_path, res, tests_data, "should get edit", subject)
+          when "create"
+            minitest_create_test(route, name_by_path, res, tests_data, subject)
+          when "update"
+            minitest_update_test(route, name_by_path, res, tests_data, subject)
+          when "destroy"
+            minitest_destroy_test(route, name_by_path, res, tests_data, subject)
+          else
+            minitest_generic_test(route, name_by_path, res, tests_data, subject)
+          end
+        end
+
+        def minitest_get_test(route, name_by_path, res, tests_data, label, subject)
+          resolved = url_expression(route, name_by_path, subject, res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+
+          minitest_request_test(label, verb_for(route), resolved, res, "assert_response :success")
+        end
+
+        def minitest_member_get_test(route, name_by_path, res, tests_data, label, subject)
+          return minitest_skip_test(label, "requires a #{res[:table]} fixture") unless subject
+
+          minitest_get_test(route, name_by_path, res, tests_data, label, subject)
+        end
+
+        def minitest_create_test(route, name_by_path, res, tests_data, subject)
+          label = "should create #{res[:name]}"
+          resolved = url_expression(route, name_by_path, subject, res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+          if res[:attrs].empty?
+            return minitest_skip_test(label, "no permitted attributes detected; fill in valid params for POST #{route[:path]}")
+          end
+
+          params = request_params_literal(res, subject ? :fixture : :placeholder)
+          minitest_request_test(label, "post", resolved, res,
+            res[:json_api] ? "assert_response :success" : "assert_response :redirect",
+            params_literal: params,
+            difference: "\"#{res[:model]}.count\"",
+            todos: params_todos(res, params))
+        end
+
+        def minitest_update_test(route, name_by_path, res, tests_data, subject)
+          label = "should update #{res[:name]}"
+          return minitest_skip_test(label, "requires a #{res[:table]} fixture") unless subject
+
+          resolved = url_expression(route, name_by_path, subject, res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+          if res[:attrs].empty?
+            return minitest_skip_test(label, "no permitted attributes detected; fill in valid params for #{route[:verb]} #{route[:path]}")
+          end
+
+          params = request_params_literal(res, :fixture)
+          minitest_request_test(label, verb_for(route), resolved, res,
+            res[:json_api] ? "assert_response :success" : "assert_response :redirect",
+            params_literal: params,
+            todos: params_todos(res, params))
+        end
+
+        def minitest_destroy_test(route, name_by_path, res, tests_data, subject)
+          label = "should destroy #{res[:name]}"
+          return minitest_skip_test(label, "requires a #{res[:table]} fixture") unless subject
+
+          resolved = url_expression(route, name_by_path, res[:name], res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+
+          setup_lines = [
+            "# Destroy a fresh record: deleting a fixture row can violate foreign keys other fixtures hold on it.",
+            "#{res[:name]} = #{res[:model]}.create!(#{subject}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res)})"
+          ]
+          # String uniques are already randomized by destroy_attr_overrides;
+          # only non-string uniques still need a hand-picked fresh value.
+          unhandled_uniques = res[:unique_attrs].reject { |a| %w[string text].include?(schema_column_type(res[:table], a)) }
+          minitest_request_test(label, "delete", resolved, res,
+            res[:json_api] ? "assert_response :success" : "assert_response :redirect",
+            difference: "\"#{res[:model]}.count\", -1",
+            setup_lines: setup_lines,
+            todos: unhandled_uniques.any? ? [ "confirm the fresh record satisfies uniqueness validations" ] : [])
+        end
+
+        def minitest_generic_test(route, name_by_path, res, tests_data, subject)
+          action = (route[:action] || "index").to_s
+          verb = verb_for(route)
+          label = verb == "get" ? "should get #{action}" : "#{route[:verb]} #{route[:path]}"
+
+          if verb != "get"
+            return minitest_skip_test(label, "provide params and assertions for #{action}")
+          end
+
+          resolved = url_expression(route, name_by_path, subject, res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+
+          minitest_request_test(label, verb, resolved, res, "assert_response :success")
+        end
+
+        def minitest_request_test(label, verb, resolved, res, assertion, params_literal: nil, difference: nil, setup_lines: [], todos: [])
+          json = res[:json_api] ? ", as: :json" : ""
+          params_part = params_literal ? ", params: #{params_literal}" : ""
+          request = "#{verb} #{resolved[:url]}#{params_part}#{json}"
+
+          out = [ "  test \"#{label}\" do" ]
+          todos.each { |t| out << "    # TODO: #{t}" }
+          (resolved[:prelude] + setup_lines).each { |l| out << "    #{l}" }
+          if difference
+            out << "    assert_difference(#{difference}) do"
+            out << "      #{request}"
+            out << "    end"
+          else
+            out << "    #{request}"
+          end
+          out << "    #{assertion}"
+          out << "  end"
+          out
+        end
+
+        def minitest_skip_test(label, reason)
+          [ "  test \"#{label}\" do", "    skip \"TODO: #{reason}\"", "  end" ]
+        end
+
+        def verb_for(route)
+          (route[:verb] || "GET").downcase
+        end
+
+        def unresolved_reason(route)
+          "resolve the dynamic segments of #{route[:verb]} #{route[:path]} (no matching fixture found)"
+        end
+
+        # ── RSpec request generation ─────────────────────────────────────
+
+        def generate_rspec_request(ctrl_class, snake, routes, patterns, tests_data, res)
+          file_path = "spec/requests/#{snake}_spec.rb"
+          factory = find_factory_name(snake.singularize.camelize, tests_data)
+
+          lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
+          lines << "RSpec.describe \"#{ctrl_class}\", type: :request do"
+
+          if devise_app?(tests_data)
+            lines << "  include Devise::Test::IntegrationHelpers"
+            lines << ""
+            lines << "  let(:user) { create(:user) }"
+            lines << "  before { sign_in user }"
+            lines << ""
+          end
+
+          subject_expr = rspec_subject_lines(lines, res, factory)
+          attrs_available = rspec_attributes_lines(lines, res, factory)
+
+          name_by_path = route_names_by_path(routes)
+          dedupe_routes(routes).each do |route|
+            lines << ""
+            lines.concat(rspec_route_test(route, name_by_path, res, tests_data, subject_expr, attrs_available))
+          end
+
+          if routes.empty?
+            lines << "  it \"has tests\" do"
+            lines << "    skip \"TODO: no routes found for #{ctrl_class}; add request specs once routes exist\""
+            lines << "  end"
+          end
+
+          lines << "end"
+          lines << "```"
+          text_response(lines.join("\n"))
+        end
+
+        # Emits the subject let and returns the expression tests use to
+        # reference a persisted record (nil when one cannot be built).
+        def rspec_subject_lines(lines, res, factory)
+          if factory
+            lines << "  let(:#{res[:name]}) { create(:#{factory}) }"
+            return res[:name]
+          end
+          return nil unless res[:model] && res[:attrs].any?
+
+          placeholder = placeholder_attrs_literal(res)
+          lines << "  # TODO: adjust these attributes if validations reject the placeholder values"
+          lines << "  let(:#{res[:name]}) { #{res[:model]}.create!(#{placeholder}) }"
+          res[:name]
+        end
+
+        def rspec_attributes_lines(lines, res, factory)
+          if factory
+            lines << "  let(:valid_attributes) { attributes_for(:#{factory}) }"
+            true
+          elsif res[:attrs].any?
+            lines << "  let(:valid_attributes) { #{placeholder_attrs_literal(res)} }"
+            true
+          else
+            false
+          end
+        end
+
+        def rspec_route_test(route, name_by_path, res, tests_data, subject_expr, attrs_available)
+          action = (route[:action] || "index").to_s
+          verb = verb_for(route)
+          body =
+            case action
+            when "index", "new"
+              rspec_get_body(route, name_by_path, res, tests_data, nil, "returns success")
+            when "show", "edit"
+              if subject_expr
+                rspec_get_body(route, name_by_path, res, tests_data, subject_expr, "returns success")
+              else
+                rspec_skip_body("returns success", "requires a persisted #{res[:name]} record")
+              end
+            when "create"
+              rspec_create_body(route, name_by_path, res, tests_data, attrs_available)
+            when "update"
+              rspec_update_body(route, name_by_path, res, tests_data, subject_expr, attrs_available)
+            when "destroy"
+              rspec_destroy_body(route, name_by_path, res, tests_data, subject_expr)
+            else
+              if verb == "get"
+                rspec_get_body(route, name_by_path, res, tests_data, subject_expr, "returns success")
+              else
+                rspec_skip_body("handles #{action}", "provide params and assertions for #{action}")
+              end
+            end
+
+          out = [ "  describe \"#{route[:verb]} #{route[:path]}\" do" ]
+          out.concat(body.map { |l| l.empty? ? l : "  #{l}" })
+          out << "  end"
+          out
+        end
+
+        def rspec_get_body(route, name_by_path, res, tests_data, subject_expr, label)
+          resolved = url_expression(route, name_by_path, subject_expr, res, tests_data, rspec: true)
+          return rspec_skip_body(label, unresolved_reason(route)) unless resolved
+
+          json = res[:json_api] ? ", as: :json" : ""
+          out = [ "  it \"#{label}\" do" ]
+          resolved[:prelude].each { |l| out << "    #{l}" }
+          out << "    get #{resolved[:url]}#{json}"
+          out << "    expect(response).to have_http_status(:success)"
+          out << "  end"
+          out
+        end
+
+        def rspec_create_body(route, name_by_path, res, tests_data, attrs_available)
+          label = "creates a new #{res[:model] || res[:name]}"
+          return rspec_skip_body(label, "no permitted attributes detected; fill in valid params") unless attrs_available && res[:model]
+
+          resolved = url_expression(route, name_by_path, nil, res, tests_data, rspec: true)
+          return rspec_skip_body(label, unresolved_reason(route)) unless resolved
+
+          json = res[:json_api] ? ", as: :json" : ""
+          status = res[:json_api] ? ":success" : ":redirect"
+          out = [ "  it \"#{label}\" do" ]
+          resolved[:prelude].each { |l| out << "    #{l}" }
+          out << "    expect {"
+          out << "      post #{resolved[:url]}, params: { #{res[:param_key]}: valid_attributes }#{json}"
+          out << "    }.to change(#{res[:model]}, :count).by(1)"
+          out << "    expect(response).to have_http_status(#{status})"
+          out << "  end"
+          out
+        end
+
+        def rspec_update_body(route, name_by_path, res, tests_data, subject_expr, attrs_available)
+          label = "updates the #{res[:name]}"
+          return rspec_skip_body(label, "requires a persisted #{res[:name]} record") unless subject_expr
+          return rspec_skip_body(label, "no permitted attributes detected; fill in valid params") unless attrs_available
+
+          resolved = url_expression(route, name_by_path, subject_expr, res, tests_data, rspec: true)
+          return rspec_skip_body(label, unresolved_reason(route)) unless resolved
+
+          json = res[:json_api] ? ", as: :json" : ""
+          status = res[:json_api] ? ":success" : ":redirect"
+          out = [ "  it \"#{label}\" do" ]
+          resolved[:prelude].each { |l| out << "    #{l}" }
+          out << "    #{verb_for(route)} #{resolved[:url]}, params: { #{res[:param_key]}: valid_attributes }#{json}"
+          out << "    expect(response).to have_http_status(#{status})"
+          out << "  end"
+          out
+        end
+
+        def rspec_destroy_body(route, name_by_path, res, tests_data, subject_expr)
+          label = "destroys the #{res[:name]}"
+          return rspec_skip_body(label, "requires a persisted #{res[:name]} record") unless subject_expr && res[:model]
+
+          resolved = url_expression(route, name_by_path, "record", res, tests_data, rspec: true)
+          return rspec_skip_body(label, unresolved_reason(route)) unless resolved
+
+          json = res[:json_api] ? ", as: :json" : ""
+          out = [ "  it \"#{label}\" do" ]
+          out << "    record = #{res[:model]}.create!(#{subject_expr}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res)})"
+          resolved[:prelude].each { |l| out << "    #{l}" }
+          out << "    expect {"
+          out << "      delete #{resolved[:url]}#{json}"
+          out << "    }.to change(#{res[:model]}, :count).by(-1)"
+          out << "  end"
+          out
+        end
+
+        def rspec_skip_body(label, reason)
+          [ "  it \"#{label}\" do", "    skip \"TODO: #{reason}\"", "  end" ]
+        end
+
+        # ── Route and params helpers ─────────────────────────────────────
+
+        # Scaffolds test each action once; keep one route per action (PATCH
+        # wins over PUT for update).
+        def dedupe_routes(routes)
+          chosen = {}
+          routes.each do |r|
+            action = (r[:action] || "index").to_s
+            existing = chosen[action]
+            chosen[action] = r if existing.nil? || (existing[:verb] == "PUT" && r[:verb] == "PATCH")
+          end
+          chosen.values.sort_by.with_index do |r, i|
+            [ RESTFUL_ACTION_ORDER.index((r[:action] || "").to_s) || RESTFUL_ACTION_ORDER.size, i ]
+          end
+        end
+
+        # Unnamed routes (POST/PATCH/DELETE in a resources block) share their
+        # path with a named sibling; borrow that sibling's helper name.
+        def route_names_by_path(routes)
+          routes.each_with_object({}) do |r, map|
+            map[r[:path]] ||= r[:name] if r[:name]
+          end
+        end
+
+        # Resolve a route to a helper call (articles_url, article_url(@article))
+        # or an interpolated path string when the route has no helper name.
+        # Returns { url:, prelude: } or nil when a dynamic segment cannot be
+        # satisfied from test data.
+        def url_expression(route, name_by_path, subject_expr, res, tests_data, rspec: false)
+          params = route[:params] || (route[:path] || "").scan(/:(\w+)/).flatten
+          args = params.map do |p|
+            expr = path_param_expr(p, subject_expr, tests_data, rspec: rspec)
+            return nil unless expr
+            expr
+          end
+
+          helper = route[:name] || name_by_path[route[:path]]
+          if helper
+            url = args.empty? ? "#{helper}_url" : "#{helper}_url(#{args.join(', ')})"
+            { url: url, prelude: [] }
+          else
+            prelude = params.each_with_index.map { |p, i| "#{p} = #{args[i]}.id" }
+            quoted = (route[:path] || "/#{res[:table]}").gsub(/:(\w+)/, "\#{\\1}")
+            { url: "\"#{quoted}\"", prelude: prelude }
+          end
+        end
+
+        # Dynamic path segments come from the subject record (:id) or a parent
+        # record (:parent_id). Minitest reads parents from fixtures; RSpec
+        # request specs do not load fixtures, so parents need a factory.
+        def path_param_expr(param, subject_expr, tests_data, rspec: false)
+          if param == "id"
+            subject_expr
+          elsif param.end_with?("_id")
+            parent = param.delete_suffix("_id")
+            if rspec
+              factory = find_factory_name(parent.camelize, tests_data)
+              factory && "create(:#{factory})"
+            else
+              key = fixture_key_for(parent.pluralize, tests_data)
+              key && "#{parent.pluralize}(:#{key})"
+            end
+          end
+        end
+
+        # Build the params hash literal for create/update, copying attribute
+        # values from the fixture record the way Rails scaffold tests do.
+        def request_params_literal(res, value_source)
+          pairs = res[:attrs].map do |attr|
+            "#{attr}: #{attr_value_expr(res, attr, value_source)}"
+          end
+          "{ #{res[:param_key]}: { #{pairs.join(', ')} } }"
+        end
+
+        def attr_value_expr(res, attr, value_source)
+          if res[:unique_attrs].include?(attr) && %w[string text].include?(schema_column_type(res[:table], attr))
+            # Unique values must differ from every fixture row.
+            "\"#{attr}-\#{SecureRandom.hex(4)}\""
+          elsif value_source == :fixture
+            "@#{res[:name]}.#{attr}"
+          else
+            PLACEHOLDER_VALUES.fetch(schema_column_type(res[:table], attr).to_s, "nil")
+          end
+        end
+
+        def params_todos(res, params_literal)
+          todos = []
+          todos << "replace nil attribute values with valid data" if params_literal.include?(": nil")
+          non_string_uniques = res[:unique_attrs].reject { |a| %w[string text].include?(schema_column_type(res[:table], a)) }
+          todos << "ensure #{non_string_uniques.join(', ')} differ from existing fixture values (uniqueness validation)" if non_string_uniques.any?
+          todos
+        end
+
+        def placeholder_attrs_literal(res)
+          pairs = res[:attrs].map do |attr|
+            "#{attr}: #{attr_value_expr(res, attr, :placeholder)}"
+          end
+          "{ #{pairs.join(', ')} }"
+        end
+
+        # Extra create! arguments that keep a copied record from tripping
+        # uniqueness validations.
+        def destroy_attr_overrides(res)
+          overrides = res[:unique_attrs].filter_map do |attr|
+            next unless %w[string text].include?(schema_column_type(res[:table], attr))
+            "\"#{attr}\" => \"#{attr}-\#{SecureRandom.hex(4)}\""
+          end
+          overrides.any? ? ".merge(#{overrides.join(', ')})" : ""
+        end
+
+        def schema_content_columns(table)
+          tables = (cached_context[:schema] || {})[:tables] || {}
+          cols = (tables[table] || tables[table.to_sym] || {})[:columns] || []
+          cols.map { |c| c[:name].to_s } - %w[id created_at updated_at]
+        end
+
+        def schema_column_type(table, column)
+          tables = (cached_context[:schema] || {})[:tables] || {}
+          cols = (tables[table] || tables[table.to_sym] || {})[:columns] || []
+          col = cols.find { |c| c[:name].to_s == column }
+          (col && col[:type]).to_s
+        end
+
+        # Columns covered by a unique database index. Posting a fixture row's
+        # own value for one of these raises RecordNotUnique even when the
+        # model declares no uniqueness validation.
+        def unique_index_columns(table)
+          tables = (cached_context[:schema] || {})[:tables] || {}
+          indexes = (tables[table] || tables[table.to_sym] || {})[:indexes] || []
+          indexes.select { |i| i[:unique] }.flat_map { |i| Array(i[:columns]).map(&:to_s) }
+        end
+
+        def devise_app?(tests_data)
+          tests_data[:test_helper_setup]&.any? { |h| h.include?("Devise") } || false
         end
 
         # ── File-based test generation ───────────────────────────────────
@@ -560,27 +972,19 @@ module RailsAiContext
 
         # ── Helpers ──────────────────────────────────────────────────────
 
-        # Resolve the best fixture key for a model by reading actual fixture file contents.
-        # Falls back to :one if no fixture file is found.
-        def resolve_fixture_key(model_name, fixture_names)
-          plural = model_name.underscore.pluralize
-          # fixture_names is { "users" => [:one, :two], "posts" => [:draft_post, ...] }
-          keys = fixture_names[plural] || fixture_names[plural.to_sym]
-          if keys.is_a?(Array) && keys.any?
-            ":#{keys.first}"
-          else
-            # Try reading the fixture file directly
-            fixture_file = File.join(Rails.root, "test", "fixtures", "#{plural}.yml")
-            if File.exist?(fixture_file)
-              content = RailsAiContext::SafeFile.read(fixture_file)
-              if content
-                # YAML fixture files have top-level keys as fixture names
-                first_key = content.scan(/^([a-z_]\w*):/i).first&.first
-                return ":#{first_key}" if first_key
-              end
-            end
-            ":one"
-          end
+        # First fixture key for a table (reading the fixture file when the
+        # cached fixture names miss it), or nil when no fixture exists.
+        def fixture_key_for(table, tests_data)
+          fixture_names = tests_data[:fixture_names] || {}
+          keys = fixture_names[table] || fixture_names[table.to_sym]
+          return keys.first.to_s if keys.is_a?(Array) && keys.any?
+
+          fixture_file = File.join(Rails.root, "test", "fixtures", "#{table}.yml")
+          return nil unless File.exist?(fixture_file)
+
+          content = RailsAiContext::SafeFile.read(fixture_file)
+          # YAML fixture files have top-level keys as fixture names
+          content&.scan(/^([a-z_]\w*):/i)&.first&.first
         end
 
         def find_factory_name(model_name, tests_data)

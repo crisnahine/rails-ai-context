@@ -71,6 +71,55 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       end
     end
 
+    context "with an empty app/models/concerns/ directory (only a .keep file)" do
+      let(:concerns_dir) { File.join(Rails.root, "app/models/concerns") }
+
+      before do
+        FileUtils.mkdir_p(concerns_dir)
+        FileUtils.touch(File.join(concerns_dir, ".keep"))
+      end
+
+      after { FileUtils.rm_rf(concerns_dir) }
+
+      it "does not claim concerns_models - the directory holds no concern files" do
+        expect(result[:architecture]).not_to include("concerns_models")
+      end
+    end
+
+    context "with a real concern file in app/models/concerns/" do
+      let(:concerns_dir) { File.join(Rails.root, "app/models/concerns") }
+
+      before do
+        FileUtils.mkdir_p(concerns_dir)
+        File.write(File.join(concerns_dir, "searchable.rb"), <<~RUBY)
+          module Searchable
+            extend ActiveSupport::Concern
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_rf(concerns_dir) }
+
+      it "detects concerns_models" do
+        expect(result[:architecture]).to include("concerns_models")
+      end
+    end
+
+    context "with an empty app/controllers/concerns/ directory (only a .keep file)" do
+      let(:concerns_dir) { File.join(Rails.root, "app/controllers/concerns") }
+
+      before do
+        FileUtils.mkdir_p(concerns_dir)
+        FileUtils.touch(File.join(concerns_dir, ".keep"))
+      end
+
+      after { FileUtils.rm_rf(concerns_dir) }
+
+      it "does not claim concerns_controllers - the directory holds no concern files" do
+        expect(result[:architecture]).not_to include("concerns_controllers")
+      end
+    end
+
     context "with custom app directories" do
       let(:custom_dir) { File.join(Rails.root, "app/services") }
 

@@ -158,7 +158,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
   describe "Strong Migrations integration" do
     before do
       allow(described_class).to receive(:cached_context).and_return({
-        schema: { tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } },
+        schema: { adapter: "PostgreSQL", tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } },
         models: {}
       })
     end
@@ -173,7 +173,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       end
     end
 
-    context "when strong_migrations gem is present" do
+    context "when strong_migrations gem is present on a PostgreSQL app" do
       before { allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true) }
 
       it "warns about remove_column needing safety_assured + ignored_columns" do
@@ -230,6 +230,38 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         response = described_class.call(action: "add_column", table: "users", column: "phone", type: "string")
         text = response.content.first[:text]
         expect(text).not_to include("Strong Migrations Warnings")
+      end
+    end
+
+    context "when strong_migrations gem is present on a MySQL/Trilogy app" do
+      before do
+        allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { adapter: "Trilogy", tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } },
+          models: {}
+        })
+      end
+
+      it "does not raise the Postgres-only :concurrently warning for add_index" do
+        response = described_class.call(action: "add_index", table: "users", column: "email")
+        text = response.content.first[:text]
+        expect(text).not_to include("Strong Migrations Warnings")
+        expect(text).not_to include("ACCESS EXCLUSIVE")
+      end
+
+      it "describes online DDL instead of algorithm: :concurrently in the add_index note" do
+        response = described_class.call(action: "add_index", table: "users", column: "email")
+        text = response.content.first[:text]
+        expect(text).to include("online DDL")
+        expect(text).not_to include("**Note:** For large tables, consider `algorithm: :concurrently` (PostgreSQL) to avoid locking")
+      end
+
+      it "warns about add_association using foreign_key_checks instead of the Postgres two-step validation" do
+        response = described_class.call(action: "add_association", table: "users", column: "tenant")
+        text = response.content.first[:text]
+        expect(text).to include("Strong Migrations Warnings")
+        expect(text).to include("foreign_key_checks")
+        expect(text).not_to include("validate_foreign_key")
       end
     end
   end

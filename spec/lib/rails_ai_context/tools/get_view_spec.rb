@@ -27,6 +27,13 @@ RSpec.describe RailsAiContext::Tools::GetView do
       expect(text).to include("Posts")
     end
 
+    it "accepts the full repo-relative path (with the app/views/ prefix) the same as the app/views-relative form" do
+      result = described_class.call(path: "app/views/posts/index.html.erb")
+      text = result.content.first[:text]
+      expect(text).to include("posts/index.html.erb")
+      expect(text).to include("Posts")
+    end
+
     it "returns error for non-existent path" do
       result = described_class.call(path: "nonexistent/show.html.erb")
       text = result.content.first[:text]

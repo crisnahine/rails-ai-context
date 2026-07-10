@@ -233,7 +233,7 @@ RSpec.describe "Copilot instructions compliance" do
         expect(file[:content]).to include("PostsController")
       end
 
-      it "MCP tools file includes all 38 tools" do
+      it "MCP tools file includes all 39 tools" do
         file = generated_files["rails-mcp-tools.instructions.md"]
         content = file[:content]
         %w[
@@ -247,6 +247,7 @@ RSpec.describe "Copilot instructions compliance" do
           rails_get_helper_methods rails_get_config rails_get_gems
           rails_security_scan rails_get_component_catalog rails_performance_check
           rails_dependency_graph rails_migration_advisor rails_get_frontend_stack
+          rails_get_api
           rails_search_docs rails_query rails_read_logs rails_generate_test
           rails_diagnose rails_review_changes rails_onboard rails_runtime_info
           rails_session_context

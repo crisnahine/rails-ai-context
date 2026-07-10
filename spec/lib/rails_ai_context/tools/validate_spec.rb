@@ -11,6 +11,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
       text = result.content.first[:text]
       expect(text).to include("syntax OK")
       expect(text).to include("1/1 files passed")
+      expect(result.error?).to be false
     end
 
     it "detects bad Ruby syntax" do
@@ -22,6 +23,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
         result = described_class.call(files: [ "tmp/bad_syntax_test.rb" ])
         text = result.content.first[:text]
         expect(text).to include("0/1 files passed")
+        expect(result.error?).to be true
       ensure
         File.delete(bad_file) if File.exist?(bad_file)
       end

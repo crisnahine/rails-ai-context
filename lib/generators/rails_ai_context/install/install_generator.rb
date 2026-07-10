@@ -1,6 +1,32 @@
 # frozen_string_literal: true
 
 require "json"
+require "thor/line_editor"
+
+# Thor's interactive `ask` reads the line through Reline once the `readline`
+# library is available, and Reline writes cursor control escape sequences
+# (hide/show cursor, clear line) to support in-place editing - it does this
+# even when neither end of the process is attached to a real terminal.
+# Restrict it to genuine TTY sessions so piped or redirected runs (CI, `rails
+# generate ... < /dev/null`, captured logs) get plain prompt text instead of
+# raw escape codes; Thor already falls back to a plain, escape-free reader
+# when this returns false.
+class Thor
+  module LineEditor
+    class Readline
+      def self.available?
+        return false unless $stdin.tty? && $stdout.tty?
+
+        begin
+          require "readline"
+        rescue LoadError
+        end
+
+        Object.const_defined?(:Readline)
+      end
+    end
+  end
+end
 
 module RailsAiContext
   module Generators
@@ -8,6 +34,9 @@ module RailsAiContext
       source_root File.expand_path("templates", __dir__)
 
       desc "Install rails-ai-context: creates initializer, MCP config, and generates initial context files."
+
+      class_option :defaults, type: :boolean, default: false,
+        desc: "Skip all interactive prompts and use each prompt's documented default (for CI/non-interactive use)"
 
       AI_TOOLS = {
         "1" => { key: :claude,   name: "Claude Code",     files: "CLAUDE.md + .claude/rules/",                        format: :claude },
@@ -28,6 +57,13 @@ module RailsAiContext
         codex:    %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md]
       }.freeze
 
+      # The initializer guard written before this gem checked respond_to?(:configure).
+      # A path:/git: gemspec is evaluated in-process by Bundler in every environment,
+      # defining a VERSION-only stub `RailsAiContext` module even when the gem itself
+      # isn't in the current Bundler group - so `defined?(RailsAiContext)` alone
+      # doesn't prove `.configure` exists.
+      BARE_GUARD_PATTERN = /^([ \t]*)if defined\?\(RailsAiContext\)$/
+
       def select_ai_tools
         say ""
         say "Which AI tools do you use? (select all that apply)", :yellow
@@ -38,7 +74,7 @@ module RailsAiContext
         say "  a. All of the above"
         say ""
 
-        input = ask("Enter numbers separated by commas (e.g. 1,2) or 'a' for all:").strip.downcase
+        input = ask_safe("Enter numbers separated by commas (e.g. 1,2) or 'a' for all:").strip.downcase
 
         @selected_formats = if input == "a" || input == "all"
           AI_TOOLS.values.map { |t| t[:format] }
@@ -78,7 +114,7 @@ module RailsAiContext
         say "  1,2 - remove only specific ones by number"
         say ""
 
-        input = ask("Enter choice:").strip.downcase
+        input = ask_safe("Enter choice:").strip.downcase
         return if input.empty? || input == "n" || input == "no"
 
         to_remove = if input == "y" || input == "yes" || input == "a"
@@ -127,7 +163,7 @@ module RailsAiContext
         say "  2. No  - CLI only (no server needed)"
         say ""
 
-        input = ask("Enter number (default: 1):").strip
+        input = ask_safe("Enter number (default: 1):").strip
 
         @tool_mode = case input
         when "2" then :cli
@@ -139,10 +175,12 @@ module RailsAiContext
       end
 
       def create_mcp_config
+        # No explicit standalone: flag - the generator detects the install
+        # mode from Gemfile.lock, so this writes the same command form as the
+        # standalone CLI init for the same app (no config ping-pong).
         generator = RailsAiContext::McpConfigGenerator.new(
           tools: @selected_formats,
           output_dir: Rails.root.to_s,
-          standalone: false,
           tool_mode: @tool_mode
         )
         result = generator.call
@@ -322,6 +360,16 @@ module RailsAiContext
       end
 
       no_tasks do
+      # Thor's `ask` returns nil when stdin hits EOF (e.g. piping fewer answers
+      # than prompts, or `< /dev/null`), which crashes the very next `.strip`
+      # call. Every prompt in this generator treats an empty answer as "use
+      # the default", so collapsing both the EOF case and `--defaults` to ""
+      # here lets each call site's existing empty-string handling do the rest.
+      def ask_safe(statement, **opts)
+        return "" if options[:defaults]
+        ask(statement, **opts).to_s
+      end
+
       def create_new_initializer(path)
         # Always write uncommented so re-install can detect previous selection
         tools_line = "  config.ai_tools = %i[#{@selected_formats.join(' ')}]"
@@ -426,15 +474,25 @@ module RailsAiContext
       end
 
       def ensure_initializer_guard(content)
-        return [ content, false ] if guarded_initializer?(content)
+        return upgrade_bare_guard(content) if guarded_initializer?(content)
 
         header_match = content.match(/\A# frozen_string_literal: true\n(?:\n)?/)
         header = header_match ? "# frozen_string_literal: true\n\n" : ""
         body = header_match ? content.delete_prefix(header_match[0]) : content
         body = "#{body}\n" unless body.end_with?("\n")
 
-        wrapped = "#{header}if defined?(RailsAiContext)\n#{indent_content(body)}end\n"
+        wrapped = "#{header}if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)\n#{indent_content(body)}end\n"
         [ wrapped, wrapped != content ]
+      end
+
+      # Upgrades an initializer still on the bare `if defined?(RailsAiContext)`
+      # guard (written before this gem checked respond_to?(:configure)) in place.
+      # No-op if the guard is already the current form.
+      def upgrade_bare_guard(content)
+        upgraded = content.sub(BARE_GUARD_PATTERN) do
+          "#{Regexp.last_match(1)}if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)"
+        end
+        [ upgraded, upgraded != content ]
       end
 
       def reindent_section_content(section_content, content)
@@ -454,7 +512,11 @@ module RailsAiContext
       end
 
       def guarded_initializer?(content)
-        content.match?(/^[ \t]*if defined\?\(RailsAiContext\)$/)
+        # Matches the current guard (which also checks respond_to?(:configure)) as
+        # well as the older bare guard, so re-running the generator neither
+        # double-wraps an initializer nor treats an unguarded one as guarded.
+        content.match?(BARE_GUARD_PATTERN) ||
+          content.match?(/^[ \t]*if defined\?\(RailsAiContext\)\s*&&\s*RailsAiContext\.respond_to\?\(:configure\)$/)
       end
 
       def indent_content(content)
@@ -497,8 +559,15 @@ module RailsAiContext
         }
 
         require "yaml"
-        File.write(yaml_path, YAML.dump(content))
-        say "Created .rails-ai-context.yml (standalone config)", :green
+        new_content = YAML.dump(content)
+        existed = File.exist?(yaml_path)
+
+        if existed && File.read(yaml_path) == new_content
+          say ".rails-ai-context.yml (unchanged)", :yellow
+        else
+          File.write(yaml_path, new_content)
+          say "#{existed ? 'Updated' : 'Created'} .rails-ai-context.yml", :green
+        end
       end
 
       def add_to_gitignore
@@ -506,15 +575,20 @@ module RailsAiContext
         return unless File.exist?(gitignore)
 
         content = File.read(gitignore)
-        append = []
-        append << ".ai-context.json" unless content.include?(".ai-context.json")
+        lines = []
+        unless content.include?(".ai-context.json")
+          lines << ""
+          lines << "# rails-ai-context (JSON cache - markdown files should be committed)"
+          lines << ".ai-context.json"
+        end
+        unless content.include?(".codex/config.toml")
+          lines << ""
+          lines << "# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)"
+          lines << ".codex/config.toml"
+        end
 
-        if append.any?
-          File.open(gitignore, "a") do |f|
-            f.puts ""
-            f.puts "# rails-ai-context (JSON cache - markdown files should be committed)"
-            append.each { |line| f.puts line }
-          end
+        if lines.any?
+          File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
           say "Updated .gitignore", :green
         end
       end
@@ -533,8 +607,18 @@ module RailsAiContext
 
         return if File.exist?(hook_path) && File.read(hook_path).include?("rails-ai-context")
 
-        answer = ask("Install a pre-commit hook that validates Rails references? (y/N)").strip.downcase
+        answer = ask_safe("Install a pre-commit hook that validates Rails references? (y/N)").strip.downcase
         return unless answer == "y"
+
+        # Standalone installs have no `ai:*` rake tasks, so the hook must call
+        # the gem's own binary; in-Gemfile installs go through rake as usual.
+        if RailsAiContext::InstallMode.standalone?
+          hook_binary = "rails-ai-context"
+          validate_command = %(rails-ai-context tool validate --files "$files")
+        else
+          hook_binary = "rails"
+          validate_command = %(rails 'ai:tool[validate]' files="$files")
+        end
 
         FileUtils.mkdir_p(hooks_dir)
         File.write(hook_path, <<~HOOK)
@@ -549,9 +633,9 @@ module RailsAiContext
             exit 0
           fi
 
-          if command -v rails &> /dev/null; then
+          if command -v #{hook_binary} &> /dev/null; then
             files=$(printf '%s\\n' "$changed_files" | tr '\\n' ',')
-            rails 'ai:tool[validate]' files="$files" 2>/dev/null
+            #{validate_command} 2>/dev/null
             exit_code=$?
             if [ $exit_code -ne 0 ]; then
               echo ""
@@ -581,14 +665,16 @@ module RailsAiContext
           @selected_formats, root: Rails.root
         )
 
-        @selected_formats.each do |fmt|
-          begin
-            result = RailsAiContext.generate_context(format: fmt)
-            (result[:written] || []).each { |f| say "  ✅ #{f}", :green }
-            (result[:skipped] || []).each { |f| say "  ⏭️  #{f} (unchanged)", :yellow }
-          rescue => e
-            say "  ❌ #{fmt}: #{e.message}", :red
-          end
+        # Generate every selected format in ONE call so ContextFileSerializer's
+        # cross-format dedup applies (opencode and codex share AGENTS.md and
+        # its split rules - generating them one format at a time defeats that
+        # dedup and reports the same file as both written and unchanged).
+        begin
+          result = RailsAiContext.generate_context(format: @selected_formats)
+          (result[:written] || []).each { |f| say "  ✅ #{f}", :green }
+          (result[:skipped] || []).each { |f| say "  ⏭️  #{f} (unchanged)", :yellow }
+        rescue => e
+          say "  ❌ #{@selected_formats.join(', ')}: #{e.message}", :red
         end
       end
 
@@ -636,7 +722,11 @@ module RailsAiContext
         say "  rails-ai-context init          # interactive setup"
         say "  rails-ai-context serve         # start MCP server"
         say ""
-        say "Commit context files and MCP config files so your team benefits!", :green
+        if @selected_formats.include?(:codex)
+          say "Commit context files and MCP configs so your team benefits! (.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)", :green
+        else
+          say "Commit context files and MCP config files so your team benefits!", :green
+        end
       end
     end
   end

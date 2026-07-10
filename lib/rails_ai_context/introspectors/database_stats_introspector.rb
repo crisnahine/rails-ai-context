@@ -7,6 +7,11 @@ module RailsAiContext
     class DatabaseStatsIntrospector
       attr_reader :app
 
+      # Trilogy is Rails 8's default MySQL adapter (`adapter_name` reports
+      # "Trilogy", not "Mysql2") - matching only /mysql/ silently skips
+      # stats collection for every Trilogy app.
+      MYSQL_ADAPTER = /mysql|trilogy/i
+
       def initialize(app)
         @app = app
       end
@@ -18,7 +23,7 @@ module RailsAiContext
         case adapter
         when /postgresql/
           collect_postgresql_stats
-        when /mysql/
+        when MYSQL_ADAPTER
           collect_mysql_stats
         when /sqlite/
           collect_sqlite_stats

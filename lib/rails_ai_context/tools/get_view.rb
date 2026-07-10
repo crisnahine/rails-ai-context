@@ -67,7 +67,8 @@ module RailsAiContext
             all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
             suggestion = find_closest_match(ctrl_lower, all_dirs)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
-            return text_response("No views for '#{controller}'.#{hint} Directories with views: #{all_dirs.join(', ')}")
+            dirs_note = all_dirs.any? ? " Directories with views: #{all_dirs.join(', ')}" : " No view directories found (API-only apps typically have none)."
+            return text_response("No views for '#{controller}'.#{hint}#{dirs_note}")
           end
 
           templates = filtered_templates
@@ -257,6 +258,13 @@ module RailsAiContext
         if path.include?("..") || path.start_with?("/")
           return text_response("Path not allowed: #{path}")
         end
+
+        # Accept the full repo-relative form too (e.g. "app/views/layouts/mailer.html.erb"),
+        # not just the documented app/views-relative form ("layouts/mailer.html.erb").
+        # Agents commonly address a file the way they found it on disk; without
+        # this, a file that genuinely exists reads as "not found" purely because
+        # of which convention the caller used.
+        path = path.delete_prefix("app/views/") if path.start_with?("app/views/")
 
         # Block sensitive files on the caller-supplied string before any
         # filesystem stat - closes the existence-oracle side channel.

@@ -77,6 +77,32 @@ module E2E
       request("tools/call", { name: name, arguments: arguments })
     end
 
+    # Drain whatever stderr output is currently buffered without blocking
+    # for the full `timeout` once data starts arriving. The server writes
+    # log lines synchronously while handling a request, so by the time its
+    # stdout response has been read, any stderr line for that same request
+    # is already flushed and ready to read - this just waits briefly for it.
+    def read_stderr_available(timeout: 1.0, quiet_period: 0.05)
+      buffer = +""
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+      loop do
+        remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        break if remaining <= 0
+
+        wait = buffer.empty? ? remaining : quiet_period
+        ready, = IO.select([ @stderr ], nil, nil, wait)
+        break if ready.nil?
+
+        chunk = @stderr.read_nonblock(65536)
+        buffer << chunk
+      rescue IO::WaitReadable
+        next
+      rescue EOFError
+        break
+      end
+      buffer
+    end
+
     private
 
     # The MCP stdio transport uses newline-delimited JSON (NDJSON) per the

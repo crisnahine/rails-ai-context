@@ -143,7 +143,7 @@ RSpec.describe RailsAiContext::Resources do
       result = read_handler.call(uri: "rails://schema")
       expect(result).to be_an(Array)
       expect(result.first[:uri]).to eq("rails://schema")
-      expect(result.first[:mime_type]).to eq("application/json")
+      expect(result.first[:mimeType]).to eq("application/json")
       parsed = JSON.parse(result.first[:text])
       expect(parsed).to eq({ "tables" => [ "users" ] })
     end
@@ -177,7 +177,7 @@ RSpec.describe RailsAiContext::Resources do
     end
 
     it "delegates rails-ai-context:// URIs to VFS" do
-      vfs_result = [ { uri: "rails-ai-context://models/User", mime_type: "application/json", text: '{"ok":true}' } ]
+      vfs_result = [ { uri: "rails-ai-context://models/User", mimeType: "application/json", text: '{"ok":true}' } ]
       allow(RailsAiContext::VFS).to receive(:resolve).and_return(vfs_result)
 
       result = read_handler.call(uri: "rails-ai-context://models/User")

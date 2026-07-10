@@ -108,6 +108,25 @@ module RailsAiContext
 
       HARD_ROW_CAP = 1000
 
+      # Trilogy is Rails 8's default MySQL adapter (`adapter_name` reports
+      # "Trilogy", not "Mysql2") - every dispatch that branches on adapter
+      # name to apply the MySQL safety/parsing path must match both, or
+      # Trilogy apps silently fall through to the "unknown adapter" path
+      # with no READ ONLY transaction and no statement timeout.
+      MYSQL_ADAPTER = /mysql|trilogy/i
+
+      # SHOW/DESCRIBE/EXPLAIN return schema metadata (a table's column list,
+      # an EXPLAIN plan), never application data rows. Two consequences:
+      #   1. They're inherently bounded - appending `LIMIT n` to them is
+      #      invalid syntax on MySQL/Postgres and the query fails outright,
+      #      even though these statements are explicitly advertised as allowed.
+      #   2. Column-name-based redaction doesn't apply to them - MySQL's
+      #      DESCRIBE returns a literal column named "Key" (PRI/UNI/MUL/empty)
+      #      that isn't actual secret data but matches the generic
+      #      sensitive-suffix heuristic (ends_with "key") used for real result
+      #      sets, so it would otherwise be redacted into uselessness.
+      SCHEMA_METADATA_PREFIX = /\A\s*(SHOW|DESCRIBE|DESC|EXPLAIN)\b/i
+
       def self.call(sql: nil, limit: nil, format: "table", explain: false, server_context: nil, **_extra)
         set_call_params(sql: sql&.truncate(60))
         # ── Environment guard ───────────────────────────────────────
@@ -150,7 +169,8 @@ module RailsAiContext
         result = execute_safely(sql.strip, row_limit, timeout_seconds)
 
         # ── Layer 4: Redact sensitive columns ───────────────────────
-        redacted = redact_results(result)
+        # Skip for SHOW/DESCRIBE/EXPLAIN - see SCHEMA_METADATA_PREFIX.
+        redacted = sql.strip.match?(SCHEMA_METADATA_PREFIX) ? result : redact_results(result)
 
         # ── Format output ───────────────────────────────────────────
         output = case format
@@ -169,10 +189,14 @@ module RailsAiContext
         elsif e.message.match?(/could not find|does not exist|Unknown database/i)
           text_response("Database not found: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Run `bin/rails db:create` to create the database\n- Check `config/database.yml` for the correct database name\n- Try `RAILS_ENV=test` if the development DB is remote")
         else
-          text_response("SQL error: #{clean_error_message(e.message)}")
+          # Genuine execution failure (unknown column, bad table, syntax
+          # error) - flag as an error result so MCP clients and the CLI
+          # (exit 1) treat it as failed. Policy blocks ("Blocked: ...") and
+          # unavailable-database guidance stay informational above.
+          error_response("SQL error: #{clean_error_message(e.message)}")
         end
       rescue => e
-        text_response("Query failed: #{clean_error_message(e.message)}")
+        error_response("Query failed: #{clean_error_message(e.message)}")
       end
 
       # ── SQL comment stripping ───────────────────────────────────────
@@ -278,7 +302,7 @@ module RailsAiContext
         case adapter
         when /postgresql/
           execute_postgresql(conn, limited_sql, timeout_seconds)
-        when /mysql/
+        when MYSQL_ADAPTER
           execute_mysql(conn, limited_sql, timeout_seconds)
         when /sqlite/
           execute_sqlite(conn, limited_sql, timeout_seconds)
@@ -361,8 +385,12 @@ module RailsAiContext
         explain_sql, parser = case adapter
         when /postgresql/
           [ "EXPLAIN (FORMAT JSON, ANALYZE) #{sql}", :parse_pg_explain ]
-        when /mysql/
-          [ "EXPLAIN #{sql}", :parse_mysql_explain ]
+        when MYSQL_ADAPTER
+          # MySQL 8.3+ and 9.x default explain_format to TREE, which
+          # parse_mysql_explain can't read (it expects the classic
+          # table/type/key/rows/Extra columns). Force TRADITIONAL explicitly
+          # so parsing works regardless of the server's default.
+          [ "EXPLAIN FORMAT=TRADITIONAL #{sql}", :parse_mysql_explain ]
         when /sqlite/
           [ "EXPLAIN QUERY PLAN #{sql}", :parse_sqlite_explain ]
         else
@@ -376,10 +404,10 @@ module RailsAiContext
         # attacker reaches this via `explain: true` to hold a DB connection
         # indefinitely and bypass the query_timeout guard.
         result = case adapter
-        when /postgresql/ then execute_postgresql(conn, explain_sql, timeout)
-        when /mysql/      then execute_mysql(conn, explain_sql, timeout)
-        when /sqlite/     then execute_sqlite(conn, explain_sql, timeout)
-        else                   conn.select_all(explain_sql)
+        when /postgresql/  then execute_postgresql(conn, explain_sql, timeout)
+        when MYSQL_ADAPTER then execute_mysql(conn, explain_sql, timeout)
+        when /sqlite/      then execute_sqlite(conn, explain_sql, timeout)
+        else                    conn.select_all(explain_sql)
         end
         parsed = send(parser, result)
 
@@ -518,6 +546,8 @@ module RailsAiContext
 
       # ── Row limit enforcement (Layer 3) ─────────────────────────────
       private_class_method def self.apply_row_limit(sql, limit)
+        return sql if sql.match?(SCHEMA_METADATA_PREFIX)
+
         effective_limit = [ limit, HARD_ROW_CAP ].min
 
         if sql.match?(/\bLIMIT\s+(\d+)/i)

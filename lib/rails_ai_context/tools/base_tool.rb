@@ -19,6 +19,7 @@ module RailsAiContext
       def self.inherited(subclass)
         super
         subclass.instance_variable_set(:@abstract, false)
+        subclass.singleton_class.prepend(SafeCall)
         # Thread-safe append. Mutex is NOT held during eager_load!'s const_get
         # (which triggers inherited), so no recursive locking risk here.
         BaseTool.registry_mutex.synchronize { BaseTool.descendants << subclass }
@@ -28,9 +29,12 @@ module RailsAiContext
         attr_reader :descendants, :registry_mutex
 
         # Mark a tool class as abstract (excluded from registration).
+        # Reaches back to BaseTool explicitly: registry_mutex/descendants are
+        # ivars on the BaseTool object, and a subclass calling this method
+        # has no ivar storage of its own to read them from.
         def abstract!
           @abstract = true
-          registry_mutex.synchronize { descendants.delete(self) }
+          BaseTool.registry_mutex.synchronize { BaseTool.descendants.delete(self) }
         end
 
         def abstract?
@@ -214,14 +218,30 @@ module RailsAiContext
           suggestion = nil if suggestion == name
           lines = [ "#{type} '#{name}' not found." ]
           lines << "Did you mean '#{suggestion}'?" if suggestion
-          lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}"
+          lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}" if available.any?
           lines << "_Recovery: #{recovery_tool}_" if recovery_tool
           text_response(lines.join("\n"))
+        end
+
+        # One-line banner listing introspectors that failed during context
+        # generation. Aggregate tools append this so AI clients know which
+        # sections are missing rather than empty.
+        def introspection_warnings_note(ctx)
+          warnings = ctx.is_a?(Hash) ? ctx[:_warnings] : nil
+          return nil unless warnings.is_a?(Array) && warnings.any?
+
+          failed = warnings.map { |w| w[:introspector] }.compact.join(", ")
+          "\n\n---\n_Partial context: introspection failed for #{failed}. " \
+            "Data from those sections is missing, not empty._"
         end
 
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
         def find_closest_match(input, available)
           return nil if available.empty?
+          # A blank query matches everything via substring ("".include? anything),
+          # so it would otherwise surface an arbitrary "Did you mean" suggestion
+          # for input that isn't a typo at all - just missing.
+          return nil if input.to_s.strip.empty?
           downcased = input.downcase
           underscored = input.underscore.downcase
 
@@ -307,7 +327,10 @@ module RailsAiContext
 
         # Helper: wrap text in an MCP::Tool::Response with safety-net truncation.
         # Auto-records the call in session context so session_context(action:"status") works.
-        def text_response(text)
+        # `suffix:`, when given, is appended after the truncation footer (or after
+        # the text itself when untruncated) so callers can attach a short trailing
+        # note that must survive truncation instead of being cut off with the tail.
+        def text_response(text, suffix: nil)
           # Auto-track: record this tool call in session context (skip SessionContext itself to avoid recursion)
           if respond_to?(:tool_name) && tool_name != "rails_session_context"
             summary = text.lines.first&.strip&.truncate(80)
@@ -320,10 +343,24 @@ module RailsAiContext
           if max && text.length > max
             truncated = text[0...max]
             truncated += "\n\n---\n_Response truncated (#{text.length} chars). Use `detail:\"summary\"` for an overview, or filter by a specific item (e.g. `table:\"users\"`)._"
+            truncated += suffix if suffix
             MCP::Tool::Response.new([ { type: "text", text: truncated } ])
           else
+            text += suffix if suffix
             MCP::Tool::Response.new([ { type: "text", text: text } ])
           end
+        end
+
+        # Helper: wrap text in an MCP::Tool::Response flagged as an error
+        # (isError: true) so MCP clients and the CLI treat the call as failed
+        # (non-zero exit). Mirrors the SafeCall rescue wrapper. Use for genuine
+        # execution failures only - policy blocks and guidance messages stay
+        # informational via text_response.
+        def error_response(text)
+          # A failed call must not leak its recorded params into the next
+          # call's session entry.
+          Thread.current[:rails_ai_context_call_params] = nil
+          MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
         end
 
         private
@@ -399,6 +436,23 @@ module RailsAiContext
         rescue Errno::ENOENT, Errno::EACCES => e
           $stderr.puts "[rails-ai-context] safe_glob failed: #{e.message}" if ENV["DEBUG"]
           []
+        end
+
+        # Merge duplicate PUT/PATCH entries for the same path+action into a
+        # single "PATCH|PUT" entry (Rails generates both for every `resources`
+        # update route). Public: the VFS routes resource uses it too, so route
+        # counts stay consistent across every surface that reports them.
+        public def dedupe_put_patch_routes(actions)
+          deduped = []
+          actions.each do |r|
+            existing = deduped.find { |d| d[:path] == r[:path] && d[:action] == r[:action] }
+            if existing && %w[PUT PATCH].include?(r[:verb]) && %w[PUT PATCH].include?(existing[:verb])
+              existing[:verb] = "PATCH|PUT"
+            else
+              deduped << r.dup
+            end
+          end
+          deduped
         end
       end
     end

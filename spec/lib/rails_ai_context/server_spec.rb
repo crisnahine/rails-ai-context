@@ -60,6 +60,44 @@ RSpec.describe RailsAiContext::Server do
       expect(mcp_server.instructions).to include("Ground truth engine")
     end
 
+    describe "exception_reporter" do
+      let(:reporter) { server.build.configuration.exception_reporter }
+
+      it "logs routine request errors (e.g. unknown tool) as a single quiet line" do
+        error = MCP::Server::RequestHandlerError.new(
+          "Tool not found: bogus", {}, error_type: :invalid_params
+        )
+        expect($stderr).to receive(:puts).once.with(
+          "[rails-ai-context] request error (invalid_params): Tool not found: bogus"
+        )
+        reporter.call(error, {})
+      end
+
+      it "logs genuine internal errors with the full backtrace" do
+        error = begin
+          raise "boom"
+        rescue => e
+          e
+        end
+        expect($stderr).to receive(:puts).with(/unhandled exception: RuntimeError: boom/)
+        expect($stderr).to receive(:puts).at_least(:once)
+        reporter.call(error, {})
+      end
+
+      it "logs a RequestHandlerError whose error_type is :internal_error with the full backtrace" do
+        error = begin
+          raise MCP::Server::RequestHandlerError.new(
+            "Internal error handling tools/call request", {}, error_type: :internal_error
+          )
+        rescue => e
+          e
+        end
+        expect($stderr).to receive(:puts).with(/unhandled exception: MCP::Server::RequestHandlerError/)
+        expect($stderr).to receive(:puts).with(/^    /).at_least(:once)
+        reporter.call(error, {})
+      end
+    end
+
     it "registers 5 resource templates" do
       mcp_server = server.build
       templates = mcp_server.instance_variable_get(:@resource_templates)

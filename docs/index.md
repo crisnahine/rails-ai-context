@@ -22,7 +22,7 @@ Works with Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI.
 
 | Guide | Description |
 |:------|:------------|
-| **[Tools Reference](TOOLS.md)** | All 38 tools with every parameter |
+| **[Tools Reference](TOOLS.md)** | All 39 tools with every parameter |
 | **[Configuration](CONFIGURATION.md)** | 40+ config options with defaults |
 | **[CLI Reference](CLI.md)** | Commands and argument syntax |
 | **[Introspectors](INTROSPECTORS.md)** | All 39 introspectors and AST engine |

@@ -198,5 +198,37 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("no Action Cable channels detected")
       end
     end
+
+    context "when app/jobs/ exists but has no job classes beyond ApplicationJob" do
+      let(:tmpdir) { Dir.mktmpdir }
+      let(:jobs_dir) { File.join(tmpdir, "app", "jobs") }
+
+      before do
+        FileUtils.mkdir_p(jobs_dir)
+        File.write(File.join(jobs_dir, "application_job.rb"), <<~RUBY)
+          class ApplicationJob < ActiveJob::Base
+          end
+        RUBY
+
+        allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir))
+        allow(described_class).to receive(:cached_context).and_return(jobs: { jobs: [], mailers: [], channels: [] })
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "says the directory exists but has no job classes, not that it's missing" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).not_to include("No app/jobs/ directory found")
+        expect(text).to include("app/jobs/ exists but has no job classes beyond ApplicationJob")
+      end
+
+      it "gives the same truthful message for a specific job lookup" do
+        result = described_class.call(job: "SendWelcomeEmail")
+        text = result.content.first[:text]
+        expect(text).not_to include("No app/jobs/ directory found")
+        expect(text).to include("app/jobs/ exists but has no job classes beyond ApplicationJob")
+      end
+    end
   end
 end

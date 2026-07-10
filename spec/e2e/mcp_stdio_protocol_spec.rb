@@ -75,9 +75,19 @@ RSpec.describe "E2E: MCP stdio protocol", type: :e2e do
     expect(content.first["text"]).to match(/posts|Post/)
   end
 
-  it "tools/call with unknown tool returns a JSON-RPC error" do
+  it "tools/call with unknown tool returns a JSON-RPC error and logs quietly" do
     expect {
       @mcp.call_tool("rails_nonexistent_tool_xyz")
     }.to raise_error(E2E::McpStdioClient::Error, /JSON-RPC error/)
+
+    # A bogus tool name is routine client-side traffic, not a server bug -
+    # it must not dump a 10-line backtrace to stderr.
+    stderr_output = @mcp.read_stderr_available
+    expect(stderr_output).to match(/\[rails-ai-context\] request error \(invalid_params\).*Tool not found/)
+    expect(stderr_output).not_to include("unhandled exception")
+
+    # The server must still be alive and answering after a routine error.
+    response = @mcp.list_tools
+    expect(response.dig("result", "tools")).to be_a(Array)
   end
 end

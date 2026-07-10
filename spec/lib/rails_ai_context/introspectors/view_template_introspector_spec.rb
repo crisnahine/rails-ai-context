@@ -106,4 +106,44 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       end
     end
   end
+
+  describe "#extract_partial_refs" do
+    it "detects the Rails 7+ bare local-variable render form (render article)" do
+      source = <<~ERB
+        <% @articles.each do |article| %>
+          <%= render article %>
+        <% end %>
+      ERB
+      expect(introspector.send(:extract_partial_refs, source)).to include("article")
+    end
+
+    it "detects the bare form wrapped in parens (render(article))" do
+      source = "<%= render(article) %>"
+      expect(introspector.send(:extract_partial_refs, source)).to include("article")
+    end
+
+    it "still detects render @ivar" do
+      source = "<%= render @article %>"
+      expect(introspector.send(:extract_partial_refs, source)).to include("article")
+    end
+
+    it "does not mistake keyword-argument hashes for a bare local render" do
+      source = <<~ERB
+        <%= render partial: "article", locals: { article: article } %>
+        <%= render json: { ok: true } %>
+        <%= render layout: false %>
+      ERB
+      refs = introspector.send(:extract_partial_refs, source)
+      expect(refs).to include("article")
+      expect(refs).not_to include("json")
+      expect(refs).not_to include("layout")
+      expect(refs).not_to include("partial")
+      expect(refs).not_to include("locals")
+    end
+
+    it "does not match a symbol action render (render :new)" do
+      source = "<%= render :new %>"
+      expect(introspector.send(:extract_partial_refs, source)).to be_empty
+    end
+  end
 end

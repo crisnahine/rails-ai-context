@@ -33,6 +33,18 @@ RSpec.describe "Tool input normalization" do
       expect(result).to be_nil
     end
 
+    it "returns nil for blank input instead of an arbitrary substring match" do
+      # "".include?(anything) is always true, so without this guard the first
+      # available name would be suggested for input that's missing, not a typo.
+      result = subject.find_closest_match("", %w[Widget Post Comment])
+      expect(result).to be_nil
+    end
+
+    it "returns nil for whitespace-only input" do
+      result = subject.find_closest_match("   ", %w[Widget Post Comment])
+      expect(result).to be_nil
+    end
+
     it "falls back to prefix match when no substring matches" do
       result = subject.find_closest_match("xyz", %w[xyzzy abc def])
       expect(result).to eq("xyzzy")

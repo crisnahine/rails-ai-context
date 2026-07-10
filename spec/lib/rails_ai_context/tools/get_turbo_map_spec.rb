@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetTurboMap do
   before { described_class.reset_cache! }
@@ -87,6 +88,51 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
       result = described_class.call(detail: "summary")
       text = result.content.first[:text]
       expect(text).to include("Turbo")
+    end
+  end
+
+  describe "when turbo-rails is not installed" do
+    let(:lock_path) { File.join(Rails.root.to_s, "Gemfile.lock") }
+
+    before do
+      File.write(lock_path, <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            rails (8.0.0)
+      LOCK
+    end
+
+    after { FileUtils.rm_f(lock_path) }
+
+    it "short-circuits with a not-installed message instead of a Turbo Drive block" do
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("Turbo is not installed in this app")
+      expect(text).not_to include("Turbo Drive Configuration")
+      expect(text).not_to include("Turbo Map")
+    end
+  end
+
+  describe "when turbo-rails IS installed (per Gemfile.lock)" do
+    let(:lock_path) { File.join(Rails.root.to_s, "Gemfile.lock") }
+
+    before do
+      File.write(lock_path, <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            turbo-rails (2.0.0)
+      LOCK
+    end
+
+    after { FileUtils.rm_f(lock_path) }
+
+    it "runs the normal Turbo Map flow" do
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("Turbo Map")
+      expect(text).not_to include("Turbo is not installed")
     end
   end
 end

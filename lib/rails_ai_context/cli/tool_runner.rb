@@ -15,12 +15,13 @@ module RailsAiContext
       class ToolNotFoundError < StandardError; end
       class InvalidArgumentError < StandardError; end
 
-      attr_reader :tool_class, :raw_args, :json_mode
+      attr_reader :tool_class, :raw_args, :json_mode, :error
 
       def initialize(tool_name, raw_args, json_mode: false)
         @tool_class = resolve_tool(tool_name)
         @raw_args = raw_args
         @json_mode = json_mode
+        @error = false
       end
 
       def run
@@ -36,13 +37,33 @@ module RailsAiContext
         lines = [ "Available tools:", "" ]
         available_tools.each do |tool|
           short = short_name(tool.tool_name)
-          desc = tool.description_value.to_s[0..79]
+          desc = truncate_at_word(tool.description_value.to_s, 79)
           lines << "  #{short.ljust(24)} #{desc}"
         end
         lines << ""
-        lines << "Usage: rails 'ai:tool[NAME]' param=value"
-        lines << "       rails-ai-context tool NAME --param value"
+        # Standalone installs have no rake tasks, so advertising the rake form
+        # would point users at a command that does not exist.
+        if RailsAiContext::InstallMode.standalone?
+          lines << "Usage: rails-ai-context tool NAME --param value"
+          lines << "JSON envelope: rails-ai-context tool NAME --json"
+        else
+          lines << "Usage: rails 'ai:tool[NAME]' param=value"
+          lines << "       rails-ai-context tool NAME --param value"
+          lines << "JSON envelope: rails-ai-context tool NAME --json, or JSON=1 rails 'ai:tool[NAME]'"
+        end
         lines.join("\n")
+      end
+
+      # Truncate at the last whole word within `limit` chars and append "..."
+      # so descriptions never cut off mid-word. Returns `text` unchanged when
+      # it already fits.
+      def self.truncate_at_word(text, limit)
+        return text if text.length <= limit
+
+        cut = text[0...limit]
+        boundary = cut.rindex(" ")
+        cut = cut[0...boundary] if boundary
+        "#{cut}..."
       end
 
       # Filtered tool list respecting skip_tools config.
@@ -63,11 +84,15 @@ module RailsAiContext
         lines = [
           "#{tool_class.tool_name} - #{tool_class.description_value}",
           "",
-          "Usage:",
-          "  rails 'ai:tool[#{short_name(tool_class.tool_name)}]' #{properties.keys.map { |k| "#{k}=VALUE" }.join(' ')}",
-          "  rails-ai-context tool #{short_name(tool_class.tool_name)} #{properties.keys.map { |k| "--#{k.to_s.tr('_', '-')} VALUE" }.join(' ')}",
-          ""
+          "Usage:"
         ]
+        # Standalone installs have no rake tasks; only show the rake form when
+        # the gem lives in the app's Gemfile.
+        unless RailsAiContext::InstallMode.standalone?
+          lines << "  rails 'ai:tool[#{short_name(tool_class.tool_name)}]' #{properties.keys.map { |k| "#{k}=VALUE" }.join(' ')}"
+        end
+        lines << "  rails-ai-context tool #{short_name(tool_class.tool_name)} #{properties.keys.map { |k| "--#{k.to_s.tr('_', '-')} VALUE" }.join(' ')}"
+        lines << ""
 
         if properties.any?
           lines << "Options:"
@@ -128,7 +153,15 @@ module RailsAiContext
         suggestion = Tools::BaseTool.find_closest_match(name, short_names)
         msg = "Unknown tool '#{name}'."
         msg += " Did you mean '#{suggestion}'?" if suggestion
-        msg += "\n\nRun with --list to see all available tools."
+        # In-Gemfile, this message reaches both the CLI (`--list` works) and
+        # the rake task (`--list` does not - it's a Thor-only option), so name
+        # both working invocations instead of one that fails half the time.
+        # Standalone installs have no rake tasks, so only name the CLI form.
+        msg += if RailsAiContext::InstallMode.standalone?
+          "\n\nSee all tools: rails-ai-context tool --list."
+        else
+          "\n\nSee all tools: rails 'ai:tool' (rake) or rails-ai-context tool --list (CLI)."
+        end
         raise ToolNotFoundError, msg
       end
 
@@ -273,12 +306,14 @@ module RailsAiContext
         end
       end
 
-      # Extract text from MCP::Tool::Response.
+      # Extract text from MCP::Tool::Response and record whether the tool
+      # reported failure (isError), so callers can set a non-zero exit code.
       def extract_output(response)
         text = response.content.first&.dig(:text) || ""
+        @error = response.respond_to?(:error?) && response.error?
         if json_mode
           require "json"
-          JSON.pretty_generate(tool: tool_class.tool_name, output: text)
+          JSON.pretty_generate(tool: tool_class.tool_name, output: text, error: @error)
         else
           text
         end

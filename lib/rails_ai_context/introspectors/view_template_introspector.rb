@@ -152,12 +152,26 @@ module RailsAiContext
         helpers.uniq
       end
 
+      RENDER_KEYWORD_ARGS = %w[
+        partial layout collection json plain html text xml body file inline
+        js status location content_type template formats spacer_template
+        cached as object each_serializer
+      ].to_set.freeze
+
       def extract_partial_refs(content)
         refs = []
         # render "partial_name" or render partial: "name"
         content.scan(/render\s+(?:partial:\s*)?["']([^"']+)["']/).each { |m| refs << m[0] }
         # render @collection
         content.scan(/render\s+@(\w+)/).each { |m| refs << m[0] }
+        # render article / render(article) - Rails 7+ bare local-variable/object
+        # render (the scaffold default: `render @articles.each { |article| render article }`).
+        # The negative lookahead excludes keyword-argument hashes like
+        # `render json: ...` / `render partial: ...`, where a colon immediately
+        # follows the identifier instead of a statement boundary.
+        content.scan(/\brender[\s(]+([a-z_]\w*)\b(?!\s*:)/).each do |m|
+          refs << m[0] unless RENDER_KEYWORD_ARGS.include?(m[0])
+        end
         # Phlex: render ComponentName.new(...) or render(ComponentName.new(...))
         content.scan(/render[\s(]+([A-Z]\w+(?:::\w+)*)\.new/).each { |m| refs << m[0] }
         refs.uniq

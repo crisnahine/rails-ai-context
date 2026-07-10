@@ -32,8 +32,10 @@ module RailsAiContext
       def self.call(ref: "HEAD", files: nil, server_context: nil)
         root = Rails.root.to_s
 
-        # Verify git is available
-        _, status = Open3.capture2("git", "rev-parse", "--git-dir", chdir: root)
+        # Verify git is available. Child stderr goes to File::NULL so git's own
+        # "fatal: not a git repository" noise never reaches the server terminal;
+        # the friendly message below is the only thing the caller sees.
+        _, status = Open3.capture2("git", "rev-parse", "--git-dir", chdir: root, err: File::NULL)
         unless status.success?
           return text_response("Not a git repository. `rails_review_changes` requires a git repository.\n\n**To initialize:** `git init && git add -A && git commit -m 'Initial commit'`")
         end
@@ -111,19 +113,19 @@ module RailsAiContext
 
         def get_changed_files(ref, root)
           if ref == "HEAD"
-            staged, _ = Open3.capture2("git", "diff", "--cached", "--name-only", chdir: root)
-            unstaged, _ = Open3.capture2("git", "diff", "--name-only", chdir: root)
-            untracked, _ = Open3.capture2("git", "ls-files", "--others", "--exclude-standard", chdir: root)
+            staged, _ = Open3.capture2("git", "diff", "--cached", "--name-only", chdir: root, err: File::NULL)
+            unstaged, _ = Open3.capture2("git", "diff", "--name-only", chdir: root, err: File::NULL)
+            untracked, _ = Open3.capture2("git", "ls-files", "--others", "--exclude-standard", chdir: root, err: File::NULL)
             (staged.lines + unstaged.lines + untracked.lines).map(&:strip).reject(&:empty?).uniq
           else
             # Try three-dot (since divergence from ref)
-            output, status = Open3.capture2("git", "diff", "--name-only", "#{ref}...HEAD", chdir: root)
+            output, status = Open3.capture2("git", "diff", "--name-only", "#{ref}...HEAD", chdir: root, err: File::NULL)
             unless status.success?
               # Fall back to two-dot
-              output, status = Open3.capture2("git", "diff", "--name-only", "#{ref}..HEAD", chdir: root)
+              output, status = Open3.capture2("git", "diff", "--name-only", "#{ref}..HEAD", chdir: root, err: File::NULL)
               unless status.success?
                 # Fall back to single ref diff
-                output, _ = Open3.capture2("git", "diff", "--name-only", ref, chdir: root)
+                output, _ = Open3.capture2("git", "diff", "--name-only", ref, chdir: root, err: File::NULL)
               end
             end
             output.lines.map(&:strip).reject(&:empty?).uniq
@@ -132,7 +134,7 @@ module RailsAiContext
 
         def get_commit_log(ref, root)
           return nil if ref == "HEAD"
-          output, status = Open3.capture2("git", "log", "--oneline", "-10", "#{ref}..HEAD", chdir: root)
+          output, status = Open3.capture2("git", "log", "--oneline", "-10", "#{ref}..HEAD", chdir: root, err: File::NULL)
           return nil unless status.success? && !output.strip.empty?
           output.strip
         end
@@ -230,12 +232,12 @@ module RailsAiContext
 
         def get_file_diff(file, root, ref)
           if ref == "HEAD"
-            output, status = Open3.capture2("git", "diff", "--", file, chdir: root)
+            output, status = Open3.capture2("git", "diff", "--", file, chdir: root, err: File::NULL)
             if !status.success? || output.strip.empty?
-              output, status = Open3.capture2("git", "diff", "--cached", "--", file, chdir: root)
+              output, status = Open3.capture2("git", "diff", "--cached", "--", file, chdir: root, err: File::NULL)
             end
           else
-            output, status = Open3.capture2("git", "diff", ref, "--", file, chdir: root)
+            output, status = Open3.capture2("git", "diff", ref, "--", file, chdir: root, err: File::NULL)
           end
           status.success? && !output.strip.empty? ? output : nil
         end

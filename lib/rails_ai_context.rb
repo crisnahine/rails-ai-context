@@ -34,6 +34,18 @@ module RailsAiContext
       @configured_via_block || false
     end
 
+    # Warn through Rails.logger when available, stderr otherwise. Introspection
+    # runs in contexts where Rails.logger is nil (early-boot rake tasks, engine
+    # dummy apps); a logging call that raises inside a rescue block defeats the
+    # fault isolation the rescue exists to provide.
+    def log_warn(message)
+      if defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
+        Rails.logger.warn(message)
+      else
+        $stderr.puts(message)
+      end
+    end
+
     # Quick access to introspect the current Rails app
     # Returns a hash of all discovered context
     def introspect(app = nil)

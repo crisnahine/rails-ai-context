@@ -7,7 +7,40 @@ require "yaml"
 RSpec.describe RailsAiContext::McpConfigGenerator do
   let(:tools) { %i[claude cursor copilot opencode codex] }
 
+  # Examples that omit standalone: exercise the in-Gemfile command shape.
+  # Pin detection so the assertions do not depend on this repo's own
+  # Gemfile.lock; explicit standalone: arguments bypass detection entirely.
+  before do
+    allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+  end
+
   describe "#call" do
+    context "install mode detection" do
+      it "auto-detects standalone mode when standalone: is not given" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+        Dir.mktmpdir do |dir|
+          described_class.new(tools: [ :claude ], output_dir: dir, tool_mode: :mcp).call
+
+          entry = JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"]["rails-ai-context"]
+          expect(entry["command"]).to eq("rails-ai-context")
+          expect(entry["args"]).to eq([ "serve" ])
+        end
+      end
+
+      it "prefers an explicit standalone: value over detection" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+        Dir.mktmpdir do |dir|
+          described_class.new(tools: [ :claude ], output_dir: dir, standalone: false, tool_mode: :mcp).call
+
+          entry = JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"]["rails-ai-context"]
+          expect(entry["command"]).to eq("bundle")
+          expect(entry["args"]).to eq([ "exec", "rails-ai-context", "serve" ])
+        end
+      end
+    end
+
     context "with :mcp tool_mode" do
       it "generates .mcp.json for :claude with mcpServers key" do
         Dir.mktmpdir do |dir|
@@ -20,7 +53,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
           entry = content["mcpServers"]["rails-ai-context"]
           expect(entry["command"]).to eq("bundle")
-          expect(entry["args"]).to eq([ "exec", "rails", "ai:serve" ])
+          expect(entry["args"]).to eq([ "exec", "rails-ai-context", "serve" ])
         end
       end
 
@@ -50,7 +83,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
           entry = content["servers"]["rails-ai-context"]
           expect(entry["command"]).to eq("bundle")
-          expect(entry["args"]).to eq([ "exec", "rails", "ai:serve" ])
+          expect(entry["args"]).to eq([ "exec", "rails-ai-context", "serve" ])
         end
       end
 
@@ -64,7 +97,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
 
           entry = content["mcp"]["rails-ai-context"]
           expect(entry["type"]).to eq("local")
-          expect(entry["command"]).to eq([ "bundle", "exec", "rails", "ai:serve" ])
+          expect(entry["command"]).to eq([ "bundle", "exec", "rails-ai-context", "serve" ])
           expect(entry).not_to have_key("args")
         end
       end
@@ -79,7 +112,7 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           content = File.read(path)
           expect(content).to include("[mcp_servers.rails-ai-context]")
           expect(content).to include('command = "bundle"')
-          expect(content).to include('args = ["exec", "rails", "ai:serve"]')
+          expect(content).to include('args = ["exec", "rails-ai-context", "serve"]')
           # Env section captures PATH for Codex sandbox compatibility
           expect(content).to include("[mcp_servers.rails-ai-context.env]")
           expect(content).to include("PATH = ")

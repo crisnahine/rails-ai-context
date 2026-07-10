@@ -3,6 +3,7 @@
 require "json"
 require "fileutils"
 require "securerandom"
+require_relative "install_mode"
 
 module RailsAiContext
   # Generates per-tool MCP config files so each AI tool auto-discovers the MCP server.
@@ -26,12 +27,17 @@ module RailsAiContext
 
     # @param tools [Array<Symbol>] selected AI tool keys (e.g. [:claude, :cursor])
     # @param output_dir [String] project root path
-    # @param standalone [Boolean] true for standalone CLI mode
+    # @param standalone [Boolean, nil] true writes bare `rails-ai-context`
+    #   commands, false writes `bundle exec` commands. nil (the default)
+    #   detects the install mode from the app's Gemfile.lock so every entry
+    #   point that writes MCP configs (standalone CLI init, rake task, Rails
+    #   generator) converges on identical config content for the same app
+    #   instead of rewriting each other's command form on alternate runs.
     # @param tool_mode [Symbol] :mcp or :cli
-    def initialize(tools:, output_dir:, standalone: false, tool_mode: :mcp)
+    def initialize(tools:, output_dir:, standalone: nil, tool_mode: :mcp)
       @tools = Array(tools).map(&:to_sym)
       @output_dir = output_dir
-      @standalone = standalone
+      @standalone = standalone.nil? ? InstallMode.standalone? : standalone
       @tool_mode = tool_mode
     end
 
@@ -169,8 +175,10 @@ module RailsAiContext
         lines << 'command = "rails-ai-context"'
         lines << 'args = ["serve"]'
       else
+        # Same command shape as mcp_json_entry: the CLI binary quarantines app
+        # boot output away from stdout starting before Bundler.require.
         lines << 'command = "bundle"'
-        lines << 'args = ["exec", "rails", "ai:serve"]'
+        lines << 'args = ["exec", "rails-ai-context", "serve"]'
       end
 
       # Codex CLI env_clear()s the process environment. Capture the current Ruby
@@ -205,7 +213,11 @@ module RailsAiContext
       if @standalone
         { "command" => "rails-ai-context", "args" => [ "serve" ] }
       else
-        { "command" => "bundle", "args" => [ "exec", "rails", "ai:serve" ] }
+        # The CLI binary quarantines app boot output away from stdout starting
+        # before Bundler.require; the rake task can only quarantine from the
+        # environment task onward. Both paths keep working - this only changes
+        # what new installs write into their MCP configs.
+        { "command" => "bundle", "args" => [ "exec", "rails-ai-context", "serve" ] }
       end
     end
 
@@ -213,7 +225,7 @@ module RailsAiContext
       if @standalone
         [ "rails-ai-context", "serve" ]
       else
-        [ "bundle", "exec", "rails", "ai:serve" ]
+        [ "bundle", "exec", "rails-ai-context", "serve" ]
       end
     end
 

@@ -63,20 +63,13 @@ module RailsAiContext
         all_migrations.last(count).reverse
       end
 
-      # Detect pending migrations by comparing against schema version
+      # Detect pending migrations. Prefers the live DB (authoritative - the
+      # actual applied version set) and falls back to comparing migration
+      # filenames against the schema file's recorded version when the
+      # database is unreachable (CI, static analysis, no db:create yet).
       def pending_migrations
-        if defined?(ActiveRecord::Base) && ActiveRecord::Base.connection_pool.connected?
-          begin
-            context = ActiveRecord::MigrationContext.new(migrate_dir)
-            if context.respond_to?(:pending_migrations)
-              return context.pending_migrations.map do |m|
-                { version: m.version.to_s, name: m.name }
-              end
-            end
-          rescue => _e
-            # Fall through to file-based detection
-          end
-        end
+        live = RailsAiContext::MigrationStatus.pending(migrate_dir)
+        return live if live
 
         schema_ver = current_schema_version
         return [] unless schema_ver
@@ -87,13 +80,7 @@ module RailsAiContext
       end
 
       def current_schema_version
-        schema_path = File.join(root, "db/schema.rb")
-        return nil unless File.exist?(schema_path)
-
-        content = RailsAiContext::SafeFile.read(schema_path)
-        return nil unless content
-        match = content.match(/version:\s*([\d_]+)/)
-        match ? match[1].delete("_") : nil
+        RailsAiContext::SchemaVersion.current(root)
       rescue => e
         $stderr.puts "[rails-ai-context] current_schema_version failed: #{e.message}" if ENV["DEBUG"]
         nil

@@ -35,7 +35,7 @@ module RailsAiContext
         if conventions[:directory_structure]&.any?
           lines << "" << "## Directory structure"
           conventions[:directory_structure].sort_by { |k, _| k }.each do |dir, count|
-            lines << "- `#{dir}/` → #{count} files"
+            lines << "- `#{dir}/` → #{count} #{count == 1 ? 'file' : 'files'}"
           end
         end
 
@@ -187,6 +187,10 @@ module RailsAiContext
         flash_alerts = []
         not_found_patterns = []
         create_flows = []
+        create_flow_parts_seen = []
+        create_error_statuses = []
+        json_response_count = 0
+        html_response_count = 0
         show_only_controllers = []
         has_services = Dir.exist?(Rails.root.join("app", "services"))
 
@@ -234,9 +238,23 @@ module RailsAiContext
               flow_parts << "permission check" if create_block.match?(/can_\w+\??|authorize|authorize!/)
               flow_parts << "build" if create_block.match?(/\.new\(|\.build\(|\.create\(/)
               flow_parts << "save" if create_block.match?(/\.save\b|\.create\b/)
-              flow_parts << "redirect/render" if create_block.match?(/redirect_to|render\b/)
+              # A scaffolded HTML controller's `respond_to` block often has a
+              # `format.json { render json: ... }` branch alongside its HTML
+              # redirect - that's still an HTML-first flow, not a JSON API one.
+              # Only call it "render json" when there's no redirect_to at all.
+              is_json_response = !create_block.match?(/redirect_to/) && create_block.match?(/render\s+json:/)
+              if create_block.match?(/redirect_to|render\b/)
+                flow_parts << (is_json_response ? "render json" : "redirect/render")
+                is_json_response ? json_response_count += 1 : html_response_count += 1
+              end
               if flow_parts.size >= 2
                 create_flows << "#{controller_name.camelize}: #{flow_parts.join(' → ')}"
+                create_flow_parts_seen.concat(flow_parts)
+                # Record the failure-branch status this create action renders,
+                # skipping success statuses so :created does not shadow it.
+                error_status = create_block.scan(/status:\s*:(\w+)/).flatten
+                  .find { |s| !%w[created ok found see_other].include?(s) }
+                create_error_statuses << error_status if error_status
               end
             end
           end
@@ -270,21 +288,53 @@ module RailsAiContext
 
         if create_flows.any?
           sections << "" << "### Create Action Pattern (follow this for new actions)"
+          create_flows.each { |f| sections << "- #{f}" }
+          sections << ""
+
+          has_permission_check = create_flow_parts_seen.include?("permission check")
+          has_save = create_flow_parts_seen.include?("save")
+          has_redirect_render = create_flow_parts_seen.include?("redirect/render")
+          has_json_render = create_flow_parts_seen.include?("render json")
+          # When both styles appear across controllers, follow whichever is
+          # more common so the skeleton reflects the dominant convention.
+          use_json_skeleton = has_json_render && json_response_count >= html_response_count
+          # Rails 7.1 renamed the 422 status symbol: newer scaffolds render
+          # :unprocessable_content, older apps :unprocessable_entity. Mirror
+          # whichever the app's own create actions use most.
+          failure_status = create_error_statuses.tally.max_by { |_, count| count }&.first || "unprocessable_entity"
+
           sections << "```ruby"
           sections << "def create"
-          sections << "  unless current_user.can_[permission]?"
-          sections << '    redirect_to [path], alert: "[limit message]"'
-          sections << "    return"
-          sections << "  end"
-          sections << ""
-          sections << "  @record = current_user.[association].build([params_method])"
-          sections << ""
-          sections << "  if @record.save"
-          sections << '    redirect_to @record, notice: "[success message]"'
-          sections << "  else"
-          sections << "    @[collection] = current_user.[association].[scope]"
-          sections << "    render :new, status: :unprocessable_entity"
-          sections << "  end"
+          if has_permission_check
+            sections << "  unless current_user.can_[permission]?"
+            sections << '    redirect_to [path], alert: "[limit message]"'
+            sections << "    return"
+            sections << "  end"
+            sections << ""
+            sections << "  @record = current_user.[association].build([params_method])"
+          else
+            sections << "  @record = [Model].new([params_method])"
+          end
+          if has_save
+            sections << ""
+            sections << "  if @record.save"
+            if use_json_skeleton
+              sections << "    render json: @record, status: :created"
+            elsif has_redirect_render
+              sections << '    redirect_to @record, notice: "[success message]"'
+            else
+              sections << "    # success"
+            end
+            sections << "  else"
+            if use_json_skeleton
+              sections << "    render json: @record.errors, status: :#{failure_status}"
+            elsif has_redirect_render
+              sections << "    render :new, status: :#{failure_status}"
+            else
+              sections << "    # failure"
+            end
+            sections << "  end"
+          end
           sections << "end"
           sections << "```"
           sections << ""
@@ -298,8 +348,13 @@ module RailsAiContext
           sections << "#"
           sections << "class AnalyticsController < ApplicationController"
           sections << "  def show"
-          sections << "    @records = current_user.[association].[scope]"
-          sections << "    @stats = current_user.[association].[aggregation]"
+          if auth_checks.any?
+            sections << "    @records = current_user.[association].[scope]"
+            sections << "    @stats = current_user.[association].[aggregation]"
+          else
+            sections << "    @records = [Model].[scope]"
+            sections << "    @stats = [Model].[aggregation]"
+          end
           sections << "  end"
           sections << "end"
           sections << "```"

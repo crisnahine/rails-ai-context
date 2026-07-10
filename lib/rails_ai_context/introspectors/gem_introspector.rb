@@ -64,6 +64,7 @@ module RailsAiContext
         # Database
         "pg"              => { category: :database, note: "PostgreSQL adapter." },
         "mysql2"          => { category: :database, note: "MySQL adapter." },
+        "trilogy"         => { category: :database, note: "MySQL adapter (pure Ruby, Rails 8 default over mysql2)." },
         "sqlite3"         => { category: :database, note: "SQLite adapter." },
         "litestack"       => { category: :database, note: "All-in-one SQLite-based backend (cache, jobs, cable, search)." },
         "redis"           => { category: :database, note: "Redis client. Used for caching/sessions/Action Cable." },

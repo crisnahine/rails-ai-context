@@ -88,7 +88,7 @@ module RailsAiContext
         perf = ctx[:performance]
         if perf.is_a?(Hash) && !perf[:error] && perf[:summary]
           total = perf.dig(:summary, :total_issues).to_i
-          lines << "- Performance: #{total} issues detected" if total > 0
+          lines << "- Performance: #{total} #{total == 1 ? 'issue' : 'issues'} detected" if total > 0
         end
 
         fe = ctx[:frontend_frameworks]

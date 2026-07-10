@@ -18,7 +18,10 @@ module RailsAiContext
 
     class << self
       # Resolve a rails-ai-context:// URI to MCP resource content.
-      # Returns an array of content hashes: [{uri:, mime_type:, text:}]
+      # Returns an array of content hashes: [{uri:, mimeType:, text:}].
+      # Keys are MCP-spec camelCase because the MCP SDK serializes the
+      # resources/read handler's return value into the JSON-RPC response
+      # verbatim - a snake_case :mime_type key would reach clients unchanged.
       def resolve(uri)
         PATTERNS.each do |entry|
           match = uri.match(entry[:pattern])
@@ -43,7 +46,7 @@ module RailsAiContext
         unless data
           available = models.keys.sort.first(20)
           content = JSON.pretty_generate(error: "Model '#{name}' not found", available: available)
-          return [ { uri: uri, mime_type: "application/json", text: content } ]
+          return [ { uri: uri, mimeType: "application/json", text: content } ]
         end
 
         # Enrich with schema columns if available
@@ -51,7 +54,7 @@ module RailsAiContext
         schema = context.dig(:schema, :tables, table_name) if table_name
         enriched = data.merge(schema: schema).compact
 
-        [ { uri: uri, mime_type: "application/json", text: JSON.pretty_generate(enriched) } ]
+        [ { uri: uri, mimeType: "application/json", text: JSON.pretty_generate(enriched) } ]
       end
 
       def resolve_controller(uri, name)
@@ -68,10 +71,10 @@ module RailsAiContext
         unless key
           available = controllers.keys.sort.first(20)
           content = JSON.pretty_generate(error: "Controller '#{name}' not found", available: available)
-          return [ { uri: uri, mime_type: "application/json", text: content } ]
+          return [ { uri: uri, mimeType: "application/json", text: content } ]
         end
 
-        [ { uri: uri, mime_type: "application/json", text: JSON.pretty_generate(controllers[key]) } ]
+        [ { uri: uri, mimeType: "application/json", text: JSON.pretty_generate(controllers[key]) } ]
       end
 
       def resolve_controller_action(uri, controller_name, action_name)
@@ -85,7 +88,7 @@ module RailsAiContext
 
         unless key
           content = JSON.pretty_generate(error: "Controller '#{controller_name}' not found")
-          return [ { uri: uri, mime_type: "application/json", text: content } ]
+          return [ { uri: uri, mimeType: "application/json", text: content } ]
         end
 
         info = controllers[key]
@@ -94,7 +97,7 @@ module RailsAiContext
 
         unless action
           content = JSON.pretty_generate(error: "Action '#{action_name}' not found in #{key}", available: actions)
-          return [ { uri: uri, mime_type: "application/json", text: content } ]
+          return [ { uri: uri, mimeType: "application/json", text: content } ]
         end
 
         # Build action-specific data
@@ -113,7 +116,7 @@ module RailsAiContext
           strong_params: info[:strong_params]
         }.compact
 
-        [ { uri: uri, mime_type: "application/json", text: JSON.pretty_generate(action_data) } ]
+        [ { uri: uri, mimeType: "application/json", text: JSON.pretty_generate(action_data) } ]
       end
 
       def resolve_view(uri, path)
@@ -136,7 +139,7 @@ module RailsAiContext
 
         unless File.exist?(full_path)
           content = JSON.pretty_generate(error: "View not found: #{path}")
-          return [ { uri: uri, mime_type: "application/json", text: content } ]
+          return [ { uri: uri, mimeType: "application/json", text: content } ]
         end
 
         # Verify resolved path is still under views_dir. `start_with?` alone
@@ -166,24 +169,34 @@ module RailsAiContext
         max_size = RailsAiContext.configuration.max_file_size
         if File.size(real_view) > max_size
           content = JSON.pretty_generate(error: "File too large: #{path} (#{File.size(real_view)} bytes)")
-          return [ { uri: uri, mime_type: "application/json", text: content } ]
+          return [ { uri: uri, mimeType: "application/json", text: content } ]
         end
 
         view_content = RailsAiContext::SafeFile.read(real_view) || ""
         mime = path.end_with?(".rb") ? "text/x-ruby" : "text/html"
-        [ { uri: uri, mime_type: mime, text: view_content } ]
+        [ { uri: uri, mimeType: mime, text: view_content } ]
       end
 
       def resolve_routes(uri, controller)
         context = RailsAiContext.introspect
         routes_data = context[:routes] || {}
 
-        filtered = (routes_data[:routes] || []).select { |r|
-          r[:controller].to_s.include?(controller)
-        }
-        data = routes_data.merge(routes: filtered, filtered_by: controller)
+        # The route introspector groups routes as {controller_name => [entries]}
+        # under :by_controller (there is no flat :routes list). Entries omit the
+        # controller because it is the grouping key, so merge it back in to keep
+        # each row self-describing in the flattened output. PUT/PATCH update
+        # pairs merge into one PATCH|PUT entry so this resource reports the
+        # same counts as the routes tool.
+        by_controller = routes_data[:by_controller] || {}
+        routes = by_controller.flat_map { |name, entries|
+          next [] unless name.to_s.include?(controller)
 
-        [ { uri: uri, mime_type: "application/json", text: JSON.pretty_generate(data) } ]
+          Tools::BaseTool.dedupe_put_patch_routes(Array(entries)).map { |entry| entry.merge(controller: name.to_s) }
+        }
+
+        data = { filtered_by: controller, total_routes: routes.size, routes: routes }
+
+        [ { uri: uri, mimeType: "application/json", text: JSON.pretty_generate(data) } ]
       end
     end
   end

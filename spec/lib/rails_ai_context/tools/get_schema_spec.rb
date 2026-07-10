@@ -221,4 +221,34 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).not_to include("| Column |")
     end
   end
+
+  describe "singular pluralization with exactly one table" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: { "users" => tables["users"] }, total_tables: 1 },
+        models: {}
+      })
+    end
+
+    it "says '1 table' not '1 tables' in the standard header" do
+      result = described_class.call(detail: "standard")
+      text = result.content.first[:text]
+      expect(text).to include("# Schema (1 table, showing 1)")
+      expect(text).not_to include("1 tables")
+    end
+
+    it "says '1 table' not '1 tables' in the summary header" do
+      result = described_class.call(detail: "summary")
+      text = result.content.first[:text]
+      expect(text).to include("# Schema Summary (1 table)")
+      expect(text).not_to include("1 tables")
+    end
+
+    it "says '1 table' not '1 tables' in the full header" do
+      result = described_class.call(detail: "full")
+      text = result.content.first[:text]
+      expect(text).to include("# Schema Full Detail (1 of 1 table)")
+      expect(text).not_to include("1 tables")
+    end
+  end
 end

@@ -141,6 +141,11 @@ module RailsAiContext
 
         output = results.join("\n")
         output += "\n\n#{passed}/#{total} files passed"
+        # A failed validation is the tool's core negative verdict, not
+        # advisory guidance - flag it as an MCP error so CLI callers exit
+        # non-zero. Mirrors the SQL-error promotion in query.rb.
+        return error_response(output) if passed < total
+
         text_response(output)
       end
 

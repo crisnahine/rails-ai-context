@@ -184,5 +184,20 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         expect(text).not_to include("static_parse")
       end
     end
+
+    context "route count parity with rails_get_routes" do
+      it "reports the same app route total as the routes tool (PUT/PATCH deduped)" do
+        RailsAiContext::Tools::GetRoutes.reset_cache!
+
+        routes_text = RailsAiContext::Tools::GetRoutes.call(detail: "standard").content.first[:text]
+        routes_total = routes_text[/# Routes \((\d+) route/, 1].to_i
+        expect(routes_total).to be > 0
+
+        onboard_text = described_class.call(detail: "standard").content.first[:text]
+        onboard_total = onboard_text[/Total: (\d+) app routes/, 1].to_i
+
+        expect(onboard_total).to eq(routes_total)
+      end
+    end
   end
 end

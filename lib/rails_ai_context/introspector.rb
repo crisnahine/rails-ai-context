@@ -29,7 +29,7 @@ module RailsAiContext
         context[name] = introspector.call
       rescue => e
         context[name] = { error: e.message }
-        Rails.logger.warn "[rails-ai-context] #{name} introspection failed: #{e.message}"
+        RailsAiContext.log_warn "[rails-ai-context] #{name} introspection failed: #{e.message}"
       end
 
       # Collect warnings for introspectors that failed, so serializers can

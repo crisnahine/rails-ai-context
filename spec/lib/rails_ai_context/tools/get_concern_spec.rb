@@ -215,6 +215,23 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("Searchable")
       end
 
+      it "omits the dangling 'Available:' line when no concerns exist to suggest" do
+        empty_dir = Dir.mktmpdir
+        FileUtils.mkdir_p(File.join(empty_dir, "app", "models", "concerns"))
+        FileUtils.mkdir_p(File.join(empty_dir, "app", "controllers", "concerns"))
+        allow(described_class).to receive(:rails_app).and_return(
+          double("app", root: Pathname.new(empty_dir))
+        )
+
+        result = described_class.call(name: "Nonexistent")
+        text = result.content.first[:text]
+
+        expect(text).to include("not found")
+        expect(text).not_to include("Available:")
+      ensure
+        FileUtils.remove_entry(empty_dir) if empty_dir
+      end
+
       it "returns message when no concern directories exist" do
         allow(described_class).to receive(:rails_app).and_return(
           double("app", root: Pathname.new("/tmp/empty_app_#{SecureRandom.hex(4)}"))

@@ -42,8 +42,8 @@ module RailsAiContext
         arch << "phlex" if gem_present?("phlex-rails")
         arch << "stimulus" if dir_exists?("app/javascript/controllers")
         arch << "importmaps" if file_exists?("config/importmap.rb")
-        arch << "concerns_models" if dir_exists?("app/models/concerns")
-        arch << "concerns_controllers" if dir_exists?("app/controllers/concerns")
+        arch << "concerns_models" if concern_files_exist?("app/models/concerns")
+        arch << "concerns_controllers" if concern_files_exist?("app/controllers/concerns")
         arch << "validators" if dir_exists?("app/validators")
         arch << "policies" if dir_exists?("app/policies")
         arch << "serializers" if dir_exists?("app/serializers")
@@ -331,6 +331,13 @@ module RailsAiContext
 
       def dir_exists?(relative_path)
         Dir.exist?(File.join(root, relative_path))
+      end
+
+      # A freshly-generated Rails app ships empty concerns/ directories (holding
+      # only a .keep file), so directory existence alone isn't evidence the
+      # pattern is in use. Require at least one real Ruby file inside.
+      def concern_files_exist?(relative_path)
+        Dir.glob(File.join(root, relative_path, "**", "*.rb")).any?
       end
 
       def file_exists?(relative_path)

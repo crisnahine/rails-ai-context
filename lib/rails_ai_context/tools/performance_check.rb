@@ -100,7 +100,16 @@ module RailsAiContext
         end
 
         if filtered_count == 0
-          lines << "No performance issues detected#{model && !model.empty? ? " for #{model}" : ""}. Your app looks good!"
+          scoped = []
+          scoped << "for #{model}" if model && !model.empty?
+          scoped << "in category '#{category}'" if category != "all"
+
+          if scoped.empty?
+            lines << "No performance issues detected. Your app looks good!"
+          else
+            lines << "No issues found #{scoped.join(' ')}. Other categories or models may still have issues - " \
+              "call rails_performance_check() without filters for the full report."
+          end
         end
 
         text_response(lines.join("\n"))

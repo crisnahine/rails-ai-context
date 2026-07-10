@@ -87,6 +87,25 @@ module RailsAiContext
       class << self
         private
 
+        # Word-boundary match against the feature keyword: `pattern` must align
+        # with a contiguous run of whole "words" in `text` (as split by
+        # underscores, path separators, and CamelCase boundaries), allowing
+        # for simple singular/plural variance on each word (e.g. "post"
+        # matches "posts" and "PostsController", and "dos_service" matches
+        # "dos_service_0"). A plain substring check would also match "post"
+        # against "postmark" - an unrelated word that merely starts the same.
+        def feature_word_match?(text, pattern)
+          return false if text.nil? || pattern.nil? || pattern.empty?
+
+          text_words = text.to_s.underscore.scan(/[a-z0-9]+/)
+          pattern_words = pattern.to_s.underscore.scan(/[a-z0-9]+/)
+          return false if pattern_words.empty?
+
+          text_words.each_cons(pattern_words.size).any? do |window|
+            window.zip(pattern_words).all? { |w, p| w == p || w.singularize == p.singularize }
+          end
+        end
+
         # --- AF: Models ---
         def discover_models(ctx, pattern, lines)
           models = ctx[:models] || {}
@@ -96,9 +115,8 @@ module RailsAiContext
 
           matched = models.select do |name, data|
             next false if data[:error]
-            name.downcase.include?(pattern) ||
-              data[:table_name]&.downcase&.include?(pattern) ||
-              name.underscore.include?(pattern) ||
+            feature_word_match?(name, pattern) ||
+              feature_word_match?(data[:table_name], pattern) ||
               (extra_auth_match && (name == "User" || data[:concerns]&.any? { |c| c.to_s.downcase.match?(/authenticat|devise/) }))
           end
 
@@ -144,7 +162,7 @@ module RailsAiContext
         # --- AF: Controllers ---
         def discover_controllers(ctx, pattern, lines)
           controllers = ctx.dig(:controllers, :controllers) || {}
-          matched = controllers.select { |name, data| data.is_a?(Hash) && !data[:error] && name.downcase.include?(pattern) }
+          matched = controllers.select { |name, data| data.is_a?(Hash) && !data[:error] && feature_word_match?(name, pattern) }
 
           if matched.any?
             lines << "## Controllers (#{matched.size})"
@@ -178,7 +196,7 @@ module RailsAiContext
         # --- AF: Routes ---
         def discover_routes(ctx, pattern, lines)
           by_controller = ctx.dig(:routes, :by_controller) || {}
-          matched = by_controller.select { |ctrl, _| ctrl.downcase.include?(pattern) }
+          matched = by_controller.select { |ctrl, _| feature_word_match?(ctrl, pattern) }
 
           if matched.any?
             route_count = matched.values.sum(&:size)
@@ -210,8 +228,8 @@ module RailsAiContext
           # a content scan for files whose basename doesn't match. This
           # avoids reading every service file's full contents on large apps.
           found = candidates.select do |path|
-            next true if File.basename(path, ".rb").include?(pattern)
-            File.size(path) < 50_000 && (RailsAiContext::SafeFile.read(path) || "").downcase.include?(pattern)
+            next true if feature_word_match?(File.basename(path, ".rb"), pattern)
+            File.size(path) < 50_000 && feature_word_match?(RailsAiContext::SafeFile.read(path), pattern)
           end
           return if found.empty?
 
@@ -238,7 +256,7 @@ module RailsAiContext
           real_root = File.realpath(root).to_s
           candidates = safe_glob(dir, "**/*.rb", real_root).first(MAX_SCAN_FILES)
           found = candidates.select do |path|
-            File.basename(path, ".rb").include?(pattern)
+            feature_word_match?(File.basename(path, ".rb"), pattern)
           end
           return if found.empty?
 
@@ -265,7 +283,7 @@ module RailsAiContext
           real_views_dir = File.realpath(views_dir).to_s
           candidates = safe_glob(views_dir, "**/*.{erb,haml,slim}", real_root).first(MAX_SCAN_FILES)
           found = candidates.select do |path|
-            path.sub("#{real_views_dir}/", "").downcase.include?(pattern)
+            feature_word_match?(path.sub("#{real_views_dir}/", ""), pattern)
           end
           return if found.empty?
 
@@ -295,7 +313,7 @@ module RailsAiContext
           controllers = stim[:controllers] || []
           matched = controllers.select do |c|
             name = c[:name] || c[:file]&.gsub("_controller.js", "")
-            name&.downcase&.include?(pattern)
+            feature_word_match?(name, pattern)
           end
           return if matched.empty?
 
@@ -331,12 +349,12 @@ module RailsAiContext
             suffix_glob = safe_glob(dir, "**/*_{test,spec}.rb", real_root).first(MAX_SCAN_FILES)
             truncated = true if suffix_glob.size == MAX_SCAN_FILES
             suffix_glob.each do |path|
-              found << path if File.basename(path, ".rb").include?(pattern)
+              found << path if feature_word_match?(File.basename(path, ".rb"), pattern)
             end
             prefix_glob = safe_glob(dir, "**/{test,spec}_*.rb", real_root).first(MAX_SCAN_FILES)
             truncated = true if prefix_glob.size == MAX_SCAN_FILES
             prefix_glob.each do |path|
-              found << path if File.basename(path, ".rb").include?(pattern)
+              found << path if feature_word_match?(File.basename(path, ".rb"), pattern)
             end
           end
           found.uniq!
@@ -347,8 +365,10 @@ module RailsAiContext
           found.each do |path|
             relative = path.sub("#{real_root}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
-            test_count = source.scan(/\b(?:it|test|should)\b/).size
-            lines << "- `#{relative}` (#{test_count} tests)"
+            test_count = source.each_line.count do |line|
+              line.match?(/^\s*(?:test|it|specify)\s+["']/) || line.match?(/^\s*def\s+test_/)
+            end
+            lines << "- `#{relative}` (#{test_count} #{test_count == 1 ? 'test' : 'tests'})"
           end
           lines << ""
           found
@@ -373,7 +393,7 @@ module RailsAiContext
           # Check controllers
           controllers = ctx[:controllers]&.dig(:controllers) || {}
           controllers.each_key do |ctrl_name|
-            next unless ctrl_name.downcase.include?(pattern)
+            next unless feature_word_match?(ctrl_name, pattern)
             snake = ctrl_name.underscore.delete_suffix("_controller")
             unless test_basenames.any? { |t| t.include?(snake) }
               gaps << "Controller `#{ctrl_name}` - no test file found"
@@ -386,7 +406,7 @@ module RailsAiContext
           job_dir = File.join(root, "app", "jobs")
           if Dir.exist?(job_dir)
             safe_glob(job_dir, "**/*.rb", real_root).first(MAX_SCAN_FILES).each do |path|
-              next unless File.basename(path, ".rb").include?(pattern)
+              next unless feature_word_match?(File.basename(path, ".rb"), pattern)
               snake = File.basename(path, ".rb")
               unless test_basenames.any? { |t| t.include?(snake) }
                 gaps << "Job `#{snake}` - no test file found"
@@ -398,7 +418,7 @@ module RailsAiContext
           service_dir = File.join(root, "app", "services")
           if Dir.exist?(service_dir)
             safe_glob(service_dir, "**/*.rb", real_root).first(MAX_SCAN_FILES).each do |path|
-              next unless File.basename(path, ".rb").include?(pattern)
+              next unless feature_word_match?(File.basename(path, ".rb"), pattern)
               snake = File.basename(path, ".rb")
               unless test_basenames.any? { |t| t.include?(snake) }
                 gaps << "Service `#{snake}` - no test file found"
@@ -511,7 +531,7 @@ module RailsAiContext
 
           real_root = File.realpath(root).to_s
           candidates = safe_glob(dir, "**/*.rb", real_root).first(MAX_SCAN_FILES)
-          found = candidates.select { |p| File.basename(p, ".rb").include?(pattern) }
+          found = candidates.select { |p| feature_word_match?(File.basename(p, ".rb"), pattern) }
           return if found.empty?
 
           lines << "## Channels (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
@@ -532,7 +552,7 @@ module RailsAiContext
 
           real_root = File.realpath(root).to_s
           candidates = safe_glob(dir, "**/*.rb", real_root).first(MAX_SCAN_FILES)
-          found = candidates.select { |p| File.basename(p, ".rb").include?(pattern) }
+          found = candidates.select { |p| feature_word_match?(File.basename(p, ".rb"), pattern) }
           return if found.empty?
 
           lines << "## Mailers (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
@@ -555,8 +575,8 @@ module RailsAiContext
 
           # Find components whose usage includes views matching the pattern
           matched = comp[:components].select do |c|
-            c[:name]&.downcase&.include?(pattern) ||
-              c[:used_in]&.any? { |v| v.downcase.include?(pattern) }
+            feature_word_match?(c[:name], pattern) ||
+              c[:used_in]&.any? { |v| feature_word_match?(v, pattern) }
           end
           return if matched.empty?
 
@@ -585,7 +605,7 @@ module RailsAiContext
             candidates = safe_glob(dir, "**/*.rb", real_root).first(MAX_SCAN_FILES)
             truncated = true if candidates.size == MAX_SCAN_FILES
             candidates.each do |path|
-              next unless File.basename(path, ".rb").include?(pattern) || path.downcase.include?(pattern)
+              next unless feature_word_match?(File.basename(path, ".rb"), pattern) || feature_word_match?(path, pattern)
               source = RailsAiContext::SafeFile.read(path) or next
               source.scan(/ENV\[["']([^"']+)["']\]|ENV\.fetch\(["']([^"']+)["']\)/).each do |m|
                 env_vars << (m[0] || m[1])

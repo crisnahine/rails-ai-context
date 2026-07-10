@@ -101,8 +101,11 @@ module RailsAiContext
         # Show affected models
         lines.concat(show_affected_models(table, models))
 
-        # Strong Migrations warnings (only when the gem is present in the project)
-        lines.concat(strong_migrations_warnings(action, table, column, options)) if strong_migrations_gem_present?
+        # Strong Migrations warnings (only when the gem is present in the project).
+        # add_association accepts the associated table via either `column` or
+        # `type` (see generate_add_association) - resolve the same way here.
+        warning_column = action == "add_association" ? (column || type) : column
+        lines.concat(strong_migrations_warnings(action, table, warning_column, options)) if strong_migrations_gem_present?
 
         text_response(lines.join("\n"))
       end
@@ -222,7 +225,7 @@ module RailsAiContext
           lines = []
 
           if !column_exists?(table, column)
-            lines << "**Warning:** Column `#{column}` does not exist on `#{table}`. This migration will fail with `PG::UndefinedColumn`."
+            lines << "**Warning:** Column `#{column}` does not exist on `#{table}`. This migration will fail with `ActiveRecord::StatementInvalid`."
             lines << ""
           end
 
@@ -243,7 +246,11 @@ module RailsAiContext
           lines << "```"
           lines << ""
           lines << "**Reversible:** Yes"
-          lines << "**Note:** For large tables, consider `algorithm: :concurrently` (PostgreSQL) to avoid locking"
+          lines << if mysql_adapter?
+            "**Note:** MySQL/MariaDB add indexes to InnoDB tables via online DDL by default (`ALGORITHM=INPLACE`, no table lock) - there's no `algorithm: :concurrently` equivalent to reach for here (that option is PostgreSQL-only; Rails raises `ArgumentError` if you pass it on this adapter)."
+          else
+            "**Note:** For large tables, consider `algorithm: :concurrently` (PostgreSQL) to avoid locking"
+          end
           lines
         end
 
@@ -368,19 +375,32 @@ module RailsAiContext
               "Safer pattern: add a new column with the new type, backfill, dual-write, swap, drop the old column."
             ]
           when "add_index"
-            unless options.to_s.include?("concurrently")
+            # strong_migrations only requires algorithm: :concurrently on
+            # PostgreSQL (its ACCESS EXCLUSIVE lock is the problem) - it
+            # doesn't flag plain add_index on MySQL/MariaDB or SQLite at all.
+            if postgresql_adapter? && !options.to_s.include?("concurrently")
               [
                 "**`add_index` without `algorithm: :concurrently`** acquires an `ACCESS EXCLUSIVE` lock on Postgres and blocks writes.",
                 "Use `add_index :#{table}, :#{column}, algorithm: :concurrently` and add `disable_ddl_transaction!` at the top of the migration."
               ]
             end
           when "add_association"
-            [
-              "**`add_foreign_key` validates existing rows by default**, which acquires a `SHARE ROW EXCLUSIVE` lock on both tables.",
-              "Safer two-step pattern:",
-              "  1. `add_foreign_key :#{table}, :other_table, validate: false` (lock-free)",
-              "  2. In a separate migration: `validate_foreign_key :#{table}, :other_table`"
-            ]
+            if mysql_adapter?
+              [
+                "**`add_foreign_key` blocks writes on both tables while validating existing rows.** MySQL/MariaDB has no `validate: false` + separate-validation two-step like Postgres.",
+                "If you're certain all rows are valid, wrap in `safety_assured` and drop `foreign_key_checks` for the duration:",
+                "  1. `execute \"SET SESSION foreign_key_checks = 0\"`",
+                "  2. `add_foreign_key :#{table}, :#{column}`",
+                "  3. `execute \"SET SESSION foreign_key_checks = 1\"`"
+              ]
+            else
+              [
+                "**`add_foreign_key` validates existing rows by default**, which acquires a `SHARE ROW EXCLUSIVE` lock on both tables.",
+                "Safer two-step pattern:",
+                "  1. `add_foreign_key :#{table}, :#{column}, validate: false` (lock-free)",
+                "  2. In a separate migration: `validate_foreign_key :#{table}, :#{column}`"
+              ]
+            end
           when "add_column"
             if options.to_s.match?(/null:\s*false/) && !options.to_s.include?("default:")
               [
@@ -472,6 +492,21 @@ module RailsAiContext
         rescue => e
           $stderr.puts "[rails-ai-context] rails_version failed: #{e.message}" if ENV["DEBUG"]
           "7.1"
+        end
+
+        # Locking/DDL advice differs by adapter (MySQL's online DDL vs
+        # Postgres's ACCESS EXCLUSIVE locks), so callers need to know which
+        # family the app is actually running before printing lock advice.
+        def current_adapter
+          cached_context.dig(:schema, :adapter).to_s
+        end
+
+        def mysql_adapter?
+          current_adapter.match?(/mysql|trilogy/i)
+        end
+
+        def postgresql_adapter?
+          current_adapter.match?(/postgres/i)
         end
       end
     end

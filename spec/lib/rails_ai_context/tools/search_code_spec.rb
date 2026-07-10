@@ -68,6 +68,23 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       text = result.content.first[:text]
       expect(text).to include("Unknown match_type")
     end
+
+    it "marks match lines with '>' and context lines with spaces when context is shown" do
+      skip "requires ripgrep for context lines" unless described_class.send(:ripgrep_available?)
+
+      result = described_class.call(pattern: "class Post", path: "app/models", context_lines: 2)
+      text = result.content.first[:text]
+      expect(text).to include("`>` = match line")
+      expect(text).to match(%r{^> app/models/post\.rb:\d+: class Post})
+      expect(text).to match(/^  \S+:\d+:/)
+    end
+
+    it "keeps the plain format when no context lines are requested" do
+      result = described_class.call(pattern: "class Post", path: "app/models", context_lines: 0)
+      text = result.content.first[:text]
+      expect(text).not_to include("`>` = match line")
+      expect(text).to match(%r{^app/models/post\.rb:\d+: class Post})
+    end
   end
 
   describe ".ripgrep_available?" do

@@ -66,6 +66,14 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(result["User"][:concerns]).to be_an(Array)
     end
 
+    it "excludes the debug gem's Kernel-prepended module from concerns" do
+      # The `debug` gem (default in Rails 7.0+ Gemfiles) prepends this onto
+      # Kernel, so every model's ancestors include it even though it's not
+      # something the app itself mixed in.
+      expect(introspector.send(:framework_concern?, "DEBUGGER__::TrapInterceptor")).to be true
+      expect(result["User"][:concerns]).not_to include("DEBUGGER__::TrapInterceptor")
+    end
+
     it "extracts class_methods as array" do
       expect(result["User"][:class_methods]).to be_an(Array)
     end

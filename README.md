@@ -20,8 +20,8 @@
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green)](https://registry.modelcontextprotocol.io)
 <br>
 [![Ruby](https://img.shields.io/badge/Ruby-3.1%20%7C%203.2%20%7C%203.3%20%7C%203.4-CC342D)](https://github.com/crisnahine/rails-ai-context)
-[![Rails](https://img.shields.io/badge/Rails-7.0%20%7C%207.1%20%7C%207.2%20%7C%208.0-CC0000)](https://github.com/crisnahine/rails-ai-context)
-[![Tests](https://img.shields.io/badge/Tests-2257%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
+[![Rails](https://img.shields.io/badge/Rails-7.0%20%7C%207.1%20%7C%207.2%20%7C%208.0%20%7C%208.1-CC0000)](https://github.com/crisnahine/rails-ai-context)
+[![Tests](https://img.shields.io/badge/Tests-2501%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -68,7 +68,7 @@ rails-ai-context serve    # start MCP server
 
 </div>
 
-Now your AI doesn't guess - it **asks your app directly.** 38 tools and 5 resource templates that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing - every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
+Now your AI doesn't guess - it **asks your app directly.** 39 tools and 5 resource templates that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing - every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
 
 <br>
 
@@ -163,7 +163,7 @@ Native Rails controller transport. No separate process needed.
 
 ### CLI
 
-Same 38 tools, no server needed. Works in any terminal, any AI tool.
+Same 39 tools, no server needed. Works in any terminal, any AI tool.
 
 ```bash
 rails 'ai:tool[search_code]' pattern="publishable?" match_type=trace
@@ -351,7 +351,7 @@ Every tool is **read-only** and returns data verified against your actual app - 
 
 </details>
 
-> **[All 38 tools with parameters →](docs/TOOLS.md)** &nbsp;|&nbsp; **[Real-world recipes →](docs/RECIPES.md)**
+> **[All 39 tools with parameters →](docs/TOOLS.md)** &nbsp;|&nbsp; **[Real-world recipes →](docs/RECIPES.md)**
 
 <br>
 
@@ -401,8 +401,8 @@ graph TD
 
     B["rails-ai-context\nPrism AST parsing · Cached · Confidence-tagged\nVFS: rails-ai-context:// URIs introspected fresh"]
 
-    B --> C["MCP Server\nstdio / HTTP\n38 tools · 5 templates"]
-    B --> D["CLI Tools\nRake / Thor\nSame 38 tools"]
+    B --> C["MCP Server\nstdio / HTTP\n39 tools · 5 templates"]
+    B --> D["CLI Tools\nRake / Thor\nSame 39 tools"]
     B --> E["Static Files\nCLAUDE.md · .cursor/rules/ · .cursorrules\n.github/instructions/"]
 
     style A fill:#4a9eff,stroke:#2d7ad4,color:#fff
@@ -440,7 +440,7 @@ Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, Open
 | In-Gemfile | Standalone | What it does |
 |:-----------|:-----------|:------------|
 | `rails ai:context` | `rails-ai-context context` | Generate context files |
-| `rails 'ai:tool[NAME]'` | `rails-ai-context tool NAME` | Run any of the 38 tools |
+| `rails 'ai:tool[NAME]'` | `rails-ai-context tool NAME` | Run any of the 39 tools |
 | `rails ai:tool` | `rails-ai-context tool --list` | List all available tools |
 | `rails ai:serve` | `rails-ai-context serve` | Start MCP server (stdio) |
 | `rails ai:doctor` | `rails-ai-context doctor` | Diagnostics + AI readiness score |
@@ -453,7 +453,7 @@ Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, Open
 | | |
 |:------|:------------|
 | **[Quickstart](docs/QUICKSTART.md)** | 5-minute getting started |
-| **[Tools Reference](docs/TOOLS.md)** | All 38 tools with every parameter |
+| **[Tools Reference](docs/TOOLS.md)** | All 39 tools with every parameter |
 | **[Recipes](docs/RECIPES.md)** | Real-world workflows and examples |
 | **[Custom Tools](docs/CUSTOM_TOOLS.md)** | Build and test your own MCP tools |
 | **[Configuration](docs/CONFIGURATION.md)** | 40+ config options with defaults |
@@ -543,7 +543,7 @@ end
 ## About
 
 Built by a Rails developer with 10+ years of production experience.<br>
-2154 tests + 100-example e2e harness. 38 tools. 5 resource templates. 39 introspectors. Standalone or in-Gemfile.<br>
+2154 tests + 100-example e2e harness. 39 tools. 5 resource templates. 39 introspectors. Standalone or in-Gemfile.<br>
 MIT licensed. [Contributions welcome.](CONTRIBUTING.md)
 
 <br>

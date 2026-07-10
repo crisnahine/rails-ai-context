@@ -50,6 +50,36 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(list).to include("validate")
       expect(list).to include("rails 'ai:tool[NAME]'")
     end
+
+    it "shows only the CLI usage form on standalone installs (no rake tasks exist)" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      list = described_class.tool_list
+      expect(list).to include("Usage: rails-ai-context tool NAME --param value")
+      expect(list).not_to include("rails 'ai:tool[NAME]'")
+    end
+
+    it "truncates a long description at a word boundary with an ellipsis" do
+      list = described_class.tool_list
+      full_description = RailsAiContext::Tools::AnalyzeFeature.description_value.to_s
+      expected = described_class.truncate_at_word(full_description, 79)
+      expect(list).to include(expected)
+      # The old bug cut mid-word with no "...": guard against that regressing.
+      expect(list).not_to include(full_description[0..79])
+    end
+  end
+
+  describe ".truncate_at_word" do
+    it "leaves short text unchanged" do
+      expect(described_class.truncate_at_word("short text", 79)).to eq("short text")
+    end
+
+    it "truncates long text at the last whole word and appends an ellipsis" do
+      text = "Full-stack feature analysis: models, controllers, routes, services, jobs, views, tests"
+      result = described_class.truncate_at_word(text, 79)
+      expect(result).to eq("Full-stack feature analysis: models, controllers, routes, services, jobs,...")
+      expect(text).to start_with(result.delete_suffix("..."))
+    end
   end
 
   describe ".tool_help" do
@@ -66,6 +96,22 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       help = described_class.tool_help(RailsAiContext::Tools::SearchCode)
       expect(help).to include("[required]")
       expect(help).to include("--pattern")
+    end
+
+    it "shows both invocation forms on in-Gemfile installs" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+      help = described_class.tool_help(RailsAiContext::Tools::GetSchema)
+      expect(help).to include("rails 'ai:tool[schema]'")
+      expect(help).to include("rails-ai-context tool schema")
+    end
+
+    it "shows only the CLI form on standalone installs (no rake tasks exist)" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      help = described_class.tool_help(RailsAiContext::Tools::GetSchema)
+      expect(help).to include("rails-ai-context tool schema")
+      expect(help).not_to include("ai:tool")
     end
   end
 
@@ -108,6 +154,24 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     it "raises ToolNotFoundError for unknown tool" do
       expect { described_class.new("nonexistent", []) }
         .to raise_error(described_class::ToolNotFoundError, /Unknown tool/)
+    end
+
+    it "points to both the rake and CLI ways to list tools, not a rake-incompatible --list flag" do
+      expect { described_class.new("nonexistent", []) }
+        .to raise_error(described_class::ToolNotFoundError) { |e|
+          expect(e.message).to include("rails 'ai:tool'")
+          expect(e.message).to include("rails-ai-context tool --list")
+        }
+    end
+
+    it "points only to the CLI list command on standalone installs (no rake tasks exist)" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      expect { described_class.new("nonexistent", []) }
+        .to raise_error(described_class::ToolNotFoundError) { |e|
+          expect(e.message).to include("rails-ai-context tool --list")
+          expect(e.message).not_to include("ai:tool'")
+        }
     end
 
     it "suggests close matches on typo" do
@@ -186,6 +250,41 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       parsed = JSON.parse(output)
       expect(parsed["tool"]).to eq("rails_get_conventions")
       expect(parsed["output"]).to be_a(String)
+    end
+
+    it "includes error: false for a successful call" do
+      runner = described_class.new("conventions", [], json_mode: true)
+      output = runner.run
+      expect(JSON.parse(output)["error"]).to eq(false)
+    end
+  end
+
+  describe "#error" do
+    it "defaults to false before any call" do
+      runner = described_class.new("conventions", [])
+      expect(runner.error).to eq(false)
+    end
+
+    it "stays false for a successful tool call" do
+      runner = described_class.new("conventions", [])
+      runner.run
+      expect(runner.error).to eq(false)
+    end
+
+    it "stays false for an informational not-found response (deliberate non-goal)" do
+      # "Model not found" is a friendly text response, not an isError result -
+      # scripts should not treat it as a failure worth a non-zero exit.
+      runner = described_class.new("model_details", [ "--model", "TotallyNotAModel" ])
+      output = runner.run
+      expect(output).to include("not found")
+      expect(runner.error).to eq(false)
+    end
+
+    it "becomes true when the tool response reports isError" do
+      runner = described_class.new("conventions", [])
+      response = instance_double(MCP::Tool::Response, content: [ { type: "text", text: "boom" } ], error?: true)
+      runner.send(:extract_output, response)
+      expect(runner.error).to eq(true)
     end
   end
 

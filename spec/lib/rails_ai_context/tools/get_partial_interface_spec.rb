@@ -56,6 +56,22 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(text).to include("not found")
     end
 
+    it "does not list the same partial twice when it exists under multiple extensions" do
+      views_dir = Rails.root.join("app", "views")
+      dir = views_dir.join("gpi_dup_#{Process.pid}")
+      FileUtils.mkdir_p(dir)
+      File.write(dir.join("_widget.html.erb"), "<%= widget %>")
+      File.write(dir.join("_widget.json.jbuilder"), "json.name widget.name")
+
+      result = described_class.call(partial: "nonexistent/widget")
+      text = result.content.first[:text]
+      candidate = "gpi_dup_#{Process.pid}/widget"
+
+      expect(text.scan(candidate).size).to eq(1)
+    ensure
+      FileUtils.rm_rf(dir) if defined?(dir)
+    end
+
     it "returns helpful message when partial is nil" do
       result = described_class.call(partial: nil)
       text = result.content.first[:text]

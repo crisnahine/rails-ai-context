@@ -100,10 +100,12 @@ end unless defined?(save_tool_mode_to_initializer)
 
 def ensure_mcp_configs(ai_tools = nil)
   tools = ai_tools || RailsAiContext.configuration.ai_tools || RailsAiContext::McpConfigGenerator::TOOL_CONFIGS.keys
+  # No explicit standalone: flag - the generator detects the install mode from
+  # Gemfile.lock, so this writes the same command form as the standalone CLI
+  # init for the same app (no config ping-pong between entry points).
   generator = RailsAiContext::McpConfigGenerator.new(
     tools: tools,
     output_dir: Rails.root.to_s,
-    standalone: false,
     tool_mode: RailsAiContext.configuration.tool_mode
   )
   result = generator.call
@@ -154,8 +156,15 @@ def save_yaml_config(ai_tools, tool_mode)
     "ai_tools" => Array(ai_tools).map(&:to_s),
     "tool_mode" => tool_mode.to_s
   }
-  File.write(yaml_path, YAML.dump(content))
-  puts "💾 Saved .rails-ai-context.yml (standalone config)"
+  new_content = YAML.dump(content)
+  existed = File.exist?(yaml_path)
+
+  if existed && File.read(yaml_path) == new_content
+    puts "💾 .rails-ai-context.yml (unchanged)"
+  else
+    File.write(yaml_path, new_content)
+    puts "💾 #{existed ? 'Updated' : 'Saved'} .rails-ai-context.yml"
+  end
 rescue => e
   $stderr.puts "[rails-ai-context] save_yaml_config failed: #{e.message}" if ENV["DEBUG"]
   nil
@@ -260,13 +269,20 @@ def add_ai_context_to_gitignore
   return unless File.exist?(gitignore)
 
   content = File.read(gitignore)
-  return if content.include?(".ai-context.json")
-
-  File.open(gitignore, "a") do |f|
-    f.puts ""
-    f.puts "# rails-ai-context (JSON cache - markdown files should be committed)"
-    f.puts ".ai-context.json"
+  lines = []
+  unless content.include?(".ai-context.json")
+    lines << ""
+    lines << "# rails-ai-context (JSON cache - markdown files should be committed)"
+    lines << ".ai-context.json"
   end
+  unless content.include?(".codex/config.toml")
+    lines << ""
+    lines << "# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)"
+    lines << ".codex/config.toml"
+  end
+  return if lines.empty?
+
+  File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
   puts "✅ Updated .gitignore"
 end unless defined?(add_ai_context_to_gitignore)
 
@@ -332,6 +348,7 @@ namespace :ai do
 
     runner = RailsAiContext::CLI::ToolRunner.new(name, params, json_mode: json_mode)
     puts runner.run
+    exit 1 if runner.error
   rescue RailsAiContext::CLI::ToolRunner::ToolNotFoundError => e
     $stderr.puts "Error: #{e.message}"
     exit 1
@@ -389,14 +406,21 @@ namespace :ai do
       print_result(result)
     else
       puts "📝 Writing context files for: #{ai_tools.map(&:to_s).join(', ')}..."
-      ai_tools.each do |fmt|
-        result = RailsAiContext.generate_context(format: fmt)
-        print_result(result)
-      end
+      # One call for every selected format so ContextFileSerializer's
+      # cross-format dedup applies (opencode and codex share AGENTS.md and
+      # its split rules - generating one format at a time defeats that dedup
+      # and reports the same file as both written and unchanged).
+      result = RailsAiContext.generate_context(format: ai_tools)
+      print_result(result)
     end
 
     puts ""
-    puts "Done! Commit these files so your team benefits."
+    if Array(ai_tools).include?(:codex)
+      puts "Done! Commit context files and MCP configs so your team benefits."
+      puts "(.codex/config.toml stays local - it embeds machine-specific paths; add it to .gitignore)"
+    else
+      puts "Done! Commit these files so your team benefits."
+    end
     puts "Change AI tools: config/initializers/rails_ai_context.rb (config.ai_tools)"
     puts ""
     puts "Standalone (no Gemfile needed):"
@@ -465,7 +489,12 @@ namespace :ai do
   end
 
   desc "Start the MCP server (stdio transport, auto-discovered by configured AI tools)"
-  task serve: :environment do
+  task :serve do
+    # Boot inside the task so app boot output (initializer puts, deprecation
+    # warnings) is quarantined to stderr - stdout carries the JSON-RPC stream.
+    RailsAiContext::OutputGuard.quarantine_stdout do
+      Rake::Task["environment"].invoke
+    end
     require "rails_ai_context"
 
     RailsAiContext.start_mcp_server(transport: :stdio)
@@ -533,32 +562,7 @@ namespace :ai do
   task :preset, [ :name ] => :environment do |_t, args|
     require "rails_ai_context"
 
-    presets = {
-      "architecture" => {
-        desc: "Full feature analysis across all layers",
-        tools: [
-          { name: "analyze_feature", params: { feature: ENV["feature"] || ENV["FEATURE"] || Rails.application.class.module_parent_name.underscore } },
-          { name: "dependency_graph", params: {} },
-          { name: "performance_check", params: {} }
-        ]
-      },
-      "debugging" => {
-        desc: "Diagnose recent issues and validate current state",
-        tools: [
-          { name: "read_logs", params: { level: "ERROR", lines: 100 } },
-          { name: "review_changes", params: {} },
-          { name: "validate", params: {} }
-        ]
-      },
-      "migration" => {
-        desc: "Schema overview with migration advice and validation",
-        tools: [
-          { name: "get_schema", params: { detail: "summary" } },
-          { name: "migration_advisor", params: { action: ENV["action"] || "status" } },
-          { name: "validate", params: {} }
-        ]
-      }
-    }
+    presets = RailsAiContext::Presets::DEFINITIONS
 
     name = args[:name]&.strip&.downcase
     unless name && presets.key?(name)
@@ -567,8 +571,6 @@ namespace :ai do
       presets.each do |key, info|
         puts "  rails 'ai:preset[#{key}]'".ljust(38) + "# #{info[:desc]}"
       end
-      puts ""
-      puts "Pass feature= or action= via ENV for context-specific presets."
       next
     end
 
@@ -600,66 +602,7 @@ namespace :ai do
     require "rails_ai_context"
 
     context = RailsAiContext.introspect
-    app_name = context[:app_name] || Rails.application.class.module_parent_name
-
-    puts "# #{app_name} - Schema Facts"
-    puts "# Generated: #{Time.now.strftime('%Y-%m-%d %H:%M')}"
-    puts ""
-
-    # Tables overview
-    if context[:schema] && !context[:schema][:error]
-      tables = context[:schema][:tables] || {}
-      puts "## Tables (#{tables.size})"
-      tables.each do |name, meta|
-        cols = meta[:columns]&.size || 0
-        indexes = meta[:indexes]&.size || 0
-        fks = meta[:foreign_keys]&.size || 0
-        puts "- #{name} (#{cols} cols, #{indexes} indexes, #{fks} FKs)"
-      end
-      puts ""
-    end
-
-    # Associations
-    if context[:models] && !context[:models][:error]
-      puts "## Associations"
-      context[:models].each do |model_name, meta|
-        next if meta[:error]
-        assocs = meta[:associations] || []
-        next if assocs.empty?
-        grouped = assocs.group_by { |a| a[:type] || a["type"] }
-        parts = grouped.map do |type, list|
-          names = list.map { |a| a[:name] || a["name"] }
-          "#{type} :#{names.join(', :')}"
-        end
-        puts "- #{model_name}: #{parts.join(' | ')}"
-      end
-      puts ""
-    end
-
-    # Gems / dependencies
-    if context[:gems] && !context[:gems][:error]
-      notable = context[:gems][:gems]&.select { |g| g[:category] != "other" }&.first(15)
-      if notable&.any?
-        puts "## Key Dependencies"
-        notable.each do |g|
-          puts "- #{g[:name]} (#{g[:category]})"
-        end
-        puts ""
-      end
-    end
-
-    # Architecture
-    if context[:conventions] && !context[:conventions][:error]
-      arch = context[:conventions][:architecture] || []
-      if arch.any?
-        puts "## Architecture"
-        arch.each { |a| puts "- #{a}" }
-        puts ""
-      end
-    end
-
-    puts "---"
-    puts "Run `rails ai:inspect` for full JSON introspection."
+    puts RailsAiContext::FactsFormatter.render(context, inspect_hint: "rails ai:inspect")
   end
 
   desc "Run diagnostic checks and report AI readiness score"
@@ -683,5 +626,14 @@ namespace :ai do
 
     puts ""
     puts "AI Readiness Score: #{result[:score]}/100"
+
+    # STRICT=1 turns doctor into a CI gate: exit 1 when any check fails.
+    if %w[1 true yes].include?(ENV["STRICT"].to_s.downcase)
+      failed = result[:checks].count { |c| c.status == :fail }
+      if failed > 0
+        puts "#{failed} check#{'s' unless failed == 1} failed (STRICT mode)"
+        exit 1
+      end
+    end
   end
 end

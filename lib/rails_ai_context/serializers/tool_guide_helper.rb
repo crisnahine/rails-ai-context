@@ -23,6 +23,20 @@ module RailsAiContext
         RailsAiContext.configuration.tool_mode
       end
 
+      # True when the app runs in API-only mode (no view layer) - used to swap
+      # the view-editing workflow for an API-focused one in the generated guide.
+      # Falls back to false (the view workflow) when the includer has no
+      # `context` to inspect.
+      def api_only?
+        return false unless respond_to?(:context)
+
+        ctx = context
+        return true if ctx.is_a?(Hash) && ctx.dig(:api, :api_only) == true
+
+        arch = ctx.is_a?(Hash) ? ctx.dig(:conventions, :architecture) : nil
+        arch.is_a?(Array) && arch.include?("api_only")
+      end
+
       # Derived from BaseTool.registered_tools - the single source of truth for tool count.
       def tool_count
         RailsAiContext::Server.builtin_tools.size
@@ -43,7 +57,7 @@ module RailsAiContext
           ]
         else
           [
-            "This project has #{tool_count} MCP tools via `rails ai:serve`.",
+            "This project has #{tool_count} MCP tools via `#{serve_cmd}`.",
             "**MANDATORY - use these instead of reading files.** They return ground truth from the running app:",
             "real schema, real associations, real filters - not guesses from file reads.",
             "Read files ONLY when you are about to Edit them.",
@@ -127,14 +141,8 @@ module RailsAiContext
           "1. #{tool_call_inline("rails_get_context", "controller:\"PostsController\", action:\"create\"", "context", "controller=PostsController action=create")} - action source + routes + views + model",
           "2. Read the controller file, make your fix",
           "3. #{tool_call_inline("rails_validate", "files:[\"app/controllers/posts_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/posts_controller.rb level=rails")}",
-          "",
-          "**Build or modify a view:**",
-          "1. #{tool_call_inline("rails_get_view", "controller:\"posts\"", "view", "controller=posts")} - existing templates, partials, Stimulus refs",
-          "2. #{tool_call_inline("rails_get_partial_interface", "partial:\"shared/status_badge\"", "partial_interface", "partial=shared/status_badge")} - partial locals contract",
-          "3. #{tool_call_inline("rails_get_component_catalog", "component:\"Button\"", "component_catalog", "component=Button")} - ViewComponent/Phlex props, slots, previews",
-          "4. Read the view file, make your edit",
-          "5. #{tool_call_inline("rails_validate", "files:[\"app/views/posts/index.html.erb\"]", "validate", "files=app/views/posts/index.html.erb")}",
-          "",
+          ""
+        ] + (api_only? ? api_endpoint_workflow_lines : view_workflow_lines) + [
           "**Trace a method:**",
           tool_call("rails_search_code(pattern:\"publishable?\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"publishable?\" match_type=trace")),
           "",
@@ -150,13 +158,39 @@ module RailsAiContext
         ]
       end
 
+      # HTML/Hotwire apps get the view-editing workflow.
+      def view_workflow_lines
+        [
+          "**Build or modify a view:**",
+          "1. #{tool_call_inline("rails_get_view", "controller:\"posts\"", "view", "controller=posts")} - existing templates, partials, Stimulus refs",
+          "2. #{tool_call_inline("rails_get_partial_interface", "partial:\"shared/status_badge\"", "partial_interface", "partial=shared/status_badge")} - partial locals contract",
+          "3. #{tool_call_inline("rails_get_component_catalog", "component:\"Button\"", "component_catalog", "component=Button")} - ViewComponent/Phlex props, slots, previews",
+          "4. Read the view file, make your edit",
+          "5. #{tool_call_inline("rails_validate", "files:[\"app/views/posts/index.html.erb\"]", "validate", "files=app/views/posts/index.html.erb")}",
+          ""
+        ]
+      end
+
+      # API-only apps have no view layer - swap in a workflow for modifying
+      # a JSON/XML response instead.
+      def api_endpoint_workflow_lines
+        [
+          "**Modify a JSON endpoint** (add/change a serialized field, adjust status codes):",
+          "1. #{tool_call_inline("rails_get_controllers", "controller:\"PostsController\", action:\"create\"", "controllers", "controller=PostsController action=create")} - action source + strong params + render map",
+          "2. #{tool_call_inline("rails_get_model_details", "model:\"Post\"", "model_details", "model=Post")} - schema + associations + validations backing the response",
+          "3. Read the controller file, make your edit",
+          "4. #{tool_call_inline("rails_validate", "files:[\"app/controllers/posts_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/posts_controller.rb level=rails")}",
+          ""
+        ]
+      end
+
       def tools_antipatterns_section
         search_tool = tool_mode == :cli ? cli_cmd("search_code") : "rails_search_code"
         validate_tool = tool_mode == :cli ? cli_cmd("validate") : "rails_validate"
         [
           "### Common mistakes - avoid these",
           "",
-          "- **Don't read db/schema.rb** - use `get_schema`. It adds [indexed]/[unique] hints you'd miss.",
+          "- **Don't read #{schema_dump_path}** - use `get_schema`. It adds [indexed]/[unique] hints you'd miss.",
           "- **Don't read model files for reference** - use `get_model_details`. It resolves concerns, inherited methods, and implicit belongs_to validations.",
           "- **Prefer `#{search_tool}` over Grep** for method tracing and cross-layer search. It excludes sensitive files, supports `match_type:\"trace\"`, and paginates.",
           "- **Don't call tools without a target** - `get_model_details()` without `model:` returns a paginated list, not an error. Always specify what you want.",
@@ -174,7 +208,7 @@ module RailsAiContext
             "### Rules",
             "",
             "1. **Use composite tools first** - `#{cli_cmd("context")}` and `#{cli_cmd("analyze_feature")}` before individual tools",
-            "2. **NEVER read reference files** - db/schema.rb, config/routes.rb, model files, test files - tools are better",
+            "2. **NEVER read reference files** - #{schema_dump_path}, config/routes.rb, model files, test files - tools are better",
             "3. **Prefer `#{cli_cmd("search_code")}`** for tracing and cross-layer search - standard search tools are fine for simple targeted lookups",
             "4. **Read files ONLY to Edit them** - not for reference",
             "5. **Validate EVERY edit** - `#{cli_cmd("validate", "files=... level=rails")}`",
@@ -186,7 +220,7 @@ module RailsAiContext
             "### Rules",
             "",
             "1. **Use composite tools first** - `rails_get_context` and `rails_analyze_feature` before individual tools",
-            "2. **NEVER read reference files** - db/schema.rb, config/routes.rb, model files, test files - tools are better",
+            "2. **NEVER read reference files** - #{schema_dump_path}, config/routes.rb, model files, test files - tools are better",
             "3. **Prefer `rails_search_code`** for tracing and cross-layer search - standard search tools are fine for simple targeted lookups",
             "4. **Read files ONLY to Edit them** - not for reference",
             "5. **Validate EVERY edit** - `rails_validate(files:[...], level:\"rails\")`",
@@ -236,6 +270,7 @@ module RailsAiContext
         [ 'rails_dependency_graph(model:"X")', "dependency_graph", "model=X", "Model association graph as Mermaid diagram" ],
         [ 'rails_migration_advisor(action:"X", table:"Y")', "migration_advisor", "action=X table=Y", "Generate migration code, flag irreversible ops" ],
         [ "rails_get_frontend_stack", "frontend_stack", nil, "React/Vue/Svelte/Angular, Inertia, TypeScript, package manager" ],
+        [ "rails_get_api", "api", nil, "API layer: api_only mode, serializers, GraphQL, versioning, rate limiting, CORS, pagination" ],
         [ 'rails_search_docs(query:"X")', "search_docs", "query=X", "Bundled topic index with weighted keyword search, on-demand GitHub fetch" ],
         [ 'rails_query(sql:"X")', "query", "sql=X", "Safe read-only SQL queries with timeout, row limit, column redaction" ],
         [ 'rails_read_logs(level:"X")', "read_logs", "level=X", "Reverse file tail with level filtering and sensitive data redaction" ],
@@ -305,11 +340,42 @@ module RailsAiContext
 
       private
 
-      # Generate zsh-safe CLI command: rails 'ai:tool[name]' params
+      # Apps with `config.active_record.schema_format = :sql` dump the schema
+      # to db/structure.sql instead of db/schema.rb; guidance that names the
+      # wrong file sends the AI hunting for a file that does not exist.
+      def schema_dump_path
+        sql_format = if defined?(ActiveRecord::Base) && ActiveRecord::Base.respond_to?(:schema_format)
+          ActiveRecord::Base.schema_format == :sql
+        end
+        if sql_format.nil?
+          root = defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
+          sql_format = !File.exist?(File.join(root, "db/schema.rb")) && File.exist?(File.join(root, "db/structure.sql"))
+        end
+        sql_format ? "db/structure.sql" : "db/schema.rb"
+      end
+
+      # Generate zsh-safe CLI command. In-Gemfile installs go through the rake
+      # task (`rails 'ai:tool[name]'`); standalone installs (gem not in the
+      # host app's Gemfile) have no rake tasks at all, so they use the CLI
+      # binary directly (`rails-ai-context tool name`).
       def cli_cmd(tool_name, params = nil)
-        cmd = "rails 'ai:tool[#{tool_name}]'"
+        cmd = standalone_install? ? "rails-ai-context tool #{tool_name}" : "rails 'ai:tool[#{tool_name}]'"
         cmd += " #{params}" if params
         cmd
+      end
+
+      # `rails ai:serve` for in-Gemfile installs; `rails-ai-context serve` for
+      # standalone installs where the rake task does not exist.
+      def serve_cmd
+        standalone_install? ? "rails-ai-context serve" : "rails ai:serve"
+      end
+
+      # Delegates to InstallMode (shared with the CLI surfaces), memoized per
+      # serializer instance because cli_cmd runs once per documented tool.
+      def standalone_install?
+        return @standalone_install if defined?(@standalone_install)
+
+        @standalone_install = RailsAiContext::InstallMode.standalone?
       end
 
       # Inline tool call for workflow steps (shorter format).
