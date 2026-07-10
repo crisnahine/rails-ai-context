@@ -28,11 +28,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Rails 7.0 canonical cell - only officially supported on Ruby 3.1
+          # Ruby 3.1 runs end-to-end on its canonical Rails 7.0 pairing. Rails
+          # 7.1+ e2e is covered on Ruby 3.3; 3.1's correctness across Rails
+          # 7.1/7.2 is covered by the unit matrix in ci.yml. A 3.1 + 7.1
+          # generated app trips Bundler 2.3.x default-gem pre-activation
+          # (error_highlight), a throwaway-app boot quirk unrelated to the gem.
           - ruby: "3.1"
             rails: "7.0"
-          - ruby: "3.1"
-            rails: "7.1"
           # Rails 8.0 + 8.1 require Ruby 3.3+ (active_support drop)
           - ruby: "3.3"
             rails: "7.1"
