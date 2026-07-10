@@ -602,8 +602,13 @@ class RailsAiContextCLI < Thor
       # mode is unaffected.
       drop_conflicting_gem_activations!
 
-      timeout = Integer(ENV.fetch("RAILS_AI_CONTEXT_BOOT_TIMEOUT",
-                                  ::RailsAiContext::BootManager::DEFAULT_TIMEOUT))
+      timeout = begin
+        Integer(ENV.fetch("RAILS_AI_CONTEXT_BOOT_TIMEOUT",
+                          ::RailsAiContext::BootManager::DEFAULT_TIMEOUT))
+      rescue ArgumentError
+        $stderr.puts "[rails-ai-context] WARNING: RAILS_AI_CONTEXT_BOOT_TIMEOUT=#{ENV['RAILS_AI_CONTEXT_BOOT_TIMEOUT']} is not a number - using #{::RailsAiContext::BootManager::DEFAULT_TIMEOUT}s"
+        ::RailsAiContext::BootManager::DEFAULT_TIMEOUT
+      end
       result = ::RailsAiContext::BootManager.boot!(app_root: Dir.pwd, timeout: timeout)
 
       unless result.booted?
@@ -616,6 +621,7 @@ class RailsAiContextCLI < Thor
         end
         $stderr.puts "  Common causes: missing ENV vars or credentials, an initializer"
         $stderr.puts "  that needs a service (database, Redis), or a syntax error."
+        $stderr.puts "  If the app is healthy but slow to boot, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, default 60)."
         exit 1
       end
 

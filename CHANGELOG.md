@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Introspector fault isolation no longer crashes when `Rails.logger` is nil (early-boot rake tasks, engine dummy apps). The failure-logging call that the rescue exists to protect now falls back to `$stderr` via `RailsAiContext.log_warn` instead of raising `NoMethodError` on a nil logger.
-- `BaseTool.abstract!` now works when called on a subclass. It read `registry_mutex` and `descendants` off `self`, but those are ivars set on `BaseTool` itself -- a subclass has no ivar storage of its own to read them from, so the call silently failed to deregister the tool. It now reaches back to `BaseTool` explicitly.
+- `BaseTool.abstract!` now works when called on a subclass. It read `registry_mutex` and `descendants` off `self`, but those are ivars set on `BaseTool` itself -- a subclass has no ivar storage of its own to read them from, so the call raised `NoMethodError` on the nil mutex. It now reaches back to `BaseTool` explicitly.
+- Custom tools that subclass `RailsAiContext::Tools::BaseTool` must accept a `server_context:` keyword (or `**kwargs`) in `self.call` -- the MCP dispatch now always passes it.
 
 ## [5.13.0] - 2026-07-10
 
