@@ -38,7 +38,7 @@ module RailsAiContext
 
       def self.call(controller: nil, action: nil, model: nil, feature: nil, include: nil, server_context: nil)
         set_call_params(controller: controller, action: action, model: model, feature: feature)
-        result = if controller && action
+        base_text = if controller && action
           controller_action_context(controller, action)
         elsif controller
           controller_context(controller)
@@ -51,17 +51,15 @@ module RailsAiContext
         end
 
         # Append additional context sections if include: is specified
-        if include.is_a?(Array) && include.any?
-          base_text = result.content.first[:text]
-          extra = append_includes(include)
-          result = text_response(base_text + extra)
+        base_text += append_includes(include) if include.is_a?(Array) && include.any?
+
+        ctx = begin
+          cached_context
+        rescue StandardError
+          nil
         end
 
-        if (note = introspection_warnings_note(begin; cached_context; rescue StandardError; nil; end))
-          result = text_response(result.content.first[:text] + note)
-        end
-
-        result
+        text_response(base_text, suffix: introspection_warnings_note(ctx))
       end
 
       private_class_method def self.controller_action_context(controller_name, action_name)
@@ -124,9 +122,9 @@ module RailsAiContext
           end
         end
 
-        text_response(lines.join("\n"))
+        lines.join("\n")
       rescue => e
-        text_response("Error assembling context: #{e.message}")
+        "Error assembling context: #{e.message}"
       end
 
       private_class_method def self.extract_ivars_from_text(text)
@@ -218,9 +216,9 @@ module RailsAiContext
           lines << "" << "---" << "" << view_text
         end
 
-        text_response(lines.join("\n"))
+        lines.join("\n")
       rescue => e
-        text_response("Error assembling context: #{e.message}")
+        "Error assembling context: #{e.message}"
       end
 
       private_class_method def self.model_context(model_name)
@@ -238,7 +236,7 @@ module RailsAiContext
 
         # If model not found, fail fast - don't leak partial results from sub-tools
         if model_text.include?("not found")
-          return model_result
+          return model_result.content.first[:text]
         end
 
         lines << model_text
@@ -259,9 +257,9 @@ module RailsAiContext
           lines << "" << "---" << "" << test_text
         end
 
-        text_response(lines.join("\n"))
+        lines.join("\n")
       rescue => e
-        text_response("Error assembling context: #{e.message}")
+        "Error assembling context: #{e.message}"
       end
 
       INCLUDE_MAP = {
@@ -358,10 +356,10 @@ module RailsAiContext
           end
         end
 
-        text_response(lines.join("\n"))
+        lines.join("\n")
       rescue => e
         # Fall back to plain analyze_feature on error
-        AnalyzeFeature.call(feature: feature_name)
+        AnalyzeFeature.call(feature: feature_name).content.first[:text]
       end
     end
   end

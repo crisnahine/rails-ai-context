@@ -32,7 +32,7 @@ module RailsAiContext
         else
           compose_standard(ctx)
         end
-        text_response("#{body}#{introspection_warnings_note(ctx)}")
+        text_response(body, suffix: introspection_warnings_note(ctx))
       rescue => e
         text_response("Onboard error: #{e.message}")
       end

@@ -323,7 +323,10 @@ module RailsAiContext
 
         # Helper: wrap text in an MCP::Tool::Response with safety-net truncation.
         # Auto-records the call in session context so session_context(action:"status") works.
-        def text_response(text)
+        # `suffix:`, when given, is appended after the truncation footer (or after
+        # the text itself when untruncated) so callers can attach a short trailing
+        # note that must survive truncation instead of being cut off with the tail.
+        def text_response(text, suffix: nil)
           # Auto-track: record this tool call in session context (skip SessionContext itself to avoid recursion)
           if respond_to?(:tool_name) && tool_name != "rails_session_context"
             summary = text.lines.first&.strip&.truncate(80)
@@ -336,8 +339,10 @@ module RailsAiContext
           if max && text.length > max
             truncated = text[0...max]
             truncated += "\n\n---\n_Response truncated (#{text.length} chars). Use `detail:\"summary\"` for an overview, or filter by a specific item (e.g. `table:\"users\"`)._"
+            truncated += suffix if suffix
             MCP::Tool::Response.new([ { type: "text", text: truncated } ])
           else
+            text += suffix if suffix
             MCP::Tool::Response.new([ { type: "text", text: text } ])
           end
         end
