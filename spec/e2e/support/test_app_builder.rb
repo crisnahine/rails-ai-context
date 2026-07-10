@@ -226,9 +226,9 @@ module E2E
         "GEM_PATH" => gem_home
       )
       # --ignore-dependencies is critical: without it, `gem install` pulls
-      # the LATEST railties/activesupport that satisfy our `>= 7.1, < 9.0`
+      # the LATEST railties/activesupport that satisfy our `>= 7.0, < 9.0`
       # constraint into the isolated gem_home. If the test app is pinned
-      # to Rails 7.1/7.2/8.0 but the isolated dir has 8.1.x, `rails-ai-
+      # to Rails 7.0/7.1/7.2/8.0 but the isolated dir has 8.1.x, `rails-ai-
       # context init` crashes with `:compile_methods is blank (KeyError)`
       # - activesupport 8.1 config options the app's Rails doesn't know
       # about. Skipping deps forces transitive gems (railties, activesupport,
