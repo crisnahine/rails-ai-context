@@ -201,7 +201,10 @@ module RailsAiContext
       /::Generated/,
       /\A(ActiveRecord|ActiveModel|ActiveSupport|ActionText|ActionMailbox|ActiveStorage)/,
       /\A(ActionDispatch|ActionController|ActionView|AbstractController)/,
-      /\A(Devise::Models|Devise::Orm|Bullet::|Turbo::|GlobalID::|Rolify::)/
+      /\A(Devise::Models|Devise::Orm|Bullet::|Turbo::|GlobalID::|Rolify::)/,
+      # The `debug` gem (default in Rails 7.0+ Gemfiles) prepends this onto
+      # Kernel, so it shows up in every model's ancestors - not a real concern.
+      /\ADEBUGGER__::/
     ].freeze
 
     DEFAULT_EXCLUDED_ASSOCIATION_NAMES = %w[

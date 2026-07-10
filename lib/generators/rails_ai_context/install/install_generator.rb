@@ -57,6 +57,13 @@ module RailsAiContext
         codex:    %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md]
       }.freeze
 
+      # The initializer guard written before this gem checked respond_to?(:configure).
+      # A path:/git: gemspec is evaluated in-process by Bundler in every environment,
+      # defining a VERSION-only stub `RailsAiContext` module even when the gem itself
+      # isn't in the current Bundler group - so `defined?(RailsAiContext)` alone
+      # doesn't prove `.configure` exists.
+      BARE_GUARD_PATTERN = /^([ \t]*)if defined\?\(RailsAiContext\)$/
+
       def select_ai_tools
         say ""
         say "Which AI tools do you use? (select all that apply)", :yellow
@@ -465,15 +472,25 @@ module RailsAiContext
       end
 
       def ensure_initializer_guard(content)
-        return [ content, false ] if guarded_initializer?(content)
+        return upgrade_bare_guard(content) if guarded_initializer?(content)
 
         header_match = content.match(/\A# frozen_string_literal: true\n(?:\n)?/)
         header = header_match ? "# frozen_string_literal: true\n\n" : ""
         body = header_match ? content.delete_prefix(header_match[0]) : content
         body = "#{body}\n" unless body.end_with?("\n")
 
-        wrapped = "#{header}if defined?(RailsAiContext)\n#{indent_content(body)}end\n"
+        wrapped = "#{header}if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)\n#{indent_content(body)}end\n"
         [ wrapped, wrapped != content ]
+      end
+
+      # Upgrades an initializer still on the bare `if defined?(RailsAiContext)`
+      # guard (written before this gem checked respond_to?(:configure)) in place.
+      # No-op if the guard is already the current form.
+      def upgrade_bare_guard(content)
+        upgraded = content.sub(BARE_GUARD_PATTERN) do
+          "#{Regexp.last_match(1)}if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)"
+        end
+        [ upgraded, upgraded != content ]
       end
 
       def reindent_section_content(section_content, content)
@@ -493,7 +510,11 @@ module RailsAiContext
       end
 
       def guarded_initializer?(content)
-        content.match?(/^[ \t]*if defined\?\(RailsAiContext\)$/)
+        # Matches the current guard (which also checks respond_to?(:configure)) as
+        # well as the older bare guard, so re-running the generator neither
+        # double-wraps an initializer nor treats an unguarded one as guarded.
+        content.match?(BARE_GUARD_PATTERN) ||
+          content.match?(/^[ \t]*if defined\?\(RailsAiContext\)\s*&&\s*RailsAiContext\.respond_to\?\(:configure\)$/)
       end
 
       def indent_content(content)

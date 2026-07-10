@@ -35,7 +35,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).to start_with(<<~RUBY)
         # frozen_string_literal: true
 
-        if defined?(RailsAiContext)
+        if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
           RailsAiContext.configure do |config|
       RUBY
       expect(content).to include("  config.ai_tools = %i[claude copilot]")
@@ -60,7 +60,30 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content.scan("if defined?(RailsAiContext)").size).to eq(1)
       expect(content).to include("  config.ai_tools = %i[claude copilot]")
       expect(content).to include("  config.tool_mode = :mcp   # MCP primary + CLI fallback")
-      expect(content).to match(/if defined\?\(RailsAiContext\)\n  RailsAiContext.configure do \|config\|.*\n  end\nend\n/m)
+      expect(content).to match(
+        /if defined\?\(RailsAiContext\) && RailsAiContext\.respond_to\?\(:configure\)\n  RailsAiContext.configure do \|config\|.*\n  end\nend\n/m
+      )
+    end
+
+    it "upgrades a bare defined?(RailsAiContext) guard to check respond_to?(:configure) too" do
+      File.write(initializer_path, <<~RUBY)
+        # frozen_string_literal: true
+
+        if defined?(RailsAiContext)
+          RailsAiContext.configure do |config|
+            config.ai_tools = %i[claude]
+          end
+        end
+      RUBY
+
+      generator.create_initializer
+
+      content = File.read(initializer_path)
+
+      expect(content).to include(
+        "if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)\n"
+      )
+      expect(content).not_to include("if defined?(RailsAiContext)\n")
     end
 
     it "keeps added sections inside the configure block for guarded initializers" do
@@ -83,7 +106,28 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).to include("    # ── Introspection")
       expect(content).to include("    # config.tool_mode = :mcp")
       expect(content).not_to include("\n  config.ai_tools = %i[claude copilot]")
-      expect(content).to match(/if defined\?\(RailsAiContext\)\n  RailsAiContext.configure do \|config\|.*# ── Introspection.*\n  end\nend\n/m)
+      expect(content).to match(
+        /if defined\?\(RailsAiContext\) && RailsAiContext\.respond_to\?\(:configure\)\n  RailsAiContext.configure do \|config\|.*# ── Introspection.*\n  end\nend\n/m
+      )
+    end
+
+    it "does not double-wrap an initializer that already has the respond_to? guard" do
+      File.write(initializer_path, <<~RUBY)
+        # frozen_string_literal: true
+
+        if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
+          RailsAiContext.configure do |config|
+            config.ai_tools = %i[claude]
+          end
+        end
+      RUBY
+
+      generator.create_initializer
+
+      content = File.read(initializer_path)
+
+      expect(content.scan("if defined?(RailsAiContext)").size).to eq(1)
+      expect(content).to include("    config.ai_tools = %i[claude copilot]")
     end
 
     it "preserves indentation when replacing config lines in guarded initializers" do

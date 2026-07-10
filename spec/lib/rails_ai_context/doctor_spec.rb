@@ -222,6 +222,60 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe "#check_initializer_guard" do
+    subject(:check) { doctor.send(:check_initializer_guard) }
+
+    let(:root) { Rails.application.root }
+    let(:initializer_path) { File.join(root, "config/initializers/rails_ai_context.rb") }
+
+    before do
+      allow(File).to receive(:exist?).and_call_original
+      allow(File).to receive(:read).and_call_original
+    end
+
+    context "when no initializer exists" do
+      before { allow(File).to receive(:exist?).with(initializer_path).and_return(false) }
+
+      it "returns nil" do
+        expect(check).to be_nil
+      end
+    end
+
+    context "when the initializer uses the bare defined? guard" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          if defined?(RailsAiContext)
+            RailsAiContext.configure do |config|
+            end
+          end
+        RUBY
+      end
+
+      it "warns with a fix" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("defined?(RailsAiContext)")
+        expect(check.fix).to include("respond_to?(:configure)")
+      end
+    end
+
+    context "when the initializer already guards with respond_to?" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)
+            RailsAiContext.configure do |config|
+            end
+          end
+        RUBY
+      end
+
+      it "returns nil" do
+        expect(check).to be_nil
+      end
+    end
+  end
+
   describe "#check_mcp_json" do
     subject(:check) { doctor.send(:check_mcp_json) }
 

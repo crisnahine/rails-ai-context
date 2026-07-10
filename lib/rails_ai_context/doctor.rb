@@ -17,6 +17,7 @@ module RailsAiContext
       check_tests
       check_migrations
       check_context_freshness
+      check_initializer_guard
       check_mcp_json
       check_codex_env_staleness
       check_mcp_buildable
@@ -222,6 +223,22 @@ module RailsAiContext
           message: "#{context_label} may be stale - #{stale_dirs.join(', ')} changed since last generation",
           fix: "Run `rails ai:context` to regenerate")
       end
+    end
+
+    # A guard written before the respond_to? check was added only tests
+    # `defined?(RailsAiContext)`, which the gemspec's version stub satisfies
+    # even outside this gem's Bundler group - `.configure` then raises
+    # NoMethodError in that environment.
+    def check_initializer_guard
+      path = File.join(app.root, "config/initializers/rails_ai_context.rb")
+      return nil unless File.exist?(path)
+
+      content = File.read(path)
+      return nil unless content.match?(/^[ \t]*if defined\?\(RailsAiContext\)$/)
+
+      Check.new(name: "Initializer guard", status: :warn,
+        message: "config/initializers/rails_ai_context.rb guards on `defined?(RailsAiContext)` alone",
+        fix: "Re-run `rails generate rails_ai_context:install`, or add `&& RailsAiContext.respond_to?(:configure)` to the guard")
     end
 
     def check_mcp_json
