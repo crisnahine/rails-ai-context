@@ -126,6 +126,27 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).not_to include("echo $changed_files")
     end
 
+    it "uses the rake form on in-Gemfile installs" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+      generator.install_validation_hook
+
+      content = File.read(hook_path)
+      expect(content).to include("if command -v rails &> /dev/null")
+      expect(content).to include("rails 'ai:tool[validate]' files=\"$files\"")
+    end
+
+    it "uses the CLI binary on standalone installs (no rake tasks exist)" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      generator.install_validation_hook
+
+      content = File.read(hook_path)
+      expect(content).to include("if command -v rails-ai-context &> /dev/null")
+      expect(content).to include("rails-ai-context tool validate --files \"$files\"")
+      expect(content).not_to include("ai:tool")
+    end
+
     it "declines the hook instead of raising when stdin hits EOF (ask returns nil)" do
       allow(generator).to receive(:ask).and_return(nil)
 
@@ -172,8 +193,14 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     let(:yaml_path) { File.join(tmpdir, ".rails-ai-context.yml") }
 
     it "creates the file and reports Created on first run" do
-      expect { generator.create_yaml_config }.to output(/Created \.rails-ai-context\.yml/).to_stdout
+      expect { generator.create_yaml_config }
+        .to output(/Created \.rails-ai-context\.yml/).to_stdout
       expect(File.read(yaml_path)).to include("ai_tools:")
+    end
+
+    it "does not mislabel the file as a standalone config" do
+      expect { generator.create_yaml_config }
+        .not_to output(/standalone config/).to_stdout
     end
 
     it "reports unchanged and does not rewrite the file when content is identical" do

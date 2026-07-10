@@ -51,6 +51,14 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(list).to include("rails 'ai:tool[NAME]'")
     end
 
+    it "shows only the CLI usage form on standalone installs (no rake tasks exist)" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      list = described_class.tool_list
+      expect(list).to include("Usage: rails-ai-context tool NAME --param value")
+      expect(list).not_to include("rails 'ai:tool[NAME]'")
+    end
+
     it "truncates a long description at a word boundary with an ellipsis" do
       list = described_class.tool_list
       full_description = RailsAiContext::Tools::AnalyzeFeature.description_value.to_s
@@ -88,6 +96,22 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       help = described_class.tool_help(RailsAiContext::Tools::SearchCode)
       expect(help).to include("[required]")
       expect(help).to include("--pattern")
+    end
+
+    it "shows both invocation forms on in-Gemfile installs" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+      help = described_class.tool_help(RailsAiContext::Tools::GetSchema)
+      expect(help).to include("rails 'ai:tool[schema]'")
+      expect(help).to include("rails-ai-context tool schema")
+    end
+
+    it "shows only the CLI form on standalone installs (no rake tasks exist)" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      help = described_class.tool_help(RailsAiContext::Tools::GetSchema)
+      expect(help).to include("rails-ai-context tool schema")
+      expect(help).not_to include("ai:tool")
     end
   end
 
@@ -137,6 +161,16 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
         .to raise_error(described_class::ToolNotFoundError) { |e|
           expect(e.message).to include("rails 'ai:tool'")
           expect(e.message).to include("rails-ai-context tool --list")
+        }
+    end
+
+    it "points only to the CLI list command on standalone installs (no rake tasks exist)" do
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+      expect { described_class.new("nonexistent", []) }
+        .to raise_error(described_class::ToolNotFoundError) { |e|
+          expect(e.message).to include("rails-ai-context tool --list")
+          expect(e.message).not_to include("ai:tool'")
         }
     end
 

@@ -20,6 +20,11 @@ require "yaml"
 # Top-level class to avoid conflict with RailsAiContext::CLI module (which contains ToolRunner).
 # The library uses RailsAiContext::CLI as a module namespace; this exe needs a class for Thor.
 class RailsAiContextCLI < Thor
+    # Thor derives its namespace from the class name ("rails_ai_context_c_l_i")
+    # and prints it as the root of the built-in `tree` command. Name it after
+    # the binary so tree output matches what users actually type.
+    namespace "rails-ai-context"
+
     # Without this, Thor exits 0 on an unrecognized command (and warns on
     # stderr that it will default to exit 1 in Thor 2.0). Scripts and AI
     # agents rely on a non-zero exit to detect a bad command.
@@ -137,6 +142,12 @@ class RailsAiContextCLI < Thor
       context = ::RailsAiContext.introspect
       puts JSON.pretty_generate(context)
     end
+
+    # Thor registers commands under their Ruby method names, and this method
+    # can't be called `inspect` (it would shadow Object#inspect). Re-key the
+    # command so dispatch, `help inspect`, and `tree` all use the public name;
+    # the command object still invokes inspect_app.
+    commands["inspect"] = commands.delete("inspect_app")
 
     desc "watch", "Watch for changes and auto-regenerate context files"
     def watch

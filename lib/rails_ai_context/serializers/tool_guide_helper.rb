@@ -370,29 +370,12 @@ module RailsAiContext
         standalone_install? ? "rails-ai-context serve" : "rails ai:serve"
       end
 
-      # A standalone install runs the gem via its own CLI binary (`gem install`
-      # + `rails-ai-context init`) rather than through the host app's Bundler
-      # group, so none of the rake tasks this gem ships are available. Detected
-      # by scanning the resolved Gemfile.lock for a rails-ai-context spec line -
-      # the same approach Tools::MigrationAdvisor uses to detect optional gems
-      # like strong_migrations. Falls back to treating the install as
-      # in-Gemfile (the common case) when the lock file can't be read.
+      # Delegates to InstallMode (shared with the CLI surfaces), memoized per
+      # serializer instance because cli_cmd runs once per documented tool.
       def standalone_install?
         return @standalone_install if defined?(@standalone_install)
 
-        root = if defined?(Bundler)
-          Bundler.root.to_s
-        elsif defined?(Rails) && Rails.respond_to?(:root) && Rails.root
-          Rails.root.to_s
-        else
-          Dir.pwd
-        end
-
-        content = RailsAiContext::SafeFile.read(File.join(root, "Gemfile.lock"))
-        @standalone_install = content ? !content.include?("rails-ai-context (") : false
-      rescue => e
-        $stderr.puts "[rails-ai-context] standalone_install? detection failed: #{e.message}" if ENV["DEBUG"]
-        @standalone_install = false
+        @standalone_install = RailsAiContext::InstallMode.standalone?
       end
 
       # Inline tool call for workflow steps (shorter format).

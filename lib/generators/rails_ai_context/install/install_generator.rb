@@ -543,7 +543,7 @@ module RailsAiContext
           say ".rails-ai-context.yml (unchanged)", :yellow
         else
           File.write(yaml_path, new_content)
-          say "#{existed ? 'Updated' : 'Created'} .rails-ai-context.yml (standalone config)", :green
+          say "#{existed ? 'Updated' : 'Created'} .rails-ai-context.yml", :green
         end
       end
 
@@ -587,6 +587,16 @@ module RailsAiContext
         answer = ask_safe("Install a pre-commit hook that validates Rails references? (y/N)").strip.downcase
         return unless answer == "y"
 
+        # Standalone installs have no `ai:*` rake tasks, so the hook must call
+        # the gem's own binary; in-Gemfile installs go through rake as usual.
+        if RailsAiContext::InstallMode.standalone?
+          hook_binary = "rails-ai-context"
+          validate_command = %(rails-ai-context tool validate --files "$files")
+        else
+          hook_binary = "rails"
+          validate_command = %(rails 'ai:tool[validate]' files="$files")
+        end
+
         FileUtils.mkdir_p(hooks_dir)
         File.write(hook_path, <<~HOOK)
           #!/bin/bash
@@ -600,9 +610,9 @@ module RailsAiContext
             exit 0
           fi
 
-          if command -v rails &> /dev/null; then
+          if command -v #{hook_binary} &> /dev/null; then
             files=$(printf '%s\\n' "$changed_files" | tr '\\n' ',')
-            rails 'ai:tool[validate]' files="$files" 2>/dev/null
+            #{validate_command} 2>/dev/null
             exit_code=$?
             if [ $exit_code -ne 0 ]; then
               echo ""

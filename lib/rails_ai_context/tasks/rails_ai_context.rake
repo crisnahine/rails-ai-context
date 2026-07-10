@@ -161,7 +161,7 @@ def save_yaml_config(ai_tools, tool_mode)
     puts "💾 .rails-ai-context.yml (unchanged)"
   else
     File.write(yaml_path, new_content)
-    puts "💾 #{existed ? 'Updated' : 'Saved'} .rails-ai-context.yml (standalone config)"
+    puts "💾 #{existed ? 'Updated' : 'Saved'} .rails-ai-context.yml"
   end
 rescue => e
   $stderr.puts "[rails-ai-context] save_yaml_config failed: #{e.message}" if ENV["DEBUG"]

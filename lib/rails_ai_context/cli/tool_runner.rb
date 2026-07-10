@@ -41,8 +41,14 @@ module RailsAiContext
           lines << "  #{short.ljust(24)} #{desc}"
         end
         lines << ""
-        lines << "Usage: rails 'ai:tool[NAME]' param=value"
-        lines << "       rails-ai-context tool NAME --param value"
+        # Standalone installs have no rake tasks, so advertising the rake form
+        # would point users at a command that does not exist.
+        if RailsAiContext::InstallMode.standalone?
+          lines << "Usage: rails-ai-context tool NAME --param value"
+        else
+          lines << "Usage: rails 'ai:tool[NAME]' param=value"
+          lines << "       rails-ai-context tool NAME --param value"
+        end
         lines.join("\n")
       end
 
@@ -76,11 +82,15 @@ module RailsAiContext
         lines = [
           "#{tool_class.tool_name} - #{tool_class.description_value}",
           "",
-          "Usage:",
-          "  rails 'ai:tool[#{short_name(tool_class.tool_name)}]' #{properties.keys.map { |k| "#{k}=VALUE" }.join(' ')}",
-          "  rails-ai-context tool #{short_name(tool_class.tool_name)} #{properties.keys.map { |k| "--#{k.to_s.tr('_', '-')} VALUE" }.join(' ')}",
-          ""
+          "Usage:"
         ]
+        # Standalone installs have no rake tasks; only show the rake form when
+        # the gem lives in the app's Gemfile.
+        unless RailsAiContext::InstallMode.standalone?
+          lines << "  rails 'ai:tool[#{short_name(tool_class.tool_name)}]' #{properties.keys.map { |k| "#{k}=VALUE" }.join(' ')}"
+        end
+        lines << "  rails-ai-context tool #{short_name(tool_class.tool_name)} #{properties.keys.map { |k| "--#{k.to_s.tr('_', '-')} VALUE" }.join(' ')}"
+        lines << ""
 
         if properties.any?
           lines << "Options:"
@@ -141,10 +151,15 @@ module RailsAiContext
         suggestion = Tools::BaseTool.find_closest_match(name, short_names)
         msg = "Unknown tool '#{name}'."
         msg += " Did you mean '#{suggestion}'?" if suggestion
-        # This message reaches both the CLI (`--list` works) and the rake
-        # task (`--list` does not - it's a Thor-only option), so name both
-        # working invocations instead of one that fails half the time.
-        msg += "\n\nSee all tools: rails 'ai:tool' (rake) or rails-ai-context tool --list (CLI)."
+        # In-Gemfile, this message reaches both the CLI (`--list` works) and
+        # the rake task (`--list` does not - it's a Thor-only option), so name
+        # both working invocations instead of one that fails half the time.
+        # Standalone installs have no rake tasks, so only name the CLI form.
+        msg += if RailsAiContext::InstallMode.standalone?
+          "\n\nSee all tools: rails-ai-context tool --list."
+        else
+          "\n\nSee all tools: rails 'ai:tool' (rake) or rails-ai-context tool --list (CLI)."
+        end
         raise ToolNotFoundError, msg
       end
 
