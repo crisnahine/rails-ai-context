@@ -68,6 +68,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
               t.string "email"
               t.string "name"
               t.integer "role"
+              t.timestamptz "last_seen_at"
+              t.tsvector "search_vector"
               t.timestamps
             end
 
@@ -103,6 +105,8 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         user_cols = result[:tables]["users"][:columns]
         expect(user_cols).to include(a_hash_including(name: "email", type: "string"))
         expect(user_cols).to include(a_hash_including(name: "role", type: "integer"))
+        expect(user_cols).to include(a_hash_including(name: "last_seen_at", type: "timestamptz"))
+        expect(user_cols).to include(a_hash_including(name: "search_vector", type: "tsvector"))
       end
     end
 
