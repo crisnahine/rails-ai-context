@@ -9,6 +9,9 @@ module RailsAiContext
 
       desc "Install rails-ai-context: creates initializer, MCP config, and generates initial context files."
 
+      class_option :defaults, type: :boolean, default: false,
+        desc: "Skip all interactive prompts and use each prompt's documented default (for CI/non-interactive use)"
+
       AI_TOOLS = {
         "1" => { key: :claude,   name: "Claude Code",     files: "CLAUDE.md + .claude/rules/",                        format: :claude },
         "2" => { key: :cursor,   name: "Cursor",          files: ".cursor/rules/ + .cursorrules (legacy fallback)",    format: :cursor },
@@ -38,7 +41,7 @@ module RailsAiContext
         say "  a. All of the above"
         say ""
 
-        input = ask("Enter numbers separated by commas (e.g. 1,2) or 'a' for all:").strip.downcase
+        input = ask_safe("Enter numbers separated by commas (e.g. 1,2) or 'a' for all:").strip.downcase
 
         @selected_formats = if input == "a" || input == "all"
           AI_TOOLS.values.map { |t| t[:format] }
@@ -78,7 +81,7 @@ module RailsAiContext
         say "  1,2 - remove only specific ones by number"
         say ""
 
-        input = ask("Enter choice:").strip.downcase
+        input = ask_safe("Enter choice:").strip.downcase
         return if input.empty? || input == "n" || input == "no"
 
         to_remove = if input == "y" || input == "yes" || input == "a"
@@ -127,7 +130,7 @@ module RailsAiContext
         say "  2. No  - CLI only (no server needed)"
         say ""
 
-        input = ask("Enter number (default: 1):").strip
+        input = ask_safe("Enter number (default: 1):").strip
 
         @tool_mode = case input
         when "2" then :cli
@@ -322,6 +325,16 @@ module RailsAiContext
       end
 
       no_tasks do
+      # Thor's `ask` returns nil when stdin hits EOF (e.g. piping fewer answers
+      # than prompts, or `< /dev/null`), which crashes the very next `.strip`
+      # call. Every prompt in this generator treats an empty answer as "use
+      # the default", so collapsing both the EOF case and `--defaults` to ""
+      # here lets each call site's existing empty-string handling do the rest.
+      def ask_safe(statement, **opts)
+        return "" if options[:defaults]
+        ask(statement, **opts).to_s
+      end
+
       def create_new_initializer(path)
         # Always write uncommented so re-install can detect previous selection
         tools_line = "  config.ai_tools = %i[#{@selected_formats.join(' ')}]"
@@ -545,7 +558,7 @@ module RailsAiContext
 
         return if File.exist?(hook_path) && File.read(hook_path).include?("rails-ai-context")
 
-        answer = ask("Install a pre-commit hook that validates Rails references? (y/N)").strip.downcase
+        answer = ask_safe("Install a pre-commit hook that validates Rails references? (y/N)").strip.downcase
         return unless answer == "y"
 
         FileUtils.mkdir_p(hooks_dir)

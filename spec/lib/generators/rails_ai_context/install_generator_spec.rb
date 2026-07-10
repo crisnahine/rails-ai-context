@@ -125,6 +125,47 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).to include("rails 'ai:tool[validate]' files=\"$files\"")
       expect(content).not_to include("echo $changed_files")
     end
+
+    it "declines the hook instead of raising when stdin hits EOF (ask returns nil)" do
+      allow(generator).to receive(:ask).and_return(nil)
+
+      expect { generator.install_validation_hook }.not_to raise_error
+      expect(File.exist?(hook_path)).to be(false)
+    end
+  end
+
+  describe "#ask_safe" do
+    it "returns an empty string instead of raising when ask hits EOF (nil)" do
+      allow(generator).to receive(:ask).and_return(nil)
+
+      expect(generator.send(:ask_safe, "Prompt:")).to eq("")
+    end
+
+    it "skips the prompt and returns an empty string when --defaults is set" do
+      defaults_generator = described_class.new([], { defaults: true }, destination_root: tmpdir)
+
+      expect(defaults_generator).not_to receive(:ask)
+      expect(defaults_generator.send(:ask_safe, "Prompt:")).to eq("")
+    end
+  end
+
+  describe "#select_ai_tools" do
+    it "falls back to all tools instead of raising when stdin hits EOF (ask returns nil)" do
+      allow(generator).to receive(:ask).and_return(nil)
+
+      expect { generator.select_ai_tools }.not_to raise_error
+      expect(generator.instance_variable_get(:@selected_formats))
+        .to match_array(described_class::AI_TOOLS.values.map { |t| t[:format] })
+    end
+  end
+
+  describe "#select_tool_mode" do
+    it "defaults to :mcp instead of raising when stdin hits EOF (ask returns nil)" do
+      allow(generator).to receive(:ask).and_return(nil)
+
+      expect { generator.select_tool_mode }.not_to raise_error
+      expect(generator.instance_variable_get(:@tool_mode)).to eq(:mcp)
+    end
   end
 
   describe "#create_yaml_config" do

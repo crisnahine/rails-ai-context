@@ -85,6 +85,19 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
                          stdin_input: "a\nn\n1\nn\n")
       expect(result.status.success?).to be(true), "re-install failed:\n#{result}"
     end
+
+    it "survives stdin hitting EOF mid-prompt instead of raising NoMethodError" do
+      # `stdin_input: nil` closes stdin immediately (see CliRunner#run), the
+      # same as `< /dev/null` - every `ask` call gets nil back, not a string.
+      result = @cli.run([ "bin/rails", "generate", "rails_ai_context:install", "--quiet" ])
+      expect(result.status.success?).to be(true), "generator crashed on EOF stdin:\n#{result}"
+      expect(result.output).not_to match(/NoMethodError/)
+    end
+
+    it "--defaults skips every prompt and completes non-interactively" do
+      result = @cli.run([ "bin/rails", "generate", "rails_ai_context:install", "--quiet", "--defaults" ])
+      expect(result.status.success?).to be(true), "generator --defaults run failed:\n#{result}"
+    end
   end
 
   describe "CLI subcommands" do
@@ -92,6 +105,29 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       result = @cli.cli("version")
       expect(result.success?).to be(true), result.to_s
       expect(result.stdout).to include(RailsAiContext::VERSION)
+    end
+
+    it "`rails-ai-context --version` and `-v` also report the gem version" do
+      %w[--version -v].each do |flag|
+        result = @cli.cli(flag)
+        expect(result.success?).to be(true), result.to_s
+        expect(result.stdout).to include(RailsAiContext::VERSION)
+      end
+    end
+
+    it "`rails-ai-context preset migration` and `rails ai:preset[migration]` run the same tool set" do
+      cli_result = @cli.cli("preset", "migration")
+      expect(cli_result.success?).to be(true), cli_result.to_s
+
+      rake_result = @cli.run([ "bin/rails", "ai:preset[migration]" ])
+      expect(rake_result.success?).to be(true), rake_result.to_s
+
+      # Both surface the same "Running: X" tool steps, in the same order -
+      # the single-source-of-truth PRESETS constant both consumers share.
+      cli_steps = cli_result.output.scan(/Running: (\w+)/).flatten
+      rake_steps = rake_result.output.scan(/Running: (\w+)/).flatten
+      expect(cli_steps).to eq(rake_steps)
+      expect(cli_steps).not_to be_empty
     end
 
     it "`rails-ai-context doctor` exits 0 and emits a readiness score" do

@@ -258,6 +258,13 @@ module RailsAiContext
           return text_response("Path not allowed: #{path}")
         end
 
+        # Accept the full repo-relative form too (e.g. "app/views/layouts/mailer.html.erb"),
+        # not just the documented app/views-relative form ("layouts/mailer.html.erb").
+        # Agents commonly address a file the way they found it on disk; without
+        # this, a file that genuinely exists reads as "not found" purely because
+        # of which convention the caller used.
+        path = path.delete_prefix("app/views/") if path.start_with?("app/views/")
+
         # Block sensitive files on the caller-supplied string before any
         # filesystem stat - closes the existence-oracle side channel.
         if sensitive_file?(path)

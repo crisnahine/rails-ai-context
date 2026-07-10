@@ -218,7 +218,7 @@ module RailsAiContext
           suggestion = nil if suggestion == name
           lines = [ "#{type} '#{name}' not found." ]
           lines << "Did you mean '#{suggestion}'?" if suggestion
-          lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}"
+          lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}" if available.any?
           lines << "_Recovery: #{recovery_tool}_" if recovery_tool
           text_response(lines.join("\n"))
         end

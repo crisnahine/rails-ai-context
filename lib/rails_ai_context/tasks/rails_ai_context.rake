@@ -560,32 +560,7 @@ namespace :ai do
   task :preset, [ :name ] => :environment do |_t, args|
     require "rails_ai_context"
 
-    presets = {
-      "architecture" => {
-        desc: "Full feature analysis across all layers",
-        tools: [
-          { name: "analyze_feature", params: { feature: ENV["feature"] || ENV["FEATURE"] || Rails.application.class.module_parent_name.underscore } },
-          { name: "dependency_graph", params: {} },
-          { name: "performance_check", params: {} }
-        ]
-      },
-      "debugging" => {
-        desc: "Diagnose recent issues and validate current state",
-        tools: [
-          { name: "read_logs", params: { level: "ERROR", lines: 100 } },
-          { name: "review_changes", params: {} },
-          { name: "validate", params: {} }
-        ]
-      },
-      "migration" => {
-        desc: "Schema overview with migration advice and validation",
-        tools: [
-          { name: "get_schema", params: { detail: "summary" } },
-          { name: "migration_advisor", params: { action: ENV["action"] || "status" } },
-          { name: "validate", params: {} }
-        ]
-      }
-    }
+    presets = RailsAiContext::Presets::DEFINITIONS
 
     name = args[:name]&.strip&.downcase
     unless name && presets.key?(name)
@@ -594,8 +569,6 @@ namespace :ai do
       presets.each do |key, info|
         puts "  rails 'ai:preset[#{key}]'".ljust(38) + "# #{info[:desc]}"
       end
-      puts ""
-      puts "Pass feature= or action= via ENV for context-specific presets."
       next
     end
 

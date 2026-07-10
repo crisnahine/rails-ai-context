@@ -30,6 +30,10 @@ class RailsAiContextCLI < Thor
     # Let Thor pass unknown options through to ToolRunner for the tool command
     stop_on_unknown_option! :tool
 
+    # Thor only recognizes bare subcommands by default; without this, `--version`
+    # and `-v` fall through to "Could not find command" instead of the `version` task.
+    map %w[--version -v] => :version
+
     desc "tool [NAME]", "Run an MCP tool (38 available). Use --list to see all."
     option :json, type: :boolean, default: false, desc: "Output as JSON envelope"
     option :list, type: :boolean, default: false, desc: "List available tools"
@@ -210,37 +214,8 @@ class RailsAiContextCLI < Thor
 
     desc "preset NAME", "Run a multi-tool preset (architecture, debugging, migration)"
     def preset(name = nil)
-      # Each preset chains tools that produce useful output with ZERO
-      # user-supplied arguments. Tools that require a target (analyze_feature
-      # needs a feature, migration_advisor needs an action+table, validate needs
-      # file paths) are deliberately excluded - in a no-arg preset they only
-      # emit "please provide X" prompts.
-      presets = {
-        "architecture" => {
-          desc: "Architecture overview across all layers",
-          tools: [
-            { name: "onboard", params: {} },
-            { name: "dependency_graph", params: {} },
-            { name: "performance_check", params: {} }
-          ]
-        },
-        "debugging" => {
-          desc: "Diagnose recent issues and inspect live state",
-          tools: [
-            { name: "read_logs", params: { level: "ERROR", lines: 100 } },
-            { name: "review_changes", params: {} },
-            { name: "runtime_info", params: {} }
-          ]
-        },
-        "migration" => {
-          desc: "Schema overview with migration status and index advice",
-          tools: [
-            { name: "get_schema", params: { detail: "summary" } },
-            { name: "runtime_info", params: { section: "database" } },
-            { name: "performance_check", params: { category: "indexes" } }
-          ]
-        }
-      }
+      require_relative "../lib/rails_ai_context/presets"
+      presets = ::RailsAiContext::Presets::DEFINITIONS
 
       unless name && presets.key?(name)
         $stderr.puts "Available presets:"

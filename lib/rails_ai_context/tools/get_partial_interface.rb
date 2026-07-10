@@ -519,7 +519,7 @@ module RailsAiContext
           parts = relative.split("/")
           parts[-1] = parts[-1].delete_prefix("_").sub(/\..*\z/, "")
           parts.join("/")
-        end.sort.first(30)
+        end.uniq.sort.first(30)
       rescue => e
         $stderr.puts "[rails-ai-context] find_available_partials failed: #{e.message}" if ENV["DEBUG"]
         []

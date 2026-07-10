@@ -179,6 +179,20 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).to include("`GET` `/posts`")
     end
 
+    it "does not treat an unrelated word that merely starts the same as a match" do
+      context_with_mailbox_route = mock_context.deep_dup
+      context_with_mailbox_route[:routes][:by_controller]["action_mailbox/ingresses/postmark/inbound_emails"] = [
+        { verb: "POST", path: "/rails/action_mailbox/postmark/inbound_emails", action: "create", name: "rails_postmark_inbound_emails" }
+      ]
+      allow(described_class).to receive(:cached_context).and_return(context_with_mailbox_route)
+
+      result = described_class.call(feature: "post")
+      text = result.content.first[:text]
+
+      expect(text).to include("### Post")
+      expect(text).not_to include("postmark")
+    end
+
     context "DoS cap (v5.8.1 round 2)" do
       it "caps discover_services at MAX_SCAN_FILES and emits truncation note" do
         Dir.mktmpdir("rac_dos_services") do |tmp|
