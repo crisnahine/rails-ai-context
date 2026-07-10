@@ -187,6 +187,7 @@ module RailsAiContext
         flash_alerts = []
         not_found_patterns = []
         create_flows = []
+        create_flow_parts_seen = []
         show_only_controllers = []
         has_services = Dir.exist?(Rails.root.join("app", "services"))
 
@@ -237,6 +238,7 @@ module RailsAiContext
               flow_parts << "redirect/render" if create_block.match?(/redirect_to|render\b/)
               if flow_parts.size >= 2
                 create_flows << "#{controller_name.camelize}: #{flow_parts.join(' → ')}"
+                create_flow_parts_seen.concat(flow_parts)
               end
             end
           end
@@ -270,21 +272,33 @@ module RailsAiContext
 
         if create_flows.any?
           sections << "" << "### Create Action Pattern (follow this for new actions)"
+          create_flows.each { |f| sections << "- #{f}" }
+          sections << ""
+
+          has_permission_check = create_flow_parts_seen.include?("permission check")
+          has_save = create_flow_parts_seen.include?("save")
+          has_redirect_render = create_flow_parts_seen.include?("redirect/render")
+
           sections << "```ruby"
           sections << "def create"
-          sections << "  unless current_user.can_[permission]?"
-          sections << '    redirect_to [path], alert: "[limit message]"'
-          sections << "    return"
-          sections << "  end"
-          sections << ""
-          sections << "  @record = current_user.[association].build([params_method])"
-          sections << ""
-          sections << "  if @record.save"
-          sections << '    redirect_to @record, notice: "[success message]"'
-          sections << "  else"
-          sections << "    @[collection] = current_user.[association].[scope]"
-          sections << "    render :new, status: :unprocessable_entity"
-          sections << "  end"
+          if has_permission_check
+            sections << "  unless current_user.can_[permission]?"
+            sections << '    redirect_to [path], alert: "[limit message]"'
+            sections << "    return"
+            sections << "  end"
+            sections << ""
+            sections << "  @record = current_user.[association].build([params_method])"
+          else
+            sections << "  @record = [Model].new([params_method])"
+          end
+          if has_save
+            sections << ""
+            sections << "  if @record.save"
+            sections << (has_redirect_render ? '    redirect_to @record, notice: "[success message]"' : "    # success")
+            sections << "  else"
+            sections << (has_redirect_render ? "    render :new, status: :unprocessable_entity" : "    # failure")
+            sections << "  end"
+          end
           sections << "end"
           sections << "```"
           sections << ""
@@ -298,8 +312,13 @@ module RailsAiContext
           sections << "#"
           sections << "class AnalyticsController < ApplicationController"
           sections << "  def show"
-          sections << "    @records = current_user.[association].[scope]"
-          sections << "    @stats = current_user.[association].[aggregation]"
+          if auth_checks.any?
+            sections << "    @records = current_user.[association].[scope]"
+            sections << "    @stats = current_user.[association].[aggregation]"
+          else
+            sections << "    @records = [Model].[scope]"
+            sections << "    @stats = [Model].[aggregation]"
+          end
           sections << "  end"
           sections << "end"
           sections << "```"

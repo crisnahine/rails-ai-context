@@ -347,7 +347,9 @@ module RailsAiContext
           found.each do |path|
             relative = path.sub("#{real_root}/", "")
             source = RailsAiContext::SafeFile.read(path) or next
-            test_count = source.scan(/\b(?:it|test|should)\b/).size
+            test_count = source.each_line.count do |line|
+              line.match?(/^\s*(?:test|it|specify)\s+["']/) || line.match?(/^\s*def\s+test_/)
+            end
             lines << "- `#{relative}` (#{test_count} tests)"
           end
           lines << ""
