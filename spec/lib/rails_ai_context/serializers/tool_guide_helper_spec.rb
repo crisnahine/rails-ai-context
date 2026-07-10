@@ -197,6 +197,67 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     end
   end
 
+  describe "#api_only?" do
+    it "is false when the includer has no context to inspect" do
+      expect(helper.api_only?).to be false
+    end
+
+    context "with a context-aware includer" do
+      let(:context_class) do
+        Class.new do
+          include RailsAiContext::Serializers::ToolGuideHelper
+          attr_accessor :context
+
+          def initialize(context)
+            @context = context
+          end
+        end
+      end
+
+      it "is true when context[:api][:api_only] is true" do
+        instance = context_class.new(api: { api_only: true })
+        expect(instance.api_only?).to be true
+      end
+
+      it "is true when conventions architecture includes api_only" do
+        instance = context_class.new(conventions: { architecture: %w[api_only] })
+        expect(instance.api_only?).to be true
+      end
+
+      it "is false for a regular Hotwire app" do
+        instance = context_class.new(api: { api_only: false }, conventions: { architecture: %w[hotwire] })
+        expect(instance.api_only?).to be false
+      end
+    end
+  end
+
+  describe "#tools_workflow_section" do
+    let(:context_class) do
+      Class.new do
+        include RailsAiContext::Serializers::ToolGuideHelper
+        attr_accessor :context
+
+        def initialize(context)
+          @context = context
+        end
+      end
+    end
+
+    it "includes the view-editing workflow for a regular app" do
+      instance = context_class.new(conventions: { architecture: %w[hotwire] })
+      text = instance.tools_workflow_section.join("\n")
+      expect(text).to include("Build or modify a view")
+      expect(text).not_to include("Modify a JSON endpoint")
+    end
+
+    it "swaps in the JSON-endpoint workflow for an API-only app" do
+      instance = context_class.new(api: { api_only: true })
+      text = instance.tools_workflow_section.join("\n")
+      expect(text).to include("Modify a JSON endpoint")
+      expect(text).not_to include("Build or modify a view")
+    end
+  end
+
   describe "#cli_cmd" do
     it "generates zsh-safe rake command without params" do
       expect(helper.cli_cmd("schema")).to eq("rails 'ai:tool[schema]'")

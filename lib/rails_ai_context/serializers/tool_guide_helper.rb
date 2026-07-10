@@ -23,6 +23,20 @@ module RailsAiContext
         RailsAiContext.configuration.tool_mode
       end
 
+      # True when the app runs in API-only mode (no view layer) - used to swap
+      # the view-editing workflow for an API-focused one in the generated guide.
+      # Falls back to false (the view workflow) when the includer has no
+      # `context` to inspect.
+      def api_only?
+        return false unless respond_to?(:context)
+
+        ctx = context
+        return true if ctx.is_a?(Hash) && ctx.dig(:api, :api_only) == true
+
+        arch = ctx.is_a?(Hash) ? ctx.dig(:conventions, :architecture) : nil
+        arch.is_a?(Array) && arch.include?("api_only")
+      end
+
       # Derived from BaseTool.registered_tools - the single source of truth for tool count.
       def tool_count
         RailsAiContext::Server.builtin_tools.size
@@ -127,14 +141,8 @@ module RailsAiContext
           "1. #{tool_call_inline("rails_get_context", "controller:\"PostsController\", action:\"create\"", "context", "controller=PostsController action=create")} - action source + routes + views + model",
           "2. Read the controller file, make your fix",
           "3. #{tool_call_inline("rails_validate", "files:[\"app/controllers/posts_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/posts_controller.rb level=rails")}",
-          "",
-          "**Build or modify a view:**",
-          "1. #{tool_call_inline("rails_get_view", "controller:\"posts\"", "view", "controller=posts")} - existing templates, partials, Stimulus refs",
-          "2. #{tool_call_inline("rails_get_partial_interface", "partial:\"shared/status_badge\"", "partial_interface", "partial=shared/status_badge")} - partial locals contract",
-          "3. #{tool_call_inline("rails_get_component_catalog", "component:\"Button\"", "component_catalog", "component=Button")} - ViewComponent/Phlex props, slots, previews",
-          "4. Read the view file, make your edit",
-          "5. #{tool_call_inline("rails_validate", "files:[\"app/views/posts/index.html.erb\"]", "validate", "files=app/views/posts/index.html.erb")}",
-          "",
+          ""
+        ] + (api_only? ? api_endpoint_workflow_lines : view_workflow_lines) + [
           "**Trace a method:**",
           tool_call("rails_search_code(pattern:\"publishable?\", match_type:\"trace\")", cli_cmd("search_code", "pattern=\"publishable?\" match_type=trace")),
           "",
@@ -146,6 +154,32 @@ module RailsAiContext
           "",
           "**Generate tests matching project patterns:**",
           tool_call("rails_generate_test(model:\"Post\")", cli_cmd("generate_test", "model=Post")),
+          ""
+        ]
+      end
+
+      # HTML/Hotwire apps get the view-editing workflow.
+      def view_workflow_lines
+        [
+          "**Build or modify a view:**",
+          "1. #{tool_call_inline("rails_get_view", "controller:\"posts\"", "view", "controller=posts")} - existing templates, partials, Stimulus refs",
+          "2. #{tool_call_inline("rails_get_partial_interface", "partial:\"shared/status_badge\"", "partial_interface", "partial=shared/status_badge")} - partial locals contract",
+          "3. #{tool_call_inline("rails_get_component_catalog", "component:\"Button\"", "component_catalog", "component=Button")} - ViewComponent/Phlex props, slots, previews",
+          "4. Read the view file, make your edit",
+          "5. #{tool_call_inline("rails_validate", "files:[\"app/views/posts/index.html.erb\"]", "validate", "files=app/views/posts/index.html.erb")}",
+          ""
+        ]
+      end
+
+      # API-only apps have no view layer - swap in a workflow for modifying
+      # a JSON/XML response instead.
+      def api_endpoint_workflow_lines
+        [
+          "**Modify a JSON endpoint** (add/change a serialized field, adjust status codes):",
+          "1. #{tool_call_inline("rails_get_controllers", "controller:\"PostsController\", action:\"create\"", "controllers", "controller=PostsController action=create")} - action source + strong params + render map",
+          "2. #{tool_call_inline("rails_get_model_details", "model:\"Post\"", "model_details", "model=Post")} - schema + associations + validations backing the response",
+          "3. Read the controller file, make your edit",
+          "4. #{tool_call_inline("rails_validate", "files:[\"app/controllers/posts_controller.rb\"], level:\"rails\"", "validate", "files=app/controllers/posts_controller.rb level=rails")}",
           ""
         ]
       end

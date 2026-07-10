@@ -188,6 +188,8 @@ module RailsAiContext
         not_found_patterns = []
         create_flows = []
         create_flow_parts_seen = []
+        json_response_count = 0
+        html_response_count = 0
         show_only_controllers = []
         has_services = Dir.exist?(Rails.root.join("app", "services"))
 
@@ -235,7 +237,15 @@ module RailsAiContext
               flow_parts << "permission check" if create_block.match?(/can_\w+\??|authorize|authorize!/)
               flow_parts << "build" if create_block.match?(/\.new\(|\.build\(|\.create\(/)
               flow_parts << "save" if create_block.match?(/\.save\b|\.create\b/)
-              flow_parts << "redirect/render" if create_block.match?(/redirect_to|render\b/)
+              # A scaffolded HTML controller's `respond_to` block often has a
+              # `format.json { render json: ... }` branch alongside its HTML
+              # redirect - that's still an HTML-first flow, not a JSON API one.
+              # Only call it "render json" when there's no redirect_to at all.
+              is_json_response = !create_block.match?(/redirect_to/) && create_block.match?(/render\s+json:/)
+              if create_block.match?(/redirect_to|render\b/)
+                flow_parts << (is_json_response ? "render json" : "redirect/render")
+                is_json_response ? json_response_count += 1 : html_response_count += 1
+              end
               if flow_parts.size >= 2
                 create_flows << "#{controller_name.camelize}: #{flow_parts.join(' → ')}"
                 create_flow_parts_seen.concat(flow_parts)
@@ -278,6 +288,10 @@ module RailsAiContext
           has_permission_check = create_flow_parts_seen.include?("permission check")
           has_save = create_flow_parts_seen.include?("save")
           has_redirect_render = create_flow_parts_seen.include?("redirect/render")
+          has_json_render = create_flow_parts_seen.include?("render json")
+          # When both styles appear across controllers, follow whichever is
+          # more common so the skeleton reflects the dominant convention.
+          use_json_skeleton = has_json_render && json_response_count >= html_response_count
 
           sections << "```ruby"
           sections << "def create"
@@ -294,9 +308,21 @@ module RailsAiContext
           if has_save
             sections << ""
             sections << "  if @record.save"
-            sections << (has_redirect_render ? '    redirect_to @record, notice: "[success message]"' : "    # success")
+            if use_json_skeleton
+              sections << "    render json: @record, status: :created"
+            elsif has_redirect_render
+              sections << '    redirect_to @record, notice: "[success message]"'
+            else
+              sections << "    # success"
+            end
             sections << "  else"
-            sections << (has_redirect_render ? "    render :new, status: :unprocessable_entity" : "    # failure")
+            if use_json_skeleton
+              sections << "    render json: @record.errors, status: :unprocessable_entity"
+            elsif has_redirect_render
+              sections << "    render :new, status: :unprocessable_entity"
+            else
+              sections << "    # failure"
+            end
             sections << "  end"
           end
           sections << "end"

@@ -227,5 +227,64 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
         expect(text).to include("@record = current_user.[association].build([params_method])")
       end
     end
+
+    context "with an API-only controller that only renders json" do
+      before do
+        File.write(File.join(controllers_dir, "orders_controller.rb"), <<~RUBY)
+          class OrdersController < ApplicationController
+            def create
+              @order = Order.new(order_params)
+
+              if @order.save
+                render json: @order, status: :created, location: @order
+              else
+                render json: @order.errors, status: :unprocessable_content
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "shows a render-json skeleton, not the HTML redirect/render one" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("OrdersController: build → save → render json")
+        expect(text).to include("render json: @record, status: :created")
+        expect(text).to include("render json: @record.errors, status: :unprocessable_entity")
+        expect(text).not_to include("redirect_to @record")
+        expect(text).not_to include("render :new, status: :unprocessable_entity")
+      end
+    end
+
+    context "with a scaffolded controller that responds to both html and json" do
+      before do
+        File.write(File.join(controllers_dir, "articles_controller.rb"), <<~RUBY)
+          class ArticlesController < ApplicationController
+            def create
+              @article = Article.new(article_params)
+
+              respond_to do |format|
+                if @article.save
+                  format.html { redirect_to @article, notice: "Article was successfully created." }
+                  format.json { render :show, status: :created, location: @article }
+                else
+                  format.html { render :new, status: :unprocessable_content }
+                  format.json { render json: @article.errors, status: :unprocessable_content }
+                end
+              end
+            end
+          end
+        RUBY
+      end
+
+      it "still shows the HTML redirect/render skeleton (redirect_to means it really has a view layer)" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("ArticlesController: build → save → redirect/render")
+        expect(text).to include('redirect_to @record, notice: "[success message]"')
+        expect(text).to include("render :new, status: :unprocessable_entity")
+        expect(text).not_to include("render json: @record")
+      end
+    end
   end
 end

@@ -45,6 +45,8 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(detail: "standard", stream: nil, controller: nil, server_context: nil)
+        return text_response("Turbo is not installed in this app (no `turbo-rails` gem in Gemfile.lock).") if turbo_rails_absent?
+
         root = Rails.root.to_s
 
         # Collect all Turbo data
@@ -101,6 +103,24 @@ module RailsAiContext
         else
           text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
+      end
+
+      # True only when a Gemfile.lock exists AND it does not list turbo-rails -
+      # a definite "not installed" signal. When no lock file is present at all
+      # we can't tell either way, so this returns false (matches the
+      # convention_introspector/migration_advisor gem_present? pattern of
+      # trusting the lock file, not guessing when it's absent).
+      private_class_method def self.turbo_rails_absent?
+        lock_path = File.join(Rails.root.to_s, "Gemfile.lock")
+        return false unless File.exist?(lock_path)
+
+        content = RailsAiContext::SafeFile.read(lock_path)
+        return false unless content
+
+        !content.include?("    turbo-rails (")
+      rescue => e
+        $stderr.puts "[rails-ai-context] turbo_rails_absent? failed: #{e.message}" if ENV["DEBUG"]
+        false
       end
 
       private_class_method def self.format_summary(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: nil)

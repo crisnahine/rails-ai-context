@@ -119,6 +119,7 @@ module RailsAiContext
           lines << "- **Package manager:** #{data[:package_manager]}" if data[:package_manager]
 
           # TypeScript
+          ts_enabled = data[:typescript].is_a?(Hash) && data[:typescript][:enabled]
           if data[:typescript].is_a?(Hash)
             ts = data[:typescript]
             if ts[:enabled]
@@ -130,17 +131,37 @@ module RailsAiContext
           end
 
           # Testing frameworks
-          if data[:testing_frameworks].is_a?(Array) && data[:testing_frameworks].any?
+          has_testing = data[:testing_frameworks].is_a?(Array) && data[:testing_frameworks].any?
+          if has_testing
             lines << "- **Testing:** #{data[:testing_frameworks].join(', ')}"
           end
 
-          # Hotwire stack - enrich with Stimulus/Turbo data for importmap apps
-          enrich_with_hotwire(lines)
+          # Hotwire stack - enrich with Stimulus/Turbo data for importmap apps.
+          # Built into a separate array first so we can detect its presence
+          # before deciding whether there's any frontend stack at all.
+          hotwire_lines = []
+          enrich_with_hotwire(hotwire_lines)
+          has_hotwire = hotwire_lines.any?
+
+          has_frontend_roots = data[:frontend_roots].is_a?(Array) && data[:frontend_roots].any?
+
+          # Nothing detected anywhere: no JS framework, no build tooling, no
+          # Hotwire, no frontend directories. Without this check the only
+          # line printed would be "TypeScript: disabled," which reads as if
+          # a JS frontend exists that simply opted out of TypeScript.
+          no_frontend_evidence = !data[:framework] && !data[:mounting_strategy] && !data[:build_tool] &&
+            !state_management.present? && !data[:package_manager] && !ts_enabled &&
+            !has_testing && !has_hotwire && !has_frontend_roots
+
+          if no_frontend_evidence
+            return "# Frontend Stack\n\nNo frontend stack detected (API-only app / no app/javascript, no package.json)."
+          end
+
+          lines.concat(hotwire_lines)
 
           # Frontend roots with component counts - skip "0 components" for Hotwire apps
           # where Stimulus controllers ARE the components
-          has_hotwire = lines.any? { |l| l.include?("Hotwire Stack") }
-          if data[:frontend_roots].is_a?(Array) && data[:frontend_roots].any?
+          if has_frontend_roots
             roots_with_components = data[:frontend_roots].select { |r| (r[:component_count] || 0) > 0 }
             if roots_with_components.any?
               lines << "" << "## Frontend Roots" << ""

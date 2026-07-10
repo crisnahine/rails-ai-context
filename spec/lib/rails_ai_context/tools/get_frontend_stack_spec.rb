@@ -302,5 +302,75 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         expect(text).not_to include("components")
       end
     end
+
+    context "on an API-only app with no frontend evidence at all" do
+      let(:empty_frontend_data) do
+        {
+          frontend_roots: [],
+          framework: nil,
+          version: nil,
+          mounting_strategy: nil,
+          build_tool: nil,
+          state_management: [],
+          package_manager: nil,
+          typescript: { enabled: false },
+          testing_frameworks: []
+        }
+      end
+
+      before do
+        allow(described_class).to receive(:cached_context).and_return({ frontend_frameworks: empty_frontend_data })
+      end
+
+      it "says no frontend stack was detected instead of just 'TypeScript: disabled'" do
+        result = described_class.call(detail: "standard")
+        text = result.content.first[:text]
+
+        expect(text).to include("No frontend stack detected")
+        expect(text).not_to include("TypeScript: disabled")
+      end
+
+      it "still says so at detail:full" do
+        result = described_class.call(detail: "full")
+        text = result.content.first[:text]
+
+        expect(text).to include("No frontend stack detected")
+      end
+    end
+
+    context "on a Hotwire app with TypeScript disabled and no frontend_roots" do
+      let(:hotwire_only_data) do
+        {
+          frontend_roots: [],
+          framework: nil,
+          mounting_strategy: nil,
+          build_tool: nil,
+          state_management: [],
+          package_manager: nil,
+          typescript: { enabled: false },
+          testing_frameworks: []
+        }
+      end
+
+      let(:gems_data) do
+        { notable_gems: [ { name: "turbo-rails", version: "2.0.0" } ] }
+      end
+
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          frontend_frameworks: hotwire_only_data,
+          gems: gems_data,
+          stimulus: {}
+        })
+      end
+
+      it "shows the Hotwire stack instead of the no-frontend message" do
+        result = described_class.call(detail: "standard")
+        text = result.content.first[:text]
+
+        expect(text).to include("Hotwire Stack")
+        expect(text).not_to include("No frontend stack detected")
+      end
+    end
   end
 end
