@@ -175,10 +175,12 @@ module RailsAiContext
       end
 
       def create_mcp_config
+        # No explicit standalone: flag - the generator detects the install
+        # mode from Gemfile.lock, so this writes the same command form as the
+        # standalone CLI init for the same app (no config ping-pong).
         generator = RailsAiContext::McpConfigGenerator.new(
           tools: @selected_formats,
           output_dir: Rails.root.to_s,
-          standalone: false,
           tool_mode: @tool_mode
         )
         result = generator.call

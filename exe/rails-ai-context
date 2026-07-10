@@ -236,11 +236,15 @@ class RailsAiContextCLI < Thor
       presets = ::RailsAiContext::Presets::DEFINITIONS
 
       unless name && presets.key?(name)
+        $stderr.puts "Unknown preset: #{name}\n\n" if name
         $stderr.puts "Available presets:"
         $stderr.puts ""
         presets.each do |key, info|
           $stderr.puts "  rails-ai-context preset #{key}".ljust(45) + "# #{info[:desc]}"
         end
+        # Bare `preset` is a listing request (exit 0); a name that matches no
+        # preset is an input error, so scripts get a non-zero exit.
+        exit 1 if name
         return
       end
 
@@ -524,10 +528,12 @@ class RailsAiContextCLI < Thor
 
     def write_mcp_configs(ai_tools, tool_mode)
       require_relative "../lib/rails_ai_context/mcp_config_generator"
+      # No explicit standalone: flag - the generator detects the install mode
+      # from Gemfile.lock, so this writes the same command form as the rake
+      # task and Rails generator for the same app (no config ping-pong).
       generator = ::RailsAiContext::McpConfigGenerator.new(
         tools: ai_tools,
         output_dir: Dir.pwd,
-        standalone: true,
         tool_mode: tool_mode
       )
       result = generator.call

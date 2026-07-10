@@ -35,11 +35,21 @@ RSpec.describe RailsAiContext::VFS do
         }
       },
       routes: {
-        routes: [
-          { controller: "posts", action: "index", verb: "GET", path: "/posts" },
-          { controller: "posts", action: "show", verb: "GET", path: "/posts/:id" },
-          { controller: "users", action: "index", verb: "GET", path: "/users" }
-        ]
+        # Mirrors RouteIntrospector#call output: routes are grouped under
+        # :by_controller keyed by controller name (there is no flat :routes list).
+        total_routes: 3,
+        by_controller: {
+          "posts" => [
+            { verb: "GET", path: "/posts", action: "index", name: "posts" },
+            { verb: "GET", path: "/posts/:id", action: "show", name: "post" }
+          ],
+          "users" => [
+            { verb: "GET", path: "/users", action: "index", name: "users" }
+          ]
+        },
+        api_namespaces: [],
+        mounted_engines: [],
+        root_route: nil
       }
     }
   end
@@ -54,7 +64,7 @@ RSpec.describe RailsAiContext::VFS do
         result = described_class.resolve("rails-ai-context://models/Post")
         expect(result).to be_an(Array)
         expect(result.first[:uri]).to eq("rails-ai-context://models/Post")
-        expect(result.first[:mime_type]).to eq("application/json")
+        expect(result.first[:mimeType]).to eq("application/json")
 
         data = JSON.parse(result.first[:text])
         expect(data["table_name"]).to eq("posts")
@@ -127,7 +137,24 @@ RSpec.describe RailsAiContext::VFS do
         result = described_class.resolve("rails-ai-context://routes/posts")
         data = JSON.parse(result.first[:text])
         expect(data["routes"].size).to eq(2)
+        expect(data["total_routes"]).to eq(2)
         expect(data["filtered_by"]).to eq("posts")
+      end
+
+      it "flattens by_controller entries and restores the controller key" do
+        result = described_class.resolve("rails-ai-context://routes/posts")
+        data = JSON.parse(result.first[:text])
+        expect(data["routes"]).to all(include("controller" => "posts"))
+        expect(data["routes"].map { |r| r["path"] }).to contain_exactly("/posts", "/posts/:id")
+        expect(data["routes"].first).to include("verb" => "GET", "action" => "index", "name" => "posts")
+      end
+
+      it "returns an empty list for a controller with no routes" do
+        result = described_class.resolve("rails-ai-context://routes/widgets")
+        data = JSON.parse(result.first[:text])
+        expect(data["routes"]).to eq([])
+        expect(data["total_routes"]).to eq(0)
+        expect(data["filtered_by"]).to eq("widgets")
       end
 
       it "raises for bare routes URI without controller" do
@@ -152,7 +179,7 @@ RSpec.describe RailsAiContext::VFS do
       it "resolves a view URI" do
         result = described_class.resolve("rails-ai-context://views/#{test_dir_name}/index.html.erb")
         expect(result.first[:text]).to include("<h1>VFS Test</h1>")
-        expect(result.first[:mime_type]).to eq("text/html")
+        expect(result.first[:mimeType]).to eq("text/html")
       end
 
       it "blocks path traversal" do

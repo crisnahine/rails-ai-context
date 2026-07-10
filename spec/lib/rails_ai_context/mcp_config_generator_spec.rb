@@ -7,7 +7,40 @@ require "yaml"
 RSpec.describe RailsAiContext::McpConfigGenerator do
   let(:tools) { %i[claude cursor copilot opencode codex] }
 
+  # Examples that omit standalone: exercise the in-Gemfile command shape.
+  # Pin detection so the assertions do not depend on this repo's own
+  # Gemfile.lock; explicit standalone: arguments bypass detection entirely.
+  before do
+    allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+  end
+
   describe "#call" do
+    context "install mode detection" do
+      it "auto-detects standalone mode when standalone: is not given" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+        Dir.mktmpdir do |dir|
+          described_class.new(tools: [ :claude ], output_dir: dir, tool_mode: :mcp).call
+
+          entry = JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"]["rails-ai-context"]
+          expect(entry["command"]).to eq("rails-ai-context")
+          expect(entry["args"]).to eq([ "serve" ])
+        end
+      end
+
+      it "prefers an explicit standalone: value over detection" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+        Dir.mktmpdir do |dir|
+          described_class.new(tools: [ :claude ], output_dir: dir, standalone: false, tool_mode: :mcp).call
+
+          entry = JSON.parse(File.read(File.join(dir, ".mcp.json")))["mcpServers"]["rails-ai-context"]
+          expect(entry["command"]).to eq("bundle")
+          expect(entry["args"]).to eq([ "exec", "rails-ai-context", "serve" ])
+        end
+      end
+    end
+
     context "with :mcp tool_mode" do
       it "generates .mcp.json for :claude with mcpServers key" do
         Dir.mktmpdir do |dir|

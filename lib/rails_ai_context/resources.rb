@@ -139,6 +139,9 @@ module RailsAiContext
 
       private
 
+      # Content hashes use MCP-spec camelCase keys (mimeType): the SDK places
+      # the handler's return value into the JSON-RPC response without renaming
+      # keys, so snake_case would leak to clients as-is.
       def handle_read(params)
         uri = params[:uri]
 
@@ -151,13 +154,13 @@ module RailsAiContext
         if STATIC_RESOURCES.key?(uri)
           key = STATIC_RESOURCES[uri][:key]
           content = JSON.pretty_generate(context[key] || {})
-          [ { uri: uri, mime_type: "application/json", text: content } ]
+          [ { uri: uri, mimeType: "application/json", text: content } ]
         elsif (match = uri.match(%r{\Arails://models/(.+)\z}))
           model_name = match[1]
           models = context[:models] || {}
           data = models[model_name] || { error: "Model '#{model_name}' not found" }
           content = JSON.pretty_generate(data)
-          [ { uri: uri, mime_type: "application/json", text: content } ]
+          [ { uri: uri, mimeType: "application/json", text: content } ]
         else
           raise RailsAiContext::Error, "Unknown resource: #{uri}"
         end

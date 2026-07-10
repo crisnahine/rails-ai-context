@@ -100,10 +100,12 @@ end unless defined?(save_tool_mode_to_initializer)
 
 def ensure_mcp_configs(ai_tools = nil)
   tools = ai_tools || RailsAiContext.configuration.ai_tools || RailsAiContext::McpConfigGenerator::TOOL_CONFIGS.keys
+  # No explicit standalone: flag - the generator detects the install mode from
+  # Gemfile.lock, so this writes the same command form as the standalone CLI
+  # init for the same app (no config ping-pong between entry points).
   generator = RailsAiContext::McpConfigGenerator.new(
     tools: tools,
     output_dir: Rails.root.to_s,
-    standalone: false,
     tool_mode: RailsAiContext.configuration.tool_mode
   )
   result = generator.call
