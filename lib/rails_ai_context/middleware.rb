@@ -25,7 +25,7 @@ module RailsAiContext
         @app.call(env)
       end
     rescue => e
-      Rails.logger.error "[rails-ai-context] MCP request failed: #{e.class}: #{e.message}"
+      RailsAiContext.log_warn "[rails-ai-context] MCP request failed: #{e.class}: #{e.message}"
       json_rpc_error_response(e)
     end
 

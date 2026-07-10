@@ -63,6 +63,24 @@ RSpec.describe RailsAiContext::Introspector do
       end
     end
 
+    it "isolates introspector failures even when Rails.logger is nil" do
+      broken = Class.new do
+        def initialize(app); end
+
+        def call
+          raise "boom"
+        end
+      end
+      stub_const("RailsAiContext::Introspector::INTROSPECTOR_MAP",
+                 RailsAiContext::Introspector::INTROSPECTOR_MAP.merge(schema: broken))
+      allow(Rails).to receive(:logger).and_return(nil)
+
+      result = nil
+      expect { result = introspector.call }.to output(/schema introspection failed/).to_stderr
+      expect(result[:schema]).to eq(error: "boom")
+      expect(result[:_warnings]).to include(introspector: "schema", error: "boom")
+    end
+
     it "extracts schema with tables" do
       result = introspector.call
       schema = result[:schema]

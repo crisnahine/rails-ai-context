@@ -53,12 +53,12 @@ RSpec.describe RailsAiContext::Middleware do
       expect(body).to eq([ "OK" ])
     end
 
-    it "logs the error via Rails.logger" do
+    it "logs the error via RailsAiContext.log_warn" do
       transport = instance_double(MCP::Server::Transports::StreamableHTTPTransport)
       allow(transport).to receive(:handle_request).and_raise(RuntimeError, "log me")
       middleware.instance_variable_set(:@mcp_transport, transport)
 
-      expect(Rails.logger).to receive(:error).with(/MCP request failed.*log me/)
+      expect(Rails.logger).to receive(:warn).with(/MCP request failed.*log me/)
 
       env = Rack::MockRequest.env_for("/mcp", method: "POST", input: "{}")
       middleware.call(env)
