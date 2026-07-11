@@ -478,4 +478,46 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
+
+  describe "hybrid AR + Mongoid apps" do
+    it "static_call gives AR-style table details for AR models and Mongoid details for Mongoid documents" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "widget.rb"), <<~RUBY)
+          class Widget < ApplicationRecord
+            belongs_to :factory
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "customer.rb"), <<~RUBY)
+          class Customer
+            include Mongoid::Document
+            field :name, type: String
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        widget = result["Widget"]
+        expect(widget[:table_name]).to eq("widgets")
+        expect(widget[:associations].map { |a| a[:name] }).to contain_exactly(:factory)
+        expect(widget).not_to have_key(:mongoid)
+
+        customer = result["Customer"]
+        expect(customer[:mongoid]).to be(true)
+        expect(customer[:fields]).to include(name: :name, type: "String")
+        expect(customer).not_to have_key(:table_name)
+      end
+    end
+
+    it "#call keeps AR-reflected entries (with real table_name) instead of discarding them when AppKind.mongoid? is true" do
+      allow(RailsAiContext::AppKind).to receive(:mongoid?).and_return(true)
+
+      result = introspector.call
+
+      expect(result["User"][:table_name]).to eq("users")
+      expect(result["User"][:associations]).not_to be_empty
+    end
+  end
 end

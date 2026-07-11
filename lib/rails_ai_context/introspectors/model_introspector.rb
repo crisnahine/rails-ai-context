@@ -20,16 +20,30 @@ module RailsAiContext
 
       # @return [Hash] model metadata keyed by model name
       def call
-        return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
-
         eager_load_models!
         models = discover_models
 
-        models.each_with_object({}) do |model, hash|
+        result = models.each_with_object({}) do |model, hash|
           hash[model.name] = extract_model_details(model)
         rescue => e
           hash[model.name] = { error: e.message }
         end
+
+        # A hybrid app (ActiveRecord primary, Mongoid gem present too) has
+        # documents that AR reflection can never see - they don't descend
+        # from ActiveRecord::Base. Supplement rather than replace, so a
+        # pure-AR model in a hybrid app keeps its full reflection-based
+        # details instead of being reduced to Mongoid's blanket static pass.
+        if RailsAiContext::AppKind.mongoid?(app.root)
+          mongoid_static_models.each do |class_name, details|
+            next if result.key?(class_name)
+            next unless details[:mongoid]
+
+            result[class_name] = details
+          end
+        end
+
+        result
       end
 
       # Static tier: models are discovered by globbing every model directory
@@ -561,12 +575,26 @@ module RailsAiContext
             begin
               next if File.size(path) > RailsAiContext.configuration.max_file_size
 
-              result[class_name] = mongoid_model_details(path)
+              result[class_name] = if mongoid_document_source?(path)
+                mongoid_model_details(path)
+              else
+                static_model_details(path, class_name)
+              end
             rescue => e
               result[class_name] = { error: e.message }
             end
           end
         end
+      end
+
+      # A hybrid app (ActiveRecord primary, Mongoid gem present) mixes
+      # AR-backed models in with actual Mongoid documents under the same
+      # model directories. Only files that really `include Mongoid::Document`
+      # get the Mongoid listener stack; everything else falls back to the
+      # regular AR-style static pass so it still gets a table_name.
+      def mongoid_document_source?(path)
+        content = RailsAiContext::SafeFile.read(path)
+        !!content&.include?("Mongoid::Document")
       end
 
       def mongoid_model_details(path)
