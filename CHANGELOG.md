@@ -28,16 +28,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model extraction (fields, embeds, store_in) for Mongoid apps.
 - API-only apps get explicit "not applicable" answers from view/frontend
   tools instead of empty listings.
+- **Loud Rails 9 warning in the standalone CLI.** In-Gemfile installs already
+  fail Bundler resolution against Rails 9 (`railties < 9.0`); the standalone
+  CLI has no such check, so it used to boot silently against an untested
+  Rails version. It now prints a stderr warning naming the installed Rails
+  version and pointing at checking for a newer gem release.
+- **`docs/COMPATIBILITY.md`** publishes the supported-version matrix, the CI
+  version grid, the RUNTIME/STATIC tier contract with the confidence-tag
+  vocabulary, and a shape-by-introspector matrix that cites the spec or QA
+  run proving every cell.
 
 ### Changed
 
 - Boot failure in `tool`/`serve` no longer exits 1; it degrades to the
   static tier with a stderr notice. `doctor` keeps requiring a bootable app.
+- CI runs Rails 8.x on Ruby 3.2 again. The exclusion assumed Rails 8
+  required Ruby 3.3+; both railties 8.0.5 and 8.1.3 declare
+  `required_ruby_version >= 3.2.0`.
 
 ### Fixed
 
 - `config.auto_mount = true` set in a user initializer now takes effect
   (the middleware initializer ran before user initializers loaded).
+- `prism` and `concurrent-ruby` are now capped below their next majors
+  (`< 2.0`, `< 3.0`) instead of an open-ended floor.
+- A syntax error in one model file now costs exactly that model - the rest
+  of the models section, and every other section, still answers normally
+  (verified end-to-end in the static tier).
 
 ## [5.14.0] - 2026-07-11
 

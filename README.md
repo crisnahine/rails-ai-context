@@ -503,6 +503,7 @@ empty listings.
 | **[Standalone](docs/STANDALONE.md)** | Use without Gemfile entry |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and fixes |
 | **[FAQ](docs/FAQ.md)** | Frequently asked questions |
+| **[Compatibility](docs/COMPATIBILITY.md)** | Supported versions, operating tiers, and the shape matrix with proof sources |
 
 <br>
 
