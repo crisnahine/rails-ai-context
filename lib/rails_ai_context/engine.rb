@@ -9,7 +9,11 @@ module RailsAiContext
     end
 
     # Auto-mount MCP HTTP middleware when configured
-    initializer "rails_ai_context.middleware" do |app|
+    # Must run after config/initializers so a user's
+    # `config.auto_mount = true` is visible when the mount decision is made;
+    # the middleware stack is built later in the boot finisher, so adding to
+    # it here still takes effect.
+    initializer "rails_ai_context.middleware", after: :load_config_initializers do |app|
       if RailsAiContext.configuration.auto_mount
         require_relative "middleware"
         app.middleware.use RailsAiContext::Middleware
