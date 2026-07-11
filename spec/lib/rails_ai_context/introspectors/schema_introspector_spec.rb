@@ -618,6 +618,65 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         FileUtils.rm_rf(db_dir)
       end
     end
+
+    context "with a secondary database dump and ActiveRecord not connected" do
+      it "still attaches secondary_databases through the static fallback" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 2024_01_01_000000) do
+              create_table "users" do |t|
+                t.string "name"
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 1) do
+              create_table "solid_queue_jobs" do |t|
+                t.string "queue_name", null: false
+              end
+            end
+          RUBY
+
+          fixture_introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+          allow(fixture_introspector).to receive(:active_record_connected?).and_return(false)
+
+          result = fixture_introspector.call
+
+          expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        end
+      end
+    end
+
+    context "with a secondary database dump and no live tables" do
+      it "still attaches secondary_databases when table_names is empty" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 2024_01_01_000000) do
+              create_table "users" do |t|
+                t.string "name"
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 1) do
+              create_table "solid_queue_jobs" do |t|
+                t.string "queue_name", null: false
+              end
+            end
+          RUBY
+
+          fixture_introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+          allow(fixture_introspector).to receive(:active_record_connected?).and_return(true)
+          allow(fixture_introspector).to receive(:table_names).and_return([])
+
+          result = fixture_introspector.call
+
+          expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        end
+      end
+    end
   end
 
   describe "#static_call" do
@@ -652,7 +711,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           end
         RUBY
         File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
-          ActiveRecord::Schema[8.0].define(version: 1) do
+          ActiveRecord::Schema[8.0].define(version: 2019_09_20_000000) do
             create_table "solid_queue_jobs" do |t|
               t.string "queue_name", null: false
             end
@@ -662,9 +721,11 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result[:tables].keys).to eq([ "users" ])
+        expect(result[:schema_version]).to eq("20240101000000")
         expect(result[:secondary_databases].keys).to eq([ "queue" ])
         expect(result[:secondary_databases]["queue"][:tables]).to have_key("solid_queue_jobs")
         expect(result[:secondary_databases]["queue"][:note]).to include("queue_schema.rb")
+        expect(result[:secondary_databases]["queue"][:schema_version]).to eq("20190920000000")
       end
     end
 

@@ -13,8 +13,8 @@ module RailsAiContext
 
       # @return [Hash] database schema context
       def call
-        return static_schema_parse unless active_record_connected?
-        return static_schema_parse if table_names.empty?
+        return attach_secondary_databases(static_schema_parse) unless active_record_connected?
+        return attach_secondary_databases(static_schema_parse) if table_names.empty?
 
         schema_content = File.exist?(schema_file_path) ? (RailsAiContext::SafeFile.read(schema_file_path, max_size: RailsAiContext.configuration.max_schema_file_size) || "") : ""
 
@@ -196,6 +196,18 @@ module RailsAiContext
         nil
       end
 
+      # Reads the version stamp from the schema.rb file actually being parsed,
+      # rather than the app's primary db/schema.rb. Secondary database dumps
+      # (db/queue_schema.rb, etc.) carry their own version: keyword, and
+      # current_schema_version would otherwise report the primary database's
+      # version on every secondary entry.
+      def schema_version_for(path)
+        RailsAiContext::SchemaVersion.from_schema_rb(path)
+      rescue => e
+        $stderr.puts "[rails-ai-context] schema_version_for failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
       def schema_file_path
         File.join(app.root, "db", "schema.rb")
       end
@@ -365,7 +377,7 @@ module RailsAiContext
           adapter: "static_parse",
           tables: tables,
           total_tables: tables.size,
-          schema_version: current_schema_version,
+          schema_version: schema_version_for(path),
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: parse_generated_columns(content),
