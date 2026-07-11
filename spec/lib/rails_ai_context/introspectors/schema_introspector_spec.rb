@@ -112,6 +112,16 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    def parse_structure_fixture(sql)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        path = File.join(dir, "db", "structure.sql")
+        File.write(path, sql)
+        fixture_introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        return fixture_introspector.send(:parse_structure_sql, path)
+      end
+    end
+
     context "with a valid structure.sql fixture" do
       before do
         allow(introspector).to receive(:active_record_connected?).and_return(false)
@@ -193,6 +203,91 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           to_table: "users",
           column: "user_id"
         ))
+      end
+
+      it "reports the postgresql dialect" do
+        result = introspector.call
+        expect(result[:dialect]).to eq("postgresql")
+      end
+    end
+
+    context "with a MySQL (mysqldump) structure.sql" do
+      let(:mysql_sql) do
+        <<~SQL
+          CREATE TABLE `products` (
+            `id` bigint NOT NULL AUTO_INCREMENT,
+            `name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+            `price_cents` int NOT NULL DEFAULT '0',
+            `active` tinyint(1) DEFAULT '1',
+            `store_id` bigint DEFAULT NULL,
+            `metadata` json DEFAULT NULL,
+            `created_at` datetime(6) NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `index_products_on_name` (`name`),
+            KEY `index_products_on_store_id` (`store_id`),
+            CONSTRAINT `fk_rails_123abc` FOREIGN KEY (`store_id`) REFERENCES `stores` (`id`)
+          ) ENGINE=InnoDB AUTO_INCREMENT=42 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+          CREATE TABLE `stores` (
+            `id` bigint NOT NULL AUTO_INCREMENT,
+            `name` varchar(255) DEFAULT NULL,
+            PRIMARY KEY (`id`)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+          INSERT INTO `schema_migrations` (version) VALUES ('20240101000000');
+        SQL
+      end
+
+      it "extracts tables, columns, indexes, and foreign keys" do
+        result = parse_structure_fixture(mysql_sql)
+
+        expect(result[:dialect]).to eq("mysql")
+        expect(result[:total_tables]).to eq(2)
+
+        products = result[:tables]["products"]
+        expect(products[:columns].map { |c| c[:name] })
+          .to contain_exactly("id", "name", "price_cents", "active", "store_id", "metadata", "created_at")
+        types = products[:columns].to_h { |c| [ c[:name], c[:type] ] }
+        expect(types["name"]).to eq("string")
+        expect(types["active"]).to eq("boolean")
+        expect(types["price_cents"]).to eq("integer")
+        expect(types["created_at"]).to eq("datetime")
+
+        expect(products[:indexes]).to include(
+          { name: "index_products_on_name", columns: [ "name" ], unique: true },
+          { name: "index_products_on_store_id", columns: [ "store_id" ], unique: false }
+        )
+        expect(products[:foreign_keys]).to eq(
+          [ { from_table: "products", to_table: "stores", column: "store_id", primary_key: "id" } ]
+        )
+      end
+    end
+
+    context "with a SQLite structure.sql" do
+      let(:sqlite_sql) do
+        <<~SQL
+          CREATE TABLE IF NOT EXISTS "schema_migrations" ("version" varchar NOT NULL PRIMARY KEY);
+          CREATE TABLE IF NOT EXISTS "widgets" (
+            "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+            "name" varchar DEFAULT NULL,
+            "weight" decimal(8,2),
+            "created_at" datetime(6) NOT NULL
+          );
+          CREATE UNIQUE INDEX "index_widgets_on_name" ON "widgets" ("name");
+          INSERT INTO "schema_migrations" (version) VALUES ('20240101000000');
+        SQL
+      end
+
+      it "extracts quoted tables, columns, and indexes" do
+        result = parse_structure_fixture(sqlite_sql)
+
+        expect(result[:dialect]).to eq("sqlite")
+        expect(result[:tables].keys).to eq([ "widgets" ])
+        widgets = result[:tables]["widgets"]
+        expect(widgets[:columns].map { |c| c[:name] }).to include("name", "weight", "created_at")
+        expect(widgets[:indexes]).to eq(
+          [ { name: "index_widgets_on_name", columns: [ "name" ], unique: true } ]
+        )
       end
     end
 
