@@ -46,24 +46,54 @@ module RailsAiContext
       end
     end
 
+    # Operating tier. :runtime means the host app booted and live reflection
+    # is available; :static means only source files are being analyzed.
+    # Defaults to :runtime because in-app usage (railtie, rake tasks) only
+    # reaches this code after a successful boot.
+    attr_writer :tier
+
+    def tier
+      @tier || :runtime
+    end
+
+    def static_tier?
+      tier == :static
+    end
+
+    # One-line explanation of why the static tier is active (boot failure
+    # summary, or a note that --no-boot was requested). Nil in runtime tier.
+    attr_accessor :static_reason
+
     # Quick access to introspect the current Rails app
     # Returns a hash of all discovered context
     def introspect(app = nil)
-      app ||= Rails.application
+      app ||= default_app
       Introspector.new(app).call
     end
 
     # Generate context files (CLAUDE.md, .cursor/rules/, etc.)
     def generate_context(app = nil, format: :all)
-      app ||= Rails.application
+      app ||= default_app
       context = introspect(app)
       Serializers::ContextFileSerializer.new(context, format: format).call
     end
 
     # Start the MCP server programmatically
     def start_mcp_server(app = nil, transport: :stdio)
-      app ||= Rails.application
+      app ||= default_app
       Server.new(app, transport: transport).start
+    end
+
+    private
+
+    # The app object introspection runs against: the booted Rails app in
+    # runtime tier, a filesystem-rooted stand-in in static tier.
+    def default_app
+      if static_tier?
+        StaticApp.new(configuration.app_root || Dir.pwd)
+      else
+        Rails.application
+      end
     end
   end
 end

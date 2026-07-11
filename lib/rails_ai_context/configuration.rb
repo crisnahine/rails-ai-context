@@ -107,6 +107,12 @@ module RailsAiContext
     # Output directory for generated context files
     attr_accessor :output_dir
 
+    # Filesystem root of the app under analysis. Set by the CLI (--app-path
+    # or the working directory) for the static tier; nil means "ask Rails".
+    # Deliberately not a YAML key: the config file lives inside the app it
+    # would point at.
+    attr_accessor :app_root
+
     # Models/tables to exclude from introspection
     attr_accessor :excluded_models
 
