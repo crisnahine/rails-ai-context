@@ -115,6 +115,20 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     expect(records.first).to include(path: "/", controller: "welcome")
   end
 
+  it "records a non-literal to: target as dynamic instead of guessing" do
+    results = routes_for('resources :posts do
+      get "legacy", to: redirect("/elsewhere")
+    end')
+    expect(results.none? { |r| r[:type] == :route && r[:action] == "legacy" }).to be(true)
+    expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }).to include(:get)
+  end
+
+  it "records a slashed segment with non-literal to: as dynamic" do
+    results = routes_for('get "admin/up", to: redirect("/status")')
+    expect(results.none? { |r| r[:type] == :route }).to be(true)
+    expect(results.first).to include(type: :dynamic, macro: :get)
+  end
+
   it "applies scope path and module independently" do
     records = route_records('scope "/v2", module: :v2 do
       resources :posts, only: [:index]

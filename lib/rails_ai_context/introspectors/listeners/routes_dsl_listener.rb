@@ -161,7 +161,10 @@ module RailsAiContext
           segment ||= rocket_key
           return emit_dynamic(node) unless segment
 
+          target_given = opts.key?(:to) || !rocket_key.nil?
           target = opts[:to] || (rocket_key && opts[rocket_key])
+          return emit_dynamic(node) if target_given && unreadable_target?(target)
+
           controller, action = resolve_target(target, segment)
           return emit_dynamic(node) unless controller && action
 
@@ -199,6 +202,14 @@ module RailsAiContext
           end
 
           join_path(current_prefix, segment)
+        end
+
+        # A to: value the parser can't read as a literal "controller#action"
+        # string (a helper call like redirect(...), a symbol, a constant, or
+        # a string with no "#") can't be split into a controller and action,
+        # so it must not feed the segment-based guessing in resolve_target.
+        def unreadable_target?(target)
+          !(target.is_a?(String) && target.include?("#"))
         end
 
         def resolve_target(target, segment)
