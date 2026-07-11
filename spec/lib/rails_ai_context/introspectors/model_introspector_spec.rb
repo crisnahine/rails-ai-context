@@ -415,5 +415,39 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result["Good"]).to have_key(:associations)
       end
     end
+
+    it "discovers models in packs and engines directories" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "engines", "store", "app", "models", "store"))
+        File.write(File.join(dir, "app", "models", "user.rb"),
+                   "class User < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"),
+                   "class Invoice < ApplicationRecord\n  belongs_to :user\nend\n")
+        File.write(File.join(dir, "engines", "store", "app", "models", "store", "order.rb"),
+                   "class Store::Order < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("User", "Invoice", "Store::Order")
+        expect(result["Invoice"][:associations].map { |a| a[:name] }).to eq([ :user ])
+        expect(result["Store::Order"][:table_name]).to eq("orders")
+      end
+    end
+
+    it "keeps the first definition when the same class name appears in two dirs" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        File.write(File.join(dir, "app", "models", "user.rb"),
+                   "class User < ApplicationRecord\n  has_many :posts\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "models", "user.rb"),
+                   "class User < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result["User"][:associations]).not_to be_empty
+      end
+    end
   end
 end

@@ -30,27 +30,31 @@ module RailsAiContext
         end
       end
 
-      # Static tier: models are discovered by globbing app/models and parsed
-      # with the source listeners; nothing is constantized. The table name is
-      # inferred from the class name (Rails convention), which is why every
-      # entry is tagged STATIC rather than VERIFIED - custom table_name= calls
-      # surface in :macros but are not resolved.
+      # Static tier: models are discovered by globbing every model directory
+      # PathResolver resolves (conventional app/models, packs, engines, and
+      # configured extras) and parsed with the source listeners; nothing is
+      # constantized. The table name is inferred from the class name (Rails
+      # convention), which is why every entry is tagged STATIC rather than
+      # VERIFIED - custom table_name= calls surface in :macros but are not
+      # resolved. When the same class name is found in more than one
+      # directory, the first discovery wins.
       def static_call
-        models_dir = File.join(app.root.to_s, "app", "models")
-        return {} unless Dir.exist?(models_dir)
+        RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
+          Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
+            relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
+            next if relative == "application_record" || relative.start_with?("concerns/")
 
-        Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each_with_object({}) do |path, result|
-          relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-          next if relative == "application_record" || relative.start_with?("concerns/")
+            class_name = relative.camelize
+            next if result.key?(class_name)
+            next if config.excluded_models.include?(class_name)
 
-          class_name = relative.camelize
-          next if config.excluded_models.include?(class_name)
+            begin
+              next if File.size(path) > RailsAiContext.configuration.max_file_size
 
-          begin
-            next if File.size(path) > RailsAiContext.configuration.max_file_size
-            result[class_name] = static_model_details(path, class_name)
-          rescue => e
-            result[class_name] = { error: e.message }
+              result[class_name] = static_model_details(path, class_name)
+            rescue => e
+              result[class_name] = { error: e.message }
+            end
           end
         end
       end
@@ -81,9 +85,8 @@ module RailsAiContext
             config.excluded_models.include?(model.name)
         end
 
-        models_dir = File.join(app.root.to_s, "app", "models")
-        if Dir.exist?(models_dir)
-          known = models.map(&:name).to_set
+        known = models.map(&:name).to_set
+        RailsAiContext::PathResolver.model_dirs(app.root.to_s).each do |models_dir|
           Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
             class_name = relative.camelize
