@@ -114,6 +114,21 @@ RSpec.describe "E2E: static tier", type: :e2e do
     end
   end
 
+  describe "syntax error in one model file" do
+    it "costs exactly that model, not the models section" do
+      broken = File.join(@builder.app_path, "app", "models", "zz_broken.rb")
+      File.write(broken, "class ZzBroken < ApplicationRecord\n  def oops(\nend\n")
+      begin
+        result = @cli.cli_tool("model_details", [ "--model", "Post", "--no-boot" ])
+        expect(result.exit_status).to eq(0), result.to_s
+        expect(result.stdout).to include("Post")
+        expect(result.stdout).not_to include("ZzBroken")
+      ensure
+        File.delete(broken) if File.exist?(broken)
+      end
+    end
+  end
+
   describe "--app-path from outside the app directory" do
     it "resolves the app root from a foreign cwd" do
       # CliRunner#run always chdirs into the app directory before running a
