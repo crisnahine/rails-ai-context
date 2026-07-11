@@ -27,13 +27,15 @@ RSpec.describe "E2E: boot resilience", type: :e2e do
   end
 
   describe "app that raises during boot" do
-    it "tool command fails with a friendly diagnostic, not a Thor backtrace" do
+    it "tool command falls back to static analysis instead of dying" do
       with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING: REDIS_URL is not set"\n)) do
         result = @cli.cli_tool("schema")
-        expect(result.exit_status).to eq(1), result.to_s
-        expect(result.stderr).to include("failed to boot")
+        expect(result.exit_status).to eq(0), result.to_s
+        expect(result.stderr).to include("App boot failed")
         expect(result.stderr).to include("FATAL_ENV_MISSING")
+        expect(result.stderr).to include("static tier active")
         expect(result.stderr).not_to include("thor")
+        expect(result.stdout).not_to be_empty
       end
     end
 
@@ -45,12 +47,12 @@ RSpec.describe "E2E: boot resilience", type: :e2e do
       end
     end
 
-    it "handles a syntax error in an initializer" do
+    it "falls back to static analysis on a syntax error in an initializer" do
       with_initializer("zz_broken_syntax.rb", "def broken(\n") do
         result = @cli.cli_tool("schema")
-        expect(result.exit_status).to eq(1), result.to_s
-        expect(result.stderr).to include("failed to boot")
+        expect(result.exit_status).to eq(0), result.to_s
         expect(result.stderr).to match(/SyntaxError|broken_syntax/)
+        expect(result.stderr).to include("static tier active")
       end
     end
   end
@@ -129,10 +131,10 @@ RSpec.describe "E2E: boot resilience", type: :e2e do
   end
 
   describe "app that hangs during boot" do
-    it "fails with a friendly timeout message naming the configured limit, not the raw Timeout::Error" do
+    it "falls back to static analysis on boot timeout, naming the limit" do
       with_initializer("zz_slow.rb", "sleep 5\n") do
         result = @cli.cli_tool("schema", extra_env: { "RAILS_AI_CONTEXT_BOOT_TIMEOUT" => "2" })
-        expect(result.exit_status).to eq(1), result.to_s
+        expect(result.exit_status).to eq(0), result.to_s
         expect(result.stderr).to include("did not finish within 2s")
         expect(result.stderr).to include("RAILS_AI_CONTEXT_BOOT_TIMEOUT")
         expect(result.stderr).not_to include("Timeout::Error: execution expired")
