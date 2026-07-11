@@ -24,6 +24,9 @@ module RailsAiContext
       def self.call(detail: "standard", server_context: nil) # rubocop:disable Metrics
         data = cached_context[:frontend_frameworks]
 
+        note = unavailable_note(data)
+        return text_response(note) if note
+
         unless data.is_a?(Hash) && !data[:error]
           return text_response(
             "No frontend framework data available. Ensure the :frontend_frameworks introspector is enabled in your " \

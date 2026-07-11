@@ -54,6 +54,8 @@ module RailsAiContext
         models = cached_context[:models]
         return text_response("Model introspection not available. Add :models to introspectors.") unless models
         return text_response("Model introspection failed: #{models[:error]}") if models[:error]
+        note = unavailable_note(models)
+        return text_response(note) if note
 
         # Specific model - show callbacks in execution order
         if model
@@ -226,7 +228,7 @@ module RailsAiContext
       end
 
       private_class_method def self.extract_callback_source(model_name, method_name)
-        path = Rails.root.join("app", "models", "#{model_name.underscore}.rb")
+        path = rails_app.root.join("app", "models", "#{model_name.underscore}.rb")
         extract_method_source_from_file(path, method_name)
       end
 
@@ -243,7 +245,7 @@ module RailsAiContext
 
           underscore = concern_name.underscore
           concern_path = RailsAiContext.configuration.concern_paths
-            .map { |dir| Rails.root.join(dir, "#{underscore}.rb") }
+            .map { |dir| rails_app.root.join(dir, "#{underscore}.rb") }
             .find { |p| File.exist?(p) }
           next unless concern_path
           next if File.size(concern_path) > max_size

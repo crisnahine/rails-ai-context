@@ -47,6 +47,8 @@ module RailsAiContext
         schema = cached_context[:schema]
         return text_response("Schema introspection not available. Add :schema to introspectors.") unless schema
         return text_response("Schema introspection not available: #{schema[:error]}") if schema[:error]
+        note = unavailable_note(schema)
+        return text_response(note) if note
 
         tables = schema[:tables] || {}
 
@@ -99,6 +101,7 @@ module RailsAiContext
             idx_count = data[:indexes]&.size || 0
             lines << "- **#{name}** - #{col_count} #{col_count == 1 ? 'column' : 'columns'}, #{idx_count} #{idx_count == 1 ? 'index' : 'indexes'}"
           end
+          lines.concat(secondary_databases_lines(schema))
           if offset + limit < total
             lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more, or `table:\"name\"` for full detail._"
             lines << "_cache_key: #{cache_key}_"
@@ -174,6 +177,7 @@ module RailsAiContext
             lines << ""
           end
 
+          lines.concat(secondary_databases_lines(schema))
           lines << "_Use `detail:\"summary\"` for all #{total} tables, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > limit
           text_response(lines.join("\n"))
 
@@ -189,6 +193,7 @@ module RailsAiContext
             lines << format_table_markdown(name, tables[name])
             lines << ""
           end
+          lines.concat(secondary_databases_lines(schema))
           if offset + limit < total
             lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more._"
             lines << "_cache_key: #{cache_key}_"
@@ -208,6 +213,21 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] models_for_table failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # Rails 8 multi-database apps dump each secondary database (queue,
+      # cache, cable) to its own schema/structure file. This tool targets
+      # the primary database's tables in detail, so secondaries get a
+      # compact one-line-per-database summary rather than full column detail.
+      private_class_method def self.secondary_databases_lines(schema)
+        secondary = schema[:secondary_databases]
+        return [] unless secondary
+
+        lines = [ "", "## Secondary databases", "" ]
+        secondary.each do |name, db|
+          lines << "- **#{name}**: #{db[:total_tables]} tables (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
+        end
+        lines
       end
 
       private_class_method def self.format_table_markdown(name, data)
@@ -300,6 +320,7 @@ module RailsAiContext
           lines << ""
         end
 
+        lines.concat(secondary_databases_lines(schema))
         lines.join("\n")
       end
     end

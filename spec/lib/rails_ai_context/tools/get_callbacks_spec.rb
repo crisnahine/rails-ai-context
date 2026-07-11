@@ -104,7 +104,7 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
         end
       RUBY
 
-      allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
       allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
     end
@@ -172,7 +172,7 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
         end
       RUBY
 
-      allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
       allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
     end

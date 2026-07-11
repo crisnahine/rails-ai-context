@@ -23,10 +23,57 @@ module RailsAiContext
         eager_load_models!
         models = discover_models
 
-        models.each_with_object({}) do |model, hash|
+        result = models.each_with_object({}) do |model, hash|
           hash[model.name] = extract_model_details(model)
         rescue => e
           hash[model.name] = { error: e.message }
+        end
+
+        # A hybrid app (ActiveRecord primary, Mongoid gem present too) has
+        # documents that AR reflection can never see - they don't descend
+        # from ActiveRecord::Base. Supplement rather than replace, so a
+        # pure-AR model in a hybrid app keeps its full reflection-based
+        # details instead of being reduced to Mongoid's blanket static pass.
+        if RailsAiContext::AppKind.mongoid?(app.root)
+          mongoid_static_models.each do |class_name, details|
+            next if result.key?(class_name)
+            next unless details[:mongoid]
+
+            result[class_name] = details
+          end
+        end
+
+        result
+      end
+
+      # Static tier: models are discovered by globbing every model directory
+      # PathResolver resolves (conventional app/models, packs, engines, and
+      # configured extras) and parsed with the source listeners; nothing is
+      # constantized. The table name is inferred from the class name (Rails
+      # convention), which is why every entry is tagged STATIC rather than
+      # VERIFIED - custom table_name= calls surface in :macros but are not
+      # resolved. When the same class name is found in more than one
+      # directory, the first discovery wins.
+      def static_call
+        return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
+
+        RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
+          Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
+            relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
+            next if relative == "application_record" || relative.start_with?("concerns/")
+
+            class_name = relative.camelize
+            next if result.key?(class_name)
+            next if config.excluded_models.include?(class_name)
+
+            begin
+              next if File.size(path) > RailsAiContext.configuration.max_file_size
+
+              result[class_name] = static_model_details(path, class_name)
+            rescue => e
+              result[class_name] = { error: e.message }
+            end
+          end
         end
       end
 
@@ -56,9 +103,8 @@ module RailsAiContext
             config.excluded_models.include?(model.name)
         end
 
-        models_dir = File.join(app.root.to_s, "app", "models")
-        if Dir.exist?(models_dir)
-          known = models.map(&:name).to_set
+        known = models.map(&:name).to_set
+        RailsAiContext::PathResolver.model_dirs(app.root.to_s).each do |models_dir|
           Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
             class_name = relative.camelize
@@ -69,6 +115,7 @@ module RailsAiContext
               klass = class_name.constantize
               next unless klass < ActiveRecord::Base && !klass.abstract_class?
               models << klass
+              known << class_name
             rescue NameError, LoadError
               # Not a valid model class
             end
@@ -495,6 +542,88 @@ module RailsAiContext
       def sanitize_options(options)
         options.reject { |_k, v| v.is_a?(Proc) || v.is_a?(Regexp) }
                .transform_values(&:to_s)
+      end
+
+      def static_model_details(path, class_name)
+        data = SourceIntrospector.call(path)
+        {
+          confidence: Confidence::STATIC,
+          table_name: class_name.demodulize.underscore.pluralize,
+          associations: data[:associations],
+          validations: data[:validations],
+          scopes: data[:scopes],
+          enums: data[:enums],
+          callbacks: data[:callbacks],
+          macros: data[:macros],
+          methods: data[:methods]
+        }
+      end
+
+      # Mongoid documents are invisible to ActiveRecord reflection, so both
+      # tiers parse them from source. Fields and embedded relations come from
+      # the Mongoid listener; shared-name macros (belongs_to, has_many,
+      # validates, scope) come from the regular listener stack.
+      def mongoid_static_models
+        RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
+          Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
+            relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
+            next if relative == "application_record" || relative.start_with?("concerns/")
+
+            class_name = relative.camelize
+            next if result.key?(class_name)
+            next if config.excluded_models.include?(class_name)
+
+            begin
+              next if File.size(path) > RailsAiContext.configuration.max_file_size
+
+              result[class_name] = if mongoid_document_source?(path)
+                mongoid_model_details(path)
+              else
+                static_model_details(path, class_name)
+              end
+            rescue => e
+              result[class_name] = { error: e.message }
+            end
+          end
+        end
+      end
+
+      # A hybrid app (ActiveRecord primary, Mongoid gem present) mixes
+      # AR-backed models in with actual Mongoid documents under the same
+      # model directories. Only files that really `include Mongoid::Document`
+      # get the Mongoid listener stack; everything else falls back to the
+      # regular AR-style static pass so it still gets a table_name.
+      def mongoid_document_source?(path)
+        content = RailsAiContext::SafeFile.read(path)
+        !!content&.include?("Mongoid::Document")
+      end
+
+      def mongoid_model_details(path)
+        data = SourceIntrospector.walk(path, {
+          mongoid: -> { Listeners::MongoidFieldsListener.new },
+          associations: Listeners::AssociationsListener,
+          validations: Listeners::ValidationsListener,
+          scopes: Listeners::ScopesListener,
+          callbacks: Listeners::CallbacksListener,
+          methods: Listeners::MethodsListener
+        })
+        macros = data[:mongoid] || []
+        details = {
+          confidence: Confidence::STATIC,
+          mongoid: true,
+          fields: macros.select { |m| m[:macro] == :field }
+                        .map { |m| { name: m[:args].first, type: m[:options][:type] }.compact },
+          embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
+                        .map { |m| { type: m[:macro], name: m[:args].first } },
+          associations: data[:associations],
+          validations: data[:validations],
+          scopes: data[:scopes],
+          callbacks: data[:callbacks],
+          methods: data[:methods]
+        }
+        collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
+        details[:collection] = collection if collection
+        details
       end
     end
   end

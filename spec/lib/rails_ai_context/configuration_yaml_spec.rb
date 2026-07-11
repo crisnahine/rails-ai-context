@@ -268,6 +268,23 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         expect(config.introspectors).to eq(%i[schema models routes])
       end
     end
+
+    it "loads extra_app_paths as an array of strings" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({
+          "extra_app_paths" => %w[src vendor/internal]
+        }))
+
+        RailsAiContext::Configuration.load_from_yaml(yaml_path)
+
+        expect(config.extra_app_paths).to eq(%w[src vendor/internal])
+      end
+    end
+
+    it "defaults extra_app_paths to an empty array" do
+      expect(RailsAiContext::Configuration.new.extra_app_paths).to eq([])
+    end
   end
 
   describe ".auto_load!" do

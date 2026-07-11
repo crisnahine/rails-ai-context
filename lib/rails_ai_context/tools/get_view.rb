@@ -31,8 +31,11 @@ module RailsAiContext
       def self.call(controller: nil, path: nil, detail: "standard", server_context: nil)
         data = cached_context[:view_templates]
 
-        # Fall back to reading from disk if introspector not in preset
-        if data.nil? || data[:error]
+        # Fall back to reading from disk if the introspector isn't in the
+        # preset, failed, or - in static tier - never ran at all. The disk
+        # read is real static analysis either way, so it beats rendering an
+        # empty listing from a section that was simply never inspected.
+        if data.nil? || data[:error] || data[:unavailable]
           return read_from_disk(controller: controller, path: path, detail: detail)
         end
 
@@ -64,6 +67,15 @@ module RailsAiContext
           }
 
           if filtered_templates.empty? && filtered_partials.empty?
+            # Gate on the UNFILTERED maps, not the filter miss: an API-only
+            # app can still have real views (mailer templates, most
+            # commonly), so a controller filter that simply doesn't match
+            # anything must not be reported as "views don't exist here".
+            if templates.empty? && partials.empty?
+              note = api_only_note("app/views")
+              return text_response(note) if note
+            end
+
             all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
             suggestion = find_closest_match(ctrl_lower, all_dirs)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
@@ -73,6 +85,14 @@ module RailsAiContext
 
           templates = filtered_templates
           partials = filtered_partials
+        end
+
+        # Unfiltered zero-template case: no controller given and the app
+        # genuinely has no views anywhere (as opposed to a filter simply not
+        # matching anything, handled above).
+        if controller.nil? && templates.empty? && partials.empty?
+          note = api_only_note("app/views")
+          return text_response(note) if note
         end
 
         case detail
@@ -204,7 +224,7 @@ module RailsAiContext
       end
 
       private_class_method def self.list_layouts(detail)
-        layouts_dir = Rails.root.join("app", "views", "layouts")
+        layouts_dir = rails_app.root.join("app", "views", "layouts")
         return text_response("No app/views/layouts/ directory found.") unless Dir.exist?(layouts_dir)
 
         files = Dir.glob(File.join(layouts_dir, "*")).reject { |f| File.directory?(f) }.sort
@@ -272,7 +292,7 @@ module RailsAiContext
           return text_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
         end
 
-        views_dir = Rails.root.join("app", "views")
+        views_dir = rails_app.root.join("app", "views")
         full_path = views_dir.join(path)
 
         unless File.exist?(full_path)
@@ -388,7 +408,7 @@ module RailsAiContext
         return "(file not found)" if relative_path.nil? || relative_path.to_s.empty?
         return "(access denied)" if sensitive_file?(relative_path.to_s)
 
-        views_dir = Rails.root.join("app", "views")
+        views_dir = rails_app.root.join("app", "views")
         full_path = views_dir.join(relative_path)
         return "(file not found)" unless File.exist?(full_path)
 
@@ -492,8 +512,13 @@ module RailsAiContext
       end
 
       private_class_method def self.read_from_disk(controller:, path:, detail:)
-        views_dir = Rails.root.join("app", "views")
-        return text_response("No app/views directory found.") unless Dir.exist?(views_dir)
+        views_dir = rails_app.root.join("app", "views")
+        unless Dir.exist?(views_dir)
+          note = api_only_note("app/views")
+          return text_response(note) if note
+
+          return text_response("No app/views directory found.")
+        end
 
         if path
           return read_view_file(path)

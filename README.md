@@ -448,6 +448,44 @@ Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, Open
 
 <br>
 
+## Static tier: works even when the app can't boot
+
+`rails-ai-context` attempts a full boot for live reflection. When boot fails
+(missing ENV vars, unreachable services, a broken initializer) the `serve`
+and `tool` commands fall back to the **static tier** instead of dying:
+routes come from parsing `config/routes.rb`, schema from `db/schema.rb` /
+`db/structure.sql` / migrations, models and controllers from their source
+files. Every response carries a banner explaining the degradation, static
+data is tagged `[STATIC]`, and sections that genuinely need a booted app
+report `[UNAVAILABLE]` with the reason.
+
+Flags:
+
+- `--no-boot` (serve, tool) - skip the boot attempt entirely and serve
+  static analysis. Fast, and immune to boot-time side effects.
+- `--app-path PATH` (all app-reading commands) - run against a Rails app in
+  another directory.
+- `--environment ENV` (all commands) - set RAILS_ENV for the boot attempt.
+
+`rails-ai-context doctor` still requires a bootable app: its job is
+diagnosing why boot fails.
+
+<br>
+
+## App shapes
+
+Beyond the conventional layout, code is discovered in packwerk packs
+(`packs/*/app/*`), in-repo engines (`engines/*/app/*`), and any directories
+listed in `extra_app_paths` in `.rails-ai-context.yml`. Rails multi-database
+schema dumps (`db/queue_schema.rb` and friends) are reported under a
+`Secondary databases` section. Mongoid apps get an honest
+`[UNAVAILABLE]` schema signal plus basic static model data (fields, embedded
+relations) instead of misleading empty output, and API-only apps get
+"not applicable" answers from view and frontend tools instead of silent
+empty listings.
+
+<br>
+
 ## Documentation
 
 | | |
@@ -465,6 +503,7 @@ Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, Open
 | **[Standalone](docs/STANDALONE.md)** | Use without Gemfile entry |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and fixes |
 | **[FAQ](docs/FAQ.md)** | Frequently asked questions |
+| **[Compatibility](docs/COMPATIBILITY.md)** | Supported versions, operating tiers, and the shape matrix with proof sources |
 
 <br>
 

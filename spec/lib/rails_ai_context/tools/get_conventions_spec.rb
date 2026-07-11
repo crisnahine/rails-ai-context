@@ -166,7 +166,7 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
 
     before do
       FileUtils.mkdir_p(controllers_dir)
-      allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(described_class).to receive(:cached_context).and_return({ conventions: {} })
     end
 

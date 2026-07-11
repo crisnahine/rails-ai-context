@@ -32,6 +32,8 @@ module RailsAiContext
         data = cached_context[:tests]
         return text_response("Test introspection not available. Add :tests to introspectors.") unless data
         return text_response("Test introspection failed: #{data[:error]}") if data[:error]
+        note = unavailable_note(data)
+        return text_response(note) if note
 
         # Specific model tests
         if model
@@ -217,12 +219,12 @@ module RailsAiContext
         end
 
         candidates.each do |rel|
-          path = Rails.root.join(rel)
+          path = rails_app.root.join(rel)
           next unless File.exist?(path)
           # Path traversal protection
           begin
             real_path = File.realpath(path)
-            real_root = File.realpath(Rails.root)
+            real_root = File.realpath(rails_app.root)
             next unless real_path.start_with?(real_root)
           rescue Errno::ENOENT
             next
@@ -247,9 +249,9 @@ module RailsAiContext
         end
 
         # List nearby test files to help the agent find the right one
-        test_dirs = candidates.map { |c| File.dirname(Rails.root.join(c)) }.uniq
+        test_dirs = candidates.map { |c| File.dirname(rails_app.root.join(c)) }.uniq
         nearby = test_dirs.flat_map do |dir|
-          Dir.exist?(dir) ? Dir.glob(File.join(dir, "*")).map { |f| f.sub("#{Rails.root}/", "") }.first(10) : []
+          Dir.exist?(dir) ? Dir.glob(File.join(dir, "*")).map { |f| f.sub("#{rails_app.root}/", "") }.first(10) : []
         end
         hint = nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
         "No test file found for #{name}. Searched: #{candidates.join(', ')}#{hint}"
@@ -282,9 +284,9 @@ module RailsAiContext
           # Detect Devise + sign_in pattern from existing tests
           has_devise = false
           has_sign_in = false
-          test_dir = Rails.root.join("test").to_s
+          test_dir = rails_app.root.join("test").to_s
           if Dir.exist?(test_dir)
-            real_root = File.realpath(Rails.root).to_s
+            real_root = File.realpath(rails_app.root).to_s
             safe_glob(test_dir, "**/*_test.rb", real_root).first(5).each do |path|
               content = RailsAiContext::SafeFile.read(path) or next
               has_devise = true if content.include?("Devise::Test")
@@ -344,10 +346,10 @@ module RailsAiContext
       private_class_method def self.parse_factory_details(relative_path)
         # Try common factory locations
         candidates = [
-          Rails.root.join("spec/factories/#{relative_path}"),
-          Rails.root.join("test/factories/#{relative_path}"),
-          Rails.root.join("spec/factories", relative_path),
-          Rails.root.join("test/factories", relative_path)
+          rails_app.root.join("spec/factories/#{relative_path}"),
+          rails_app.root.join("test/factories/#{relative_path}"),
+          rails_app.root.join("spec/factories", relative_path),
+          rails_app.root.join("test/factories", relative_path)
         ]
         path = candidates.find { |p| File.exist?(p) }
         return nil unless path
@@ -414,10 +416,10 @@ module RailsAiContext
       # Parse all fixture files, returning { "fixture_file" => { entry => attrs } }
       private_class_method def self.parse_all_fixture_contents
         fixture_dirs = [
-          Rails.root.join("test", "fixtures").to_s,
-          Rails.root.join("spec", "fixtures").to_s
+          rails_app.root.join("test", "fixtures").to_s,
+          rails_app.root.join("spec", "fixtures").to_s
         ]
-        real_root = File.realpath(Rails.root).to_s
+        real_root = File.realpath(rails_app.root).to_s
 
         results = {}
         fixture_dirs.each do |dir|

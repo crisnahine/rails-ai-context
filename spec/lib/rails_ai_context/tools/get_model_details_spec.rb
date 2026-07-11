@@ -141,6 +141,40 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe ".call with a Mongoid model" do
+    let(:mongoid_models) do
+      {
+        "Customer" => {
+          mongoid: true,
+          fields: [ { name: :name, type: "String" }, { name: :active, type: "Boolean" } ],
+          embeds: [ { type: :embeds_many, name: :orders } ],
+          associations: [],
+          validations: []
+        }
+      }
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({ models: mongoid_models })
+    end
+
+    it "renders declared fields since there is no AR table/columns" do
+      result = described_class.call(model: "Customer")
+      text = result.content.first[:text]
+      expect(text).to include("## Fields")
+      expect(text).to include("name")
+      expect(text).to include("String")
+    end
+
+    it "renders embedded relations" do
+      result = described_class.call(model: "Customer")
+      text = result.content.first[:text]
+      expect(text).to include("## Embedded relations")
+      expect(text).to include("embeds_many")
+      expect(text).to include("orders")
+    end
+  end
+
   describe ".call with pagination" do
     it "respects limit parameter" do
       result = described_class.call(limit: 1)

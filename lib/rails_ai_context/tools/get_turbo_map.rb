@@ -47,7 +47,7 @@ module RailsAiContext
       def self.call(detail: "standard", stream: nil, controller: nil, server_context: nil)
         return text_response("Turbo is not installed in this app (no `turbo-rails` gem in Gemfile.lock).") if turbo_rails_absent?
 
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
 
         # Collect all Turbo data
         model_broadcasts = scan_model_broadcasts(root)
@@ -111,7 +111,7 @@ module RailsAiContext
       # convention_introspector/migration_advisor gem_present? pattern of
       # trusting the lock file, not guessing when it's absent).
       private_class_method def self.turbo_rails_absent?
-        lock_path = File.join(Rails.root.to_s, "Gemfile.lock")
+        lock_path = File.join(rails_app.root.to_s, "Gemfile.lock")
         return false unless File.exist?(lock_path)
 
         content = RailsAiContext::SafeFile.read(lock_path)
@@ -141,6 +141,9 @@ module RailsAiContext
         if warnings.any?
           lines << "" << "**Warnings:** #{warnings.size} potential mismatch(es) detected"
         end
+
+        note = unavailable_note(turbo_data)
+        lines << "" << note if note
 
         lines << ""
         lines << "_Use `detail:\"standard\"` for stream wiring, or `stream:\"name\"` to filter._"
@@ -238,6 +241,9 @@ module RailsAiContext
         has_stream_templates = turbo_data.is_a?(Hash) && turbo_data[:turbo_streams]&.any?
 
         if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
+          note = api_only_note("the Turbo Streams/Frames surface")
+          return text_response(note) if note
+
           if filter_label
             lines << "_No Turbo usage matching #{filter_label}. Try without filter to see all Turbo Streams and Frames._"
           else
@@ -246,6 +252,8 @@ module RailsAiContext
         else
           lines << "_Use `detail:\"full\"` for DOM IDs and inline templates, or `stream:\"name\"` to filter._"
         end
+        note = unavailable_note(turbo_data)
+        lines << note if note
 
         text_response(lines.join("\n"))
       end
@@ -369,12 +377,17 @@ module RailsAiContext
         has_stream_templates = turbo_data.is_a?(Hash) && turbo_data[:turbo_streams]&.any?
 
         if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
+          note = api_only_note("the Turbo Streams/Frames surface")
+          return text_response(note) if note
+
           if filter_label
             lines << "_No Turbo usage matching #{filter_label}. Try without filter to see all Turbo Streams and Frames._"
           else
             lines << "_No Turbo Streams or Frames detected in this app._"
           end
         end
+        note = unavailable_note(turbo_data)
+        lines << note if note
 
         text_response(lines.join("\n"))
       end

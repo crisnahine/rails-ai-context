@@ -18,7 +18,7 @@ module RailsAiContext
       live_reload live_reload_debounce auto_mount http_path http_bind http_port
       output_dir skip_tools excluded_models excluded_controllers
       excluded_route_prefixes excluded_filters excluded_middleware excluded_association_names excluded_paths
-      sensitive_patterns search_extensions concern_paths frontend_paths
+      sensitive_patterns search_extensions concern_paths frontend_paths extra_app_paths
       max_file_size max_test_file_size max_schema_file_size max_view_total_size
       max_view_file_size max_search_results max_validate_files
       query_timeout query_row_limit query_redacted_columns allow_query_in_production
@@ -106,6 +106,12 @@ module RailsAiContext
 
     # Output directory for generated context files
     attr_accessor :output_dir
+
+    # Filesystem root of the app under analysis. Set by the CLI (--app-path
+    # or the working directory) for the static tier; nil means "ask Rails".
+    # Deliberately not a YAML key: the config file lives inside the app it
+    # would point at.
+    attr_accessor :app_root
 
     # Models/tables to exclude from introspection
     attr_accessor :excluded_models
@@ -229,6 +235,11 @@ module RailsAiContext
     # Frontend framework detection (optional overrides - auto-detected if nil)
     attr_accessor :frontend_paths         # User-declared frontend dirs (e.g. ["app/frontend", "../web-client"])
 
+    # Additional app-root-relative directories that also contain Rails app
+    # code (e.g. ["src", "vendor/internal"]). Code discovery scans each
+    # entry's app/models, app/controllers, and app/views subdirectories.
+    attr_accessor :extra_app_paths
+
     # Database query tool settings (rails_query)
     attr_accessor :query_timeout              # Statement timeout in seconds (default: 5)
     attr_accessor :query_row_limit            # Max rows returned (default: 100, hard cap: 1000)
@@ -297,6 +308,7 @@ module RailsAiContext
       @search_extensions        = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
       @concern_paths            = %w[app/models/concerns app/controllers/concerns]
       @frontend_paths           = nil
+      @extra_app_paths          = []
       @query_timeout            = 5
       @query_row_limit          = 100
       @query_redacted_columns   = %w[

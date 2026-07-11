@@ -108,7 +108,7 @@ module RailsAiContext
         available = available_log_files
         unless path
           msg = if available.any?
-            "Log file '#{file || "#{Rails.env}.log"}' not found.\nAvailable log files: #{available.join(', ')}"
+            "Log file '#{file || "#{rails_env_name}.log"}' not found.\nAvailable log files: #{available.join(', ')}"
           else
             "No log files found in log/. Your app may log to stdout (common in Docker/container environments)."
           end
@@ -167,7 +167,7 @@ module RailsAiContext
       # ── Log file resolution ─────────────────────────────────────────
 
       private_class_method def self.resolve_log_file(file_name)
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
 
         if file_name
           # Strip .log suffix if provided, then re-add; sanitize null bytes and path separators
@@ -175,7 +175,7 @@ module RailsAiContext
           name = File.basename(name) # Prevent directory traversal via slashes
           path = File.join(root, "log", "#{name}.log")
         else
-          path = File.join(root, "log", "#{Rails.env}.log")
+          path = File.join(root, "log", "#{rails_env_name}.log")
         end
 
         # Path traversal protection: separator-aware containment so a sibling
@@ -293,7 +293,7 @@ module RailsAiContext
       # ── Available log files ─────────────────────────────────────────
 
       private_class_method def self.available_log_files
-        log_dir = File.join(Rails.root.to_s, "log")
+        log_dir = File.join(rails_app.root.to_s, "log")
         return [] unless Dir.exist?(log_dir)
         Dir.glob(File.join(log_dir, "*.log"))
           .map { |f| File.basename(f) }

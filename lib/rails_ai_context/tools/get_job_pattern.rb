@@ -25,7 +25,7 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(job: nil, detail: "standard", server_context: nil)
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
         jobs_dir = File.join(root, "app", "jobs")
         real_root = File.realpath(root).to_s
         jobs_dir_exists = Dir.exist?(jobs_dir)
@@ -44,7 +44,10 @@ module RailsAiContext
         # Pull enriched channel data from the cached introspector context - this
         # gives us the v5.8.0 fields (identified_by, streams, periodic, actions)
         # that JobIntrospector#extract_channels populates.
-        channels = (cached_context.dig(:jobs, :channels) || []).reject { |c| c.is_a?(Hash) && c[:error] }
+        jobs_data = cached_context[:jobs]
+        channels = (jobs_data.is_a?(Hash) ? jobs_data[:channels] : nil) || []
+        channels = channels.reject { |c| c.is_a?(Hash) && c[:error] }
+        channels_note = unavailable_note(jobs_data)
 
         # Single-job query: requires jobs to be present.
         if job
@@ -54,8 +57,11 @@ module RailsAiContext
 
         # No jobs and no channels - bail out, but say honestly whether the
         # directory is missing or just has no job classes beyond ApplicationJob.
+        # Channel absence is only a real negative when the :jobs section
+        # actually ran - if it's unavailable (static tier), say so instead of
+        # claiming "no channels detected".
         if job_files.empty? && channels.empty?
-          return text_response(no_jobs_or_channels_message(jobs_dir_exists))
+          return text_response(no_jobs_or_channels_message(jobs_dir_exists, channels_note))
         end
 
         # Compose: jobs section (if any) + channels section (if any).
@@ -82,11 +88,16 @@ module RailsAiContext
 
       # Same distinction for the "nothing async at all" bail-out message,
       # phrased to keep reading naturally when appended to the channels clause.
-      private_class_method def self.no_jobs_or_channels_message(jobs_dir_exists)
+      # `channels_note` carries an [UNAVAILABLE: ...] marker when the :jobs
+      # section never ran (static tier) - in that case, asserting "no Action
+      # Cable channels detected" would be a fabricated negative rather than
+      # an observed one, so the note replaces that claim instead of joining it.
+      private_class_method def self.no_jobs_or_channels_message(jobs_dir_exists, channels_note)
+        channels_clause = channels_note || "no Action Cable channels detected"
         if jobs_dir_exists
-          "app/jobs/ exists but has no job classes beyond ApplicationJob, and no Action Cable channels detected. This app may not use background jobs."
+          "app/jobs/ exists but has no job classes beyond ApplicationJob, and #{channels_clause}. This app may not use background jobs."
         else
-          "No app/jobs/ directory found and no Action Cable channels detected. This app may not use background jobs."
+          "No app/jobs/ directory found and #{channels_clause}. This app may not use background jobs."
         end
       end
 

@@ -149,5 +149,21 @@ RSpec.describe RailsAiContext::Tools::GetComponentCatalog do
         expect(text).to include("do %>")
       end
     end
+
+    context "when the app is API-only" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          api: { api_only: true },
+          components: { components: [] }
+        )
+      end
+
+      it "reports API-only apps as not applicable instead of an empty listing" do
+        response = described_class.call
+        text = response.content.first[:text]
+        expect(text).to include("Not applicable")
+        expect(text).to include("API-only")
+      end
+    end
   end
 end

@@ -93,5 +93,21 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
       text = result.content.first[:text]
       expect(text).to include("No Stimulus controllers")
     end
+
+    context "when the app is API-only" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          api: { api_only: true },
+          stimulus: { controllers: [] }
+        )
+      end
+
+      it "reports API-only apps as not applicable instead of an empty listing" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("Not applicable")
+        expect(text).to include("API-only")
+      end
+    end
   end
 end

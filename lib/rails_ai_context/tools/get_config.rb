@@ -16,6 +16,8 @@ module RailsAiContext
         data = cached_context[:config]
         return text_response("Config introspection not available. Add :config to introspectors or use `config.preset = :full`.") unless data
         return text_response("Config introspection failed: #{data[:error]}") if data[:error]
+        note = unavailable_note(data)
+        return text_response(note) if note
 
         lines = [ "# Application Configuration", "" ]
 
@@ -97,7 +99,7 @@ module RailsAiContext
       # A short note for a config/initializers file: flags files that are
       # entirely commented out, otherwise describes known stock initializers.
       private_class_method def self.initializer_note(name)
-        path = Rails.root.join("config", "initializers", name).to_s
+        path = rails_app.root.join("config", "initializers", name).to_s
         if File.exist?(path)
           content = RailsAiContext::SafeFile.read(path)
           if content
@@ -135,8 +137,8 @@ module RailsAiContext
           "Sorcery"
         elsif gem_names.include?("clearance")
           "Clearance"
-        elsif File.exist?(Rails.root.join("app/models/concerns/authentication.rb")) ||
-              File.exist?(Rails.root.join("app/controllers/concerns/authentication.rb"))
+        elsif File.exist?(rails_app.root.join("app/models/concerns/authentication.rb")) ||
+              File.exist?(rails_app.root.join("app/controllers/concerns/authentication.rb"))
           "Rails 8 authentication (built-in)"
         end
       end
@@ -166,7 +168,7 @@ module RailsAiContext
         # Asset pipeline detection (always check - not from introspector)
         parts << "Propshaft" if defined?(Propshaft)
         parts << "Sprockets" if defined?(Sprockets) && !defined?(Propshaft)
-        parts << "Import Maps" if File.exist?(Rails.root.join("config/importmap.rb"))
+        parts << "Import Maps" if File.exist?(rails_app.root.join("config/importmap.rb"))
 
         parts.uniq!
         parts.any? ? parts.join(", ") : nil
@@ -181,7 +183,7 @@ module RailsAiContext
         end
 
         # YAML fallback for older Rails or when config API isn't available
-        cable_yml = Rails.root.join("config/cable.yml")
+        cable_yml = rails_app.root.join("config/cable.yml")
         return nil unless File.exist?(cable_yml)
 
         content = RailsAiContext::SafeFile.read(cable_yml)

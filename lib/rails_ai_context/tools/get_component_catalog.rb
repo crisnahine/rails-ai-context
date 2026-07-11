@@ -36,6 +36,9 @@ module RailsAiContext
       def self.call(component: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)
         data = cached_context[:components]
 
+        note = unavailable_note(data)
+        return text_response(note) if note
+
         unless data.is_a?(Hash) && !data[:error]
           return text_response("No component data available. Ensure :components introspector is enabled and app/components/ exists.")
         end
@@ -46,6 +49,9 @@ module RailsAiContext
           component = component.to_s.strip
 
           if components.empty?
+            note = api_only_note("app/components")
+            return text_response(note) if note
+
             return text_response("Component '#{component}' not found - no components exist in app/components/. Create ViewComponent or Phlex components first.")
           end
 
@@ -62,6 +68,9 @@ module RailsAiContext
           text_response(render_single(found, detail))
         else
           if components.empty?
+            note = api_only_note("app/components")
+            return text_response(note) if note
+
             return text_response(
               "No components found in app/components/.\n\n" \
               "This app may use ERB partials instead of ViewComponent/Phlex. Try:\n" \

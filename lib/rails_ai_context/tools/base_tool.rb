@@ -95,13 +95,27 @@ module RailsAiContext
       SESSION_CONTEXT = { mutex: Mutex.new, queries: {} }
 
       class << self
-        # Convenience: access the Rails app and cached introspection
+        # Convenience: access the Rails app and cached introspection.
+        # Routes through RailsAiContext.default_app so this resolves to the
+        # booted app in runtime tier and to a StaticApp in static tier -
+        # tools that call rails_app directly (get_concern, analyze_feature,
+        # migration_advisor, ...) work in both tiers without their own checks.
         def rails_app
-          Rails.application
+          RailsAiContext.default_app
         end
 
         def config
           RailsAiContext.configuration
+        end
+
+        # The current environment name without requiring a booted app:
+        # Rails.env when a real Rails is loaded and responds to it, the
+        # ambient RAILS_ENV otherwise. Tools that only need the environment
+        # name (not the full StringInquirer API) use this instead of a bare
+        # `Rails.env` reference, which would NameError under --no-boot or
+        # early boot death.
+        def rails_env_name
+          defined?(Rails) && Rails.respond_to?(:env) ? Rails.env : (ENV["RAILS_ENV"] || "development")
         end
 
         # Cache introspection results with TTL + fingerprint invalidation.
@@ -235,6 +249,59 @@ module RailsAiContext
             "Data from those sections is missing, not empty._"
         end
 
+        # Short honest line for a context section that could not be produced
+        # because the app isn't booted, as opposed to one that ran and found
+        # nothing. Tools check this before rendering "not found"/empty copy
+        # so a missing runtime capability never reads as a confirmed
+        # negative (e.g. "No notable gems found" when gems were never
+        # inspected at all).
+        def unavailable_note(section_data)
+          return nil unless section_data.is_a?(Hash) && section_data[:unavailable]
+
+          "[UNAVAILABLE: #{section_data[:unavailable]}]"
+        end
+
+        # API-only apps legitimately have no views, partials, Stimulus, or
+        # Turbo surface; a bare empty listing is indistinguishable from a
+        # full-stack app that has none yet, so name the reason.
+        def api_only_app?
+          api = cached_context[:api]
+          return api[:api_only] == true if api.is_a?(Hash) && api.key?(:api_only)
+
+          app = rails_app
+          app.respond_to?(:config) && app.config.respond_to?(:api_only) && app.config.api_only == true
+        rescue StandardError
+          false
+        end
+
+        # Short honest line for a view/frontend section that doesn't apply on
+        # an API-only app, or nil when the app has a view layer. Tools check
+        # this before rendering "no X found" copy so a legitimately absent
+        # surface never reads as "not built yet".
+        def api_only_note(section_label)
+          return nil unless api_only_app?
+
+          "Not applicable: this is an API-only app (config.api_only), so #{section_label} does not exist."
+        end
+
+        # One banner per response in static tier: consumers must never
+        # mistake static analysis for runtime-confirmed data. Rides the
+        # suffix mechanism so it survives truncation.
+        def static_tier_banner
+          return nil unless RailsAiContext.static_tier?
+
+          reason = RailsAiContext.static_reason
+          headline = if reason.to_s.include?("--no-boot")
+            "Static mode (#{reason})"
+          elsif reason
+            "App boot failed (#{reason})"
+          else
+            "Static mode"
+          end
+          "\n\n---\n_#{headline}. Serving static analysis; runtime-only data is marked " \
+            "[UNAVAILABLE]. Run `rails-ai-context doctor` for details._"
+        end
+
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
         def find_closest_match(input, available)
           return nil if available.empty?
@@ -330,7 +397,12 @@ module RailsAiContext
         # `suffix:`, when given, is appended after the truncation footer (or after
         # the text itself when untruncated) so callers can attach a short trailing
         # note that must survive truncation instead of being cut off with the tail.
+        # In static tier, the tier banner rides along on the same mechanism so
+        # every response - caller-suffixed or not - ends with it.
         def text_response(text, suffix: nil)
+          suffix = [ suffix, static_tier_banner ].compact.join
+          suffix = nil if suffix.empty?
+
           # Auto-track: record this tool call in session context (skip SessionContext itself to avoid recursion)
           if respond_to?(:tool_name) && tool_name != "rails_session_context"
             summary = text.lines.first&.strip&.truncate(80)
@@ -360,6 +432,8 @@ module RailsAiContext
           # A failed call must not leak its recorded params into the next
           # call's session entry.
           Thread.current[:rails_ai_context_call_params] = nil
+          banner = static_tier_banner
+          text += banner if banner
           MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
         end
 

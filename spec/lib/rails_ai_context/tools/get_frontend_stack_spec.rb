@@ -268,6 +268,20 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
       end
     end
 
+    context "when frontend_frameworks is unavailable (static tier)" do
+      it "reports [UNAVAILABLE] instead of a fabricated empty answer" do
+        allow(described_class).to receive(:cached_context).and_return({
+          frontend_frameworks: { unavailable: "requires a booted Rails app (RuntimeError: boom)" }
+        })
+        result = described_class.call
+        text = result.content.first[:text]
+
+        expect(text).to include("UNAVAILABLE")
+        expect(text).to include("requires a booted Rails app (RuntimeError: boom)")
+        expect(text).not_to include("No frontend framework data available")
+      end
+    end
+
     context "with unknown detail level" do
       it "returns an error message" do
         result = described_class.call(detail: "verbose")

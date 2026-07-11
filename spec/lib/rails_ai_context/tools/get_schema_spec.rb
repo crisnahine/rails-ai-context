@@ -222,6 +222,34 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  describe "secondary databases" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: {
+          adapter: "sqlite3",
+          tables: tables,
+          total_tables: 3,
+          secondary_databases: {
+            "queue" => {
+              tables: { "solid_queue_jobs" => { columns: [], indexes: [], foreign_keys: [] } },
+              total_tables: 1,
+              note: "Parsed from db/queue_schema.rb (from committed dump, not a live connection)"
+            }
+          }
+        },
+        models: {}
+      })
+    end
+
+    it "renders a secondary databases section when present" do
+      response = described_class.call
+      text = response.content.first[:text]
+      expect(text).to include("Secondary databases")
+      expect(text).to include("queue")
+      expect(text).to include("solid_queue_jobs")
+    end
+  end
+
   describe "singular pluralization with exactly one table" do
     before do
       allow(described_class).to receive(:cached_context).and_return({

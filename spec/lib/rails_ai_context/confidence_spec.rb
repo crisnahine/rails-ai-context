@@ -101,4 +101,23 @@ RSpec.describe RailsAiContext::Confidence do
       expect(described_class.static_node?(parse_expr("-> { x }"))).to be false
     end
   end
+
+  describe "tier vocabulary" do
+    it "exposes the STATIC tag" do
+      expect(described_class::STATIC).to eq("[STATIC]")
+    end
+
+    it "exposes the bare UNAVAILABLE tag" do
+      expect(described_class::UNAVAILABLE).to eq("[UNAVAILABLE]")
+    end
+
+    it "builds a reasoned UNAVAILABLE tag" do
+      expect(described_class.unavailable("requires a booted Rails app"))
+        .to eq("[UNAVAILABLE: requires a booted Rails app]")
+    end
+
+    it "collapses a multi-line reason to its first line" do
+      expect(described_class.unavailable("boom\nbacktrace")).to eq("[UNAVAILABLE: boom]")
+    end
+  end
 end

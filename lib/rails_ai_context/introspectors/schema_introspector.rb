@@ -13,8 +13,8 @@ module RailsAiContext
 
       # @return [Hash] database schema context
       def call
-        return static_schema_parse unless active_record_connected?
-        return static_schema_parse if table_names.empty?
+        return attach_secondary_databases(static_schema_parse) unless active_record_connected?
+        return attach_secondary_databases(static_schema_parse) if table_names.empty?
 
         schema_content = File.exist?(schema_file_path) ? (RailsAiContext::SafeFile.read(schema_file_path, max_size: RailsAiContext.configuration.max_schema_file_size) || "") : ""
 
@@ -38,7 +38,7 @@ module RailsAiContext
           end
         end
 
-        {
+        attach_secondary_databases({
           adapter: adapter_name,
           tables: extract_tables,
           total_tables: table_names.size,
@@ -46,7 +46,13 @@ module RailsAiContext
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: parse_generated_columns(schema_content)
-        }
+        })
+      end
+
+      # Static tier entry: skip the connection probe entirely and answer from
+      # schema.rb / structure.sql / migration files.
+      def static_call
+        attach_secondary_databases(static_schema_parse)
       end
 
       private
@@ -190,6 +196,18 @@ module RailsAiContext
         nil
       end
 
+      # Reads the version stamp from the schema.rb file actually being parsed,
+      # rather than the app's primary db/schema.rb. Secondary database dumps
+      # (db/queue_schema.rb, etc.) carry their own version: keyword, and
+      # current_schema_version would otherwise report the primary database's
+      # version on every secondary entry.
+      def schema_version_for(path)
+        RailsAiContext::SchemaVersion.from_schema_rb(path)
+      rescue => e
+        $stderr.puts "[rails-ai-context] schema_version_for failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
       def schema_file_path
         File.join(app.root, "db", "schema.rb")
       end
@@ -238,7 +256,50 @@ module RailsAiContext
           }
         end
 
+        if RailsAiContext::AppKind.mongoid?(app.root)
+          return { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" }
+        end
+
         { error: "No db/schema.rb, db/structure.sql, or migrations found" }
+      end
+
+      # Rails multi-database setups dump each secondary database to its own
+      # file named after the database.yml entry (db/queue_schema.rb for the
+      # queue database, db/cache_structure.sql for sql format). The primary
+      # dump keeps the top-level :tables shape; secondaries ride their own
+      # key so single-database consumers are unaffected.
+      def secondary_database_dumps
+        dumps = {}
+        Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
+          name = File.basename(path, ".rb").sub(/_schema\z/, "")
+          parsed = parse_schema_rb(path)
+          next unless parsed[:total_tables].to_i.positive?
+
+          parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
+          dumps[name] = parsed
+        end
+        Dir.glob(File.join(app.root.to_s, "db", "*_structure.sql")).sort.each do |path|
+          name = File.basename(path, ".sql").sub(/_structure\z/, "")
+          next if dumps.key?(name)
+
+          parsed = parse_structure_sql(path)
+          next unless parsed[:total_tables].to_i.positive?
+
+          parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
+          dumps[name] = parsed
+        end
+        dumps
+      end
+
+      # Additive: only sets :secondary_databases when at least one secondary
+      # dump parsed to tables, and only on a result that already has the
+      # primary :tables key, so error/unavailable results pass through untouched.
+      def attach_secondary_databases(result)
+        return result unless result.is_a?(Hash) && result[:tables]
+
+        secondary = secondary_database_dumps
+        result[:secondary_databases] = secondary if secondary.any?
+        result
       end
 
       def parse_schema_rb(path)
@@ -320,7 +381,7 @@ module RailsAiContext
           adapter: "static_parse",
           tables: tables,
           total_tables: tables.size,
-          schema_version: current_schema_version,
+          schema_version: schema_version_for(path),
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: parse_generated_columns(content),
@@ -328,36 +389,95 @@ module RailsAiContext
         }
       end
 
+      # Identifier quoting differs per dump tool: pg_dump uses bare or
+      # "quoted" names with a public. prefix, mysqldump uses `backticks` and
+      # terminates CREATE TABLE with ") ENGINE=...;", sqlite uses "quotes"
+      # and IF NOT EXISTS. The body is captured up to the closing paren at
+      # line start because MySQL's trailer means ");" alone never appears.
+      # The negative lookahead in the body keeps a single-line CREATE TABLE
+      # (e.g. sqlite's schema_migrations) from swallowing every table that
+      # follows it: without it, the lazy scan has no "\n)" to stop at inside
+      # that one-line statement, so it keeps consuming lines - including the
+      # next CREATE TABLE - until it finds one.
       def parse_structure_sql(path) # rubocop:disable Metrics/MethodLength
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "structure.sql too large (#{File.size(path)} bytes)" } unless content
+
+        dialect = detect_sql_dialect(content)
         tables = {}
 
-        # Match CREATE TABLE blocks
-        content.scan(/CREATE TABLE (?:public\.)?(\w+)\s*\((.*?)\);/m) do |table_name, body|
+        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(((?:(?!CREATE TABLE).)*?)^\)/m) do |table_name, body|
           next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
 
-          columns = parse_sql_columns(body)
-          tables[table_name] = { columns: columns, indexes: [], foreign_keys: [] }
+          tables[table_name] = parse_sql_table_body(body, table_name)
         end
 
-        # Match CREATE INDEX / CREATE UNIQUE INDEX
-        content.scan(/CREATE (UNIQUE )?INDEX (\w+) ON (?:public\.)?(\w+).*?\((.+?)\)/m) do |unique, idx_name, table, cols|
-          col_list = cols.scan(/\w+/)
+        # Single-line CREATE TABLE statements (sqlite emits these for tiny
+        # tables) close with ");" on the same line and miss the multi-line
+        # scan above.
+        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(([^\n]*)\);/) do |table_name, body|
+          next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
+
+          tables[table_name] ||= parse_sql_table_body(body, table_name)
+        end
+
+        content.scan(/CREATE (UNIQUE )?INDEX\s+(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:public\.)?[`"]?(\w+)[`"]?.*?\((.+?)\)/m) do |unique, idx_name, table, cols|
+          col_list = cols.scan(/\w+/) - %w[btree gin gist hash]
           tables[table]&.dig(:indexes)&.push({ name: idx_name, columns: col_list, unique: !!unique })
         end
 
-        # Match ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY (handles multi-line)
-        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?(?:public\.)?(\w+)\s+ADD CONSTRAINT.*?FOREIGN KEY\s*\((\w+)\)\s*REFERENCES\s+(?:public\.)?(\w+)\((\w+)\)/m) do |from, col, to, pk|
+        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s+ADD CONSTRAINT.*?FOREIGN KEY\s*\([`"]?(\w+)[`"]?\)\s*REFERENCES\s+(?:public\.)?[`"]?(\w+)[`"]?\s*\([`"]?(\w+)[`"]?\)/m) do |from, col, to, pk|
           tables[from]&.dig(:foreign_keys)&.push({ from_table: from, to_table: to, column: col, primary_key: pk })
         end
 
         {
           adapter: "static_parse",
+          dialect: dialect.to_s,
           tables: tables,
           total_tables: tables.size,
           note: "Parsed from db/structure.sql (no DB connection)"
         }
+      end
+
+      # mysqldump always terminates CREATE TABLE with ") ENGINE=..." and
+      # quotes identifiers with backticks; pg_dump wraps FK updates in
+      # "ALTER TABLE ONLY", qualifies types with "::", and uses search_path /
+      # extension setup that the other two dialects never emit; sqlite
+      # marks autoincrementing primary keys and keeps its own sequence table.
+      # Order matters: check MySQL and PostgreSQL markers before sqlite's
+      # generic double-quoted CREATE TABLE, which would otherwise also match
+      # pg_dump's ANSI-quoted identifiers.
+      def detect_sql_dialect(content)
+        return :mysql if content.match?(/\)\s*ENGINE=/i) || content.match?(/CREATE TABLE\s+`/)
+        return :postgresql if content.match?(/SET search_path|CREATE EXTENSION|ALTER TABLE ONLY|::\w+/)
+        return :sqlite if content.match?(/sqlite_sequence|AUTOINCREMENT|CREATE TABLE\s+(?:IF NOT EXISTS\s+)?"/)
+
+        :unknown
+      end
+
+      # MySQL keeps indexes and foreign keys inside the CREATE TABLE body as
+      # KEY / UNIQUE KEY / CONSTRAINT lines; the other dialects emit separate
+      # statements, so those lines simply never match here.
+      def parse_sql_table_body(body, table_name)
+        table = { columns: parse_sql_columns(body), indexes: [], foreign_keys: [] }
+
+        body.each_line do |line|
+          line = line.strip.chomp(",")
+          case line
+          when /\ACONSTRAINT\s+[`"]?\w+[`"]?\s+FOREIGN KEY\s*\([`"]?(\w+)[`"]?\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\([`"]?(\w+)[`"]?\)/i
+            table[:foreign_keys] << { from_table: table_name, to_table: $2, column: $1, primary_key: $3 }
+          when /\A(UNIQUE\s+)?(?:KEY|INDEX)\s+[`"](\w+)[`"]\s*\(([^)]*)\)/i
+            # $1/$2/$3 must be captured to locals before any further regex
+            # call: String#scan below re-runs matching and would otherwise
+            # clobber $~ (and so $1) before the hash literal reads it.
+            unique = !$1.nil?
+            idx_name = $2
+            cols = $3.scan(/\w+/)
+            table[:indexes] << { name: idx_name, columns: cols, unique: unique }
+          end
+        end
+
+        table
       end
 
       # Parse column definitions from a CREATE TABLE body
@@ -367,13 +487,21 @@ module RailsAiContext
           line = line.strip.chomp(",").strip
           next if line.empty?
           next if line.match?(/\A(PRIMARY|CONSTRAINT|CHECK|UNIQUE|EXCLUDE|FOREIGN)\b/i)
+          # KEY/INDEX are non-reserved words in PostgreSQL, so pg_dump emits
+          # bare `key` or `index` columns unquoted. mysqldump always backticks
+          # inline index names ("KEY `name` (...)"), so a quoted name after
+          # KEY/INDEX is the reliable signal that this line is an index
+          # definition rather than a column named "key" or "index".
+          next if line.match?(/\A(?:UNIQUE\s+)?(?:KEY|INDEX)\s+[`"]/i)
 
           # Match: column_name type_with_params [constraints]
-          if (match = line.match(/\A"?(\w+)"?\s+(.+)/))
+          if (match = line.match(/\A[`"]?(\w+)[`"]?\s+(.+)/))
             col_name = match[1]
             rest = match[2]
             # Extract type: everything before NOT NULL, NULL, DEFAULT, etc.
-            col_type = rest.split(/\s+(?:NOT\s+NULL|NULL|DEFAULT|PRIMARY|UNIQUE|CONSTRAINT|CHECK)\b/i).first&.strip&.downcase
+            col_type = rest.split(
+              /\s+(?:NOT\s+NULL|NULL|DEFAULT|PRIMARY|UNIQUE|CONSTRAINT|CHECK|AUTO_INCREMENT|AUTOINCREMENT|CHARACTER\s+SET|COLLATE|COMMENT|GENERATED|REFERENCES)\b/i
+            ).first&.strip&.downcase
             next unless col_type && !col_type.empty?
             columns << { name: col_name, type: normalize_sql_type(col_type) }
           end
@@ -684,15 +812,22 @@ module RailsAiContext
         end
       end
 
-      def normalize_sql_type(type)
-        case type
-        when /\Ainteger\z/i, /\Aint\z/i, /\Aint4\z/i then "integer"
+      def normalize_sql_type(type) # rubocop:disable Metrics/MethodLength, Metrics/CyclomaticComplexity
+        # MySQL's boolean columns are a sized tinyint. This has to run
+        # before the size-stripping below (and before the generic tinyint
+        # match) because bare tinyint is a real 1-byte integer column.
+        return "boolean" if type.start_with?("tinyint(1)")
+
+        base = type.sub(/\(.+\z/m, "").strip
+
+        case base
+        when /\Ainteger\z/i, /\Aint\z/i, /\Aint4\z/i, /\Atinyint\z/i, /\Amediumint\z/i then "integer"
         when /\Abigint\z/i, /\Aint8\z/i then "bigint"
         when /\Asmallint\z/i, /\Aint2\z/i then "smallint"
         when /\Acharacter varying\z/i, /\Avarchar\z/i then "string"
-        when /\Atext\z/i then "text"
+        when /\Atext\z/i, /\Alongtext\z/i, /\Amediumtext\z/i, /\Atinytext\z/i then "text"
         when /\Aboolean\z/i, /\Abool\z/i then "boolean"
-        when /\Atimestamp/i then "datetime"
+        when /\Atimestamp/i, /\Adatetime\z/i then "datetime"
         when /\Adate\z/i then "date"
         when /\Atime\z/i then "time"
         when /\Anumeric\z/i, /\Adecimal\z/i then "decimal"
@@ -703,6 +838,7 @@ module RailsAiContext
         when /\Acitext\z/i then "citext"
         when /\Aarray\z/i then "array"
         when /\Ahstore\z/i then "hstore"
+        when /\Alongblob\z/i, /\Amediumblob\z/i, /\Ablob\z/i, /\Abinary\z/i, /\Avarbinary\z/i then "binary"
         else type
         end
       end

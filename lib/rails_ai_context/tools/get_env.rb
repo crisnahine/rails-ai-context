@@ -21,7 +21,7 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(detail: "standard", server_context: nil)
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
 
         env_vars = scan_env_vars(root)
         env_example = scan_env_example(root)
@@ -526,7 +526,7 @@ module RailsAiContext
 
       private_class_method def self.parse_credentials_structure
         # Look for credentials template or example
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
         candidates = %w[
           config/credentials.yml.example
           config/credentials.yml.sample

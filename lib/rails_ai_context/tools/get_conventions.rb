@@ -16,6 +16,8 @@ module RailsAiContext
         conventions = cached_context[:conventions]
         return text_response("Convention detection not available. Add :conventions to introspectors.") unless conventions
         return text_response("Convention detection failed: #{conventions[:error]}") if conventions[:error]
+        note = unavailable_note(conventions)
+        return text_response(note) if note
 
         lines = [ "# App Conventions & Architecture", "" ]
 
@@ -134,7 +136,7 @@ module RailsAiContext
       end
 
       private_class_method def self.detect_frontend_stack
-        pkg_path = Rails.root.join("package.json")
+        pkg_path = rails_app.root.join("package.json")
         return [] unless File.exist?(pkg_path)
 
         content = RailsAiContext::SafeFile.read(pkg_path) || ""
@@ -168,19 +170,19 @@ module RailsAiContext
       end
 
       private_class_method def self.detect_package_manager
-        return "pnpm" if File.exist?(Rails.root.join("pnpm-lock.yaml"))
-        return "yarn" if File.exist?(Rails.root.join("yarn.lock"))
-        return "bun" if File.exist?(Rails.root.join("bun.lockb"))
-        return "npm" if File.exist?(Rails.root.join("package-lock.json"))
+        return "pnpm" if File.exist?(rails_app.root.join("pnpm-lock.yaml"))
+        return "yarn" if File.exist?(rails_app.root.join("yarn.lock"))
+        return "bun" if File.exist?(rails_app.root.join("bun.lockb"))
+        return "npm" if File.exist?(rails_app.root.join("package-lock.json"))
         nil
       end
 
       # Scan controllers for app-specific authorization, flash, and error-handling patterns
       private_class_method def self.detect_app_patterns
-        controllers_dir = Rails.root.join("app", "controllers").to_s
+        controllers_dir = rails_app.root.join("app", "controllers").to_s
         return [] unless Dir.exist?(controllers_dir)
 
-        real_root = File.realpath(Rails.root).to_s
+        real_root = File.realpath(rails_app.root).to_s
         auth_checks = []
         auth_denials = []
         flash_notices = []
@@ -192,7 +194,7 @@ module RailsAiContext
         json_response_count = 0
         html_response_count = 0
         show_only_controllers = []
-        has_services = Dir.exist?(Rails.root.join("app", "services"))
+        has_services = Dir.exist?(rails_app.root.join("app", "services"))
 
         safe_glob(controllers_dir, "**/*.rb", real_root).each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
@@ -367,7 +369,7 @@ module RailsAiContext
         sections.concat(test_pattern) if test_pattern.any?
 
         if has_services
-          services_dir = Rails.root.join("app", "services").to_s
+          services_dir = rails_app.root.join("app", "services").to_s
           service_files = safe_glob(services_dir, "**/*.rb", real_root)
           if service_files.any?
             sections << "" << "### Service Objects"
@@ -385,10 +387,10 @@ module RailsAiContext
 
       private_class_method def self.detect_locale_info
         info = []
-        locales_dir = Rails.root.join("config", "locales").to_s
+        locales_dir = rails_app.root.join("config", "locales").to_s
         return info unless Dir.exist?(locales_dir)
 
-        real_root = File.realpath(Rails.root).to_s
+        real_root = File.realpath(rails_app.root).to_s
         locale_files = safe_glob(locales_dir, "**/*.{yml,yaml,rb}", real_root)
         locales = locale_files.map { |f| File.basename(f, ".*").split(".").first }.uniq.sort
 
@@ -397,7 +399,7 @@ module RailsAiContext
         info << "**Locales:** #{locales.join(', ')} (#{locales.size} total)"
 
         # Detect default locale from config
-        app_config = Rails.root.join("config", "application.rb")
+        app_config = rails_app.root.join("config", "application.rb")
         if File.exist?(app_config)
           content = RailsAiContext::SafeFile.read(app_config) || ""
           if (match = content.match(/config\.i18n\.default_locale\s*=\s*[:"'](\w+)/))
@@ -406,7 +408,7 @@ module RailsAiContext
         end
 
         # Detect primary UI language by sampling flash messages from controllers
-        controllers_dir = Rails.root.join("app", "controllers").to_s
+        controllers_dir = rails_app.root.join("app", "controllers").to_s
         if Dir.exist?(controllers_dir)
           samples = []
           safe_glob(controllers_dir, "**/*.rb", real_root).first(10).each do |path|
@@ -439,10 +441,10 @@ module RailsAiContext
 
       private_class_method def self.detect_test_pattern
         sections = []
-        test_dir = Rails.root.join("test", "controllers").to_s
+        test_dir = rails_app.root.join("test", "controllers").to_s
         return sections unless Dir.exist?(test_dir)
 
-        real_root = File.realpath(Rails.root).to_s
+        real_root = File.realpath(rails_app.root).to_s
         test_files = safe_glob(test_dir, "**/*_test.rb", real_root)
         return sections if test_files.empty?
 

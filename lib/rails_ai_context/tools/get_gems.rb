@@ -56,6 +56,8 @@ module RailsAiContext
         gems = cached_context[:gems]
         return text_response("Gem introspection not available. Add :gems to introspectors.") unless gems
         return text_response("Gem introspection failed: #{gems[:error]}") if gems[:error]
+        note = unavailable_note(gems)
+        return text_response(note) if note
 
         notable = gems[:notable_gems] || []
         notable = notable.select { |g| g[:category] == category } unless category == "all"
@@ -97,7 +99,7 @@ module RailsAiContext
         return hint if hint.is_a?(String)
         return nil unless hint.is_a?(Array)
 
-        root = defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root : Dir.pwd
+        root = rails_app.root
         present = hint.select { |path| File.exist?(File.join(root, path)) }
         present.any? ? present.join(", ") : nil
       end

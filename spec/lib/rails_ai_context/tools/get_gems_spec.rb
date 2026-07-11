@@ -129,6 +129,17 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       expect(text).to include("Gemfile.lock not found")
     end
 
+    it "reports [UNAVAILABLE] instead of a fabricated empty answer in static tier" do
+      allow(described_class).to receive(:cached_context).and_return({
+        gems: { unavailable: "requires a booted Rails app (RuntimeError: boom)" }
+      })
+      result = described_class.call
+      text = result.content.first[:text]
+      expect(text).to include("UNAVAILABLE")
+      expect(text).to include("requires a booted Rails app (RuntimeError: boom)")
+      expect(text).not_to include("No notable gems")
+    end
+
     it "handles empty notable_gems list" do
       gems_data[:notable_gems] = []
       result = described_class.call

@@ -65,7 +65,7 @@ module RailsAiContext
             next
           end
 
-          full_path = Rails.root.join(file)
+          full_path = rails_app.root.join(file)
 
           unless File.exist?(full_path)
             suggestion = find_file_suggestion(file)
@@ -77,7 +77,7 @@ module RailsAiContext
 
           begin
             real = File.realpath(full_path).to_s
-            rails_root_real = File.realpath(Rails.root).to_s
+            rails_root_real = File.realpath(rails_app.root).to_s
             # Separator-aware containment - matches the v5.8.1-r2 hardening in
             # get_view.rb / vfs.rb. Without `+ File::SEPARATOR`, a sibling-dir
             # like `/app/rails_evil/...` would prefix-match a Rails root at
@@ -157,12 +157,12 @@ module RailsAiContext
         %w[app/models app/controllers app/views app/helpers app/jobs app/mailers
            app/services app/channels lib config].each do |dir|
           candidate = File.join(dir, basename)
-          return candidate if File.exist?(Rails.root.join(candidate))
+          return candidate if File.exist?(rails_app.root.join(candidate))
         end
 
         # Broader recursive search
-        matches = Dir.glob(File.join(Rails.root, "app", "**", basename)).first(1)
-        return matches.first.sub("#{Rails.root}/", "") if matches.any?
+        matches = Dir.glob(File.join(rails_app.root, "app", "**", basename)).first(1)
+        return matches.first.sub("#{rails_app.root}/", "") if matches.any?
 
         nil
       rescue => e
@@ -542,7 +542,7 @@ module RailsAiContext
           ref = rc[:name]
           next if ref.include?("@") || ref.include?("#") || ref.include?("{")
           possible = resolve_partial_paths(file, ref)
-          unless possible.any? { |p| File.exist?(File.join(Rails.root, "app", "views", p)) }
+          unless possible.any? { |p| File.exist?(File.join(rails_app.root, "app", "views", p)) }
             warnings << "render \"#{ref}\" - partial not found (checked: #{possible.first(2).join(', ')})"
           end
         end
@@ -555,7 +555,7 @@ module RailsAiContext
         content.scan(/render\s+(?:partial:\s*)?["']([^"']+)["']/).flatten.uniq.each do |ref|
           next if ref.include?("@") || ref.include?("#") || ref.include?("{")
           possible = resolve_partial_paths(file, ref)
-          unless possible.any? { |p| File.exist?(File.join(Rails.root, "app", "views", p)) }
+          unless possible.any? { |p| File.exist?(File.join(rails_app.root, "app", "views", p)) }
             warnings << "render \"#{ref}\" - partial not found (checked: #{possible.first(2).join(', ')})"
           end
         end
@@ -773,7 +773,7 @@ module RailsAiContext
         # Build set of known methods (instance + from source content)
         known = Set.new(model_data[:instance_methods] || [])
         # Also check the file source for private methods
-        source = RailsAiContext::SafeFile.read(Rails.root.join(file))
+        source = RailsAiContext::SafeFile.read(rails_app.root.join(file))
         source&.scan(/\bdef\s+(\w+[?!]?)/)&.each { |m| known << m[0] }
 
         # Skip check if model has concerns (method may be in concern)
@@ -952,7 +952,7 @@ module RailsAiContext
         return warnings unless ctrl_data
 
         # Get all instance variables set across all actions
-        source_path = Rails.root.join("app", "controllers", "#{ctrl_class.underscore}.rb")
+        source_path = rails_app.root.join("app", "controllers", "#{ctrl_class.underscore}.rb")
         return warnings unless File.exist?(source_path)
 
         ctrl_source = RailsAiContext::SafeFile.read(source_path)
@@ -993,7 +993,7 @@ module RailsAiContext
         return warnings if broadcasts.empty?
 
         # Scan views for turbo_stream_from subscriptions
-        views_dir = Rails.root.join("app", "views")
+        views_dir = rails_app.root.join("app", "views")
         return warnings unless Dir.exist?(views_dir)
 
         subscriptions = Set.new
@@ -1031,7 +1031,7 @@ module RailsAiContext
         # and that a .turbo_stream.erb template exists
         base = file.sub(/\.html\.erb$/, "")
         turbo_template = "#{base}.turbo_stream.erb"
-        turbo_path = Rails.root.join(turbo_template)
+        turbo_path = rails_app.root.join(turbo_template)
 
         if content.include?("turbo_stream_from") && !File.exist?(turbo_path)
           # Only warn if the controller likely needs it
@@ -1105,7 +1105,7 @@ module RailsAiContext
         return [] unless brakeman_available?
 
         tracker = Brakeman.run(
-          app_path: Rails.root.to_s,
+          app_path: rails_app.root.to_s,
           quiet: true,
           report_progress: false,
           print_report: false

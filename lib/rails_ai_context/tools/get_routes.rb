@@ -44,6 +44,8 @@ module RailsAiContext
         routes = cached_context[:routes]
         return text_response("Route introspection not available. Add :routes to introspectors.") unless routes
         return text_response("Route introspection failed: #{routes[:error]}") if routes[:error]
+        note = unavailable_note(routes)
+        return text_response(note) if note
 
         by_controller = routes[:by_controller] || {}
         offset = [ offset.to_i, 0 ].max

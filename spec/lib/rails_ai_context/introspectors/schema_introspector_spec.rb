@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
   let(:app) { double("app", root: Pathname.new(fixture_path)) }
@@ -110,6 +112,16 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    def parse_structure_fixture(sql)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        path = File.join(dir, "db", "structure.sql")
+        File.write(path, sql)
+        fixture_introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        return fixture_introspector.send(:parse_structure_sql, path)
+      end
+    end
+
     context "with a valid structure.sql fixture" do
       before do
         allow(introspector).to receive(:active_record_connected?).and_return(false)
@@ -191,6 +203,111 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           to_table: "users",
           column: "user_id"
         ))
+      end
+
+      it "reports the postgresql dialect" do
+        result = introspector.call
+        expect(result[:dialect]).to eq("postgresql")
+      end
+    end
+
+    context "with a MySQL (mysqldump) structure.sql" do
+      let(:mysql_sql) do
+        <<~SQL
+          CREATE TABLE `products` (
+            `id` bigint NOT NULL AUTO_INCREMENT,
+            `name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+            `price_cents` int NOT NULL DEFAULT '0',
+            `active` tinyint(1) DEFAULT '1',
+            `store_id` bigint DEFAULT NULL,
+            `metadata` json DEFAULT NULL,
+            `created_at` datetime(6) NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `index_products_on_name` (`name`),
+            KEY `index_products_on_store_id` (`store_id`),
+            CONSTRAINT `fk_rails_123abc` FOREIGN KEY (`store_id`) REFERENCES `stores` (`id`)
+          ) ENGINE=InnoDB AUTO_INCREMENT=42 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+          CREATE TABLE `stores` (
+            `id` bigint NOT NULL AUTO_INCREMENT,
+            `name` varchar(255) DEFAULT NULL,
+            PRIMARY KEY (`id`)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+          INSERT INTO `schema_migrations` (version) VALUES ('20240101000000');
+        SQL
+      end
+
+      it "extracts tables, columns, indexes, and foreign keys" do
+        result = parse_structure_fixture(mysql_sql)
+
+        expect(result[:dialect]).to eq("mysql")
+        expect(result[:total_tables]).to eq(2)
+
+        products = result[:tables]["products"]
+        expect(products[:columns].map { |c| c[:name] })
+          .to contain_exactly("id", "name", "price_cents", "active", "store_id", "metadata", "created_at")
+        types = products[:columns].to_h { |c| [ c[:name], c[:type] ] }
+        expect(types["name"]).to eq("string")
+        expect(types["active"]).to eq("boolean")
+        expect(types["price_cents"]).to eq("integer")
+        expect(types["created_at"]).to eq("datetime")
+
+        expect(products[:indexes]).to include(
+          { name: "index_products_on_name", columns: [ "name" ], unique: true },
+          { name: "index_products_on_store_id", columns: [ "store_id" ], unique: false }
+        )
+        expect(products[:foreign_keys]).to eq(
+          [ { from_table: "products", to_table: "stores", column: "store_id", primary_key: "id" } ]
+        )
+      end
+    end
+
+    context "with unquoted key/index column names (PostgreSQL non-reserved words)" do
+      let(:pg_key_sql) do
+        <<~SQL
+          CREATE TABLE public.settings (
+              id bigint NOT NULL,
+              key character varying NOT NULL,
+              index integer DEFAULT 0,
+              value text
+          );
+        SQL
+      end
+
+      it "parses key and index as columns, not index definitions" do
+        result = parse_structure_fixture(pg_key_sql)
+        settings = result[:tables]["settings"]
+        expect(settings[:columns].map { |c| c[:name] }).to contain_exactly("id", "key", "index", "value")
+        expect(settings[:indexes]).to be_empty
+      end
+    end
+
+    context "with a SQLite structure.sql" do
+      let(:sqlite_sql) do
+        <<~SQL
+          CREATE TABLE IF NOT EXISTS "schema_migrations" ("version" varchar NOT NULL PRIMARY KEY);
+          CREATE TABLE IF NOT EXISTS "widgets" (
+            "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+            "name" varchar DEFAULT NULL,
+            "weight" decimal(8,2),
+            "created_at" datetime(6) NOT NULL
+          );
+          CREATE UNIQUE INDEX "index_widgets_on_name" ON "widgets" ("name");
+          INSERT INTO "schema_migrations" (version) VALUES ('20240101000000');
+        SQL
+      end
+
+      it "extracts quoted tables, columns, and indexes" do
+        result = parse_structure_fixture(sqlite_sql)
+
+        expect(result[:dialect]).to eq("sqlite")
+        expect(result[:tables].keys).to eq([ "widgets" ])
+        widgets = result[:tables]["widgets"]
+        expect(widgets[:columns].map { |c| c[:name] }).to include("name", "weight", "created_at")
+        expect(widgets[:indexes]).to eq(
+          [ { name: "index_widgets_on_name", columns: [ "name" ], unique: true } ]
+        )
       end
     end
 
@@ -499,6 +616,167 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:schema_version]).to eq("20240115123456")
       ensure
         FileUtils.rm_rf(db_dir)
+      end
+    end
+
+    context "with a secondary database dump and ActiveRecord not connected" do
+      it "still attaches secondary_databases through the static fallback" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 2024_01_01_000000) do
+              create_table "users" do |t|
+                t.string "name"
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 1) do
+              create_table "solid_queue_jobs" do |t|
+                t.string "queue_name", null: false
+              end
+            end
+          RUBY
+
+          fixture_introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+          allow(fixture_introspector).to receive(:active_record_connected?).and_return(false)
+
+          result = fixture_introspector.call
+
+          expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        end
+      end
+    end
+
+    context "with a secondary database dump and no live tables" do
+      it "still attaches secondary_databases when table_names is empty" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 2024_01_01_000000) do
+              create_table "users" do |t|
+                t.string "name"
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 1) do
+              create_table "solid_queue_jobs" do |t|
+                t.string "queue_name", null: false
+              end
+            end
+          RUBY
+
+          fixture_introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+          allow(fixture_introspector).to receive(:active_record_connected?).and_return(true)
+          allow(fixture_introspector).to receive(:table_names).and_return([])
+
+          result = fixture_introspector.call
+
+          expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        end
+      end
+    end
+  end
+
+  describe "#static_call" do
+    it "answers from files even when a live connection exists" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 2024_01_01_000000) do
+            create_table "widgets" do |t|
+              t.string "name"
+            end
+          end
+        RUBY
+        app = RailsAiContext::StaticApp.new(dir)
+        result = described_class.new(app).static_call
+        expect(result[:total_tables]).to eq(1)
+        expect(result[:tables]).to have_key("widgets")
+        expect(result[:adapter]).to eq("static_parse")
+      end
+    end
+
+    it "reports Mongoid apps as unavailable instead of a misleading missing-schema error" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result[:unavailable]).to include("Mongoid")
+        expect(result).not_to have_key(:error)
+      end
+    end
+  end
+
+  describe "secondary database dumps" do
+    it "reports db/*_schema.rb dumps under secondary_databases" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 2024_01_01_000000) do
+            create_table "users" do |t|
+              t.string "name"
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 2019_09_20_000000) do
+            create_table "solid_queue_jobs" do |t|
+              t.string "queue_name", null: false
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables].keys).to eq([ "users" ])
+        expect(result[:schema_version]).to eq("20240101000000")
+        expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        expect(result[:secondary_databases]["queue"][:tables]).to have_key("solid_queue_jobs")
+        expect(result[:secondary_databases]["queue"][:note]).to include("queue_schema.rb")
+        expect(result[:secondary_databases]["queue"][:schema_version]).to eq("20190920000000")
+      end
+    end
+
+    it "omits the key entirely when no secondary dumps exist" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 1) do
+            create_table "users" do |t|
+              t.string "name"
+            end
+          end
+        RUBY
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result).not_to have_key(:secondary_databases)
+      end
+    end
+
+    it "attaches secondary_databases from the LIVE path in #call too" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 1) do
+            create_table "solid_queue_jobs" do |t|
+              t.string "queue_name", null: false
+            end
+          end
+        RUBY
+
+        app = double("app", root: Pathname.new(dir))
+        live_introspector = described_class.new(app)
+        allow(live_introspector).to receive(:active_record_connected?).and_return(true)
+        allow(live_introspector).to receive(:adapter_name).and_return("postgresql")
+        allow(live_introspector).to receive(:table_names).and_return([ "users" ])
+        allow(live_introspector).to receive(:extract_tables).and_return({ "users" => { columns: [], indexes: [], foreign_keys: [] } })
+
+        result = live_introspector.call
+
+        expect(result[:tables].keys).to eq([ "users" ])
+        expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        expect(result[:secondary_databases]["queue"][:tables]).to have_key("solid_queue_jobs")
       end
     end
   end

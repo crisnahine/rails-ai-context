@@ -68,7 +68,7 @@ module RailsAiContext
         min_confidence = CONFIDENCE_MAP[confidence] || 2
 
         options = {
-          app_path: Rails.root.to_s,
+          app_path: rails_app.root.to_s,
           quiet: true,
           report_progress: false,
           min_confidence: min_confidence,
@@ -90,7 +90,7 @@ module RailsAiContext
 
         if files&.any?
           # Check if specified files exist
-          missing = files.select { |f| !File.exist?(Rails.root.join(f)) }
+          missing = files.select { |f| !File.exist?(rails_app.root.join(f)) }
           if missing.any? && missing.size == files.size
             return text_response("File(s) not found: #{missing.join(', ')}. Provide paths relative to Rails root.")
           end

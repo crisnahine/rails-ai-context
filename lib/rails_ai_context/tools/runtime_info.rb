@@ -193,7 +193,7 @@ module RailsAiContext
         end
 
         def gather_pending_migrations
-          migrate_dir = File.join(Rails.root, "db/migrate")
+          migrate_dir = File.join(rails_app.root, "db/migrate")
           pending = RailsAiContext::MigrationStatus.pending(migrate_dir)
           return nil unless pending
 

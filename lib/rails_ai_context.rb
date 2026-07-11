@@ -2,6 +2,18 @@
 
 require "zeitwerk"
 
+# Introspectors and tools lean on ActiveSupport's core extensions (camelize,
+# underscore, deep_dup, presence, ...) without requiring them individually.
+# In runtime tier that's harmless - booting the host Rails app loads all of
+# ActiveSupport as a side effect before any of this code runs. In static
+# tier nothing boots Rails, so those methods are only defined by accident of
+# which introspector happens to run first. Requiring them here up front
+# makes both tiers behave the same regardless of load order.
+require "active_support/core_ext/string/inflections"
+require "active_support/core_ext/string/filters"
+require "active_support/core_ext/object/deep_dup"
+require "active_support/core_ext/object/blank"
+
 # Provide Data.define on Ruby 3.1 (no-op on 3.2+) before any value object is
 # autoloaded. Defines a top-level constant, so it stays outside Zeitwerk.
 require_relative "rails_ai_context/polyfill/data"
@@ -46,24 +58,52 @@ module RailsAiContext
       end
     end
 
+    # Operating tier. :runtime means the host app booted and live reflection
+    # is available; :static means only source files are being analyzed.
+    # Defaults to :runtime because in-app usage (railtie, rake tasks) only
+    # reaches this code after a successful boot.
+    attr_writer :tier
+
+    def tier
+      @tier || :runtime
+    end
+
+    def static_tier?
+      tier == :static
+    end
+
+    # One-line explanation of why the static tier is active (boot failure
+    # summary, or a note that --no-boot was requested). Nil in runtime tier.
+    attr_accessor :static_reason
+
     # Quick access to introspect the current Rails app
     # Returns a hash of all discovered context
     def introspect(app = nil)
-      app ||= Rails.application
+      app ||= default_app
       Introspector.new(app).call
     end
 
     # Generate context files (CLAUDE.md, .cursor/rules/, etc.)
     def generate_context(app = nil, format: :all)
-      app ||= Rails.application
+      app ||= default_app
       context = introspect(app)
       Serializers::ContextFileSerializer.new(context, format: format).call
     end
 
     # Start the MCP server programmatically
     def start_mcp_server(app = nil, transport: :stdio)
-      app ||= Rails.application
+      app ||= default_app
       Server.new(app, transport: transport).start
+    end
+
+    # The app object introspection runs against: the booted Rails app in
+    # runtime tier, a filesystem-rooted stand-in in static tier.
+    def default_app
+      if static_tier?
+        StaticApp.new(configuration.app_root || Dir.pwd)
+      else
+        Rails.application
+      end
     end
   end
 end

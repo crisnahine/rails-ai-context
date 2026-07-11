@@ -37,6 +37,8 @@ module RailsAiContext
         models = cached_context[:models]
         return text_response("Model introspection not available. Add :models to introspectors.") unless models
         return text_response("Model introspection failed: #{models[:error]}") if models[:error]
+        note = unavailable_note(models)
+        return text_response(note) if note
 
         # Specific model - always full detail (strip whitespace for fuzzy input)
         if model
@@ -129,6 +131,25 @@ module RailsAiContext
                 parts << "array" if c[:array]
                 lines << "- #{parts.join(' | ')}"
               end
+            end
+          end
+        end
+
+        # Mongoid documents have no AR table/columns - render declared fields
+        # and embedded relations directly from the source-parsed macros instead.
+        if data[:mongoid]
+          if data[:fields]&.any?
+            lines << "" << "## Fields"
+            data[:fields].each do |f|
+              type_str = f[:type] ? ": #{f[:type]}" : ""
+              lines << "- `#{f[:name]}`#{type_str}"
+            end
+          end
+
+          if data[:embeds]&.any?
+            lines << "" << "## Embedded relations"
+            data[:embeds].each do |e|
+              lines << "- `#{e[:type]}` **#{e[:name]}**"
             end
           end
         end
@@ -370,7 +391,7 @@ module RailsAiContext
 
       # Extract bodies of custom validate methods (single-line or first meaningful line)
       private_class_method def self.extract_custom_validate_bodies(model_name, method_names)
-        path = Rails.root.join("app", "models", "#{model_name.underscore}.rb")
+        path = rails_app.root.join("app", "models", "#{model_name.underscore}.rb")
         return {} unless File.exist?(path) && File.size(path) <= max_file_size
 
         source = RailsAiContext::SafeFile.read(path)
@@ -391,7 +412,7 @@ module RailsAiContext
 
       # Extract class methods defined in the model source (not inherited)
       private_class_method def self.extract_source_defined_methods(model_name, class_methods: false)
-        path = Rails.root.join("app", "models", "#{model_name.underscore}.rb")
+        path = rails_app.root.join("app", "models", "#{model_name.underscore}.rb")
         return nil unless File.exist?(path)
         return nil if File.size(path) > max_file_size
 
@@ -414,7 +435,7 @@ module RailsAiContext
 
       # Extract public method signatures (name + params) from model source
       private_class_method def self.extract_method_signatures(model_name)
-        path = Rails.root.join("app", "models", "#{model_name.underscore}.rb")
+        path = rails_app.root.join("app", "models", "#{model_name.underscore}.rb")
         return nil unless File.exist?(path)
         return nil if File.size(path) > max_file_size
 
@@ -445,7 +466,7 @@ module RailsAiContext
         underscore = concern_name.underscore
         # Search configurable concern paths
         path = RailsAiContext.configuration.concern_paths
-          .map { |dir| Rails.root.join(dir, "#{underscore}.rb") }
+          .map { |dir| rails_app.root.join(dir, "#{underscore}.rb") }
           .find { |p| File.exist?(p) }
         return nil unless path
         return nil if File.size(path) > max_size
@@ -473,7 +494,7 @@ module RailsAiContext
 
       private_class_method def self.extract_model_structure(model_name)
         path = "app/models/#{model_name.underscore}.rb"
-        full_path = Rails.root.join(path)
+        full_path = rails_app.root.join(path)
         return nil unless File.exist?(full_path)
         return nil if File.size(full_path) > max_file_size
 

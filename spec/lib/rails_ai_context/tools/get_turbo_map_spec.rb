@@ -114,6 +114,17 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
     end
   end
 
+  describe ".call for an API-only app" do
+    it "reports API-only apps as not applicable instead of an empty listing" do
+      allow(described_class).to receive(:cached_context).and_return(api: { api_only: true })
+
+      result = described_class.call(controller: "nonexistent_controller_xyz", detail: "standard")
+      text = result.content.first[:text]
+      expect(text).to include("Not applicable")
+      expect(text).to include("API-only")
+    end
+  end
+
   describe "when turbo-rails IS installed (per Gemfile.lock)" do
     let(:lock_path) { File.join(Rails.root.to_s, "Gemfile.lock") }
 

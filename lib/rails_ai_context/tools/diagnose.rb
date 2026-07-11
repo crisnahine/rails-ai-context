@@ -467,7 +467,7 @@ module RailsAiContext
 
         def gather_git_context(file, file_refs)
           lines = []
-          root = Rails.root.to_s
+          root = rails_app.root.to_s
 
           files_to_check = [ file, *file_refs.map { |r| r[:file] } ].compact.uniq.first(3)
           return lines if files_to_check.empty?

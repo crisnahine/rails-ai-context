@@ -5,13 +5,25 @@ module RailsAiContext
   # Shared across tools and introspectors without creating
   # cross-layer dependencies.
   #
-  # VERIFIED: value extracted from a static, deterministic AST node
-  #           (symbol literals, string literals, integers, booleans).
-  # INFERRED: value involves dynamic expressions, metaprogramming,
-  #           or runtime-only constructs that AST cannot fully resolve.
+  # VERIFIED: value the gem can assert with certainty - runtime-confirmed data,
+  #           or a static literal the AST resolves deterministically (see for_node).
+  # STATIC: derived from source files without a booted app - trustworthy structure,
+  #         not runtime-confirmed.
+  # INFERRED: heuristic - dynamic expressions, metaprogramming, or runtime-only
+  #           constructs the AST cannot fully resolve.
+  # UNAVAILABLE: the data source is absent entirely; the reasoned form says why.
   module Confidence
     VERIFIED = "[VERIFIED]"
     INFERRED = "[INFERRED]"
+    STATIC = "[STATIC]"
+    UNAVAILABLE = "[UNAVAILABLE]"
+
+    # Reasoned unavailability tag: "[UNAVAILABLE: requires a booted Rails app]".
+    # Reasons are collapsed to their first line so a raised exception message
+    # can be passed through without flooding the tag.
+    def self.unavailable(reason)
+      "[UNAVAILABLE: #{reason.to_s.lines.first.to_s.strip}]"
+    end
 
     # Determine confidence level for a Prism call node's arguments.
     # Returns VERIFIED if all arguments are static literals,

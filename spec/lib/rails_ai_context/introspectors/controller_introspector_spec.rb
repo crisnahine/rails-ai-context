@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -299,6 +300,62 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:permits]).to eq([ "total" ])
       expect(result[:arrays]).to eq([ "item_ids" ])
       expect(result[:nested]).to eq({ "address" => %w[line1 line2] })
+    end
+  end
+
+  describe "#static_call" do
+    it "extracts controllers purely from source files" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api"))
+        File.write(File.join(dir, "app", "controllers", "widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            before_action :set_widget, only: [:show]
+
+            def index; end
+
+            def show; end
+
+            private
+
+            def set_widget; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "api", "pings_controller.rb"), <<~RUBY)
+          class Api::PingsController < ActionController::API
+            def show; end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        widgets = result[:controllers]["WidgetsController"]
+        expect(widgets[:actions]).to eq(%w[index show])
+        expect(widgets[:parent_class]).to eq("ApplicationController")
+        expect(widgets[:confidence]).to eq("[STATIC]")
+        expect(result[:controllers]["Api::PingsController"][:api_controller]).to be(true)
+      end
+    end
+
+    it "returns an empty controllers hash when the directory is missing" do
+      Dir.mktmpdir do |dir|
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result[:controllers]).to eq({})
+      end
+    end
+
+    it "discovers controllers in packs and engines directories" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "users_controller.rb"),
+                   "class UsersController < ApplicationController\n  def index; end\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "controllers", "invoices_controller.rb"),
+                   "class InvoicesController < ApplicationController\n  def show; end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result[:controllers].keys).to contain_exactly("UsersController", "InvoicesController")
+        expect(result[:controllers]["InvoicesController"][:actions]).to eq([ "show" ])
+      end
     end
   end
 end

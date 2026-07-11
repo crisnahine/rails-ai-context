@@ -23,6 +23,12 @@ RSpec.describe RailsAiContext::Engine do
     it "registers the middleware initializer" do
       expect(initializer_names).to include("rails_ai_context.middleware")
     end
+
+    it "mounts the middleware after user initializers have run" do
+      initializer = RailsAiContext::Engine.initializers.find { |i| i.name == "rails_ai_context.middleware" }
+      expect(initializer).not_to be_nil
+      expect(initializer.after).to eq(:load_config_initializers)
+    end
   end
 
   describe "configuration integration" do

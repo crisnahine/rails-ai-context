@@ -44,10 +44,13 @@ module RailsAiContext
           return text_response("Path not allowed: #{partial} (sensitive file)")
         end
 
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
         views_dir = File.join(root, "app", "views")
 
         unless Dir.exist?(views_dir)
+          note = api_only_note("app/views")
+          return text_response(note) if note
+
           return text_response("No app/views/ directory found.")
         end
 

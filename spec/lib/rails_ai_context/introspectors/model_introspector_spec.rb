@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 # Ensure test app models are loaded
 require_relative "../../../internal/app/models/application_record"
@@ -345,6 +347,177 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       it "returns empty hash" do
         expect(result).to eq({})
       end
+    end
+  end
+
+  describe "#static_call" do
+    it "discovers and parses models from source without constantizing" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), <<~RUBY)
+          class Widget < ApplicationRecord
+            belongs_to :factory
+            has_many :parts
+            validates :name, presence: true
+            scope :active, -> { where(active: true) }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "admin", "report.rb"), <<~RUBY)
+          class Admin::Report < ApplicationRecord
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "concerns", "searchable.rb"), <<~RUBY)
+          module Searchable
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Widget", "Admin::Report")
+        widget = result["Widget"]
+        expect(widget[:confidence]).to eq("[STATIC]")
+        expect(widget[:table_name]).to eq("widgets")
+        expect(widget[:associations].map { |a| a[:name] }).to contain_exactly(:factory, :parts)
+        expect(widget[:validations]).not_to be_empty
+        expect(result["Admin::Report"][:table_name]).to eq("reports")
+      end
+    end
+
+    it "isolates a single unreadable model to its own entry" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "good.rb"), "class Good < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "huge.rb"), "class Huge < ApplicationRecord\nend\n")
+        allow(File).to receive(:size).and_call_original
+        allow(File).to receive(:size).with(a_string_ending_with("huge.rb")).and_return(10_000_000)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result.keys).to contain_exactly("Good")
+      end
+    end
+
+    it "records a stat failure as that model's error entry without aborting the pass" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "good.rb"), "class Good < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "bad.rb"), "class Bad < ApplicationRecord\nend\n")
+        allow(File).to receive(:size).and_call_original
+        allow(File).to receive(:size).with(a_string_ending_with("bad.rb")).and_raise(Errno::EACCES)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result["Bad"]).to include(error: a_string_including("Permission denied"))
+        expect(result["Good"]).to have_key(:associations)
+      end
+    end
+
+    it "discovers models in packs and engines directories" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "engines", "store", "app", "models", "store"))
+        File.write(File.join(dir, "app", "models", "user.rb"),
+                   "class User < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"),
+                   "class Invoice < ApplicationRecord\n  belongs_to :user\nend\n")
+        File.write(File.join(dir, "engines", "store", "app", "models", "store", "order.rb"),
+                   "class Store::Order < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("User", "Invoice", "Store::Order")
+        expect(result["Invoice"][:associations].map { |a| a[:name] }).to eq([ :user ])
+        expect(result["Store::Order"][:table_name]).to eq("orders")
+      end
+    end
+
+    it "keeps the first definition when the same class name appears in two dirs" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        File.write(File.join(dir, "app", "models", "user.rb"),
+                   "class User < ApplicationRecord\n  has_many :posts\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "models", "user.rb"),
+                   "class User < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result["User"][:associations]).not_to be_empty
+      end
+    end
+  end
+
+  describe "Mongoid apps" do
+    it "extracts fields and embeds statically in both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "customer.rb"), <<~RUBY)
+          class Customer
+            include Mongoid::Document
+            field :name, type: String
+            embeds_many :orders
+            has_many :tickets
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        [ introspector.static_call, introspector.call ].each do |result|
+          customer = result["Customer"]
+          expect(customer[:mongoid]).to be(true)
+          expect(customer[:fields]).to include(name: :name, type: "String")
+          expect(customer[:embeds]).to include(type: :embeds_many, name: :orders)
+          expect(customer[:associations].map { |a| a[:name] }).to include(:tickets)
+          expect(customer).not_to have_key(:table_name)
+        end
+      end
+    end
+  end
+
+  describe "hybrid AR + Mongoid apps" do
+    it "static_call gives AR-style table details for AR models and Mongoid details for Mongoid documents" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "widget.rb"), <<~RUBY)
+          class Widget < ApplicationRecord
+            belongs_to :factory
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "customer.rb"), <<~RUBY)
+          class Customer
+            include Mongoid::Document
+            field :name, type: String
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        widget = result["Widget"]
+        expect(widget[:table_name]).to eq("widgets")
+        expect(widget[:associations].map { |a| a[:name] }).to contain_exactly(:factory)
+        expect(widget).not_to have_key(:mongoid)
+
+        customer = result["Customer"]
+        expect(customer[:mongoid]).to be(true)
+        expect(customer[:fields]).to include(name: :name, type: "String")
+        expect(customer).not_to have_key(:table_name)
+      end
+    end
+
+    it "#call keeps AR-reflected entries (with real table_name) instead of discarding them when AppKind.mongoid? is true" do
+      allow(RailsAiContext::AppKind).to receive(:mongoid?).and_return(true)
+
+      result = introspector.call
+
+      expect(result["User"][:table_name]).to eq("users")
+      expect(result["User"][:associations]).not_to be_empty
     end
   end
 end

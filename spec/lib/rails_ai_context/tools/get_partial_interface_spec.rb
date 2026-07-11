@@ -128,6 +128,20 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       end
     end
 
+    context "when the app is API-only" do
+      it "reports API-only apps as not applicable instead of an empty listing" do
+        Dir.mktmpdir("rac_gpi_api_only") do |tmp|
+          allow(described_class).to receive(:cached_context).and_return(api: { api_only: true })
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+
+          result = described_class.call(partial: "shared/status_badge")
+          text = result.content.first[:text]
+          expect(text).to include("Not applicable")
+          expect(text).to include("API-only")
+        end
+      end
+    end
+
     context "C1 symlink hardening (v5.8.1 round 2)" do
       let(:views_dir) { Rails.root.join("app", "views") }
 

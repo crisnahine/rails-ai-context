@@ -28,6 +28,9 @@ module RailsAiContext
       def self.call(detail: "standard", server_context: nil)
         data = cached_context[:api]
 
+        note = unavailable_note(data)
+        return text_response(note) if note
+
         unless data.is_a?(Hash) && !data[:error]
           return text_response(
             "No API layer data available. Ensure the :api introspector is enabled in your " \
