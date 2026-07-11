@@ -563,7 +563,7 @@ class RailsAiContextCLI < Thor
         require "rails_ai_context"
         puts ::RailsAiContext::CLI::ToolRunner.tool_list
         puts ""
-        puts "Run inside a Rails app to execute tools."
+        puts "Run inside a Rails app to execute tools - static source analysis works even when the app can't boot (see --no-boot)."
       rescue LoadError, StandardError => e
         $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
         $stderr.puts "Run this command from your Rails app root directory."
