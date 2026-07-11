@@ -46,7 +46,7 @@ module RailsAiContext
 
         result = {
           total_routes: entries.size,
-          by_controller: static_by_controller(entries),
+          by_controller: group_by_controller(entries),
           api_namespaces: static_api_namespaces(entries),
           mounted_engines: (ast[:mounts] || []).map { |m| { engine: m[:engine], path: m[:path] } },
           root_route: static_root_route(entries),
@@ -136,18 +136,8 @@ module RailsAiContext
           end
       end
 
-      def static_by_controller(entries)
-        entries.group_by { |e| e[:controller] }.transform_values do |routes|
-          routes.map do |r|
-            entry = { verb: r[:verb], path: r[:path], action: r[:action], name: r[:name] }
-            entry[:params] = r[:params] if r[:params]
-            entry[:restful] = r[:restful] unless r[:restful].nil?
-            entry.compact
-          end
-        end
-      end
-
       def static_api_namespaces(entries)
+        # Match path prefixes anchored at /api and sort for deterministic output.
         entries.filter_map { |e| e[:path][%r{\A/api(?:/v\d+)?}] }.uniq.sort
       end
 
