@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.16.1] - 2026-07-12
+
+### Fixed
+
+- **Engine-mounted MCP works on Rails 7.0-7.2** (caught by the release e2e
+  matrix minutes after 5.16.0 shipped; 8.x was unaffected). The MCP
+  transport answers SSE-mode requests with a Rack 3 streaming body (a
+  Proc); Rails 7.x's response buffer fed that Proc through Rack::ETag,
+  which 500'd every `tools/call` through
+  `mount RailsAiContext::Engine, at: "/mcp"`. `McpController` now includes
+  `ActionController::Live` and pumps callable bodies through the live
+  stream (enumerable bodies are joined to a plain string), verified with
+  real curl MCP sessions against booted Rails 7.0, 7.1, 7.2, and 8.0 apps.
+
 ## [5.16.0] - 2026-07-12
 
 ### Fixed
