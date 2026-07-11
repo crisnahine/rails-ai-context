@@ -37,6 +37,8 @@ module RailsAiContext
         models = cached_context[:models]
         return text_response("Model introspection not available. Add :models to introspectors.") unless models
         return text_response("Model introspection failed: #{models[:error]}") if models[:error]
+        note = unavailable_note(models)
+        return text_response(note) if note
 
         # Specific model - always full detail (strip whitespace for fuzzy input)
         if model

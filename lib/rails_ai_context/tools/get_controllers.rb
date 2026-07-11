@@ -40,6 +40,8 @@ module RailsAiContext
         data = cached_context[:controllers]
         return text_response("Controller introspection not available. Add :controllers to introspectors.") unless data
         return text_response("Controller introspection failed: #{data[:error]}") if data[:error]
+        note = unavailable_note(data)
+        return text_response(note) if note
 
         controllers = data[:controllers] || {}
 

@@ -36,6 +36,8 @@ module RailsAiContext
         data = cached_context[:stimulus]
         return text_response("Stimulus introspection not available. Add :stimulus to introspectors.") unless data
         return text_response("Stimulus introspection failed: #{data[:error]}") if data[:error]
+        note = unavailable_note(data)
+        return text_response(note) if note
 
         all_controllers = data[:controllers] || []
         return text_response("No Stimulus controllers found.") if all_controllers.empty?

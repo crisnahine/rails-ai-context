@@ -56,6 +56,8 @@ module RailsAiContext
         gems = cached_context[:gems]
         return text_response("Gem introspection not available. Add :gems to introspectors.") unless gems
         return text_response("Gem introspection failed: #{gems[:error]}") if gems[:error]
+        note = unavailable_note(gems)
+        return text_response(note) if note
 
         notable = gems[:notable_gems] || []
         notable = notable.select { |g| g[:category] == category } unless category == "all"

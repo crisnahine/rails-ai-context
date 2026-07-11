@@ -36,6 +36,9 @@ module RailsAiContext
       def self.call(component: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)
         data = cached_context[:components]
 
+        note = unavailable_note(data)
+        return text_response(note) if note
+
         unless data.is_a?(Hash) && !data[:error]
           return text_response("No component data available. Ensure :components introspector is enabled and app/components/ exists.")
         end

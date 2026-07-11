@@ -16,6 +16,8 @@ module RailsAiContext
         data = cached_context[:config]
         return text_response("Config introspection not available. Add :config to introspectors or use `config.preset = :full`.") unless data
         return text_response("Config introspection failed: #{data[:error]}") if data[:error]
+        note = unavailable_note(data)
+        return text_response(note) if note
 
         lines = [ "# Application Configuration", "" ]
 

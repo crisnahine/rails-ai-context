@@ -142,6 +142,9 @@ module RailsAiContext
           lines << "" << "**Warnings:** #{warnings.size} potential mismatch(es) detected"
         end
 
+        note = unavailable_note(turbo_data)
+        lines << "" << note if note
+
         lines << ""
         lines << "_Use `detail:\"standard\"` for stream wiring, or `stream:\"name\"` to filter._"
 
@@ -246,6 +249,8 @@ module RailsAiContext
         else
           lines << "_Use `detail:\"full\"` for DOM IDs and inline templates, or `stream:\"name\"` to filter._"
         end
+        note = unavailable_note(turbo_data)
+        lines << note if note
 
         text_response(lines.join("\n"))
       end
@@ -375,6 +380,8 @@ module RailsAiContext
             lines << "_No Turbo Streams or Frames detected in this app._"
           end
         end
+        note = unavailable_note(turbo_data)
+        lines << note if note
 
         text_response(lines.join("\n"))
       end

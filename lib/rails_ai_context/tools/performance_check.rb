@@ -34,6 +34,9 @@ module RailsAiContext
       def self.call(model: nil, category: "all", detail: "standard", server_context: nil)
         data = cached_context[:performance]
 
+        note = unavailable_note(data)
+        return text_response(note) if note
+
         unless data.is_a?(Hash) && !data[:error]
           return text_response("No performance data available. Ensure :performance introspector is enabled.")
         end

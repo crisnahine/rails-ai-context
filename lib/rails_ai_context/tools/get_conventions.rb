@@ -16,6 +16,8 @@ module RailsAiContext
         conventions = cached_context[:conventions]
         return text_response("Convention detection not available. Add :conventions to introspectors.") unless conventions
         return text_response("Convention detection failed: #{conventions[:error]}") if conventions[:error]
+        note = unavailable_note(conventions)
+        return text_response(note) if note
 
         lines = [ "# App Conventions & Architecture", "" ]
 

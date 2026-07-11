@@ -31,8 +31,11 @@ module RailsAiContext
       def self.call(controller: nil, path: nil, detail: "standard", server_context: nil)
         data = cached_context[:view_templates]
 
-        # Fall back to reading from disk if introspector not in preset
-        if data.nil? || data[:error]
+        # Fall back to reading from disk if the introspector isn't in the
+        # preset, failed, or - in static tier - never ran at all. The disk
+        # read is real static analysis either way, so it beats rendering an
+        # empty listing from a section that was simply never inspected.
+        if data.nil? || data[:error] || data[:unavailable]
           return read_from_disk(controller: controller, path: path, detail: detail)
         end
 

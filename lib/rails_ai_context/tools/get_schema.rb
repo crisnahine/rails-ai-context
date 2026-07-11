@@ -47,6 +47,8 @@ module RailsAiContext
         schema = cached_context[:schema]
         return text_response("Schema introspection not available. Add :schema to introspectors.") unless schema
         return text_response("Schema introspection not available: #{schema[:error]}") if schema[:error]
+        note = unavailable_note(schema)
+        return text_response(note) if note
 
         tables = schema[:tables] || {}
 

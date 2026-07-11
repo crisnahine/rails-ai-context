@@ -32,6 +32,8 @@ module RailsAiContext
         data = cached_context[:tests]
         return text_response("Test introspection not available. Add :tests to introspectors.") unless data
         return text_response("Test introspection failed: #{data[:error]}") if data[:error]
+        note = unavailable_note(data)
+        return text_response(note) if note
 
         # Specific model tests
         if model
