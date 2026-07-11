@@ -2,6 +2,18 @@
 
 require "zeitwerk"
 
+# Introspectors and tools lean on ActiveSupport's core extensions (camelize,
+# underscore, deep_dup, presence, ...) without requiring them individually.
+# In runtime tier that's harmless - booting the host Rails app loads all of
+# ActiveSupport as a side effect before any of this code runs. In static
+# tier nothing boots Rails, so those methods are only defined by accident of
+# which introspector happens to run first. Requiring them here up front
+# makes both tiers behave the same regardless of load order.
+require "active_support/core_ext/string/inflections"
+require "active_support/core_ext/string/filters"
+require "active_support/core_ext/object/deep_dup"
+require "active_support/core_ext/object/blank"
+
 # Provide Data.define on Ruby 3.1 (no-op on 3.2+) before any value object is
 # autoloaded. Defines a top-level constant, so it stays outside Zeitwerk.
 require_relative "rails_ai_context/polyfill/data"
