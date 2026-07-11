@@ -130,6 +130,21 @@ RSpec.describe RailsAiContext::Introspector do
       expect(result[:schema]).to eq(total: 7, confidence: "[STATIC]")
     end
 
+    it "isolates a raising static_call to its own section" do
+      exploding = Class.new do
+        def initialize(app); end
+
+        def static_call
+          raise "static boom"
+        end
+      end
+      stub_const("RailsAiContext::Introspector::INTROSPECTOR_MAP",
+                 RailsAiContext::Introspector::INTROSPECTOR_MAP.merge(schema: exploding))
+
+      result = RailsAiContext::Introspector.new(static_app).call
+      expect(result[:schema]).to eq(error: "static boom")
+    end
+
     it "marks sections without a static path unavailable, with the boot reason" do
       result = RailsAiContext::Introspector.new(static_app).call
       expect(result[:jobs]).to eq(

@@ -129,7 +129,7 @@ module RailsAiContext
 
     def environment_name
       if defined?(Rails) && Rails.respond_to?(:env) && !RailsAiContext.static_tier?
-        Rails.env.to_s
+        Rails.env
       else
         ENV["RAILS_ENV"] || "development"
       end
