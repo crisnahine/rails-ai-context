@@ -188,6 +188,49 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    context "when the app is API-only but has real views (e.g. mailer templates)" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          api: { api_only: true },
+          view_templates: {
+            templates: { "user_mailer/welcome.html.erb" => { lines: 10 } },
+            partials: {}
+          }
+        )
+      end
+
+      it "keeps the original recovery copy for a controller filter miss instead of the API-only note" do
+        response = described_class.call(controller: "posts")
+        text = response.content.first[:text]
+        expect(text).to include("No views for 'posts'")
+        expect(text).to include("Directories with views: user_mailer")
+        expect(text).not_to include("Not applicable")
+      end
+
+      it "lists the real views for the unfiltered default call" do
+        response = described_class.call
+        text = response.content.first[:text]
+        expect(text).to include("user_mailer/welcome.html.erb")
+        expect(text).not_to include("Not applicable")
+      end
+    end
+
+    context "when the app is API-only with zero views anywhere and no controller filter" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          api: { api_only: true },
+          view_templates: { templates: {}, partials: {} }
+        )
+      end
+
+      it "reports API-only apps as not applicable for the default unfiltered listing" do
+        response = described_class.call
+        text = response.content.first[:text]
+        expect(text).to include("Not applicable")
+        expect(text).to include("API-only")
+      end
+    end
+
     context "list_layouts hardening" do
       let(:views_dir) { Rails.root.join("app", "views") }
       let(:layouts_dir) { views_dir.join("layouts") }

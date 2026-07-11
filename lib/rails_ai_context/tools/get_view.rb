@@ -67,8 +67,14 @@ module RailsAiContext
           }
 
           if filtered_templates.empty? && filtered_partials.empty?
-            note = api_only_note("app/views")
-            return text_response(note) if note
+            # Gate on the UNFILTERED maps, not the filter miss: an API-only
+            # app can still have real views (mailer templates, most
+            # commonly), so a controller filter that simply doesn't match
+            # anything must not be reported as "views don't exist here".
+            if templates.empty? && partials.empty?
+              note = api_only_note("app/views")
+              return text_response(note) if note
+            end
 
             all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
             suggestion = find_closest_match(ctrl_lower, all_dirs)
@@ -79,6 +85,14 @@ module RailsAiContext
 
           templates = filtered_templates
           partials = filtered_partials
+        end
+
+        # Unfiltered zero-template case: no controller given and the app
+        # genuinely has no views anywhere (as opposed to a filter simply not
+        # matching anything, handled above).
+        if controller.nil? && templates.empty? && partials.empty?
+          note = api_only_note("app/views")
+          return text_response(note) if note
         end
 
         case detail
