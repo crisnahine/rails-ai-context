@@ -38,6 +38,22 @@ module RailsAiContext
         { error: e.message }
       end
 
+      # Static tier: every controller goes through the source-only extractor;
+      # class loading and reflection never run.
+      def static_call
+        result = discover_from_filesystem.each_with_object({}) do |(name, path), hash|
+          hash[name] = extract_details_from_source(path).merge(confidence: Confidence::STATIC)
+        rescue => e
+          hash[name] = { error: e.message }
+        end
+        {
+          controllers: result,
+          note: "Parsed statically from app/controllers (app not booted)"
+        }
+      rescue => e
+        { error: e.message }
+      end
+
       private
 
       def eager_load_controllers!
