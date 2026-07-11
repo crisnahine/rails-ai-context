@@ -89,9 +89,25 @@ module RailsAiContext
         else
           Rails.application.eager_load!
         end
-      rescue => e
+      rescue StandardError, ScriptError => e
+        # eager_load_dir aborts at the first unloadable file (SyntaxError is a
+        # ScriptError, so it escaped the old bare rescue and killed the whole
+        # process). Load the rest one constant at a time so a single broken
+        # model costs only itself.
         $stderr.puts "[rails-ai-context] eager_load_models! failed: #{e.message}" if ENV["DEBUG"]
+        eager_load_models_individually!(models_path)
         nil
+      end
+
+      def eager_load_models_individually!(models_path)
+        return unless Dir.exist?(models_path)
+
+        Dir.glob(File.join(models_path, "**/*.rb")).sort.each do |file|
+          const_name = file.sub("#{models_path}/", "").sub(/\.rb\z/, "").camelize
+          const_name.constantize
+        rescue StandardError, ScriptError
+          next
+        end
       end
 
       def discover_models
@@ -116,8 +132,9 @@ module RailsAiContext
               next unless klass < ActiveRecord::Base && !klass.abstract_class?
               models << klass
               known << class_name
-            rescue NameError, LoadError
-              # Not a valid model class
+            rescue NameError, LoadError, ScriptError
+              # Not a valid (or currently loadable) model class - a
+              # syntax-broken file costs itself, not the whole listing.
             end
           end
         end
@@ -290,7 +307,14 @@ module RailsAiContext
       # ── AST-based extraction (replaces all regex parsing) ──────────
 
       def extract_scopes_from_ast(source_data)
-        source_data[:scopes].map { |s| { name: s[:name], body: s[:body] } }
+        source_data[:scopes].map do |s|
+          {
+            name: s[:name],
+            body: s[:body],
+            required_params: s[:required_params] || [],
+            confidence: s[:confidence]
+          }.compact
+        end
       end
 
       def extract_custom_validates_from_ast(source_data)

@@ -5,6 +5,228 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.16.0] - 2026-07-12
+
+### Fixed
+
+- **HTTP engine mount works again.** `mount RailsAiContext::Engine, at: "/mcp"`
+  500'd with `uninitialized constant McpController`: the engine is not
+  namespace-isolated, so its route needed the fully-qualified
+  `rails_ai_context/mcp#handle` controller path. Verified with a real curl
+  MCP session (initialize + session-id + tools/call) against a booted app.
+- **`config.custom_tools` is usable as documented.** Referencing an
+  `app/mcp_tools/` class constant in the initializer aborted boot with
+  `NameError` (app/ constants are not autoloadable while initializers run),
+  and a class-name string crashed every CLI tool invocation with
+  `undefined method 'tool_name' for an instance of String`. Entries may now
+  be classes or class-name strings; strings resolve lazily after boot, and
+  invalid entries are warn-skipped everywhere (server, CLI runner,
+  TestHelper) instead of taking down unrelated tools. Docs and the
+  initializer template now show the string form.
+- **Mailers are no longer invisible in development.** `extract_mailers` read
+  `ActionMailer::Base.descendants` without the eager-load fallback that
+  channels already had, so every dev-mode run reported zero mailers
+  (`ai:inspect`, context files, onboard).
+- **TestHelper is self-sufficient.** `require "rails_ai_context/test_helper"`
+  alone raised `uninitialized constant RailsAiContext::Tools` - the common
+  case, since a `group: :development` install is never Bundler-required in
+  the test environment. The helper now requires the gem core itself; docs
+  explain custom-tool name lookup in the test environment.
+- **`claude_max_lines` counts physical lines.** Dual MCP/CLI tool examples
+  embed newlines inside single entries, so a default-capped CLAUDE.md could
+  ship 161 real lines with no trim marker. The cap (and the trim) now apply
+  to physical lines of the managed block.
+- **turbo_map no longer flags correct wiring.** `broadcast_append_to post`
+  against `turbo_stream_from @post` warned "no matching turbo_stream_from";
+  stream matching now strips the ivar sigil before comparing.
+- **frontend_stack's Turbo wiring line can actually render.** It read
+  `turbo[:broadcasts]`/`[:frames]` - keys the introspector never emits
+  (`model_broadcasts`/`turbo_frames`) - so the line was dead code for every
+  app; callback-style `broadcast_*_to` calls are now also detected.
+- **generate_test emits runnable tests for arg-taking scopes.** A scope like
+  `scope :by_status, ->(s) { ... }` produced `Post.by_status` (ArgumentError
+  at runtime); scope lambdas' required params are now captured through the
+  AST layer and such scopes get an `assert_respond_to` test with a
+  fill-in-the-args call site. Verified by running the generated file for real.
+- **job_pattern keeps `wait:` in retry configuration.** One ordered regex
+  dropped whichever of `wait:`/`attempts:` came first in `retry_on`; the two
+  options are now scanned independently.
+- **get_env skips comment lines.** `# ENV["WEB_CONCURRENCY"]` in the stock
+  puma.rb comment was reported as a real environment variable.
+- **diagnose omits an empty "Next Steps" section** instead of rendering a
+  bare header when no file/method context was parsed.
+- **analyze_feature lists jbuilder templates and record renders**
+  (`render @post` / `render post`), matching what get_view reports.
+- **service_pattern surfaces mailer dependencies** (`PostMailer.published_email`
+  style calls) and recognizes `perform_now`.
+- **README observability example reads `event.payload[:duration]`** - the
+  bridge emits a zero-width event, so `event.duration` is always ~0ms.
+- Singular/plural agreement in tool output ("1 result", "1 site",
+  "1 broadcast", "1 line", "1 table", "1 controller", "1 migration file").
+- edit_context's footer no longer suggests pasting the line-numbered block
+  verbatim as an Edit old_string.
+- **A syntax-broken model or controller file no longer kills the process in
+  the runtime tier.** Eager loading aborts at the first bad file with a
+  `SyntaxError` - a `ScriptError`, which sailed past every bare `rescue` and
+  took down the MCP server mid-session and every model-touching rake task.
+  Introspection now rescues `ScriptError` at the dispatch level, eager
+  loading falls back to per-constant loading, and `discover_models`
+  tolerates unloadable classes - one broken file costs exactly that file,
+  matching the static tier's contract.
+- **Standalone CLI no longer mixes framework versions.** The RubyGems
+  binstub activates the newest installed railties before the app's
+  Gemfile.lock pins its own, leaving newer framework paths in $LOAD_PATH:
+  every generated fact reported the wrong Rails version (e.g. 8.1.3 for an
+  8.0.5 app) with "already initialized constant" warnings polluting all
+  output. The exe now strips Rails-family gem paths at startup; the app's
+  bundle is the only framework source.
+- **`--app-path` and `--environment` work after the tool name** (`tool
+  schema --table notes --app-path /x`), matching the `--json`/`--no-boot`
+  passthrough handling. Previously they were silently discarded and the
+  command ran against the wrong directory.
+- **structure.sql parsing: single-line CREATE TABLE statements** (the shape
+  sqlite's `.schema` emits) no longer lose every column but the first;
+  bodies are split on top-level commas before per-line parsing.
+- **structure.sql parsing: foreign keys land on the right table.** The
+  `ALTER TABLE ... FOREIGN KEY` regex could span statement boundaries and
+  attribute a FK to whichever table had the first `ADD CONSTRAINT`.
+- **structure.sql parsing: NOT NULL columns are no longer reported as
+  nullable** (nullability was simply not extracted).
+- **Runtime-only tools refuse in the static tier.** After a mid-boot
+  failure, `runtime_info` and `query` ran against the half-initialized app
+  and returned live, unmarked data contradicting the static-tier banner in
+  the same response; both now answer `[UNAVAILABLE: static tier]` with the
+  boot-failure reason. This also removes a raw NameError leak in
+  runtime_info's Cache section and query's wrong `--skip-active-record`
+  blame under `--no-boot`.
+- **The static-tier banner carries the literal `[STATIC]` tag** that README
+  and COMPATIBILITY.md promise.
+- **doctor's "Secrets in .gitignore" check understands globs.** Rails 8.1
+  generates `/config/*.key`; the substring check false-failed every default
+  8.1 app and docked its readiness score.
+- **model_details carries confidence tags**: `[VERIFIED]` on the runtime
+  model header, per-scope `[VERIFIED]`/`[INFERRED]` from the AST layer
+  (README promised tags this tool never rendered).
+- **Route stats agree across generated context files.** CLAUDE.md counted
+  all routes over app controllers while copilot-instructions counted all
+  routes over all controllers ("35 across 1" vs "35 across 18"); every
+  serializer now reports app routes across app controllers with the
+  framework-inclusive total alongside.
+- **get_routes counts engine mounts.** Verbless rack mounts (propshaft's
+  `/assets`) vanished from both the app list and the excluded-framework
+  count; the header now reports them explicitly.
+- **Mongoid apps are detected from the Gemfile too** (previously only
+  Gemfile.lock or config/mongoid.yml), so a fresh checkout without a
+  lockfile gets honest Mongoid treatment instead of ActiveRecord answers.
+- **`extra_app_paths` accepts entries ending in `/app`** (`custom/app`
+  previously globbed `custom/app/app/models` and silently missed).
+- **analyze_feature no longer invents model names** ("user, payment, order")
+  on apps with zero models.
+- **A missing schema is "unavailable", not "failed".** A greenfield app's
+  `context` output framed the absent db/schema.rb as "introspection failed";
+  absent data sources now use the `[UNAVAILABLE]` vocabulary.
+- **conventions: `create!` flows are no longer attributed the save-and-branch
+  skeleton**, zero-signal test files are no longer credited as pattern
+  sources, and empty custom-directory descriptions drop the dangling dash.
+- **get_config names the environment its values reflect** (cache store,
+  queue adapter, and Action Cable differ per environment).
+- **get_env skips ERB-only false positives from comments** and standalone
+  `doctor` writes its report to stdout (`doctor > report.txt` works).
+- docs: TROUBLESHOOTING covers RubyGems' "Resolving dependencies..." stdout
+  pollution of the MCP stdio stream and its fixes; a new doctor check ("MCP
+  stdio hygiene") detects the condition by re-running gem activation the way
+  an MCP client's binstub launch does.
+- **Static schema answers include the implicit id primary key**, typed per
+  the adapter in config/database.yml (bigint everywhere, integer on SQLite);
+  composite-primary-key tables (`primary_key: [...]`) are left to their
+  explicitly dumped columns instead of gaining a phantom id.
+- **Static schema answers name their source dialect and migration state**:
+  structure.sql parses report "Dialect", "Schema version" (from the
+  schema_migrations insert tail), and the exact pending migration files;
+  schema.rb parses report version plus files newer than it. Secondary
+  database dumps compare against their own db/<name>_migrate directories.
+- Review-round regression fixes (found by adversarial review of this batch):
+  the missing-schema `{unavailable:}` result no longer leaks blank
+  "- Database:" lines into generated context files; the gitignore matcher
+  honors git's basename rule (`*.key`, bare `master.key`); multi-line
+  `retry_on` declarations keep their continuation-line options; a
+  syntax-broken `custom_tools` string entry warn-skips instead of crashing
+  the server and CLI; the Turbo broadcast scan ignores comments and method
+  definitions; redirect and lambda routes are not counted as engine mounts.
+- Second review-round fixes: the gitignore security check honors `!`
+  negation patterns (a re-included secret now correctly fails the check);
+  `SafeFile.read` scrubs invalid UTF-8 so one bad byte in one file can no
+  longer raise out of any scan (previously it could erase every model's
+  Turbo broadcasts, or crash `get_turbo_map` outright); legacy zero-padded
+  migration versions (`001_` storing version "1") no longer read as
+  forever-pending; the synthesized primary-key type is resolved per
+  database from config/database.yml (a mixed postgres/sqlite multi-db app
+  types each dump correctly); endless-method broadcasts
+  (`def refresh = broadcast_replace_to(...)`) are detected while trailing
+  `#comments` (with or without spaces) are not, in both the introspector
+  and get_turbo_map's own scanners; `retry_on` options inside trailing
+  comments are not reported as real retry config; the doctor stdio-hygiene
+  probe launches from Bundler's original environment (a configured bundle
+  path no longer produces a spurious warning); a custom tool whose class
+  body raises during autoload is reported as broken rather than
+  "class not found"; the schema_migrations INSERT regex and the
+  section-usability predicate each have a single home.
+- Third review-round fixes: source-line scans (Turbo broadcasts, retry_on
+  options) strip comments with a string-aware walker (`SourceLine`) instead
+  of a regex, so a `#` inside a string literal (`"#comments"`, `"##{id}"`)
+  no longer truncates the line and drops real calls, while comment text
+  still never reads as code - including comments after a continuation comma
+  in multi-line `retry_on`; `def self.broadcast_*_to` definitions are not
+  counted as broadcast calls; the doctor gitignore check now models git's
+  negation semantics (dir-only `!*/` entries, no re-inclusion under an
+  excluded parent, negations must match the file itself) - verified against
+  `git check-ignore` on a 16-case battery; the database.yml block lookup
+  no longer bleeds across whitespace-only lines into a sibling database's
+  adapter; and a custom tool whose body references a missing constant that
+  shares a name segment with the entry is no longer misreported as
+  "class not found".
+- Fourth review-round fixes: the gitignore check now evaluates paths the
+  way git does (ancestor-directory recursion with last-match-wins instead
+  of descend globbing), closing a false-SAFE case where `config/` followed
+  by `!config/` read as still covering config/master.key - verified 25/25
+  against `git check-ignore`, including `**/`, whitelist preludes, and
+  re-included directories; it also honors case-insensitive filesystems the
+  way core.ignorecase does. `SourceLine.strip_comment` gained %-literal
+  support (`%w[cs#billing]` is content, `n % 2` is not a literal), an
+  O(n) walk (a 400k-char multibyte line dropped from 27s to 51ms), and a
+  no-`#` fast path. Broadcast def-blanking handles constant receivers
+  (`def User.broadcast_updates_to`) and multiple defs per line; multi-line
+  broadcast extraction reads comment-stripped context; `::`-prefixed
+  custom_tools entries classify correctly; config/database.yml is read
+  once, CRLF-normalized, per introspection run.
+- Sixth-through-eighth review-round fixes (call-site scanning converged
+  after three more single-finding rounds): classic one-line methods
+  (`def x; broadcast_y_to(...); end`) contribute their body while
+  visibility-prefixed definitions (`private def`, `private_class_method
+  def`) contribute nothing; `;`/`=` inside string keyword defaults
+  (`sep: "; "`, `label: "a=b"`) and inside `#{...}` interpolation (with
+  nested quoted strings) no longer delimit a signature. A final review
+  round at a realistic-Rails bar returned zero findings.
+- Fifth review-round fixes: comment stripping is now a whole-fragment
+  state machine (`SourceLine.strip_comments`) - literal state carries
+  across newlines, so a comment mid-way through a multi-line broadcast
+  call is removed while a string spanning lines keeps its tail; backtick
+  command literals (with interpolation) are modeled; singleton broadcast
+  definitions on any receiver (`def record.broadcast_status_to`,
+  `def self::...`) are excluded from broadcast detection; database.yml
+  without a final newline still resolves its last block's adapter; and
+  the case-insensitivity probe works for app roots with caseless names
+  (all-digit directories).
+
+### Changed
+
+- Standalone `doctor` writes its report to stdout (previously stderr), so
+  `doctor > report.txt` captures it; update scripts that redirected `2>`.
+- Custom tools resolved through the CLI are now validated as `MCP::Tool`
+  subclasses, matching what the MCP server has always enforced; duck-typed
+  tool classes that only ever worked via `rails-ai-context tool` are
+  warn-skipped with the reason.
+
 ## [5.15.0] - 2026-07-11
 
 ### Added

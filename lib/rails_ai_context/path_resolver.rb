@@ -22,6 +22,12 @@ module RailsAiContext
       candidates += Dir.glob(File.join(root, "engines", "*", kind)).sort
       Array(RailsAiContext.configuration.extra_app_paths).each do |extra|
         candidates << File.join(root, extra, kind)
+        # `custom/app` is the natural way to write an entry whose tree is
+        # custom/app/models; appending the full kind would look in
+        # custom/app/app/models and silently miss. Accept both spellings.
+        if extra.to_s.chomp("/").end_with?("/app") || extra.to_s.chomp("/") == "app"
+          candidates << File.join(root, extra, kind.delete_prefix("app/"))
+        end
       end
       candidates.uniq.select { |dir| Dir.exist?(dir) }
     end

@@ -70,7 +70,7 @@ module RailsAiContext
       def self.available_tools
         skip = RailsAiContext.configuration.skip_tools
         tools = Server.builtin_tools
-        tools += RailsAiContext.configuration.custom_tools
+        tools += Server.resolve_custom_tools
         return tools if skip.empty?
         tools.reject { |t| skip.include?(t.tool_name) }
       end

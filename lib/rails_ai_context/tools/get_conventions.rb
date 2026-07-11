@@ -59,7 +59,7 @@ module RailsAiContext
         if conventions[:custom_directories]&.any?
           lines << "" << "## Custom Directories"
           conventions[:custom_directories].each do |dir, desc|
-            lines << "- `#{dir}/` - #{desc}"
+            lines << (desc.to_s.strip.empty? ? "- `#{dir}/`" : "- `#{dir}/` - #{desc}")
           end
         end
 
@@ -239,7 +239,9 @@ module RailsAiContext
               flow_parts = []
               flow_parts << "permission check" if create_block.match?(/can_\w+\??|authorize|authorize!/)
               flow_parts << "build" if create_block.match?(/\.new\(|\.build\(|\.create\(/)
-              flow_parts << "save" if create_block.match?(/\.save\b|\.create\b/)
+              # `create!` raises instead of returning false - it is not the
+              # save-then-branch flow this skeleton describes.
+              flow_parts << "save" if create_block.match?(/\.save\b(?!!)|\.create\b(?!!)/)
               # A scaffolded HTML controller's `respond_to` block often has a
               # `format.json { render json: ... }` branch alongside its HTML
               # redirect - that's still an HTML-first flow, not a JSON API one.
@@ -457,12 +459,30 @@ module RailsAiContext
 
         test_files.first(5).each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
-          has_devise = true if content.include?("Devise::Test::IntegrationHelpers")
-          has_sign_in = true if content.include?("sign_in")
-          has_assert_select = true if content.include?("assert_select")
-          has_assert_response = true if content.include?("assert_response")
-          has_auth_test = true if content.match?(/requires?\s+authentication/i)
-          detected_in << File.basename(path, ".rb").camelize.sub(/Test$/, "")
+          file_signals = false
+          if content.include?("Devise::Test::IntegrationHelpers")
+            has_devise = true
+            file_signals = true
+          end
+          if content.include?("sign_in")
+            has_sign_in = true
+            file_signals = true
+          end
+          if content.include?("assert_select")
+            has_assert_select = true
+            file_signals = true
+          end
+          if content.include?("assert_response")
+            has_assert_response = true
+            file_signals = true
+          end
+          if content.match?(/requires?\s+authentication/i)
+            has_auth_test = true
+            file_signals = true
+          end
+          # Only credit files that actually contributed a signal - an empty
+          # scaffold test says nothing about the app's test pattern.
+          detected_in << File.basename(path, ".rb").camelize.sub(/Test$/, "") if file_signals
         end
 
         return sections unless has_assert_response

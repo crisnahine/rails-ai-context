@@ -50,6 +50,11 @@ module RailsAiContext
         by_controller = routes[:by_controller] || {}
         offset = [ offset.to_i, 0 ].max
 
+        # Routes with no controller#action (engine mounts like propshaft's
+        # /assets) never enter by_controller; surface their count so the
+        # header's arithmetic adds up instead of silently dropping them.
+        unattributed_count = routes[:unrouted_mounts] || Array(routes[:mounted_engines]).size
+
         # Filter out internal Rails routes by default, remembering how many
         # were dropped so headers can say the count is app-only, not the total.
         excluded_framework_count = 0
@@ -74,6 +79,9 @@ module RailsAiContext
         count_label = "#{filtered_total} #{filtered_total == 1 ? 'route' : 'routes'}"
         if excluded_framework_count > 0 && controller.nil?
           count_label += ", excluding #{excluded_framework_count} framework #{excluded_framework_count == 1 ? 'route' : 'routes'}"
+        end
+        if unattributed_count > 0 && controller.nil?
+          count_label += " and #{unattributed_count} engine #{unattributed_count == 1 ? 'mount' : 'mounts'}"
         end
 
         case detail

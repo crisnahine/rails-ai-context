@@ -159,7 +159,9 @@ RSpec.describe "MCP Tool Integration" do
     it "rejects non-MCP::Tool classes with a warning" do
       RailsAiContext.configuration.custom_tools = [ String, 42, "not_a_tool" ]
 
-      expect($stderr).to receive(:puts).with(a_string_matching(/WARNING.*Skipping invalid custom_tool/)).exactly(3).times
+      # String and 42 are invalid entries; "not_a_tool" is a class-name string
+      # that fails to resolve, which gets its own "class not found" warning.
+      expect($stderr).to receive(:puts).with(a_string_matching(/WARNING.*Skipping (invalid )?custom_tool/)).exactly(3).times
 
       server = RailsAiContext::Server.new(Rails.application).build
       expect(server.tools.size).to eq(39)

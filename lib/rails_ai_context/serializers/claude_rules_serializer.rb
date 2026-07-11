@@ -42,7 +42,7 @@ module RailsAiContext
 
         # Compact counts - gems and architecture are already in the root file (CLAUDE.md/AGENTS.md)
         schema = context[:schema]
-        if schema.is_a?(Hash) && !schema[:error]
+        if SectionGuard.usable?(schema)
           lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables"
         end
 
@@ -67,7 +67,7 @@ module RailsAiContext
 
       def render_schema_reference
         schema = context[:schema]
-        return nil unless schema.is_a?(Hash) && !schema[:error]
+        return nil unless SectionGuard.usable?(schema)
         tables = schema[:tables] || {}
         return nil if tables.empty?
 

@@ -67,9 +67,24 @@ module RailsAiContext
         else
           Rails.application.eager_load!
         end
-      rescue => e
+      rescue StandardError, ScriptError => e
+        # ScriptError included: one syntax-broken controller must not abort
+        # introspection (eager_load_dir stops at the first bad file). Load
+        # the rest one constant at a time.
         $stderr.puts "[rails-ai-context] eager_load_controllers! failed: #{e.message}" if ENV["DEBUG"]
+        eager_load_controllers_individually!(controllers_path)
         nil
+      end
+
+      def eager_load_controllers_individually!(controllers_path)
+        return unless Dir.exist?(controllers_path)
+
+        Dir.glob(File.join(controllers_path, "**/*.rb")).sort.each do |file|
+          const_name = file.sub("#{controllers_path}/", "").sub(/\.rb\z/, "").camelize
+          const_name.constantize
+        rescue StandardError, ScriptError
+          next
+        end
       end
 
       def discover_controllers

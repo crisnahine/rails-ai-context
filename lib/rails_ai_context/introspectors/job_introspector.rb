@@ -208,6 +208,11 @@ module RailsAiContext
       def extract_mailers
         return [] unless defined?(ActionMailer::Base)
 
+        # In development (config.eager_load = false), mailer files are not
+        # loaded until first delivery. Without this, .descendants is empty
+        # and mailers are reported as absent. Same pattern as eager_load_channels!.
+        eager_load_mailers!
+
         ActionMailer::Base.descendants.filter_map do |mailer|
           next if mailer.name.nil?
 
@@ -264,8 +269,21 @@ module RailsAiContext
            Rails.autoloaders.respond_to?(:main) && Rails.autoloaders.main.respond_to?(:eager_load_dir)
           Rails.autoloaders.main.eager_load_dir(channels_path)
         end
-      rescue => e
+      rescue StandardError, ScriptError => e
         $stderr.puts "[rails-ai-context] eager_load_channels! failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      def eager_load_mailers!
+        return if Rails.application.config.eager_load
+
+        mailers_path = File.join(app.root, "app", "mailers")
+        if defined?(Zeitwerk) && Dir.exist?(mailers_path) &&
+           Rails.autoloaders.respond_to?(:main) && Rails.autoloaders.main.respond_to?(:eager_load_dir)
+          Rails.autoloaders.main.eager_load_dir(mailers_path)
+        end
+      rescue StandardError, ScriptError => e
+        $stderr.puts "[rails-ai-context] eager_load_mailers! failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
 

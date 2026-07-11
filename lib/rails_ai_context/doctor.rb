@@ -27,6 +27,7 @@ module RailsAiContext
       check_prism
       check_brakeman
       check_live_reload
+      check_stdio_activation_hygiene
       check_security_gitignore
       check_security_auto_mount
       check_performance_schema_size
@@ -152,7 +153,7 @@ module RailsAiContext
       migrate_dir = File.join(app.root, "db/migrate")
       if Dir.exist?(migrate_dir) && Dir.glob(File.join(migrate_dir, "*.rb")).any?
         count = Dir.glob(File.join(migrate_dir, "*.rb")).size
-        Check.new(name: "Migrations", status: :pass, message: "#{count} migration files", fix: nil)
+        Check.new(name: "Migrations", status: :pass, message: "#{count} migration #{count == 1 ? 'file' : 'files'}", fix: nil)
       else
         Check.new(name: "Migrations", status: :warn, message: "No migrations", fix: nil)
       end
@@ -343,6 +344,46 @@ module RailsAiContext
         fix: "Check mcp gem: `bundle info mcp`")
     end
 
+    # RubyGems prints "Resolving dependencies..." to STDOUT when activating
+    # this gem needs the full resolver (split/incomplete GEM_PATH, conflicting
+    # candidate versions). That happens before any gem code runs and corrupts
+    # the MCP stdio stream's pure-JSON framing. Re-run the activation the way
+    # the standalone binstub does and flag anything that lands on stdout.
+    # In-Gemfile installs activate through the lockfile and are immune.
+    def check_stdio_activation_hygiene
+      return Check.new(name: "MCP stdio hygiene", status: :pass,
+        message: "in-Gemfile install activates via bundler (no resolver output)", fix: nil) unless InstallMode.standalone?
+
+      require "open3"
+      # An MCP client launches the binstub from a clean shell; simulate that
+      # exactly. The booted app's Bundler has mutated this process's env
+      # (RUBYOPT gets -rbundler/setup; with a configured bundle path even
+      # GEM_HOME/GEM_PATH point into vendor/bundle), so start from Bundler's
+      # snapshot of the pre-boot environment when it is available.
+      base_env = defined?(Bundler) && Bundler.respond_to?(:original_env) ? Bundler.original_env : ENV.to_h
+      %w[RUBYOPT RUBYLIB BUNDLE_GEMFILE BUNDLE_BIN_PATH BUNDLER_SETUP BUNDLE_PATH].each { |k| base_env.delete(k) }
+      stdout, _stderr, status = Open3.capture3(
+        base_env, Gem.ruby, "--disable-gems", "-e",
+        "require 'rubygems'; gem 'rails-ai-context'",
+        unsetenv_others: true
+      )
+      if status.success? && stdout.empty?
+        Check.new(name: "MCP stdio hygiene", status: :pass,
+          message: "gem activation is silent on stdout", fix: nil)
+      elsif stdout.empty?
+        Check.new(name: "MCP stdio hygiene", status: :warn,
+          message: "gem activation exited #{status.exitstatus} (stdout clean)",
+          fix: "Run `gem list rails-ai-context` and reinstall if missing")
+      else
+        Check.new(name: "MCP stdio hygiene", status: :fail,
+          message: "gem activation writes to stdout (#{stdout.lines.first.to_s.strip.truncate(60)}) - this corrupts the MCP stdio stream",
+          fix: "GEM_PATH is split or incomplete; use the full `gem env path` (see TROUBLESHOOTING: MCP client reports a JSON parse error)")
+      end
+    rescue => e
+      Check.new(name: "MCP stdio hygiene", status: :warn,
+        message: "could not verify activation hygiene: #{e.message.truncate(60)}", fix: nil)
+    end
+
     # ── Introspector health ───────────────────────────────────────────
 
     def check_introspector_health
@@ -467,8 +508,8 @@ module RailsAiContext
 
       gitignore = File.read(gitignore_path)
       issues = []
-      issues << ".env exists but not in .gitignore" if sensitive_files.include?(".env") && !gitignore.include?(".env")
-      issues << "config/master.key not in .gitignore" if sensitive_files.include?("config/master.key") && !gitignore.include?("master.key")
+      issues << ".env exists but not in .gitignore" if sensitive_files.include?(".env") && !gitignore_covers?(gitignore, ".env")
+      issues << "config/master.key not in .gitignore" if sensitive_files.include?("config/master.key") && !gitignore_covers?(gitignore, "config/master.key")
 
       if issues.empty?
         Check.new(name: "Secrets in .gitignore", status: :pass, message: "Sensitive files properly gitignored", fix: nil)
@@ -477,6 +518,83 @@ module RailsAiContext
           message: issues.join("; "),
           fix: "Add to .gitignore: #{issues.map { |i| "`#{i.split(' ').first}`" }.join(', ')}")
       end
+    end
+
+    # Substring checks miss glob entries (Rails 8.1 generates `/config/*.key`
+    # rather than a literal master.key line), so match .gitignore patterns
+    # the way git does: anchored when the pattern contains a slash (* stops
+    # at separators), basename-at-any-depth when it doesn't, last-match-wins
+    # ordering, and git's negation rules - a `pattern/` entry only concerns
+    # directories, a negation must match the file itself (not a container),
+    # and a file cannot be re-included while a parent directory is excluded.
+    def gitignore_covers?(content, path)
+      gitignore_path_ignored?(parse_gitignore_rules(content), path, dir: false)
+    end
+
+    def parse_gitignore_rules(content)
+      content.each_line.filter_map do |line|
+        pattern = line.strip
+        next if pattern.empty? || pattern.start_with?("#")
+
+        negation = pattern.start_with?("!")
+        pattern = pattern.delete_prefix("!")
+        dir_only = pattern.end_with?("/")
+        anchored = pattern.chomp("/").include?("/")
+        pattern = pattern.delete_prefix("/").chomp("/")
+        next if pattern.empty?
+
+        { negation: negation, dir_only: dir_only, anchored: anchored, pattern: pattern }
+      end
+    end
+
+    # Mirrors git's evaluation order: if any ancestor directory ends up
+    # ignored (itself evaluated with the same rules, negations included),
+    # everything beneath it is ignored and cannot be re-included. Otherwise
+    # the path is judged by the last rule matching the path ITSELF - there
+    # is no "descend" globbing, which is what made `config/` + `!config/`
+    # (a re-included directory) falsely read as still covering its files.
+    def gitignore_path_ignored?(rules, path, dir:)
+      return true if gitignore_parent_ignored?(rules, path)
+
+      ignored = false
+      rules.each do |rule|
+        # `pattern/` entries concern directories only, in both polarities.
+        next if rule[:dir_only] && !dir
+        next if rule[:negation] && !ignored
+
+        ignored = !rule[:negation] if gitignore_pattern_matches?(rule, path)
+      end
+      ignored
+    end
+
+    def gitignore_parent_ignored?(rules, path)
+      parts = path.split("/")[0..-2]
+      parents = parts.each_index.map { |i| parts[0..i].join("/") }
+      parents.any? { |parent| gitignore_path_ignored?(rules, parent, dir: true) }
+    end
+
+    def gitignore_pattern_matches?(rule, path)
+      flags = File::FNM_PATHNAME | File::FNM_DOTMATCH
+      flags |= File::FNM_CASEFOLD if gitignore_case_insensitive?
+      if rule[:anchored]
+        File.fnmatch?(rule[:pattern], path, flags) || path == rule[:pattern]
+      else
+        File.fnmatch?(rule[:pattern], File.basename(path), flags)
+      end
+    end
+
+    # git sets core.ignorecase from the filesystem; mirror it by probing
+    # whether the .gitignore file itself resolves case-insensitively
+    # (APFS/NTFS default). The .gitignore basename always carries cased
+    # letters, unlike the app root (which can be all digits).
+    def gitignore_case_insensitive?
+      return @gitignore_case_insensitive if defined?(@gitignore_case_insensitive)
+
+      gitignore = File.join(app.root.to_s, ".gitignore")
+      swapped = File.join(app.root.to_s, ".GITIGNORE")
+      @gitignore_case_insensitive = File.exist?(gitignore) && File.identical?(gitignore, swapped)
+    rescue StandardError
+      @gitignore_case_insensitive = false
     end
 
     def check_security_auto_mount

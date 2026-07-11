@@ -174,7 +174,7 @@ module RailsAiContext
         def format_results(results, query, source, branch)
           lines = []
           lines << "# Rails Documentation Search: \"#{query}\""
-          lines << "Found #{results.size} results (#{source})"
+          lines << "Found #{results.size} #{results.size == 1 ? "result" : "results"} (#{source})"
           lines << ""
 
           results.each_with_index do |r, i|
@@ -192,7 +192,7 @@ module RailsAiContext
         def format_fetch_results(results, query, source, branch)
           lines = []
           lines << "# Rails Documentation Search: \"#{query}\" (fetched)"
-          lines << "Found #{results.size} results (#{source})"
+          lines << "Found #{results.size} #{results.size == 1 ? "result" : "results"} (#{source})"
           lines << ""
 
           results.each_with_index do |r, i|

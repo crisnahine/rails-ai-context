@@ -298,8 +298,23 @@ module RailsAiContext
           else
             "Static mode"
           end
-          "\n\n---\n_#{headline}. Serving static analysis; runtime-only data is marked " \
+          "\n\n---\n_[STATIC] #{headline}. Serving static analysis; runtime-only data is marked " \
             "[UNAVAILABLE]. Run `rails-ai-context doctor` for details._"
+        end
+
+        # Tools that only make sense against a booted app must refuse in the
+        # static tier instead of half-running against whatever a failed boot
+        # happened to load (live DB access from a "static" response
+        # contradicts the tier banner in the same reply).
+        def static_tier_refusal(capability)
+          return nil unless RailsAiContext.static_tier?
+
+          reason = RailsAiContext.static_reason
+          text_response(
+            "[UNAVAILABLE: static tier] #{capability} requires a booted Rails app" \
+            "#{reason ? " (static tier active: #{reason})" : ""}. " \
+            "Fix the boot failure (see `rails-ai-context doctor`) or rerun without `--no-boot`."
+          )
         end
 
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix

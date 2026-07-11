@@ -29,7 +29,10 @@ module RailsAiContext
       config.introspectors.each do |name|
         introspector = resolve_introspector(name)
         context[name] = run_introspector(introspector)
-      rescue => e
+      rescue StandardError, ScriptError => e
+        # ScriptError included: a syntax-broken app file surfacing through
+        # eager loading must cost one section, not the whole process (the
+        # MCP server would otherwise die mid-session).
         context[name] = { error: e.message }
         RailsAiContext.log_warn "[rails-ai-context] #{name} introspection failed: #{e.message}"
       end

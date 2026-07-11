@@ -117,7 +117,7 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
       result = described_class.call(query: "active record", limit: 1)
       text = result.content.first[:text]
 
-      expect(text).to include("Found 1 results")
+      expect(text).to include("Found 1 result")
       # Should only show the highest-scored result
       expect(text).to include("Active Record")
     end

@@ -412,7 +412,7 @@ module RailsAiContext
           test_callers = callers.select { |r| r[:file].match?(/\A(test|spec)\//) }
 
           if app_callers.any?
-            lines << "## Called from (#{app_callers.size} sites)"
+            lines << "## Called from (#{app_callers.size} #{app_callers.size == 1 ? "site" : "sites"})"
             grouped = app_callers.group_by { |r| r[:file] }
             grouped.each do |file, matches|
               category = case file

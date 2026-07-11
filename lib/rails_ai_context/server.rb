@@ -34,18 +34,60 @@ module RailsAiContext
       @transport_type = transport
     end
 
+    # Resolve config.custom_tools into MCP::Tool classes. Entries may be
+    # classes or class-name strings: classes in app/ (e.g. app/mcp_tools/)
+    # are not autoloadable while config/initializers run, so referencing the
+    # constant there aborts boot - a string name defers resolution to here,
+    # where autoloading is ready. Invalid entries are warn-skipped so one bad
+    # entry cannot take down every tool invocation.
+    def self.resolve_custom_tools(config = RailsAiContext.configuration)
+      config.custom_tools.filter_map do |entry|
+        tool = entry
+        if tool.is_a?(String)
+          # NameError messages never carry a leading "::", so normalize it
+          # away up front or a missing "::Foo::Bar" entry could never be
+          # classified as class-not-found below.
+          tool = tool.delete_prefix("::")
+          begin
+            tool = Object.const_get(tool)
+          rescue NameError => e
+            # "class not found" only when the missing constant IS the entry
+            # (or a leading namespace of it); a NameError raised from inside
+            # the tool file's class body about some other constant means the
+            # class exists but is broken - say so. The full constant path in
+            # the message disambiguates where a bare #name cannot (a body
+            # error about `Elastic::Search` must not read as entry
+            # "Tools::Search" being absent).
+            missing = e.message[/\Auninitialized constant ([\w:]+)/, 1]
+            entry_missing = missing && (tool == missing || tool.start_with?("#{missing}::"))
+            if entry_missing
+              $stderr.puts "[rails-ai-context] WARNING: Skipping custom_tool #{entry.inspect} (class not found)"
+            else
+              $stderr.puts "[rails-ai-context] WARNING: Skipping custom_tool #{entry.inspect} (#{e.class}: #{e.message.lines.first.to_s.strip})"
+            end
+            next nil
+          rescue StandardError, ScriptError => e
+            # A syntax error or raising class body in the autoloaded file must
+            # cost that one entry, not the whole server/CLI.
+            $stderr.puts "[rails-ai-context] WARNING: Skipping custom_tool #{entry.inspect} (#{e.class}: #{e.message.lines.first.to_s.strip})"
+            next nil
+          end
+        end
+
+        if tool.is_a?(Class) && tool < MCP::Tool
+          tool
+        else
+          $stderr.puts "[rails-ai-context] WARNING: Skipping invalid custom_tool #{entry.inspect} (must be an MCP::Tool subclass or its class name)"
+          nil
+        end
+      end
+    end
+
     # Build and return the configured MCP::Server instance
     def build
       config = RailsAiContext.configuration
 
-      validated_custom_tools = config.custom_tools.select do |tool|
-        if tool.is_a?(Class) && tool < MCP::Tool
-          true
-        else
-          $stderr.puts "[rails-ai-context] WARNING: Skipping invalid custom_tool #{tool.inspect} (must be an MCP::Tool subclass)"
-          false
-        end
-      end
+      validated_custom_tools = self.class.resolve_custom_tools(config)
 
       mcp_config = MCP::Configuration.new(
         # Anything that still escapes a tool (schema validation bugs, SDK-level

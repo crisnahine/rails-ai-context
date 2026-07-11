@@ -260,7 +260,9 @@ module RailsAiContext
           return { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" }
         end
 
-        { error: "No db/schema.rb, db/structure.sql, or migrations found" }
+        # An absent data source, not a failure: :unavailable keeps a fresh
+        # greenfield app out of the "introspection failed" warnings banner.
+        { unavailable: "No db/schema.rb, db/structure.sql, or migrations found" }
       end
 
       # Rails multi-database setups dump each secondary database to its own
@@ -321,6 +323,19 @@ module RailsAiContext
             else
               current_table = table_name
               tables[current_table] = { columns: [], indexes: [], foreign_keys: [] }
+              # create_table implies an id primary key unless disabled; the
+              # runtime tier reports it, so the static parse must too.
+              # Composite primary keys (primary_key: [...]) dump their columns
+              # as explicit t.* lines - synthesizing an id there would invent
+              # a column that does not exist.
+              opts = entry[:options] || {}
+              pk_opt = opts[:primary_key]
+              composite_pk = !pk_opt.nil? && !pk_opt.is_a?(String) && !pk_opt.is_a?(Symbol)
+              unless opts[:id] == false || composite_pk
+                id_type = opts[:id].is_a?(String) || opts[:id].is_a?(Symbol) ? opts[:id].to_s : implicit_pk_type(path)
+                pk_name = pk_opt ? pk_opt.to_s : "id"
+                tables[current_table][:columns] << { name: pk_name, type: id_type, null: false, primary_key: true }
+              end
             end
           when :column
             next unless current_table && tables[current_table]
@@ -377,11 +392,22 @@ module RailsAiContext
           { name: entry[:name], values: entry[:values] }
         end
 
+        version = schema_version_for(path)
+        # schema.rb records only the max applied version, so pending here
+        # means "migration files newer than the schema version" - exact for
+        # linear histories, best-effort for out-of-order merges.
+        pending = if version
+          migration_file_versions(migrate_dir_for_dump(path)).select { |v| v.to_i > version.to_i }.sort
+        else
+          []
+        end
+
         {
           adapter: "static_parse",
           tables: tables,
           total_tables: tables.size,
-          schema_version: schema_version_for(path),
+          schema_version: version,
+          pending_migrations: pending,
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: parse_generated_columns(content),
@@ -426,17 +452,104 @@ module RailsAiContext
           tables[table]&.dig(:indexes)&.push({ name: idx_name, columns: col_list, unique: !!unique })
         end
 
-        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s+ADD CONSTRAINT.*?FOREIGN KEY\s*\([`"]?(\w+)[`"]?\)\s*REFERENCES\s+(?:public\.)?[`"]?(\w+)[`"]?\s*\([`"]?(\w+)[`"]?\)/m) do |from, col, to, pk|
+        # [^;]*? keeps the match inside one statement: with .*? a pkey-only
+        # ADD CONSTRAINT would swallow up to the FOREIGN KEY of a LATER
+        # statement and attribute the FK to the wrong table.
+        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\([`"]?(\w+)[`"]?\)\s*REFERENCES\s+(?:public\.)?[`"]?(\w+)[`"]?\s*\([`"]?(\w+)[`"]?\)/m) do |from, col, to, pk|
           tables[from]&.dig(:foreign_keys)&.push({ from_table: from, to_table: to, column: col, primary_key: pk })
         end
 
-        {
+        applied = RailsAiContext::SchemaVersion.applied_versions(content)
+
+        result = {
           adapter: "static_parse",
           dialect: dialect.to_s,
           tables: tables,
           total_tables: tables.size,
           note: "Parsed from db/structure.sql (no DB connection)"
         }
+        if applied.any?
+          result[:schema_version] = applied.map(&:to_i).max.to_s
+          # Compare numerically: legacy zero-padded filenames ("001_") store
+          # version "1" in schema_migrations and must not read as pending.
+          applied_ints = applied.map(&:to_i)
+          pending = migration_file_versions(migrate_dir_for_dump(path)).reject { |v| applied_ints.include?(v.to_i) }
+          result[:pending_migrations] = pending.sort
+        end
+        result
+      end
+
+      # Version prefixes of every file in the given migrate directory - the
+      # static-tier counterpart of the schema_migrations table for pending
+      # detection.
+      def migration_file_versions(migrate_dir)
+        Dir.glob(File.join(migrate_dir, "*.rb")).filter_map do |f|
+          File.basename(f)[/\A\d+/]
+        end
+      rescue => e
+        $stderr.puts "[rails-ai-context] migration_file_versions failed: #{e.message}" if ENV["DEBUG"]
+        []
+      end
+
+      # The implicit primary key's type is adapter-specific: bigint everywhere
+      # since Rails 5.1, except SQLite where it stays integer. schema.rb does
+      # not record it, but config/database.yml names the adapter - looked up
+      # per database, because a multi-db app can mix adapters (postgres
+      # primary, sqlite queue) and each dump must be typed by its own.
+      def implicit_pk_type(dump_path)
+        db_name = File.basename(dump_path).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "")
+        db_name = "primary" if db_name.empty?
+
+        @implicit_pk_types ||= {}
+        @implicit_pk_types[db_name] ||= begin
+          adapter = database_adapter_for(db_name)
+          adapter&.start_with?("sqlite") ? "integer" : "bigint"
+        end
+      end
+
+      # Best-effort adapter lookup from config/database.yml without booting:
+      # a keyed entry for this database name wins; a file with exactly one
+      # distinct adapter is unambiguous; anything else falls back to the
+      # first adapter (the primary comes first in generated configs).
+      def database_adapter_for(db_name)
+        content = database_yml_content
+        return nil if content.empty?
+
+        adapters = content.scan(/^\s*adapter:\s*(\w+)/).flatten
+        return adapters.first if adapters.uniq.size <= 1
+
+        # Mixed adapters: find the block keyed by this database's name and
+        # take the first adapter that follows at deeper indentation. The
+        # block ends at the first non-blank line at the key's indent or
+        # shallower; blank/whitespace-only lines don't end it (and must not
+        # let it bleed into a sibling block).
+        if (m = content.match(/^([ \t]*)#{Regexp.escape(db_name)}:[ \t]*\n((?:(?:[ \t]*|\1[ \t]+\S[^\n]*)\n)*)/))
+          block_adapter = m[2][/^[ \t]*adapter:[ \t]*(\w+)/, 1]
+          return block_adapter if block_adapter
+        end
+        adapters.first
+      end
+
+      # Read once per introspection run; normalize CRLF and guarantee a
+      # trailing newline so the line-anchored block regex above works on
+      # files with Windows endings or no final newline.
+      def database_yml_content
+        @database_yml_content ||= begin
+          db_yml = File.join(app.root.to_s, "config", "database.yml")
+          content = RailsAiContext::SafeFile.read(db_yml).to_s.gsub("\r\n", "\n")
+          content.empty? || content.end_with?("\n") ? content : "#{content}\n"
+        end
+      end
+
+      # The parsers serve secondary dumps too (db/queue_schema.rb,
+      # db/cache_structure.sql), and each secondary database keeps its own
+      # migrations directory (db/queue_migrate) - comparing a secondary dump
+      # against db/migrate would report the primary's files as pending.
+      def migrate_dir_for_dump(path)
+        base = File.basename(path).sub(/\.(rb|sql)\z/, "")
+        prefix = base.sub(/_?(schema|structure)\z/, "")
+        dir_name = prefix.empty? ? "migrate" : "#{prefix}_migrate"
+        File.join(app.root.to_s, "db", dir_name)
       end
 
       # mysqldump always terminates CREATE TABLE with ") ENGINE=..." and
@@ -459,6 +572,11 @@ module RailsAiContext
       # KEY / UNIQUE KEY / CONSTRAINT lines; the other dialects emit separate
       # statements, so those lines simply never match here.
       def parse_sql_table_body(body, table_name)
+        # sqlite's .schema emits whole CREATE TABLE statements on one line;
+        # the per-line parsers below would then see a single "line" and keep
+        # only its first column. Split such bodies on top-level commas first.
+        body = split_single_line_sql_body(body) unless body.include?("\n")
+
         table = { columns: parse_sql_columns(body), indexes: [], foreign_keys: [] }
 
         body.each_line do |line|
@@ -478,6 +596,38 @@ module RailsAiContext
         end
 
         table
+      end
+
+      # Rewrite a one-line CREATE TABLE body as one definition per line,
+      # splitting on commas that sit outside parentheses and quotes (so
+      # numeric(10,2) and quoted defaults survive intact).
+      def split_single_line_sql_body(body)
+        parts = []
+        current = +""
+        depth = 0
+        quote = nil
+        body.each_char do |ch|
+          if quote
+            quote = nil if ch == quote
+            current << ch
+          elsif ch == "'" || ch == '"' || ch == "`"
+            quote = ch
+            current << ch
+          elsif ch == "("
+            depth += 1
+            current << ch
+          elsif ch == ")"
+            depth -= 1
+            current << ch
+          elsif ch == "," && depth.zero?
+            parts << current
+            current = +""
+          else
+            current << ch
+          end
+        end
+        parts << current unless current.strip.empty?
+        parts.map(&:strip).join("\n")
       end
 
       # Parse column definitions from a CREATE TABLE body
@@ -503,7 +653,10 @@ module RailsAiContext
               /\s+(?:NOT\s+NULL|NULL|DEFAULT|PRIMARY|UNIQUE|CONSTRAINT|CHECK|AUTO_INCREMENT|AUTOINCREMENT|CHARACTER\s+SET|COLLATE|COMMENT|GENERATED|REFERENCES)\b/i
             ).first&.strip&.downcase
             next unless col_type && !col_type.empty?
-            columns << { name: col_name, type: normalize_sql_type(col_type) }
+            # NOT NULL, and primary keys (implicitly NOT NULL), are the only
+            # dump-visible nullability signals.
+            nullable = !rest.match?(/\bNOT\s+NULL\b|\bPRIMARY\s+KEY\b/i)
+            columns << { name: col_name, type: normalize_sql_type(col_type), null: nullable }
           end
         end
         columns

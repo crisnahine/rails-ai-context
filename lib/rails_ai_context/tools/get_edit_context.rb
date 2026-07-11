@@ -138,7 +138,7 @@ module RailsAiContext
         output << context_code
         output << "```"
         output << ""
-        output << "_Use the code between lines #{start_idx + 1}-#{end_idx + 1} as old_string for Edit._"
+        output << "_Lines #{start_idx + 1}-#{end_idx + 1} shown; strip the line-number prefixes before using the code as old_string for Edit._"
 
         if matches.size > 1
           outside = matches[1..].select { |i| i < start_idx || i > end_idx }

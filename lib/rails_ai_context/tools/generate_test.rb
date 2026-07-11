@@ -336,6 +336,18 @@ module RailsAiContext
           scopes.each do |s|
             scope_name = s.is_a?(Hash) ? s[:name] : s
             scope_body = s.is_a?(Hash) ? s[:body] : nil
+            required_params = (s.is_a?(Hash) && s[:required_params]) || []
+            if required_params.any?
+              # Calling an arg-taking scope bare raises ArgumentError, and the
+              # right argument value can't be guessed - assert it exists and
+              # leave a runnable call site for the developer to fill in.
+              lines << "  test \"scope .#{scope_name} is defined\" do"
+              lines << "    assert_respond_to #{name}, :#{scope_name}"
+              lines << "    # #{name}.#{scope_name}(#{required_params.join(', ')}) - fill in real values to assert results"
+              lines << "  end"
+              lines << ""
+              next
+            end
             lines << "  test \"scope .#{scope_name} returns expected records\" do"
             if scope_body&.include?("order")
               lines << "    sql = #{name}.#{scope_name}.to_sql"

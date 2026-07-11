@@ -15,9 +15,10 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         allow(introspector).to receive(:active_record_connected?).and_return(false)
       end
 
-      it "returns an error" do
+      it "reports the source as unavailable, not failed" do
         result = introspector.call
-        expect(result[:error]).to include("No db/schema.rb, db/structure.sql, or migrations found")
+        expect(result[:unavailable]).to include("No db/schema.rb, db/structure.sql, or migrations found")
+        expect(result[:error]).to be_nil
       end
     end
 

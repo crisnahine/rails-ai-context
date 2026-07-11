@@ -75,12 +75,19 @@ Add your tool classes to the configuration:
 # config/initializers/rails_ai_context.rb
 if defined?(RailsAiContext)
   RailsAiContext.configure do |config|
-    config.custom_tools = [RailsGetBusinessMetrics]
+    config.custom_tools = ["RailsGetBusinessMetrics"]
   end
 end
 ```
 
 Custom tools appear alongside built-in tools in the MCP server and CLI.
+
+Use the class *name* as a string: classes under `app/` (including
+`app/mcp_tools/`) are not autoloadable while initializers run, so a bare
+constant reference there aborts boot with a `NameError`. String entries are
+resolved after the app finishes booting. A bare constant still works for
+classes already loaded when the initializer runs (e.g. defined in `lib/`
+and required manually).
 
 ## Using BaseTool features
 
@@ -111,7 +118,14 @@ end
 
 ## Testing custom tools
 
-Use the built-in `TestHelper` module:
+Use the built-in `TestHelper` module.
+
+With the gem in `group: :development`, the initializer's guard makes
+`config.custom_tools` a no-op in the test environment, so name-based lookup
+(`execute_tool("rails_get_business_metrics")`) won't find custom tools
+there. Either install the gem with `group: %i[development test]`, or pass
+the class itself: `execute_tool(RailsGetBusinessMetrics)`. Built-in tools
+resolve by name in any environment.
 
 ### With RSpec
 
@@ -191,7 +205,7 @@ If a custom tool replaces a built-in one, exclude the original:
 
 ```ruby
 RailsAiContext.configure do |config|
-  config.custom_tools = [MyBetterSecurityScan]
+  config.custom_tools = ["MyBetterSecurityScan"]
   config.skip_tools   = %w[rails_security_scan]
 end
 ```

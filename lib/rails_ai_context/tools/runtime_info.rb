@@ -26,6 +26,10 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: false)
 
       def self.call(detail: "standard", section: nil, server_context: nil)
+        if (refusal = static_tier_refusal("Live runtime state"))
+          return refusal
+        end
+
         lines = [ "# Runtime Info", "" ]
 
         sections = section ? [ section ] : %w[connections database cache jobs]

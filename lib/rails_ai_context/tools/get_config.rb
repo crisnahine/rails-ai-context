@@ -21,6 +21,12 @@ module RailsAiContext
 
         lines = [ "# Application Configuration", "" ]
 
+        # Several values below (cache store, queue adapter, Action Cable)
+        # differ per environment; name the one that produced them.
+        if defined?(Rails) && Rails.respond_to?(:env)
+          lines << "- **Environment:** #{Rails.env} (values below reflect this environment)"
+        end
+
         # Database - critical for query syntax decisions
         db_config = detect_database
         lines << "- **Database:** #{db_config}" if db_config

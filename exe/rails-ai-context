@@ -11,6 +11,24 @@
 # correctly, and clearing specs breaks gems that look up their own path at runtime
 # (e.g., MCP SDK reads Gem.loaded_specs["json-schema"].full_gem_path).
 if defined?(Gem) && Gem.respond_to?(:loaded_specs) && !ENV["BUNDLE_BIN_PATH"]
+  # Also strip the Rails-family gems' lib paths. Leaving them in $LOAD_PATH
+  # lets the app's boot resolve framework files from the NEWEST installed
+  # versions instead of the app's Gemfile.lock pins, producing a mixed
+  # framework tree: wrong Rails.version in every generated fact and
+  # "already initialized constant" double-load warnings. Every Rails app's
+  # bundle provides these; in app-less modes a require re-activates them
+  # fresh. Non-framework tooling deps (mcp and friends) must keep their
+  # paths - Bundler.setup during app boot locks out late RubyGems
+  # activation, and restore_standalone_environment! splices them back.
+  rails_family = %w[
+    rails railties activesupport activemodel activerecord actionpack
+    actionview actionmailer activejob actioncable activestorage
+    actionmailbox actiontext
+  ].freeze
+  Gem.loaded_specs.each_value do |spec|
+    next if spec.default_gem? || !rails_family.include?(spec.name)
+    spec.full_require_paths.each { |path| $LOAD_PATH.delete(path) }
+  end
   Gem.loaded_specs.delete_if { |_, spec| !spec.default_gem? }
 end
 
@@ -73,6 +91,12 @@ class RailsAiContextCLI < Thor
       # honor --no-boot in either position, mirroring the --json handling.
       no_boot = options[:no_boot]
       no_boot = true if args.delete("--no-boot")
+
+      # Same for the value-taking class options: after the tool name they
+      # arrive as plain args, and dropping them silently sends the command
+      # at the wrong app (or wrong RAILS_ENV).
+      @app_path_override = extract_value_flag!(args, "--app-path")
+      @environment_override = extract_value_flag!(args, "--environment")
 
       boot_rails!(allow_static: true, no_boot: no_boot)
 
@@ -173,17 +197,19 @@ class RailsAiContextCLI < Thor
     def doctor
       boot_rails!(context: "doctor")
       result = ::RailsAiContext::Doctor.new.run
+      # The report is the command's product - it belongs on stdout so
+      # `doctor > report.txt` captures it. stderr stays for errors only.
       result[:checks].each do |check|
         icon = case check.status
         when :pass then "PASS"
         when :warn then "WARN"
         when :fail then "FAIL"
         end
-        $stderr.puts "  [#{icon}] #{check.name}: #{check.message}"
-        $stderr.puts "         Fix: #{check.fix}" if check.fix
+        puts "  [#{icon}] #{check.name}: #{check.message}"
+        puts "         Fix: #{check.fix}" if check.fix
       end
-      $stderr.puts ""
-      $stderr.puts "AI Readiness Score: #{result[:score]}/100"
+      puts ""
+      puts "AI Readiness Score: #{result[:score]}/100"
 
       failed = result[:checks].count { |c| c.status == :fail }
       if options[:strict] && failed > 0
@@ -590,12 +616,29 @@ class RailsAiContextCLI < Thor
     # capture references BEFORE Rails boot runs and re-register them afterwards.
     STANDALONE_REQUIRED_GEMS = %w[mcp json-schema addressable public_suffix].freeze
 
+    # Pull a value-taking flag (--flag VALUE or --flag=VALUE) out of the
+    # pass-through args that stop_on_unknown_option! leaves after the tool
+    # name. Returns the value, or nil when the flag isn't present.
+    def extract_value_flag!(args, flag)
+      if (idx = args.index(flag))
+        args.delete_at(idx)
+        return args.delete_at(idx)
+      end
+      if (pair = args.find { |a| a.start_with?("#{flag}=") })
+        args.delete(pair)
+        return pair.split("=", 2)[1]
+      end
+      nil
+    end
+
     def boot_rails!(context: nil, allow_static: false, no_boot: false)
-      app_root = File.expand_path(options[:app_path] || Dir.pwd)
+      app_path_opt = @app_path_override || options[:app_path]
+      environment_opt = @environment_override || options[:environment]
+      app_root = File.expand_path(app_path_opt || Dir.pwd)
       # Relative paths inside the app (log/, tmp/, sqlite files) assume the
       # process cwd is the app root, so honor --app-path by moving there.
-      Dir.chdir(app_root) if options[:app_path]
-      ENV["RAILS_ENV"] = options[:environment] if options[:environment]
+      Dir.chdir(app_root) if app_path_opt
+      ENV["RAILS_ENV"] = environment_opt if environment_opt
 
       if allow_static && (no_boot || options[:no_boot])
         enter_static_tier!("static mode requested with --no-boot")

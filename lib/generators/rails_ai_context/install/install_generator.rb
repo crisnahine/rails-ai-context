@@ -284,7 +284,7 @@ module RailsAiContext
         "Extensibility" => <<~SECTION,
             # ── Extensibility ─────────────────────────────────────────────────
             # Register additional MCP tool classes alongside the #{RailsAiContext::Server.builtin_tools.size} built-in tools
-            # config.custom_tools = [MyApp::CustomTool]
+            # config.custom_tools = ["MyApp::CustomTool"]  # class name as string - resolved after boot
 
             # Exclude specific built-in tools by name
             # config.skip_tools = %w[rails_security_scan]

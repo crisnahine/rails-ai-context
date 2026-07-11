@@ -73,7 +73,7 @@ module RailsAiContext
         ]
 
         schema = context[:schema]
-        if schema && !schema[:error]
+        if SectionGuard.usable?(schema)
           lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables"
         end
 

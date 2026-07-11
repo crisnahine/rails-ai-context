@@ -149,12 +149,16 @@ module RailsAiContext
         lines.concat(log_section) if log_section.any?
 
         # Next steps
-        lines << "## Next Steps"
+        next_steps = []
         if file
-          lines << "_Use `rails_get_edit_context(file:\"#{file}\", near:\"#{parsed[:method_name] || line || parsed[:exception_class]}\")` to see the code._"
+          next_steps << "_Use `rails_get_edit_context(file:\"#{file}\", near:\"#{parsed[:method_name] || line || parsed[:exception_class]}\")` to see the code._"
         end
         if parsed[:method_name]
-          lines << "_Use `rails_search_code(pattern:\"#{parsed[:method_name]}\", match_type:\"trace\")` to trace the method._"
+          next_steps << "_Use `rails_search_code(pattern:\"#{parsed[:method_name]}\", match_type:\"trace\")` to trace the method._"
+        end
+        if next_steps.any?
+          lines << "## Next Steps"
+          lines.concat(next_steps)
         end
 
         output = lines.join("\n")

@@ -407,11 +407,18 @@ module RailsAiContext
           relative = file.sub("#{real_root}/", "")
           model_name = extract_class_name(source) || File.basename(file, ".rb").camelize
 
-          source.each_line.with_index(1) do |line, line_num|
-            MODEL_BROADCAST_MACROS.each do |macro|
-              next unless line.match?(/\b#{macro}\b/)
+          # Comments (including =begin blocks) are stripped up front with
+          # literal state carried across lines; `def` lines contribute only
+          # an endless method's body, so a macro name in a comment or a
+          # parameter default never counts. Line numbers are preserved.
+          stripped = RailsAiContext::SourceLine.strip_comments(source)
+          stripped.each_line.with_index(1) do |line, line_num|
+            scannable = RailsAiContext::SourceLine.executable_part(line)
 
-              stream = extract_stream_name_from_macro(line, macro)
+            MODEL_BROADCAST_MACROS.each do |macro|
+              next unless scannable.match?(/\b#{macro}\b/)
+
+              stream = extract_stream_name_from_macro(scannable, macro)
               results << {
                 model: model_name,
                 macro: macro,
@@ -443,15 +450,23 @@ module RailsAiContext
             next unless source
 
             relative = file.sub("#{real_root}/", "")
-            lines = source.lines
+            # Comments (including =begin blocks) stripped up front with
+            # literal state carried across lines; line count is preserved.
+            lines = RailsAiContext::SourceLine.strip_comments(source).lines
 
             lines.each_with_index do |line, idx|
               line_num = idx + 1
-              BROADCAST_METHODS.each do |method|
-                next unless line.include?(method)
+              # A `def` line contributes only an endless method's body, so a
+              # broadcast name in a parameter default never counts as a call.
+              scannable = RailsAiContext::SourceLine.executable_part(line)
 
-                # Join up to 3 subsequent lines for multi-line calls
-                context_lines = lines[idx, 4].map(&:chomp).join(" ")
+              BROADCAST_METHODS.each do |method|
+                next unless scannable.include?(method)
+
+                # Join up to 3 subsequent lines for multi-line calls.
+                # delete("\r"): CRLF sources must not leak carriage returns
+                # into snippets or captured stream names.
+                context_lines = lines[idx, 4].join.delete("\r").tr("\n", " ")
 
                 stream = extract_stream_from_broadcast(context_lines, method)
                 target = extract_target_from_broadcast(context_lines)
@@ -694,8 +709,12 @@ module RailsAiContext
       end
 
       # Fuzzy-match stream names: "post_{id}" matches "post_{id}",
-      # and static prefixes match (e.g., "post_" prefix in both)
+      # and static prefixes match (e.g., "post_" prefix in both).
+      # `@post` and `post` are the same record stream seen from a view
+      # ivar vs a model-side local, so ivar sigils are stripped first.
       private_class_method def self.streams_match?(a, b)
+        a = a.to_s.delete_prefix("@")
+        b = b.to_s.delete_prefix("@")
         return true if a == b
 
         # Compare static prefixes for dynamic streams (containing {})

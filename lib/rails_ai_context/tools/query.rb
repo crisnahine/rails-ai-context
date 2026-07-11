@@ -129,6 +129,10 @@ module RailsAiContext
 
       def self.call(sql: nil, limit: nil, format: "table", explain: false, server_context: nil, **_extra)
         set_call_params(sql: sql&.truncate(60))
+        if (refusal = static_tier_refusal("Running SQL queries"))
+          return refusal
+        end
+
         # ── Environment guard ───────────────────────────────────────
         unless config.allow_query_in_production || rails_env_name != "production"
           return text_response(

@@ -38,16 +38,21 @@ module RailsAiContext
       content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
       return nil unless content
 
-      match = content.match(/INSERT INTO\s+[`"]?schema_migrations[`"]?\s*\(version\)\s*VALUES\s*(.+?);/mi)
-      return nil unless match
-
-      versions = match[1].scan(/'(\d+)'/).flatten
+      versions = applied_versions(content)
       return nil if versions.empty?
 
       # Versions are timestamps (14 digits) padded consistently, but compare
       # numerically rather than lexically in case an old app still has
       # pre-timestamp (short integer) migration versions mixed in.
       versions.map(&:to_i).max.to_s
+    end
+
+    # Every applied version recorded in a structure.sql dump's
+    # schema_migrations INSERT block(s). Single home for the INSERT regex -
+    # the schema introspector's pending-migration derivation uses this too.
+    def self.applied_versions(content)
+      content.scan(/INSERT INTO\s+[`"]?schema_migrations[`"]?\s*\(version\)\s*VALUES\s*(.+?);/mi)
+        .flat_map { |m| m[0].scan(/'(\d+)'/).flatten }
     end
   end
 end

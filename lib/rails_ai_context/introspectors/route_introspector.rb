@@ -21,6 +21,10 @@ module RailsAiContext
           by_controller: group_by_controller(routes),
           api_namespaces: detect_api_namespaces(routes),
           mounted_engines: detect_mounted_engines,
+          # Everything routable that has no controller#action: Engine mounts
+          # AND bare rack apps (propshaft's /assets mounts a Server instance,
+          # which detect_mounted_engines' Class check can't see).
+          unrouted_mounts: count_unrouted_mounts,
           root_route: root ? "#{root[:controller]}##{root[:action]}" : nil
         }
       rescue => e
@@ -118,6 +122,24 @@ module RailsAiContext
           .map { |r| r[:path].match(%r{(/api/v?\d*)})&.captures&.first }
           .compact
           .uniq
+      end
+
+      def count_unrouted_mounts
+        app.routes.routes.count do |r|
+          next false if r.respond_to?(:internal) && r.internal
+          next false unless r.defaults[:controller].blank?
+
+          # Only genuine rack mounts: redirect(...) and to: ->(env) {} routes
+          # also have no controller but are not mounted apps.
+          rack_app = r.app.respond_to?(:app) ? r.app.app : r.app
+          next false if defined?(ActionDispatch::Routing::Redirect) && rack_app.is_a?(ActionDispatch::Routing::Redirect)
+          next false if rack_app.is_a?(Proc)
+
+          true
+        end
+      rescue => e
+        $stderr.puts "[rails-ai-context] count_unrouted_mounts failed: #{e.message}" if ENV["DEBUG"]
+        0
       end
 
       def detect_mounted_engines

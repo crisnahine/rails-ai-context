@@ -77,8 +77,12 @@ module RailsAiContext
         has_content = lines.any? { |l| l.start_with?("## ") || l.start_with?("### ") }
         unless has_content
           model_names = (ctx[:models] || {}).keys.map(&:to_s).sort.first(10)
-          suggestions = model_names.any? ? model_names.join(", ") : "user, payment, order"
-          return text_response("No matches found for '#{feature}'. No models, controllers, routes, services, or views match this keyword.\n\nTry one of your model names: #{suggestions}")
+          hint = if model_names.any?
+            "\n\nTry one of your model names: #{model_names.join(', ')}"
+          else
+            "\n\nThis app has no models yet, so there are no feature names to suggest."
+          end
+          return text_response("No matches found for '#{feature}'. No models, controllers, routes, services, or views match this keyword.#{hint}")
         end
 
         text_response(lines.join("\n"))
@@ -281,7 +285,7 @@ module RailsAiContext
 
           real_root = File.realpath(root).to_s
           real_views_dir = File.realpath(views_dir).to_s
-          candidates = safe_glob(views_dir, "**/*.{erb,haml,slim}", real_root).first(MAX_SCAN_FILES)
+          candidates = safe_glob(views_dir, "**/*.{erb,haml,slim,jbuilder}", real_root).first(MAX_SCAN_FILES)
           found = candidates.select do |path|
             feature_word_match?(path.sub("#{real_views_dir}/", ""), pattern)
           end
@@ -293,8 +297,11 @@ module RailsAiContext
             source = RailsAiContext::SafeFile.read(path) or next
             line_count = source.lines.size
             partials = source.scan(/render\s+(?:partial:\s*)?["']([^"']+)["']/).flatten
+            # Record renders (`render @post`, `render post`) resolve to the
+            # record's partial; surface them alongside string renders.
+            partials |= source.scan(/render[( ]\s*@?([a-z_][\w]*)\s*[,)\s%]/).flatten - %w[partial layout json plain text file inline template action status]
             stimulus = source.scan(/data-controller=["']([^"']+)["']/).flat_map { |m| m.first.split }
-            detail = "- `#{relative}` (#{line_count} lines)"
+            detail = "- `#{relative}` (#{line_count} #{line_count == 1 ? "line" : "lines"})"
             detail += " renders: #{partials.join(', ')}" if partials.any?
             detail += " stimulus: #{stimulus.join(', ')}" if stimulus.any?
             lines << detail

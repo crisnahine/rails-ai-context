@@ -285,11 +285,11 @@ module RailsAiContext
           end
 
           if turbo.is_a?(Hash) && !turbo[:error]
-            broadcasts = turbo[:broadcasts]&.size || turbo[:explicit_broadcasts]&.size || 0
-            frames = turbo[:frames]&.size || 0
+            broadcasts = turbo[:model_broadcasts]&.size || 0
+            frames = turbo[:turbo_frames]&.size || 0
             parts = []
-            parts << "#{broadcasts} broadcasts" if broadcasts > 0
-            parts << "#{frames} frames" if frames > 0
+            parts << "#{broadcasts} #{broadcasts == 1 ? "broadcast" : "broadcasts"}" if broadcasts > 0
+            parts << "#{frames} #{frames == 1 ? "frame" : "frames"}" if frames > 0
             lines << "- **Turbo wiring:** #{parts.join(', ')}" if parts.any?
           end
         end

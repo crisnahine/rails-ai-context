@@ -82,7 +82,7 @@ module RailsAiContext
 
       def schema_section
         schema = context[:schema]
-        return if schema[:error]
+        return unless SectionGuard.usable?(schema)
 
         lines = [ "## Database Schema (#{schema[:total_tables]} tables)" ]
         schema[:tables]&.each do |name, data|

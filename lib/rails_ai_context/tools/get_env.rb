@@ -254,6 +254,9 @@ module RailsAiContext
 
             vars = []
             source.each_line.with_index(1) do |line, line_num|
+              # A commented-out ENV mention is documentation, not usage.
+              next if line.lstrip.start_with?("#")
+
               # ENV["VAR_NAME"] or ENV['VAR_NAME']
               line.scan(/ENV\[["']([^"']+)["']\]/).each do |match|
                 vars << { name: match[0], line: line_num }

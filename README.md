@@ -523,7 +523,7 @@ class RailsGetBusinessMetrics < MCP::Tool
 end
 
 # config/initializers/rails_ai_context.rb
-config.custom_tools = [RailsGetBusinessMetrics]
+config.custom_tools = ["RailsGetBusinessMetrics"]
 ```
 
 Test with the built-in `TestHelper` (works with RSpec and Minitest):
@@ -562,7 +562,8 @@ Every MCP tool call fires an `ActiveSupport::Notifications` event:
 
 ```ruby
 ActiveSupport::Notifications.subscribe("rails_ai_context.tools.call") do |event|
-  Rails.logger.info "[MCP] #{event.payload[:method]} - #{event.duration}ms"
+  ms = (event.payload[:duration].to_f * 1000).round
+  Rails.logger.info "[MCP] #{event.payload[:tool_name]} - #{ms}ms"
 end
 ```
 

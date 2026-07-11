@@ -91,9 +91,22 @@ module RailsAiContext
           model_name = File.basename(path, ".rb").camelize
           ast = SourceIntrospector.walk(path, { macros: Listeners::MacrosListener })
           broadcast_hits = ast[:macros].select { |m| %i[broadcasts broadcasts_to broadcasts_refreshes_to].include?(m[:macro]) }
-          next if broadcast_hits.empty?
-
           broadcast_methods = broadcast_hits.map { |h| h[:macro].to_s }.uniq
+
+          # Callback-style broadcasts (`after_create_commit -> { broadcast_append_to ... }`)
+          # are instance-method calls, not class macros, so the macro listener
+          # can't see them - scan the executable portion of each source line
+          # (comments including =begin blocks stripped; `def` lines contribute
+          # only an endless method's body, so parameter defaults never count
+          # as calls while `def refresh = broadcast_replace_to(...)` does).
+          source = RailsAiContext::SourceLine.strip_comments(RailsAiContext::SafeFile.read(path).to_s)
+          source.each_line do |line|
+            broadcast_methods |= RailsAiContext::SourceLine.executable_part(line).scan(/\bbroadcasts?_\w+_to\b/)
+          rescue StandardError
+            next
+          end
+
+          next if broadcast_methods.empty?
           broadcasts << { model: model_name, methods: broadcast_methods }
         end
 

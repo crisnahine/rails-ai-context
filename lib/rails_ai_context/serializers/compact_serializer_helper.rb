@@ -22,8 +22,9 @@ module RailsAiContext
         lines = [ "## Stack" ]
 
         schema = context[:schema]
-        if schema && !schema[:error]
-          lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables"
+        if SectionGuard.usable?(schema)
+          tables = schema[:total_tables]
+          lines << "- Database: #{schema[:adapter]} - #{tables} #{tables == 1 ? 'table' : 'tables'}"
         end
 
         models = context[:models]
@@ -34,8 +35,15 @@ module RailsAiContext
         routes = context[:routes]
         if routes && !routes[:error]
           internal = %w[action_mailbox/ active_storage/ rails/ conductor/ devise/ turbo/]
-          app_ctrls = (routes[:by_controller] || {}).keys.reject { |k| internal.any? { |p| k.downcase.start_with?(p) } }
-          lines << "- Routes: #{routes[:total_routes]} across #{app_ctrls.size} controllers"
+          by_controller = routes[:by_controller] || {}
+          app_ctrls = by_controller.keys.reject { |k| internal.any? { |p| k.downcase.start_with?(p) } }
+          # Numerator and denominator must describe the same population: app
+          # routes across app controllers, with the grand total (framework
+          # routes included) alongside for scale.
+          app_routes = app_ctrls.sum { |k| Array(by_controller[k]).size }
+          lines << "- Routes: #{app_routes} app #{app_routes == 1 ? 'route' : 'routes'} across " \
+                   "#{app_ctrls.size} #{app_ctrls.size == 1 ? 'controller' : 'controllers'} " \
+                   "(#{routes[:total_routes]} total incl. framework)"
         end
 
         jobs = context[:jobs]
@@ -125,12 +133,15 @@ module RailsAiContext
 
       def enforce_max_lines(lines)
         max = RailsAiContext.configuration.claude_max_lines
-        if lines.size > max
-          lines = lines.first(max - 2)
-          lines << ""
-          lines << "_Context trimmed. Use MCP tools for full details._"
+        # Elements can embed newlines (e.g. the dual MCP/CLI tool examples),
+        # so the cap is applied to physical lines, not array entries.
+        physical = lines.flat_map { |l| l.to_s.split("\n", -1) }
+        if physical.size > max
+          physical = physical.first(max - 2)
+          physical << ""
+          physical << "_Context trimmed. Use MCP tools for full details._"
         end
-        lines.join("\n")
+        physical.join("\n")
       end
 
       # Architecture / conventions section - moved from ClaudeSerializer so

@@ -100,6 +100,23 @@ For Codex CLI specifically, the env section in `.codex/config.toml` must match y
 2. Check schema exists: `ls db/schema.rb` or `ls db/structure.sql`
 3. Run doctor: `rails ai:doctor`
 
+### MCP client reports a JSON parse error on the first line ("Resolving dependencies...")
+
+RubyGems can print `Resolving dependencies...` to stdout while activating the
+standalone `rails-ai-context` binary - before any gem code runs - which breaks
+the pure-JSON stdio framing. This happens when gem activation needs the full
+dependency resolver: typically a `GEM_PATH` that is missing part of the
+dependency graph, or launching from inside another Bundler project's
+directory. Fixes:
+
+1. Launch `rails-ai-context serve` with the app root as the working directory
+   (the generated MCP configs do this by default).
+2. Make sure `GEM_PATH` covers the complete default gem path
+   (`gem env path`), not just `gem env gemdir` - Ruby's bundled gems
+   (racc, etc.) live in a separate directory.
+3. In-Gemfile installs are immune: `bundle exec rails-ai-context serve`
+   activates through the lockfile.
+
 ### MCP server responds slowly
 
 - Check `config.cache_ttl` - lower values mean more frequent re-introspection

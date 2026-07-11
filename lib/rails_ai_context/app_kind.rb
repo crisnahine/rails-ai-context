@@ -13,10 +13,19 @@ module RailsAiContext
       return true if File.exist?(File.join(root, "config", "mongoid.yml"))
 
       lock = File.join(root, "Gemfile.lock")
-      return false unless File.exist?(lock)
+      if File.exist?(lock)
+        content = RailsAiContext::SafeFile.read(lock)
+        return !!content&.include?("    mongoid (")
+      end
 
-      content = RailsAiContext::SafeFile.read(lock)
-      !!content&.include?("    mongoid (")
+      # No lockfile yet (fresh checkout, bare directory): fall back to the
+      # Gemfile's own declaration so the app still gets Mongoid treatment
+      # instead of misleading ActiveRecord answers.
+      gemfile = File.join(root, "Gemfile")
+      return false unless File.exist?(gemfile)
+
+      content = RailsAiContext::SafeFile.read(gemfile)
+      !!content&.match?(/^\s*gem\s+["']mongoid["']/)
     end
   end
 end

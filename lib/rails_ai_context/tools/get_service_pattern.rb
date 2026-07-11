@@ -232,10 +232,18 @@ module RailsAiContext
         deps = Set.new
 
         # Class.new(...) or Class.call(...) or Class.perform_later(...)
-        source.scan(/([A-Z][\w:]+)\.(new|call|perform_later|perform_async|create|find|where)\b/).each do |match|
+        source.scan(/([A-Z][\w:]+)\.(new|call|perform_later|perform_async|perform_now|create|find|where)\b/).each do |match|
           cls = match[0]
           next if cls == own_class_name
           next if %w[Rails ActiveRecord ApplicationRecord File Dir ENV String Integer Float Array Hash Set Time Date DateTime URI Regexp].include?(cls)
+          deps << cls
+        end
+
+        # Mailers are invoked through their action name (PostMailer.published_email),
+        # which the verb whitelist above can't anticipate.
+        source.scan(/([A-Z][\w:]*Mailer)\.\w+/).each do |match|
+          cls = match[0]
+          next if cls == own_class_name || cls == "ActionMailer"
           deps << cls
         end
 

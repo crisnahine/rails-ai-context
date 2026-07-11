@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+# Self-sufficient on purpose: with the gem in group :development,
+# Bundler.require never loads it in the test environment, so this file is
+# often the first (and only) entry point required from a test suite.
+require_relative "../rails_ai_context"
+
 module RailsAiContext
   # Reusable test helper for verifying MCP tools - both built-in and custom.
   # Works with RSpec and Minitest.
@@ -100,7 +105,7 @@ module RailsAiContext
 
     def all_tools
       tools = RailsAiContext::Tools::BaseTool.registered_tools
-      tools + RailsAiContext.configuration.custom_tools
+      tools + RailsAiContext::Server.resolve_custom_tools
     end
 
     def available_tool_names

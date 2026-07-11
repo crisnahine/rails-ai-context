@@ -7,25 +7,33 @@ module E2E
   class HttpServerHarness
     attr_reader :port
 
-    def initialize(app_builder, timeout: 45)
+    # command: optional argv override; "%PORT%" tokens are substituted with
+    # the chosen port. Used by the engine-mount spec to boot `rails server`
+    # (the mounted-engine transport) instead of the CLI HTTP server.
+    def initialize(app_builder, timeout: 45, command: nil)
       @app = app_builder
       @timeout = timeout
+      @command = command
     end
 
     def start!
       @port = find_free_port
-      # Use `rails-ai-context serve --transport http` rather than `rails server`
-      # because auto_mount defaults to false - the Rack middleware isn't
-      # inserted into the Rails app's stack unless explicitly configured.
-      # The CLI HTTP mode starts a standalone MCP HTTP server with the gem's
-      # own transport, which is what users of the HTTP transport actually
-      # invoke.
-      prefix = if @app.isolated_gem_home?
-        [ File.join(@app.gem_home, "bin", "rails-ai-context") ]
+      # Default: `rails-ai-context serve --transport http` rather than
+      # `rails server` because auto_mount defaults to false - the Rack
+      # middleware isn't inserted into the Rails app's stack unless
+      # explicitly configured. The CLI HTTP mode starts a standalone MCP
+      # HTTP server with the gem's own transport, which is what users of
+      # the HTTP transport actually invoke.
+      cmd = if @command
+        @command.map { |c| c.gsub("%PORT%", @port.to_s) }
       else
-        [ "bundle", "exec", "rails-ai-context" ]
+        prefix = if @app.isolated_gem_home?
+          [ File.join(@app.gem_home, "bin", "rails-ai-context") ]
+        else
+          [ "bundle", "exec", "rails-ai-context" ]
+        end
+        prefix + [ "serve", "--transport", "http", "--port", @port.to_s ]
       end
-      cmd = prefix + [ "serve", "--transport", "http", "--port", @port.to_s ]
       @stdin, @stdout, @stderr, @wait_thr = Open3.popen3(@app.env, *cmd, chdir: @app.app_path)
       wait_for_ready!
       self

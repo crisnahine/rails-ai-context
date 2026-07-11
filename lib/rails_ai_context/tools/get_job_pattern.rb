@@ -332,19 +332,32 @@ module RailsAiContext
       private_class_method def self.extract_retry_config(source)
         config = []
 
-        source.scan(/retry_on\s+([\w:]+)(?:.*?attempts:\s*(\d+))?(?:.*?wait:\s*([^,\n]+))?/m).each do |match|
-          entry = "retry_on #{match[0]}"
-          entry += ", attempts: #{match[1]}" if match[1]
-          entry += ", wait: #{match[2].strip}" if match[2]
+        # Comments are stripped BEFORE the statement-spanning scan: a trailing
+        # comment after a continuation comma (`retry_on X, wait: 5, # flaky`)
+        # would otherwise end the statement one line early, and comment text
+        # (`# attempts: 3 was flaky`) must never read as real options. The
+        # stripper is string-aware with literal state carried across lines,
+        # so `wait: -> { "#{n}s" }` and multi-line strings survive.
+        stripped = RailsAiContext::SourceLine.strip_comments(source)
+
+        # wait: and attempts: appear in either order in real code, so they are
+        # scanned independently within the retry_on statement rather than with
+        # one ordered pattern (which silently drops whichever comes first).
+        # A statement spans continuation lines while each line ends with a
+        # comma (`retry_on X, wait: :polynomially_longer,\n  attempts: 10`).
+        stripped.scan(/retry_on\s+([\w:]+)((?:[^\n]*,[ \t]*\n)*[^\n]*)/).each do |klass, rest|
+          entry = "retry_on #{klass}"
+          entry += ", attempts: #{Regexp.last_match(1)}" if rest =~ /\battempts:\s*(\d+)/
+          entry += ", wait: #{Regexp.last_match(1).strip}" if rest =~ /\bwait:\s*([^,\n]+)/
           config << entry
         end
 
-        source.scan(/discard_on\s+([\w:]+(?:\s*,\s*[\w:]+)*)/).each do |match|
+        stripped.scan(/discard_on\s+([\w:]+(?:\s*,\s*[\w:]+)*)/).each do |match|
           config << "discard_on #{match[0].strip}"
         end
 
         # Sidekiq retry count
-        if (match = source.match(/sidekiq_options\s+.*retry:\s*(\w+)/))
+        if (match = stripped.match(/sidekiq_options\s+.*retry:\s*(\w+)/))
           config << "sidekiq retry: #{match[1]}"
         end
 

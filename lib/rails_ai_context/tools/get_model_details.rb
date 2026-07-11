@@ -105,7 +105,16 @@ module RailsAiContext
       end
 
       private_class_method def self.format_model(name, data)
-        lines = [ "# #{name}", "" ]
+        # Static-tier entries already carry [STATIC]; a runtime entry with a
+        # resolved table is reflection-confirmed, hence [VERIFIED].
+        header_tag = if data[:confidence]
+          " #{data[:confidence]}"
+        elsif data[:table_name] && !RailsAiContext.static_tier?
+          " #{Confidence::VERIFIED}"
+        else
+          ""
+        end
+        lines = [ "# #{name}#{header_tag}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
 
         # File structure - compact one-line format
@@ -241,12 +250,15 @@ module RailsAiContext
           end
         end
 
-        # Scopes - show lambda body so AI can chain correctly
+        # Scopes - show lambda body so AI can chain correctly. Each carries
+        # the AST confidence: [VERIFIED] literal bodies vs [INFERRED] dynamic
+        # expressions the parser can't fully resolve.
         if data[:scopes]&.any?
           lines << "" << "## Scopes"
           data[:scopes].each do |s|
             if s.is_a?(Hash)
-              lines << "- `#{s[:name]}` → #{s[:body]}"
+              tag = s[:confidence] ? " #{s[:confidence]}" : ""
+              lines << "- `#{s[:name]}` → #{s[:body]}#{tag}"
             else
               lines << "- `#{s}`"
             end

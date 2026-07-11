@@ -36,14 +36,25 @@ module RailsAiContext
         # Stack overview
         lines << "## Stack"
         schema = context[:schema]
-        lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables" if schema && !schema[:error]
+        if SectionGuard.usable?(schema)
+          tables = schema[:total_tables]
+          lines << "- Database: #{schema[:adapter]} - #{tables} #{tables == 1 ? 'table' : 'tables'}"
+        end
 
         models = context[:models]
         lines << "- Models: #{models.size}" if models.is_a?(Hash) && !models[:error]
 
         routes = context[:routes]
         if routes && !routes[:error]
-          lines << "- Routes: #{routes[:total_routes]} across #{(routes[:by_controller] || {}).size} controllers"
+          # Same population as the compact serializers: app routes across app
+          # controllers, so every generated context file quotes one number.
+          internal = %w[action_mailbox/ active_storage/ rails/ conductor/ devise/ turbo/]
+          by_controller = routes[:by_controller] || {}
+          app_ctrls = by_controller.keys.reject { |k| internal.any? { |p| k.downcase.start_with?(p) } }
+          app_routes = app_ctrls.sum { |k| Array(by_controller[k]).size }
+          lines << "- Routes: #{app_routes} app #{app_routes == 1 ? 'route' : 'routes'} across " \
+                   "#{app_ctrls.size} #{app_ctrls.size == 1 ? 'controller' : 'controllers'} " \
+                   "(#{routes[:total_routes]} total incl. framework)"
         end
 
         lines.concat(full_preset_stack_lines)

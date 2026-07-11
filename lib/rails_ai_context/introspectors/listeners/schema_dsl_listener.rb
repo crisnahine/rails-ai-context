@@ -51,6 +51,9 @@ module RailsAiContext
           @results << {
             type:     :create_table,
             table:    table_arg.unescaped,
+            # id: false / id: :uuid / primary_key: ... decide whether the
+            # implicit primary-key column exists and what to call it.
+            options:  extract_keyword_options(node),
             location: node.location.start_line
           }
         end

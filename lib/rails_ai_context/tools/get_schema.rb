@@ -95,6 +95,7 @@ module RailsAiContext
           end
           lines = [ "# Schema Summary (#{total} #{total == 1 ? 'table' : 'tables'})", "" ]
           lines << "**Adapter:** #{schema[:adapter]}" if schema[:adapter]
+          lines.concat(static_source_lines(schema))
           paginated.each do |name|
             data = tables[name]
             col_count = data[:columns]&.size || 0
@@ -118,6 +119,7 @@ module RailsAiContext
             return text_response("No tables at offset #{offset}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
           end
           lines = [ "# Schema (#{total} #{total == 1 ? 'table' : 'tables'}, showing #{paginated.size})", "" ]
+          lines.concat(static_source_lines(schema))
           paginated.each do |name|
             data = tables[name]
             timestamp_cols = %w[id created_at updated_at]
@@ -219,13 +221,34 @@ module RailsAiContext
       # cache, cable) to its own schema/structure file. This tool targets
       # the primary database's tables in detail, so secondaries get a
       # compact one-line-per-database summary rather than full column detail.
+      # Static-parse extras: the SQL dialect the dump was written in, the
+      # schema version recorded by the dump, and migration files it doesn't
+      # cover - the static-tier stand-ins for a live connection's answers.
+      private_class_method def self.static_source_lines(schema)
+        lines = []
+        lines << "**Dialect:** #{schema[:dialect]} (db/structure.sql)" if schema[:dialect] && schema[:dialect] != "unknown"
+        lines << "**Schema version:** #{schema[:schema_version]}" if schema[:schema_version]
+        if schema[:pending_migrations].is_a?(Array)
+          pending = schema[:pending_migrations]
+          if pending.any?
+            shown = pending.first(5).join(", ")
+            more = pending.size > 5 ? " (+#{pending.size - 5} more)" : ""
+            lines << "**Pending migrations:** #{pending.size} - #{shown}#{more}"
+          elsif schema[:schema_version]
+            lines << "**Pending migrations:** none"
+          end
+        end
+        lines
+      end
+
       private_class_method def self.secondary_databases_lines(schema)
         secondary = schema[:secondary_databases]
         return [] unless secondary
 
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
-          lines << "- **#{name}**: #{db[:total_tables]} tables (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
+          count = db[:total_tables]
+          lines << "- **#{name}**: #{count} #{count == 1 ? 'table' : 'tables'} (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
         end
         lines
       end
