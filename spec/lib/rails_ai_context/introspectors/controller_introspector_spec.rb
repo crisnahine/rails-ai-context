@@ -342,5 +342,20 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(result[:controllers]).to eq({})
       end
     end
+
+    it "discovers controllers in packs and engines directories" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "users_controller.rb"),
+                   "class UsersController < ApplicationController\n  def index; end\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "controllers", "invoices_controller.rb"),
+                   "class InvoicesController < ApplicationController\n  def show; end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result[:controllers].keys).to contain_exactly("UsersController", "InvoicesController")
+        expect(result[:controllers]["InvoicesController"][:actions]).to eq([ "show" ])
+      end
+    end
   end
 end

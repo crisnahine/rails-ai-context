@@ -86,15 +86,14 @@ module RailsAiContext
 
       # Scan filesystem for controller files not yet loaded as classes
       def discover_from_filesystem
-        controllers_dir = File.join(app.root, "app", "controllers")
-        return {} unless Dir.exist?(controllers_dir)
-
-        Dir.glob(File.join(controllers_dir, "**/*_controller.rb")).each_with_object({}) do |path, hash|
-          relative = path.sub("#{controllers_dir}/", "")
-          class_name = relative.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
-          next if class_name == "ApplicationController"
-          next if class_name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
-          hash[class_name] = path
+        RailsAiContext::PathResolver.controller_dirs(app.root).each_with_object({}) do |controllers_dir, result|
+          Dir.glob(File.join(controllers_dir, "**", "*_controller.rb")).sort.each do |path|
+            relative = path.sub("#{controllers_dir}/", "")
+            class_name = relative.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
+            next if class_name == "ApplicationController"
+            next if class_name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
+            result[class_name] ||= path
+          end
         end
       end
 
