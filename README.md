@@ -448,6 +448,30 @@ Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, Open
 
 <br>
 
+## Static tier: works even when the app can't boot
+
+`rails-ai-context` attempts a full boot for live reflection. When boot fails
+(missing ENV vars, unreachable services, a broken initializer) the `serve`
+and `tool` commands fall back to the **static tier** instead of dying:
+routes come from parsing `config/routes.rb`, schema from `db/schema.rb` /
+`db/structure.sql` / migrations, models and controllers from their source
+files. Every response carries a banner explaining the degradation, static
+data is tagged `[STATIC]`, and sections that genuinely need a booted app
+report `[UNAVAILABLE]` with the reason.
+
+Flags:
+
+- `--no-boot` (serve, tool) - skip the boot attempt entirely and serve
+  static analysis. Fast, and immune to boot-time side effects.
+- `--app-path PATH` (all commands) - run against a Rails app in another
+  directory.
+- `--environment ENV` (all commands) - set RAILS_ENV for the boot attempt.
+
+`rails-ai-context doctor` still requires a bootable app: its job is
+diagnosing why boot fails.
+
+<br>
+
 ## Documentation
 
 | | |

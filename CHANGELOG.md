@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.15.0] - Unreleased
+
+### Added
+
+- Static tier: `serve` and `tool` fall back to source-file analysis when the
+  app cannot boot, instead of exiting. Routes (new `config/routes.rb` Prism
+  walker), models, controllers, schema, and migrations answer statically;
+  other sections report `[UNAVAILABLE]` with the reason; every response
+  carries a tier banner.
+- CLI flags: `--no-boot` (serve/tool), `--app-path` and `--environment`
+  (all commands).
+- `[STATIC]` and `[UNAVAILABLE: <reason>]` confidence tags.
+- structure.sql parsing is dialect-aware: MySQL (backticks, inline
+  KEY/CONSTRAINT definitions, ENGINE trailers) and SQLite (quoted
+  identifiers, IF NOT EXISTS) now parse; output gains a `dialect` key.
+
+### Changed
+
+- Boot failure in `tool`/`serve` no longer exits 1; it degrades to the
+  static tier with a stderr notice. `doctor` keeps requiring a bootable app.
+
 ## [5.14.0] - 2026-07-11
 
 ### Added
