@@ -116,8 +116,9 @@ genuinely doesn't exist for this app.
 
 ## Shape matrix
 
-Rows are app shapes; columns are the five introspectors with any static
-reach. `n/a` means the shape doesn't change that introspector's behavior - see
+Rows are app shapes; columns are schema, models, routes, and controllers
+(the four whose static behavior varies by shape), plus views for contrast.
+`n/a` means the shape doesn't change that introspector's behavior - see
 the stock full-stack row for its baseline proof. Reference numbers point at
 the proof list below the table.
 
@@ -132,7 +133,7 @@ the proof list below the table.
 | Packwerk `packs/` | n/a | static [5] | n/a | n/a | n/a |
 | In-repo `engines/` | n/a | n/a | n/a | static [5] | n/a |
 | Mongoid | `[UNAVAILABLE]`, honest signal [6] | static (fields + embeds) [6] | n/a | n/a | n/a |
-| Broken-boot (any full-stack app) | static [7] | static, per-file isolation [7] | static [7] | static [5] | `[UNAVAILABLE]` [8] |
+| Broken-boot (any full-stack app) | static [7] | static, per-file isolation [7] | static [7] | static [7] | `[UNAVAILABLE]` [8] |
 | Packs + engines under `--no-boot` | n/a | static [5] | n/a | static [5] | n/a |
 | Empty/greenfield app (no scaffold) | graceful, no crash [9] | graceful, no crash [9] | graceful, no crash [9] | graceful, no crash [9] | graceful, no crash [9] |
 | Massive app (500 models/tables) | no crash at scale [10] | no crash at scale [10] | no crash at scale [10] | n/a | n/a |
@@ -140,8 +141,8 @@ the proof list below the table.
 Proof sources:
 
 1. `spec/e2e/in_gemfile_install_spec.rb`, `standalone_install_spec.rb`,
-   `zero_config_install_spec.rb` (schema/routes/model_details/controllers tool
-   invocations against the default scaffold, across all three install paths);
+   `zero_config_install_spec.rb` (schema, routes, model_details, and controllers
+   exercised across the install-path suite - in-Gemfile, standalone, zero-config);
    real Rails 8.0 apps in the v5.14.0 release QA (`blog`, `sandbox`).
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
