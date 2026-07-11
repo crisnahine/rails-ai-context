@@ -235,10 +235,9 @@ module RailsAiContext
     # Frontend framework detection (optional overrides - auto-detected if nil)
     attr_accessor :frontend_paths         # User-declared frontend dirs (e.g. ["app/frontend", "../web-client"])
 
-    # Additional app-root-relative directories that contain Rails app code
-    # beyond the conventional layout and the built-in packs/ and engines/
-    # globs (e.g. ["src", "vendor/internal"]). Each entry is scanned for
-    # app/models, app/controllers, and app/views subdirectories.
+    # Additional app-root-relative directories that also contain Rails app
+    # code (e.g. ["src", "vendor/internal"]). Code discovery scans each
+    # entry's app/models, app/controllers, and app/views subdirectories.
     attr_accessor :extra_app_paths
 
     # Database query tool settings (rails_query)
