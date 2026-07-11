@@ -135,6 +135,25 @@ module RailsAiContext
           end
         end
 
+        # Mongoid documents have no AR table/columns - render declared fields
+        # and embedded relations directly from the source-parsed macros instead.
+        if data[:mongoid]
+          if data[:fields]&.any?
+            lines << "" << "## Fields"
+            data[:fields].each do |f|
+              type_str = f[:type] ? ": #{f[:type]}" : ""
+              lines << "- `#{f[:name]}`#{type_str}"
+            end
+          end
+
+          if data[:embeds]&.any?
+            lines << "" << "## Embedded relations"
+            data[:embeds].each do |e|
+              lines << "- `#{e[:type]}` **#{e[:name]}**"
+            end
+          end
+        end
+
         # Associations
         if data[:associations]&.any?
           lines << "" << "## Associations"
