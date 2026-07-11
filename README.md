@@ -463,8 +463,8 @@ Flags:
 
 - `--no-boot` (serve, tool) - skip the boot attempt entirely and serve
   static analysis. Fast, and immune to boot-time side effects.
-- `--app-path PATH` (all commands) - run against a Rails app in another
-  directory.
+- `--app-path PATH` (all app-reading commands) - run against a Rails app in
+  another directory.
 - `--environment ENV` (all commands) - set RAILS_ENV for the boot attempt.
 
 `rails-ai-context doctor` still requires a bootable app: its job is

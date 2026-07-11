@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   walker), models, controllers, schema, and migrations answer statically;
   other sections report `[UNAVAILABLE]` with the reason; every response
   carries a tier banner.
-- CLI flags: `--no-boot` (serve/tool), `--app-path` and `--environment`
-  (all commands).
+- CLI flags: `--no-boot` (serve/tool), `--app-path` (all app-reading
+  commands), and `--environment` (all commands).
 - `[STATIC]` and `[UNAVAILABLE: <reason>]` confidence tags.
 - structure.sql parsing is dialect-aware: MySQL (backticks, inline
   KEY/CONSTRAINT definitions, ENGINE trailers) and SQLite (quoted
