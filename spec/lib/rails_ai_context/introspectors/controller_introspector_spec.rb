@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
