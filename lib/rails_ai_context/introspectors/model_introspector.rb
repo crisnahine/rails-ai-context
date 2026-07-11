@@ -20,6 +20,8 @@ module RailsAiContext
 
       # @return [Hash] model metadata keyed by model name
       def call
+        return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
+
         eager_load_models!
         models = discover_models
 
@@ -39,6 +41,8 @@ module RailsAiContext
       # resolved. When the same class name is found in more than one
       # directory, the first discovery wins.
       def static_call
+        return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
+
         RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
           Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
@@ -538,6 +542,59 @@ module RailsAiContext
           macros: data[:macros],
           methods: data[:methods]
         }
+      end
+
+      # Mongoid documents are invisible to ActiveRecord reflection, so both
+      # tiers parse them from source. Fields and embedded relations come from
+      # the Mongoid listener; shared-name macros (belongs_to, has_many,
+      # validates, scope) come from the regular listener stack.
+      def mongoid_static_models
+        RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
+          Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
+            relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
+            next if relative == "application_record" || relative.start_with?("concerns/")
+
+            class_name = relative.camelize
+            next if result.key?(class_name)
+            next if config.excluded_models.include?(class_name)
+
+            begin
+              next if File.size(path) > RailsAiContext.configuration.max_file_size
+
+              result[class_name] = mongoid_model_details(path)
+            rescue => e
+              result[class_name] = { error: e.message }
+            end
+          end
+        end
+      end
+
+      def mongoid_model_details(path)
+        data = SourceIntrospector.walk(path, {
+          mongoid: -> { Listeners::MongoidFieldsListener.new },
+          associations: Listeners::AssociationsListener,
+          validations: Listeners::ValidationsListener,
+          scopes: Listeners::ScopesListener,
+          callbacks: Listeners::CallbacksListener,
+          methods: Listeners::MethodsListener
+        })
+        macros = data[:mongoid] || []
+        details = {
+          confidence: Confidence::STATIC,
+          mongoid: true,
+          fields: macros.select { |m| m[:macro] == :field }
+                        .map { |m| { name: m[:args].first, type: m[:options][:type] }.compact },
+          embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
+                        .map { |m| { type: m[:macro], name: m[:args].first } },
+          associations: data[:associations],
+          validations: data[:validations],
+          scopes: data[:scopes],
+          callbacks: data[:callbacks],
+          methods: data[:methods]
+        }
+        collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
+        details[:collection] = collection if collection
+        details
       end
     end
   end

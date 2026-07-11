@@ -450,4 +450,32 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
+
+  describe "Mongoid apps" do
+    it "extracts fields and embeds statically in both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "customer.rb"), <<~RUBY)
+          class Customer
+            include Mongoid::Document
+            field :name, type: String
+            embeds_many :orders
+            has_many :tickets
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        [ introspector.static_call, introspector.call ].each do |result|
+          customer = result["Customer"]
+          expect(customer[:mongoid]).to be(true)
+          expect(customer[:fields]).to include(name: :name, type: "String")
+          expect(customer[:embeds]).to include(type: :embeds_many, name: :orders)
+          expect(customer[:associations].map { |a| a[:name] }).to include(:tickets)
+          expect(customer).not_to have_key(:table_name)
+        end
+      end
+    end
+  end
 end
