@@ -130,7 +130,7 @@ module RailsAiContext
       def self.call(sql: nil, limit: nil, format: "table", explain: false, server_context: nil, **_extra)
         set_call_params(sql: sql&.truncate(60))
         # ── Environment guard ───────────────────────────────────────
-        unless config.allow_query_in_production || !Rails.env.production?
+        unless config.allow_query_in_production || rails_env_name != "production"
           return text_response(
             "rails_query is disabled in production for data privacy. " \
             "Set config.allow_query_in_production = true to override."

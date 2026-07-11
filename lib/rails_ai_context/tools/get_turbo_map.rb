@@ -47,7 +47,7 @@ module RailsAiContext
       def self.call(detail: "standard", stream: nil, controller: nil, server_context: nil)
         return text_response("Turbo is not installed in this app (no `turbo-rails` gem in Gemfile.lock).") if turbo_rails_absent?
 
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
 
         # Collect all Turbo data
         model_broadcasts = scan_model_broadcasts(root)
@@ -111,7 +111,7 @@ module RailsAiContext
       # convention_introspector/migration_advisor gem_present? pattern of
       # trusting the lock file, not guessing when it's absent).
       private_class_method def self.turbo_rails_absent?
-        lock_path = File.join(Rails.root.to_s, "Gemfile.lock")
+        lock_path = File.join(rails_app.root.to_s, "Gemfile.lock")
         return false unless File.exist?(lock_path)
 
         content = RailsAiContext::SafeFile.read(lock_path)

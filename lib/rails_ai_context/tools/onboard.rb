@@ -376,7 +376,7 @@ module RailsAiContext
           test_cmd = (ctx[:tests].is_a?(Hash) && ctx[:tests][:framework] == "rspec") ? "bundle exec rspec" : "rails test"
           # bin/dev only exists in apps generated with a JS/CSS watcher;
           # recommending it elsewhere sends readers to a missing script.
-          server_cmd = File.exist?(Rails.root.join("bin", "dev")) ? "bin/dev  # or rails server" : "rails server"
+          server_cmd = File.exist?(rails_app.root.join("bin", "dev")) ? "bin/dev  # or rails server" : "rails server"
           [
             "## Getting Started", "",
             "```bash",
@@ -504,7 +504,7 @@ module RailsAiContext
 
           # Fallback: check for Dockerfile/Procfile directly
           unless has_content
-            root = Rails.root.to_s
+            root = rails_app.root.to_s
             has_dockerfile = File.exist?(File.join(root, "Dockerfile")) || File.exist?(File.join(root, "Dockerfile.dev"))
             has_procfile = File.exist?(File.join(root, "Procfile")) || File.exist?(File.join(root, "Procfile.dev"))
             has_ci = Dir.exist?(File.join(root, ".github", "workflows")) || File.exist?(File.join(root, ".gitlab-ci.yml"))
@@ -676,10 +676,10 @@ module RailsAiContext
         end
 
         def extract_service_names
-          services_dir = File.join(Rails.root, "app", "services")
+          services_dir = File.join(rails_app.root, "app", "services")
           return [] unless Dir.exist?(services_dir)
 
-          real_root = File.realpath(Rails.root).to_s
+          real_root = File.realpath(rails_app.root).to_s
           safe_glob(services_dir, "**/*.rb", real_root).filter_map do |path|
             name = File.basename(path, ".rb").camelize
             name unless name == "ApplicationService" || name == "BaseService"

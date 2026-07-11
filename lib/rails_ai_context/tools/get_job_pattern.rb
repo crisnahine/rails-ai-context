@@ -25,7 +25,7 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(job: nil, detail: "standard", server_context: nil)
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
         jobs_dir = File.join(root, "app", "jobs")
         real_root = File.realpath(root).to_s
         jobs_dir_exists = Dir.exist?(jobs_dir)

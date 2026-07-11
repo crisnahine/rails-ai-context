@@ -127,7 +127,7 @@ module RailsAiContext
         end
 
         def detect_rails_branch
-          lock_path = Rails.root.join("Gemfile.lock").to_s
+          lock_path = rails_app.root.join("Gemfile.lock").to_s
           return "main" unless File.exist?(lock_path)
 
           content = RailsAiContext::SafeFile.read(lock_path)
@@ -209,7 +209,7 @@ module RailsAiContext
         end
 
         def fetch_content(topic, branch, url)
-          cache_dir = Rails.root.join("tmp", "rails-ai-context", "docs")
+          cache_dir = rails_app.root.join("tmp", "rails-ai-context", "docs")
           FileUtils.mkdir_p(cache_dir)
 
           cache_key = "#{topic['id']}_#{branch}.md"

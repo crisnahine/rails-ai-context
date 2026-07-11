@@ -226,10 +226,10 @@ module RailsAiContext
       end
 
       private_class_method def self.find_views_using(controller_name)
-        views_dir = Rails.root.join("app", "views").to_s
+        views_dir = rails_app.root.join("app", "views").to_s
         return [] unless Dir.exist?(views_dir)
 
-        real_root = File.realpath(Rails.root).to_s
+        real_root = File.realpath(rails_app.root).to_s
         real_views_dir = File.realpath(views_dir).to_s
 
         pattern = "data-controller=\"#{controller_name}\""
@@ -248,7 +248,7 @@ module RailsAiContext
 
       private_class_method def self.detect_lifecycle(relative_path)
         return nil unless relative_path
-        path = Rails.root.join("app/javascript/controllers", relative_path)
+        path = rails_app.root.join("app/javascript/controllers", relative_path)
         return nil unless File.exist?(path)
 
         content = RailsAiContext::SafeFile.read(path)

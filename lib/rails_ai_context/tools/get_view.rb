@@ -207,7 +207,7 @@ module RailsAiContext
       end
 
       private_class_method def self.list_layouts(detail)
-        layouts_dir = Rails.root.join("app", "views", "layouts")
+        layouts_dir = rails_app.root.join("app", "views", "layouts")
         return text_response("No app/views/layouts/ directory found.") unless Dir.exist?(layouts_dir)
 
         files = Dir.glob(File.join(layouts_dir, "*")).reject { |f| File.directory?(f) }.sort
@@ -275,7 +275,7 @@ module RailsAiContext
           return text_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
         end
 
-        views_dir = Rails.root.join("app", "views")
+        views_dir = rails_app.root.join("app", "views")
         full_path = views_dir.join(path)
 
         unless File.exist?(full_path)
@@ -391,7 +391,7 @@ module RailsAiContext
         return "(file not found)" if relative_path.nil? || relative_path.to_s.empty?
         return "(access denied)" if sensitive_file?(relative_path.to_s)
 
-        views_dir = Rails.root.join("app", "views")
+        views_dir = rails_app.root.join("app", "views")
         full_path = views_dir.join(relative_path)
         return "(file not found)" unless File.exist?(full_path)
 
@@ -495,7 +495,7 @@ module RailsAiContext
       end
 
       private_class_method def self.read_from_disk(controller:, path:, detail:)
-        views_dir = Rails.root.join("app", "views")
+        views_dir = rails_app.root.join("app", "views")
         return text_response("No app/views directory found.") unless Dir.exist?(views_dir)
 
         if path

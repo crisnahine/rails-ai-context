@@ -56,7 +56,7 @@ module RailsAiContext
         private
 
         def detect_framework
-          if Dir.exist?(File.join(Rails.root, "spec"))
+          if Dir.exist?(File.join(rails_app.root, "spec"))
             "rspec"
           else
             "minitest"
@@ -65,7 +65,7 @@ module RailsAiContext
 
         # Scan existing tests to learn project patterns
         def detect_patterns(framework) # rubocop:disable Metrics
-          root = Rails.root.to_s
+          root = rails_app.root.to_s
           real_root = File.realpath(root).to_s
           patterns = { factory_style: :create, let_style: true, expect_style: true, described_class: true }
 
@@ -979,7 +979,7 @@ module RailsAiContext
           keys = fixture_names[table] || fixture_names[table.to_sym]
           return keys.first.to_s if keys.is_a?(Array) && keys.any?
 
-          fixture_file = File.join(Rails.root, "test", "fixtures", "#{table}.yml")
+          fixture_file = File.join(rails_app.root, "test", "fixtures", "#{table}.yml")
           return nil unless File.exist?(fixture_file)
 
           content = RailsAiContext::SafeFile.read(fixture_file)

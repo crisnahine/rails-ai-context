@@ -99,7 +99,7 @@ module RailsAiContext
         return hint if hint.is_a?(String)
         return nil unless hint.is_a?(Array)
 
-        root = defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root : Dir.pwd
+        root = rails_app.root
         present = hint.select { |path| File.exist?(File.join(root, path)) }
         present.any? ? present.join(", ") : nil
       end

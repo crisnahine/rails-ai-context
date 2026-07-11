@@ -445,7 +445,7 @@ module RailsAiContext
           end
 
           # Fallback: read source file
-          path = Rails.root.join("app", "controllers", "#{parent_class.underscore}.rb")
+          path = rails_app.root.join("app", "controllers", "#{parent_class.underscore}.rb")
           return [] unless File.exist?(path)
           source = RailsAiContext::SafeFile.read(path)
           return [] unless source

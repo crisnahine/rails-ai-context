@@ -38,7 +38,7 @@ module RailsAiContext
           return text_response("The `near` parameter is required. Provide a method name, keyword, or string to find.")
         end
 
-        full_path = Rails.root.join(file)
+        full_path = rails_app.root.join(file)
 
         # Block access to sensitive files (secrets, keys, credentials)
         if sensitive_file?(file)
@@ -49,9 +49,9 @@ module RailsAiContext
         unless File.exist?(full_path)
           # Try to find a matching file to suggest
           basename = File.basename(file)
-          candidates = Dir.glob(File.join(Rails.root, "app", "**", basename)).first(5)
+          candidates = Dir.glob(File.join(rails_app.root, "app", "**", basename)).first(5)
           hint = if candidates.any?
-            suggestions = candidates.map { |c| c.sub("#{Rails.root}/", "") }
+            suggestions = candidates.map { |c| c.sub("#{rails_app.root}/", "") }
             " Did you mean: #{suggestions.join(', ')}? Use the full path relative to Rails root."
           else
             " Use the full path relative to Rails root (e.g., 'app/models/#{basename}')."
@@ -60,7 +60,7 @@ module RailsAiContext
         end
         begin
           real = File.realpath(full_path).to_s
-          rails_root_real = File.realpath(Rails.root).to_s
+          rails_root_real = File.realpath(rails_app.root).to_s
           # Separator-aware containment - matches the v5.8.1-r2 hardening in
           # get_view.rb / vfs.rb. Without `+ File::SEPARATOR`, a sibling-dir
           # like `/app/rails_evil/...` would prefix-match a Rails root at

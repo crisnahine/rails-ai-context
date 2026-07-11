@@ -205,6 +205,34 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
   end
 
+  describe ".rails_env_name" do
+    it "returns Rails.env when Rails is loaded" do
+      expect(described_class.rails_env_name).to eq(Rails.env)
+    end
+
+    it "falls back to RAILS_ENV when Rails does not respond to :env" do
+      allow(Rails).to receive(:respond_to?).with(:env).and_return(false)
+      begin
+        original = ENV["RAILS_ENV"]
+        ENV["RAILS_ENV"] = "staging"
+        expect(described_class.rails_env_name).to eq("staging")
+      ensure
+        ENV["RAILS_ENV"] = original
+      end
+    end
+
+    it "falls back to development when neither Rails.env nor RAILS_ENV is available" do
+      allow(Rails).to receive(:respond_to?).with(:env).and_return(false)
+      begin
+        original = ENV["RAILS_ENV"]
+        ENV.delete("RAILS_ENV")
+        expect(described_class.rails_env_name).to eq("development")
+      ensure
+        ENV["RAILS_ENV"] = original
+      end
+    end
+  end
+
   describe ".unavailable_note" do
     it "returns nil for a Hash without :unavailable" do
       expect(described_class.unavailable_note({ notable_gems: [] })).to be_nil

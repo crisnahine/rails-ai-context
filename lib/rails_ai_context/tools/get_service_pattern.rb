@@ -25,7 +25,7 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(service: nil, detail: "standard", server_context: nil)
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
         services_dir = File.join(root, "app", "services")
 
         unless Dir.exist?(services_dir)

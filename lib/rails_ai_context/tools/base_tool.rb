@@ -108,6 +108,16 @@ module RailsAiContext
           RailsAiContext.configuration
         end
 
+        # The current environment name without requiring a booted app:
+        # Rails.env when a real Rails is loaded and responds to it, the
+        # ambient RAILS_ENV otherwise. Tools that only need the environment
+        # name (not the full StringInquirer API) use this instead of a bare
+        # `Rails.env` reference, which would NameError under --no-boot or
+        # early boot death.
+        def rails_env_name
+          defined?(Rails) && Rails.respond_to?(:env) ? Rails.env : (ENV["RAILS_ENV"] || "development")
+        end
+
         # Cache introspection results with TTL + fingerprint invalidation.
         # Uses SHARED_CACHE so all tool subclasses share one introspection
         # result instead of each caching independently.

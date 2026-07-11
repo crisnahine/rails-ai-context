@@ -69,7 +69,7 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(pattern:, path: nil, file_type: nil, match_type: "any", exact_match: false, exclude_tests: false, group_by_file: false, offset: 0, limit: nil, context_lines: 2, server_context: nil) # rubocop:disable Metrics
-        root = Rails.root.to_s
+        root = rails_app.root.to_s
         original_pattern = pattern
 
         # Reject empty or whitespace-only patterns

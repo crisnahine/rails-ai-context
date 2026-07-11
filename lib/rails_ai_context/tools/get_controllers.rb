@@ -190,7 +190,7 @@ module RailsAiContext
         end
 
         # Detect skip_before_action declarations in the child controller source
-        source_path = Rails.root.join("app", "controllers", "#{controller_name.underscore}.rb")
+        source_path = rails_app.root.join("app", "controllers", "#{controller_name.underscore}.rb")
         skipped_filters = detect_skipped_filters(source_path, action_name)
 
         # Include inherited filters from parent controller, excluding skipped ones
@@ -347,7 +347,7 @@ module RailsAiContext
         end
 
         # Fallback: read ApplicationController source directly
-        path = Rails.root.join("app", "controllers", "#{parent_class.underscore}.rb")
+        path = rails_app.root.join("app", "controllers", "#{parent_class.underscore}.rb")
         return [] unless File.exist?(path)
         return [] if File.size(path) > RailsAiContext.configuration.max_file_size
 
@@ -546,7 +546,7 @@ module RailsAiContext
 
         # Hydrate with schema hints for models referenced in this controller
         if RailsAiContext.configuration.hydration_enabled
-          source_path = Rails.root.join("app", "controllers", "#{name.underscore}.rb")
+          source_path = rails_app.root.join("app", "controllers", "#{name.underscore}.rb")
           hydration = Hydrators::ControllerHydrator.call(source_path.to_s, context: cached_context)
           hydration_text = Hydrators::HydrationFormatter.format(hydration)
           lines << "" << hydration_text unless hydration_text.empty?

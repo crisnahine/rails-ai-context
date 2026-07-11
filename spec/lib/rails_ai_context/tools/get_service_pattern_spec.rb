@@ -72,7 +72,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
           end
         RUBY
 
-        allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir))
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
         allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
       end
 
@@ -170,7 +170,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
       before do
         FileUtils.mkdir_p(File.join(tmpdir, "app", "services"))
-        allow(Rails).to receive(:root).and_return(Pathname.new(tmpdir))
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       end
 
       after { FileUtils.remove_entry(tmpdir) }
