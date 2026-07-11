@@ -472,6 +472,20 @@ diagnosing why boot fails.
 
 <br>
 
+## App shapes
+
+Beyond the conventional layout, code is discovered in packwerk packs
+(`packs/*/app/*`), in-repo engines (`engines/*/app/*`), and any directories
+listed in `extra_app_paths` in `.rails-ai-context.yml`. Rails multi-database
+schema dumps (`db/queue_schema.rb` and friends) are reported under a
+`Secondary databases` section. Mongoid apps get an honest
+`[UNAVAILABLE]` schema signal plus basic static model data (fields, embedded
+relations) instead of misleading empty output, and API-only apps get
+"not applicable" answers from view and frontend tools instead of silent
+empty listings.
+
+<br>
+
 ## Documentation
 
 | | |

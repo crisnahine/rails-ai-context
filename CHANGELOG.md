@@ -20,11 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - structure.sql parsing is dialect-aware: MySQL (backticks, inline
   KEY/CONSTRAINT definitions, ENGINE trailers) and SQLite (quoted
   identifiers, IF NOT EXISTS) now parse; output gains a `dialect` key.
+- Shape-aware discovery: models and controllers are found in packwerk
+  `packs/`, in-repo `engines/`, and configured `extra_app_paths`.
+- Multi-database schema dumps (`db/*_schema.rb`, `db/*_structure.sql`)
+  reported under `secondary_databases`.
+- Mongoid detection: honest `[UNAVAILABLE]` schema signal and basic static
+  model extraction (fields, embeds, store_in) for Mongoid apps.
+- API-only apps get explicit "not applicable" answers from view/frontend
+  tools instead of empty listings.
 
 ### Changed
 
 - Boot failure in `tool`/`serve` no longer exits 1; it degrades to the
   static tier with a stderr notice. `doctor` keeps requiring a bootable app.
+
+### Fixed
+
+- `config.auto_mount = true` set in a user initializer now takes effect
+  (the middleware initializer ran before user initializers loaded).
 
 ## [5.14.0] - 2026-07-11
 
