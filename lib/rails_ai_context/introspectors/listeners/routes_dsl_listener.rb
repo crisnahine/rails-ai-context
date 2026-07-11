@@ -66,7 +66,16 @@ module RailsAiContext
 
         def enter_namespace(node)
           name = literal_first_arg(node)
-          return emit_dynamic(node) unless name
+          unless name
+            emit_dynamic(node)
+            # A block whose name we can't read still opens a nested scope -
+            # without suppressing it, children resolve against the OUTER
+            # prefix and get tagged as verified routes, when in fact they
+            # live under an unknown namespace. Treat it like a concern: mark
+            # the whole subtree dynamic instead of guessing.
+            push_frame(node, suppress: true) if node.block
+            return
+          end
           return unless node.block
 
           opts = extract_keyword_options(node)
@@ -94,10 +103,16 @@ module RailsAiContext
           names = extract_symbol_args(node)
           if names.empty?
             emit_dynamic(node)
-          else
-            opts = extract_keyword_options(node)
-            names.each { |n| emit_resource_routes(node, n.to_s, opts, singular: singular) }
+            # Same reasoning as the namespace case: a block we can't attach
+            # resource info to still opens a nested scope, so its children
+            # must be suppressed rather than resolved against the outer
+            # prefix and misreported as verified routes.
+            push_frame(node, suppress: true) if node.block
+            return
           end
+
+          opts = extract_keyword_options(node)
+          names.each { |n| emit_resource_routes(node, n.to_s, opts, singular: singular) }
 
           return unless node.block && names.size == 1
 

@@ -144,6 +144,26 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     expect(records.map { |r| r[:controller] }.uniq).to eq([ "posts" ])
   end
 
+  it "suppresses routes inside a namespace whose name isn't a literal, when it has a block" do
+    results = routes_for('namespace Api::VERSION do
+      resources :posts
+    end')
+    expect(results.none? { |r| r[:type] == :route }).to be(true)
+    dynamic = results.select { |r| r[:type] == :dynamic }
+    expect(dynamic.size).to eq(1)
+    expect(dynamic.first[:macro]).to eq(:namespace)
+  end
+
+  it "suppresses routes inside resources whose name isn't a literal, when it has a block" do
+    results = routes_for('resources Api::NAMES do
+      member { get :extra }
+    end')
+    expect(results.none? { |r| r[:type] == :route }).to be(true)
+    dynamic = results.select { |r| r[:type] == :dynamic }
+    expect(dynamic.size).to eq(1)
+    expect(dynamic.first[:macro]).to eq(:resources)
+  end
+
   it "records dynamic constructs instead of guessing" do
     results = routes_for('devise_for :users
     resources Api::NAMES')
