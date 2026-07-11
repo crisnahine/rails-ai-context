@@ -99,6 +99,60 @@ RSpec.describe RailsAiContext::Introspector do
     end
   end
 
+  describe "static tier dispatch" do
+    let(:static_app) { RailsAiContext::StaticApp.new(Dir.pwd) }
+
+    around do |example|
+      RailsAiContext.tier = :static
+      RailsAiContext.static_reason = "RuntimeError: FATAL_ENV_MISSING"
+      example.run
+    ensure
+      RailsAiContext.tier = :runtime
+      RailsAiContext.static_reason = nil
+    end
+
+    it "routes sections through static_call when the introspector provides one" do
+      static_capable = Class.new do
+        def initialize(app); end
+
+        def call
+          raise "runtime path must not run in static tier"
+        end
+
+        def static_call
+          { total: 7, confidence: RailsAiContext::Confidence::STATIC }
+        end
+      end
+      stub_const("RailsAiContext::Introspector::INTROSPECTOR_MAP",
+                 RailsAiContext::Introspector::INTROSPECTOR_MAP.merge(schema: static_capable))
+
+      result = RailsAiContext::Introspector.new(static_app).call
+      expect(result[:schema]).to eq(total: 7, confidence: "[STATIC]")
+    end
+
+    it "marks sections without a static path unavailable, with the boot reason" do
+      result = RailsAiContext::Introspector.new(static_app).call
+      expect(result[:jobs]).to eq(
+        unavailable: "requires a booted Rails app (RuntimeError: FATAL_ENV_MISSING)"
+      )
+    end
+
+    it "does not count unavailable sections as warnings" do
+      result = RailsAiContext::Introspector.new(static_app).call
+      Array(result[:_warnings]).each do |w|
+        expect(w[:error]).not_to include("requires a booted Rails app")
+      end
+    end
+
+    it "builds base fields without Rails" do
+      result = RailsAiContext::Introspector.new(static_app).call
+      expect(result[:app_name]).to eq(File.basename(Dir.pwd))
+      expect(result[:rails_version]).to include("UNAVAILABLE")
+      expect(result[:environment]).to be_a(String)
+      expect(result[:generated_at]).to match(/\d{4}-\d{2}-\d{2}T/)
+    end
+  end
+
   describe "INTROSPECTOR_MAP / PRESETS drift guard" do
     it "every PRESETS entry is registered in INTROSPECTOR_MAP" do
       RailsAiContext::Configuration::PRESETS.each do |preset_name, names|

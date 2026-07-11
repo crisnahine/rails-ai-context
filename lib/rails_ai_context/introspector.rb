@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "time"
+
 module RailsAiContext
   # Orchestrates all sub-introspectors to build a complete
   # picture of the Rails application for AI consumption.
@@ -18,15 +20,15 @@ module RailsAiContext
       context = {
         app_name: app_name,
         ruby_version: RUBY_VERSION,
-        rails_version: Rails.version,
-        environment: Rails.env,
-        generated_at: Time.current.iso8601,
+        rails_version: rails_version,
+        environment: environment_name,
+        generated_at: Time.now.utc.iso8601,
         generator: "rails-ai-context v#{RailsAiContext::VERSION}"
       }
 
       config.introspectors.each do |name|
         introspector = resolve_introspector(name)
-        context[name] = introspector.call
+        context[name] = run_introspector(introspector)
       rescue => e
         context[name] = { error: e.message }
         RailsAiContext.log_warn "[rails-ai-context] #{name} introspection failed: #{e.message}"
@@ -94,10 +96,42 @@ module RailsAiContext
     private
 
     def app_name
+      return File.basename(app.root.to_s) if app.is_a?(RailsAiContext::StaticApp)
+
       if app.class.respond_to?(:module_parent_name)
         app.class.module_parent_name
       else
         app.class.name.deconstantize
+      end
+    end
+
+    # Static tier: only introspectors that declare a static_call can produce
+    # data without a booted app; everything else is honestly unavailable
+    # rather than crashing into a misleading per-section error.
+    def run_introspector(introspector)
+      return introspector.call unless RailsAiContext.static_tier?
+      return introspector.static_call if introspector.respond_to?(:static_call)
+
+      { unavailable: unavailable_reason }
+    end
+
+    def unavailable_reason
+      reason = RailsAiContext.static_reason
+      base = "requires a booted Rails app"
+      reason ? "#{base} (#{reason})" : base
+    end
+
+    def rails_version
+      return Rails.version if defined?(Rails) && Rails.respond_to?(:version) && !RailsAiContext.static_tier?
+
+      Confidence.unavailable("app not booted")
+    end
+
+    def environment_name
+      if defined?(Rails) && Rails.respond_to?(:env) && !RailsAiContext.static_tier?
+        Rails.env.to_s
+      else
+        ENV["RAILS_ENV"] || "development"
       end
     end
 
