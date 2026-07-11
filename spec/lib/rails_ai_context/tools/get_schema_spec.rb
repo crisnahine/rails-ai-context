@@ -233,7 +233,7 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
             "queue" => {
               tables: { "solid_queue_jobs" => { columns: [], indexes: [], foreign_keys: [] } },
               total_tables: 1,
-              note: "Parsed from db/queue_schema.rb (no DB connection)"
+              note: "Parsed from db/queue_schema.rb (from committed dump, not a live connection)"
             }
           }
         },

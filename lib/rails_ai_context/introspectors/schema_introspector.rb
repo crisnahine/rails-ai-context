@@ -275,7 +275,7 @@ module RailsAiContext
           parsed = parse_schema_rb(path)
           next unless parsed[:total_tables].to_i.positive?
 
-          parsed[:note] = "Parsed from db/#{File.basename(path)} (no DB connection)"
+          parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
           dumps[name] = parsed
         end
         Dir.glob(File.join(app.root.to_s, "db", "*_structure.sql")).sort.each do |path|
@@ -285,7 +285,7 @@ module RailsAiContext
           parsed = parse_structure_sql(path)
           next unless parsed[:total_tables].to_i.positive?
 
-          parsed[:note] = "Parsed from db/#{File.basename(path)} (no DB connection)"
+          parsed[:note] = "Parsed from db/#{File.basename(path)} (from committed dump, not a live connection)"
           dumps[name] = parsed
         end
         dumps
