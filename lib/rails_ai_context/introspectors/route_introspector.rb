@@ -27,6 +27,38 @@ module RailsAiContext
         { error: e.message }
       end
 
+      # Static tier: answer route questions from config/routes.rb alone.
+      # Output mirrors the runtime shape exactly so tools, resources, and
+      # serializers need no static-awareness of their own. Routes behind
+      # dynamic constructs (devise_for, draw, concerns) are counted in
+      # :dynamic_routes rather than fabricated.
+      def static_call
+        routes_path = File.join(app.root.to_s, "config", "routes.rb")
+        return { error: "config/routes.rb not found in #{app.root}" } unless File.exist?(routes_path)
+
+        ast = SourceIntrospector.walk(routes_path, {
+          routes: -> { Listeners::RoutesDslListener.new },
+          mounts: -> { Listeners::MountListener.new }
+        })
+        records = ast[:routes] || []
+        entries = records.select { |r| r[:type] == :route }
+        dynamic = records.count { |r| r[:type] == :dynamic }
+
+        result = {
+          total_routes: entries.size,
+          by_controller: static_by_controller(entries),
+          api_namespaces: static_api_namespaces(entries),
+          mounted_engines: (ast[:mounts] || []).map { |m| { engine: m[:engine], path: m[:path] } },
+          root_route: static_root_route(entries),
+          note: "Parsed statically from config/routes.rb (app not booted)",
+          confidence: Confidence::STATIC
+        }
+        result[:dynamic_routes] = dynamic if dynamic.positive?
+        result
+      rescue => e
+        { error: e.message }
+      end
+
       private
 
       def extract_routes
@@ -102,6 +134,26 @@ module RailsAiContext
             $stderr.puts "[rails-ai-context] detect_mounted_engines failed: #{e.message}" if ENV["DEBUG"]
             nil
           end
+      end
+
+      def static_by_controller(entries)
+        entries.group_by { |e| e[:controller] }.transform_values do |routes|
+          routes.map do |r|
+            entry = { verb: r[:verb], path: r[:path], action: r[:action], name: r[:name] }
+            entry[:params] = r[:params] if r[:params]
+            entry[:restful] = r[:restful] unless r[:restful].nil?
+            entry.compact
+          end
+        end
+      end
+
+      def static_api_namespaces(entries)
+        entries.filter_map { |e| e[:path][%r{\A/api(?:/v\d+)?}] }.uniq.sort
+      end
+
+      def static_root_route(entries)
+        root = entries.find { |e| e[:path] == "/" && e[:verb] == "GET" }
+        root && "#{root[:controller]}##{root[:action]}"
       end
     end
   end
