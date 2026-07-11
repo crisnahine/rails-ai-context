@@ -64,6 +64,15 @@ RSpec.describe "E2E: static tier", type: :e2e do
         expect(result.stdout).to match(/UNAVAILABLE|not booted|static/i)
       end
     end
+
+    it "marks gems unavailable honestly instead of claiming none exist" do
+      with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING"\n)) do
+        result = @cli.cli_tool("gems")
+        expect(result.exit_status).to eq(0), result.to_s
+        expect(result.stdout).to include("UNAVAILABLE")
+        expect(result.stdout).not_to include("No notable gems")
+      end
+    end
   end
 
   describe "broken-boot app over MCP stdio" do
