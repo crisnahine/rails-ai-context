@@ -115,6 +115,7 @@ module RailsAiContext
               klass = class_name.constantize
               next unless klass < ActiveRecord::Base && !klass.abstract_class?
               models << klass
+              known << class_name
             rescue NameError, LoadError
               # Not a valid model class
             end
