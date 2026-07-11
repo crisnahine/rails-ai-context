@@ -683,6 +683,12 @@ class RailsAiContextCLI < Thor
 
       require "rails_ai_context"
 
+      if defined?(Rails::VERSION::MAJOR) && Rails::VERSION::MAJOR >= 9
+        $stderr.puts "[rails-ai-context] WARNING: Rails #{Rails.version} is newer than this gem supports (< 9.0)."
+        $stderr.puts "[rails-ai-context]   Introspection is untested on this version and may be wrong or incomplete."
+        $stderr.puts "[rails-ai-context]   Check for a newer rails-ai-context release."
+      end
+
       RailsAiContext::Configuration.auto_load!
     end
 
