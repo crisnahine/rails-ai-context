@@ -411,7 +411,7 @@ module RailsAiContext
           case line
           when /\ACONSTRAINT\s+[`"]?\w+[`"]?\s+FOREIGN KEY\s*\([`"]?(\w+)[`"]?\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\([`"]?(\w+)[`"]?\)/i
             table[:foreign_keys] << { from_table: table_name, to_table: $2, column: $1, primary_key: $3 }
-          when /\A(UNIQUE\s+)?KEY\s+[`"]?(\w+)[`"]?\s*\(([^)]*)\)/i
+          when /\A(UNIQUE\s+)?(?:KEY|INDEX)\s+[`"](\w+)[`"]\s*\(([^)]*)\)/i
             # $1/$2/$3 must be captured to locals before any further regex
             # call: String#scan below re-runs matching and would otherwise
             # clobber $~ (and so $1) before the hash literal reads it.
@@ -431,7 +431,13 @@ module RailsAiContext
         body.each_line do |line|
           line = line.strip.chomp(",").strip
           next if line.empty?
-          next if line.match?(/\A(PRIMARY|CONSTRAINT|CHECK|UNIQUE|EXCLUDE|FOREIGN|KEY|INDEX)\b/i)
+          next if line.match?(/\A(PRIMARY|CONSTRAINT|CHECK|UNIQUE|EXCLUDE|FOREIGN)\b/i)
+          # KEY/INDEX are non-reserved words in PostgreSQL, so pg_dump emits
+          # bare `key` or `index` columns unquoted. mysqldump always backticks
+          # inline index names ("KEY `name` (...)"), so a quoted name after
+          # KEY/INDEX is the reliable signal that this line is an index
+          # definition rather than a column named "key" or "index".
+          next if line.match?(/\A(?:UNIQUE\s+)?(?:KEY|INDEX)\s+[`"]/i)
 
           # Match: column_name type_with_params [constraints]
           if (match = line.match(/\A[`"]?(\w+)[`"]?\s+(.+)/))

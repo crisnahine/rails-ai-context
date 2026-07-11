@@ -263,6 +263,26 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    context "with unquoted key/index column names (PostgreSQL non-reserved words)" do
+      let(:pg_key_sql) do
+        <<~SQL
+          CREATE TABLE public.settings (
+              id bigint NOT NULL,
+              key character varying NOT NULL,
+              index integer DEFAULT 0,
+              value text
+          );
+        SQL
+      end
+
+      it "parses key and index as columns, not index definitions" do
+        result = parse_structure_fixture(pg_key_sql)
+        settings = result[:tables]["settings"]
+        expect(settings[:columns].map { |c| c[:name] }).to contain_exactly("id", "key", "index", "value")
+        expect(settings[:indexes]).to be_empty
+      end
+    end
+
     context "with a SQLite structure.sql" do
       let(:sqlite_sql) do
         <<~SQL
