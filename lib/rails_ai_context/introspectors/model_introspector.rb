@@ -45,9 +45,9 @@ module RailsAiContext
 
           class_name = relative.camelize
           next if config.excluded_models.include?(class_name)
-          next if File.size(path) > RailsAiContext.configuration.max_file_size
 
           begin
+            next if File.size(path) > RailsAiContext.configuration.max_file_size
             result[class_name] = static_model_details(path, class_name)
           rescue => e
             result[class_name] = { error: e.message }

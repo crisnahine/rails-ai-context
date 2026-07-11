@@ -401,5 +401,19 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result.keys).to contain_exactly("Good")
       end
     end
+
+    it "records a stat failure as that model's error entry without aborting the pass" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "good.rb"), "class Good < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "bad.rb"), "class Bad < ApplicationRecord\nend\n")
+        allow(File).to receive(:size).and_call_original
+        allow(File).to receive(:size).with(a_string_ending_with("bad.rb")).and_raise(Errno::EACCES)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result["Bad"]).to include(error: a_string_including("Permission denied"))
+        expect(result["Good"]).to have_key(:associations)
+      end
+    end
   end
 end
