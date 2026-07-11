@@ -239,6 +239,18 @@ module RailsAiContext
             "Data from those sections is missing, not empty._"
         end
 
+        # Short honest line for a context section that could not be produced
+        # because the app isn't booted, as opposed to one that ran and found
+        # nothing. Tools check this before rendering "not found"/empty copy
+        # so a missing runtime capability never reads as a confirmed
+        # negative (e.g. "No notable gems found" when gems were never
+        # inspected at all).
+        def unavailable_note(section_data)
+          return nil unless section_data.is_a?(Hash) && section_data[:unavailable]
+
+          "[UNAVAILABLE: #{section_data[:unavailable]}]"
+        end
+
         # One banner per response in static tier: consumers must never
         # mistake static analysis for runtime-confirmed data. Rides the
         # suffix mechanism so it survives truncation.
@@ -387,6 +399,8 @@ module RailsAiContext
           # A failed call must not leak its recorded params into the next
           # call's session entry.
           Thread.current[:rails_ai_context_call_params] = nil
+          banner = static_tier_banner
+          text += banner if banner
           MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
         end
 

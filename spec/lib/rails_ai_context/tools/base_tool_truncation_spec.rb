@@ -205,6 +205,51 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
   end
 
+  describe ".unavailable_note" do
+    it "returns nil for a Hash without :unavailable" do
+      expect(described_class.unavailable_note({ notable_gems: [] })).to be_nil
+    end
+
+    it "returns nil for a Hash carrying a real :error" do
+      expect(described_class.unavailable_note({ error: "boom" })).to be_nil
+    end
+
+    it "returns nil for non-Hash input" do
+      expect(described_class.unavailable_note(nil)).to be_nil
+      expect(described_class.unavailable_note([])).to be_nil
+    end
+
+    it "returns a bracketed note carrying the reason for an unavailable section" do
+      note = described_class.unavailable_note({ unavailable: "requires a booted Rails app (RuntimeError: boom)" })
+      expect(note).to eq("[UNAVAILABLE: requires a booted Rails app (RuntimeError: boom)]")
+    end
+  end
+
+  describe ".error_response" do
+    it "does not append a banner in runtime tier" do
+      response = RailsAiContext::Tools::GetSchema.error_response("something failed")
+      expect(response.content.first[:text]).to eq("something failed")
+    end
+
+    context "in static tier" do
+      around do |example|
+        RailsAiContext.tier = :static
+        RailsAiContext.static_reason = "RuntimeError: FATAL_ENV_MISSING"
+        example.run
+      ensure
+        RailsAiContext.tier = :runtime
+        RailsAiContext.static_reason = nil
+      end
+
+      it "appends the tier banner so a failing tool keeps degradation context" do
+        response = RailsAiContext::Tools::GetSchema.error_response("something failed")
+        text = response.content.first[:text]
+        expect(text).to start_with("something failed")
+        expect(text).to include("App boot failed (RuntimeError: FATAL_ENV_MISSING)")
+      end
+    end
+  end
+
   describe ".rails_app tier routing" do
     after do
       RailsAiContext.tier = :runtime
