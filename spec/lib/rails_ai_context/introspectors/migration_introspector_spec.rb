@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
   let(:app) { Rails.application }
@@ -79,6 +81,25 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
 
     it "does not return an error" do
       expect(result[:error]).to be_nil
+    end
+  end
+
+  describe "#static_call" do
+    it "reports migrations from a bare directory with no booted app" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db", "migrate"))
+        File.write(File.join(dir, "db", "migrate", "20240101000000_create_widgets.rb"), <<~RUBY)
+          class CreateWidgets < ActiveRecord::Migration[7.1]
+            def change
+              create_table :widgets
+            end
+          end
+        RUBY
+        app = RailsAiContext::StaticApp.new(dir)
+        result = described_class.new(app).static_call
+        expect(result[:total]).to eq(1)
+        expect(result[:recent].first[:name]).to eq("Create widgets")
+      end
     end
   end
 end

@@ -49,6 +49,12 @@ module RailsAiContext
         }
       end
 
+      # Static tier entry: skip the connection probe entirely and answer from
+      # schema.rb / structure.sql / migration files.
+      def static_call
+        static_schema_parse
+      end
+
       private
 
       def active_record_connected?

@@ -24,6 +24,10 @@ module RailsAiContext
         { error: e.message }
       end
 
+      # The file-parsing paths in call already degrade cleanly when the
+      # database is unreachable, so the static tier runs the same code.
+      alias_method :static_call, :call
+
       private
 
       def root

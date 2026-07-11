@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
   let(:app) { double("app", root: Pathname.new(fixture_path)) }
@@ -499,6 +501,26 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:schema_version]).to eq("20240115123456")
       ensure
         FileUtils.rm_rf(db_dir)
+      end
+    end
+  end
+
+  describe "#static_call" do
+    it "answers from files even when a live connection exists" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 2024_01_01_000000) do
+            create_table "widgets" do |t|
+              t.string "name"
+            end
+          end
+        RUBY
+        app = RailsAiContext::StaticApp.new(dir)
+        result = described_class.new(app).static_call
+        expect(result[:total_tables]).to eq(1)
+        expect(result[:tables]).to have_key("widgets")
+        expect(result[:adapter]).to eq("static_parse")
       end
     end
   end
