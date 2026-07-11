@@ -159,5 +159,11 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
       expect(entry).not_to be_nil
       expect(entry[:category]).to eq(:monitoring)
     end
+
+    it "ends every note with terminal punctuation" do
+      described_class::NOTABLE_GEMS.each do |gem_name, info|
+        expect(info[:note]).to match(/[.!?)]\z/), "Note for #{gem_name} is missing terminal punctuation: #{info[:note].inspect}"
+      end
+    end
   end
 end
