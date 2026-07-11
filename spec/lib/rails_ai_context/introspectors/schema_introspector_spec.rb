@@ -697,6 +697,16 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:adapter]).to eq("static_parse")
       end
     end
+
+    it "reports Mongoid apps as unavailable instead of a misleading missing-schema error" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result[:unavailable]).to include("Mongoid")
+        expect(result).not_to have_key(:error)
+      end
+    end
   end
 
   describe "secondary database dumps" do

@@ -63,6 +63,7 @@ module RailsAiContext
 
         # Database
         "pg"              => { category: :database, note: "PostgreSQL adapter." },
+        "mongoid"         => { category: :database, note: "MongoDB ODM - schema lives in the documents, not db/schema.rb" },
         "mysql2"          => { category: :database, note: "MySQL adapter." },
         "trilogy"         => { category: :database, note: "MySQL adapter (pure Ruby, Rails 8 default over mysql2)." },
         "sqlite3"         => { category: :database, note: "SQLite adapter." },

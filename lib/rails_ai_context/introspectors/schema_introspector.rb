@@ -256,6 +256,10 @@ module RailsAiContext
           }
         end
 
+        if RailsAiContext::AppKind.mongoid?(app.root)
+          return { unavailable: "this app uses Mongoid; ActiveRecord schema introspection does not apply" }
+        end
+
         { error: "No db/schema.rb, db/structure.sql, or migrations found" }
       end
 
