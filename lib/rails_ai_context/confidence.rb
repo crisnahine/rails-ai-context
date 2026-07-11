@@ -5,24 +5,17 @@ module RailsAiContext
   # Shared across tools and introspectors without creating
   # cross-layer dependencies.
   #
-  # VERIFIED: value extracted from a runtime-confirmed source (e.g. inspection of
-  #           a loaded Rails environment).
-  # STATIC: value derived from source files without a booted app - trustworthy
-  #         structure, but not runtime-confirmed (e.g. a routes.rb entry may
-  #         still be disabled by a constraint the parser cannot evaluate).
-  # INFERRED: value involves dynamic expressions, metaprogramming,
-  #           or runtime-only constructs that AST cannot fully resolve.
-  # UNAVAILABLE: data source is absent entirely; use the reasoned form to tell
-  #              consumers what would unlock the data.
+  # VERIFIED: value the gem can assert with certainty - runtime-confirmed data,
+  #           or a static literal the AST resolves deterministically (see for_node).
+  # STATIC: derived from source files without a booted app - trustworthy structure,
+  #         not runtime-confirmed.
+  # INFERRED: heuristic - dynamic expressions, metaprogramming, or runtime-only
+  #           constructs the AST cannot fully resolve.
+  # UNAVAILABLE: the data source is absent entirely; the reasoned form says why.
   module Confidence
     VERIFIED = "[VERIFIED]"
     INFERRED = "[INFERRED]"
-    # STATIC marks data derived from source files without a booted app -
-    # trustworthy structure, but not runtime-confirmed (a routes.rb entry may
-    # still be disabled by a constraint the parser cannot evaluate).
     STATIC = "[STATIC]"
-    # UNAVAILABLE marks data whose source is absent entirely; prefer the
-    # reasoned form so consumers learn what would unlock the data.
     UNAVAILABLE = "[UNAVAILABLE]"
 
     # Reasoned unavailability tag: "[UNAVAILABLE: requires a booted Rails app]".
