@@ -67,6 +67,9 @@ module RailsAiContext
           }
 
           if filtered_templates.empty? && filtered_partials.empty?
+            note = api_only_note("app/views")
+            return text_response(note) if note
+
             all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
             suggestion = find_closest_match(ctrl_lower, all_dirs)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
@@ -496,7 +499,12 @@ module RailsAiContext
 
       private_class_method def self.read_from_disk(controller:, path:, detail:)
         views_dir = rails_app.root.join("app", "views")
-        return text_response("No app/views directory found.") unless Dir.exist?(views_dir)
+        unless Dir.exist?(views_dir)
+          note = api_only_note("app/views")
+          return text_response(note) if note
+
+          return text_response("No app/views directory found.")
+        end
 
         if path
           return read_view_file(path)

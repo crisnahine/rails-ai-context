@@ -261,6 +261,29 @@ module RailsAiContext
           "[UNAVAILABLE: #{section_data[:unavailable]}]"
         end
 
+        # API-only apps legitimately have no views, partials, Stimulus, or
+        # Turbo surface; a bare empty listing is indistinguishable from a
+        # full-stack app that has none yet, so name the reason.
+        def api_only_app?
+          api = cached_context[:api]
+          return api[:api_only] == true if api.is_a?(Hash) && api.key?(:api_only)
+
+          app = rails_app
+          app.respond_to?(:config) && app.config.respond_to?(:api_only) && app.config.api_only == true
+        rescue StandardError
+          false
+        end
+
+        # Short honest line for a view/frontend section that doesn't apply on
+        # an API-only app, or nil when the app has a view layer. Tools check
+        # this before rendering "no X found" copy so a legitimately absent
+        # surface never reads as "not built yet".
+        def api_only_note(section_label)
+          return nil unless api_only_app?
+
+          "Not applicable: this is an API-only app (config.api_only), so #{section_label} does not exist."
+        end
+
         # One banner per response in static tier: consumers must never
         # mistake static analysis for runtime-confirmed data. Rides the
         # suffix mechanism so it survives truncation.

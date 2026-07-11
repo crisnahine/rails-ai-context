@@ -49,6 +49,9 @@ module RailsAiContext
           component = component.to_s.strip
 
           if components.empty?
+            note = api_only_note("app/components")
+            return text_response(note) if note
+
             return text_response("Component '#{component}' not found - no components exist in app/components/. Create ViewComponent or Phlex components first.")
           end
 
@@ -65,6 +68,9 @@ module RailsAiContext
           text_response(render_single(found, detail))
         else
           if components.empty?
+            note = api_only_note("app/components")
+            return text_response(note) if note
+
             return text_response(
               "No components found in app/components/.\n\n" \
               "This app may use ERB partials instead of ViewComponent/Phlex. Try:\n" \

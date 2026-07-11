@@ -172,6 +172,22 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    context "when the app is API-only" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          api: { api_only: true },
+          view_templates: { templates: {}, partials: {} }
+        )
+      end
+
+      it "reports API-only apps as not applicable instead of an empty listing" do
+        response = described_class.call(controller: "users")
+        text = response.content.first[:text]
+        expect(text).to include("Not applicable")
+        expect(text).to include("API-only")
+      end
+    end
+
     context "list_layouts hardening" do
       let(:views_dir) { Rails.root.join("app", "views") }
       let(:layouts_dir) { views_dir.join("layouts") }

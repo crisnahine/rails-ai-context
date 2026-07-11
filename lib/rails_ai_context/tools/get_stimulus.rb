@@ -40,7 +40,12 @@ module RailsAiContext
         return text_response(note) if note
 
         all_controllers = data[:controllers] || []
-        return text_response("No Stimulus controllers found.") if all_controllers.empty?
+        if all_controllers.empty?
+          note = api_only_note("app/javascript/controllers")
+          return text_response(note) if note
+
+          return text_response("No Stimulus controllers found.")
+        end
 
         # Specific controller - accepts both dash and underscore naming
         # (HTML uses data-controller="weekly-chart", file is weekly_chart_controller.js)

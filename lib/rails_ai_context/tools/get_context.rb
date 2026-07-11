@@ -176,22 +176,8 @@ module RailsAiContext
 
       # True when the app runs in API-only mode (no view layer), so ivar
       # cross-referencing can drop "view" language that wouldn't be truthful.
-      # Prefers cached introspection data; falls back to the live app config
-      # when the cache is unavailable.
       private_class_method def self.api_only?
-        ctx = begin
-          cached_context
-        rescue StandardError
-          nil
-        end
-        return true if ctx.is_a?(Hash) && ctx.dig(:api, :api_only) == true
-
-        arch = ctx.is_a?(Hash) ? ctx.dig(:conventions, :architecture) : nil
-        return true if arch.is_a?(Array) && arch.include?("api_only")
-
-        rails_app.config.api_only == true
-      rescue StandardError
-        false
+        api_only_app?
       end
 
       private_class_method def self.cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: [], api_only: false)

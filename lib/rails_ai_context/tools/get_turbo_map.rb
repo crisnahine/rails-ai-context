@@ -241,6 +241,9 @@ module RailsAiContext
         has_stream_templates = turbo_data.is_a?(Hash) && turbo_data[:turbo_streams]&.any?
 
         if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
+          note = api_only_note("the Turbo Streams/Frames surface")
+          return text_response(note) if note
+
           if filter_label
             lines << "_No Turbo usage matching #{filter_label}. Try without filter to see all Turbo Streams and Frames._"
           else
@@ -374,6 +377,9 @@ module RailsAiContext
         has_stream_templates = turbo_data.is_a?(Hash) && turbo_data[:turbo_streams]&.any?
 
         if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
+          note = api_only_note("the Turbo Streams/Frames surface")
+          return text_response(note) if note
+
           if filter_label
             lines << "_No Turbo usage matching #{filter_label}. Try without filter to see all Turbo Streams and Frames._"
           else
