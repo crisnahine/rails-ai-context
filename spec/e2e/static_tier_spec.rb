@@ -48,10 +48,12 @@ RSpec.describe "E2E: static tier", type: :e2e do
         result = @cli.cli_tool("schema")
         expect(result.exit_status).to eq(0), result.to_s
         # Default detail level ("standard") headlines with "# Schema (N
-        # table(s), ...)" - it doesn't surface the "static_parse" adapter
-        # marker or a "schema.rb" filename (those only appear at other detail
-        # levels), so match what this response actually guarantees.
-        expect(result.stdout).to match(/schema|static_parse|tables?/i)
+        # table(s), ...)" - a shape only a successful parse produces. The
+        # tool's own failure strings ("Schema introspection not available...")
+        # never match this, so a regression that breaks static schema parsing
+        # fails this example instead of sliding through on a stray keyword.
+        expect(result.stdout).to match(/# Schema \(\d+ tables?/i)
+        expect(result.stdout).to include("posts")
       end
     end
 
