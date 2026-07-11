@@ -639,4 +639,74 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
   end
+
+  describe "secondary database dumps" do
+    it "reports db/*_schema.rb dumps under secondary_databases" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 2024_01_01_000000) do
+            create_table "users" do |t|
+              t.string "name"
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 1) do
+            create_table "solid_queue_jobs" do |t|
+              t.string "queue_name", null: false
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables].keys).to eq([ "users" ])
+        expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        expect(result[:secondary_databases]["queue"][:tables]).to have_key("solid_queue_jobs")
+        expect(result[:secondary_databases]["queue"][:note]).to include("queue_schema.rb")
+      end
+    end
+
+    it "omits the key entirely when no secondary dumps exist" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 1) do
+            create_table "users" do |t|
+              t.string "name"
+            end
+          end
+        RUBY
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result).not_to have_key(:secondary_databases)
+      end
+    end
+
+    it "attaches secondary_databases from the LIVE path in #call too" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 1) do
+            create_table "solid_queue_jobs" do |t|
+              t.string "queue_name", null: false
+            end
+          end
+        RUBY
+
+        app = double("app", root: Pathname.new(dir))
+        live_introspector = described_class.new(app)
+        allow(live_introspector).to receive(:active_record_connected?).and_return(true)
+        allow(live_introspector).to receive(:adapter_name).and_return("postgresql")
+        allow(live_introspector).to receive(:table_names).and_return([ "users" ])
+        allow(live_introspector).to receive(:extract_tables).and_return({ "users" => { columns: [], indexes: [], foreign_keys: [] } })
+
+        result = live_introspector.call
+
+        expect(result[:tables].keys).to eq([ "users" ])
+        expect(result[:secondary_databases].keys).to eq([ "queue" ])
+        expect(result[:secondary_databases]["queue"][:tables]).to have_key("solid_queue_jobs")
+      end
+    end
+  end
 end

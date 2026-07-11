@@ -38,7 +38,7 @@ module RailsAiContext
           end
         end
 
-        {
+        attach_secondary_databases({
           adapter: adapter_name,
           tables: extract_tables,
           total_tables: table_names.size,
@@ -46,13 +46,13 @@ module RailsAiContext
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: parse_generated_columns(schema_content)
-        }
+        })
       end
 
       # Static tier entry: skip the connection probe entirely and answer from
       # schema.rb / structure.sql / migration files.
       def static_call
-        static_schema_parse
+        attach_secondary_databases(static_schema_parse)
       end
 
       private
@@ -245,6 +245,45 @@ module RailsAiContext
         end
 
         { error: "No db/schema.rb, db/structure.sql, or migrations found" }
+      end
+
+      # Rails multi-database setups dump each secondary database to its own
+      # file named after the database.yml entry (db/queue_schema.rb for the
+      # queue database, db/cache_structure.sql for sql format). The primary
+      # dump keeps the top-level :tables shape; secondaries ride their own
+      # key so single-database consumers are unaffected.
+      def secondary_database_dumps
+        dumps = {}
+        Dir.glob(File.join(app.root.to_s, "db", "*_schema.rb")).sort.each do |path|
+          name = File.basename(path, ".rb").sub(/_schema\z/, "")
+          parsed = parse_schema_rb(path)
+          next unless parsed[:total_tables].to_i.positive?
+
+          parsed[:note] = "Parsed from db/#{File.basename(path)} (no DB connection)"
+          dumps[name] = parsed
+        end
+        Dir.glob(File.join(app.root.to_s, "db", "*_structure.sql")).sort.each do |path|
+          name = File.basename(path, ".sql").sub(/_structure\z/, "")
+          next if dumps.key?(name)
+
+          parsed = parse_structure_sql(path)
+          next unless parsed[:total_tables].to_i.positive?
+
+          parsed[:note] = "Parsed from db/#{File.basename(path)} (no DB connection)"
+          dumps[name] = parsed
+        end
+        dumps
+      end
+
+      # Additive: only sets :secondary_databases when at least one secondary
+      # dump parsed to tables, and only on a result that already has the
+      # primary :tables key, so error/unavailable results pass through untouched.
+      def attach_secondary_databases(result)
+        return result unless result.is_a?(Hash) && result[:tables]
+
+        secondary = secondary_database_dumps
+        result[:secondary_databases] = secondary if secondary.any?
+        result
       end
 
       def parse_schema_rb(path)
