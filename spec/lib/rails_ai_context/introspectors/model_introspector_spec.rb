@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 # Ensure test app models are loaded
 require_relative "../../../internal/app/models/application_record"
@@ -344,6 +346,59 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
       it "returns empty hash" do
         expect(result).to eq({})
+      end
+    end
+  end
+
+  describe "#static_call" do
+    it "discovers and parses models from source without constantizing" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), <<~RUBY)
+          class Widget < ApplicationRecord
+            belongs_to :factory
+            has_many :parts
+            validates :name, presence: true
+            scope :active, -> { where(active: true) }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "admin", "report.rb"), <<~RUBY)
+          class Admin::Report < ApplicationRecord
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "concerns", "searchable.rb"), <<~RUBY)
+          module Searchable
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Widget", "Admin::Report")
+        widget = result["Widget"]
+        expect(widget[:confidence]).to eq("[STATIC]")
+        expect(widget[:table_name]).to eq("widgets")
+        expect(widget[:associations].map { |a| a[:name] }).to contain_exactly(:factory, :parts)
+        expect(widget[:validations]).not_to be_empty
+        expect(result["Admin::Report"][:table_name]).to eq("reports")
+      end
+    end
+
+    it "isolates a single unreadable model to its own entry" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "good.rb"), "class Good < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "huge.rb"), "class Huge < ApplicationRecord\nend\n")
+        allow(File).to receive(:size).and_call_original
+        allow(File).to receive(:size).with(a_string_ending_with("huge.rb")).and_return(10_000_000)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result.keys).to contain_exactly("Good")
       end
     end
   end

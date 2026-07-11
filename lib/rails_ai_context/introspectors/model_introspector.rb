@@ -30,6 +30,31 @@ module RailsAiContext
         end
       end
 
+      # Static tier: models are discovered by globbing app/models and parsed
+      # with the source listeners; nothing is constantized. The table name is
+      # inferred from the class name (Rails convention), which is why every
+      # entry is tagged STATIC rather than VERIFIED - custom table_name= calls
+      # surface in :macros but are not resolved.
+      def static_call
+        models_dir = File.join(app.root.to_s, "app", "models")
+        return {} unless Dir.exist?(models_dir)
+
+        Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each_with_object({}) do |path, result|
+          relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
+          next if relative == "application_record" || relative.start_with?("concerns/")
+
+          class_name = relative.camelize
+          next if config.excluded_models.include?(class_name)
+          next if File.size(path) > RailsAiContext.configuration.max_file_size
+
+          begin
+            result[class_name] = static_model_details(path, class_name)
+          rescue => e
+            result[class_name] = { error: e.message }
+          end
+        end
+      end
+
       private
 
       def eager_load_models!
@@ -495,6 +520,21 @@ module RailsAiContext
       def sanitize_options(options)
         options.reject { |_k, v| v.is_a?(Proc) || v.is_a?(Regexp) }
                .transform_values(&:to_s)
+      end
+
+      def static_model_details(path, class_name)
+        data = SourceIntrospector.call(path)
+        {
+          confidence: Confidence::STATIC,
+          table_name: class_name.demodulize.underscore.pluralize,
+          associations: data[:associations],
+          validations: data[:validations],
+          scopes: data[:scopes],
+          enums: data[:enums],
+          callbacks: data[:callbacks],
+          macros: data[:macros],
+          methods: data[:methods]
+        }
       end
     end
   end
