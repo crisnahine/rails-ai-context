@@ -15,4 +15,11 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       expect { runner.run }.not_to raise_error
     end
   end
+
+  it "documents the static-tier flags" do
+    help = `ruby #{File.expand_path('../exe/rails-ai-context', __dir__)} help serve 2>&1`
+    expect(help).to include("--no-boot")
+    expect(help).to include("--app-path")
+    expect(help).to include("--environment")
+  end
 end

@@ -39,18 +39,23 @@ class RailsAiContextCLI < Thor
     # and `-v` fall through to "Could not find command" instead of the `version` task.
     map %w[--version -v] => :version
 
+    class_option :app_path, type: :string,
+      desc: "Path to the Rails app root (default: current directory)"
+    class_option :environment, type: :string,
+      desc: "RAILS_ENV to run under (default: the ambient RAILS_ENV or development)"
+
     desc "tool [NAME]", "Run an MCP tool. Use --list to see all."
     option :json, type: :boolean, default: false, desc: "Output as JSON envelope"
     option :list, type: :boolean, default: false, desc: "List available tools"
+    option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def tool(name = nil, *args)
       if options[:list] || name.nil?
         print_tool_list
         return
       end
 
-      boot_rails!
-
       if args.include?("--help") || args.include?("-h")
+        require "rails_ai_context"
         tool_class = ::RailsAiContext::CLI::ToolRunner.new(name, []).tool_class
         puts ::RailsAiContext::CLI::ToolRunner.tool_help(tool_class)
         return
@@ -63,6 +68,13 @@ class RailsAiContextCLI < Thor
       json_mode = options[:json]
       json_mode = true if args.delete("--json")
       json_mode = true if args.delete("-j")
+
+      # stop_on_unknown_option! passes post-name flags through into args;
+      # honor --no-boot in either position, mirroring the --json handling.
+      no_boot = options[:no_boot]
+      no_boot = true if args.delete("--no-boot")
+
+      boot_rails!(allow_static: true, no_boot: no_boot)
 
       runner = ::RailsAiContext::CLI::ToolRunner.new(name, args, json_mode: json_mode)
       puts runner.run
@@ -77,8 +89,9 @@ class RailsAiContextCLI < Thor
     desc "serve", "Start MCP server (stdio transport)"
     option :transport, type: :string, default: "stdio", desc: "Transport: stdio or http"
     option :port, type: :numeric, default: 6029, desc: "HTTP port (only for http transport)"
+    option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def serve
-      boot_rails!
+      boot_rails!(allow_static: true)
 
       transport = options[:transport].to_sym
       if transport == :http
@@ -577,11 +590,22 @@ class RailsAiContextCLI < Thor
     # capture references BEFORE Rails boot runs and re-register them afterwards.
     STANDALONE_REQUIRED_GEMS = %w[mcp json-schema addressable public_suffix].freeze
 
-    def boot_rails!(context: nil)
+    def boot_rails!(context: nil, allow_static: false, no_boot: false)
+      app_root = File.expand_path(options[:app_path] || Dir.pwd)
+      # Relative paths inside the app (log/, tmp/, sqlite files) assume the
+      # process cwd is the app root, so honor --app-path by moving there.
+      Dir.chdir(app_root) if options[:app_path]
+      ENV["RAILS_ENV"] = options[:environment] if options[:environment]
+
+      if allow_static && (no_boot || options[:no_boot])
+        enter_static_tier!("static mode requested with --no-boot")
+        return
+      end
+
       config_path = File.join(Dir.pwd, "config", "environment.rb")
       unless File.exist?(config_path)
         $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
-        $stderr.puts "Run this command from your Rails app root directory."
+        $stderr.puts "Run this command from your Rails app root directory (or pass --app-path)."
         exit 1
       end
 
@@ -621,6 +645,18 @@ class RailsAiContextCLI < Thor
       result = ::RailsAiContext::BootManager.boot!(app_root: Dir.pwd, timeout: timeout)
 
       unless result.booted?
+        if allow_static
+          $stderr.puts "[rails-ai-context] App boot failed: #{result.failure_summary}"
+          if result.error.is_a?(::RailsAiContext::BootManager::BootTimeoutError)
+            $stderr.puts "[rails-ai-context]   If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
+          end
+          $stderr.puts "[rails-ai-context] Serving static analysis; runtime-only data is marked [UNAVAILABLE]."
+          $stderr.puts "[rails-ai-context] Run `rails-ai-context doctor` for boot diagnostics."
+          restore_standalone_environment!(pre_boot_paths, pre_boot_specs)
+          enter_static_tier!(result.failure_summary)
+          return
+        end
+
         $stderr.puts "Error: Rails app failed to boot in #{Dir.pwd}"
         $stderr.puts "  #{result.failure_summary}"
         if ENV["DEBUG"]
@@ -643,24 +679,38 @@ class RailsAiContextCLI < Thor
         exit 1
       end
 
-      # Restore paths and specs that Bundler.setup stripped (standalone mode).
-      # For Gemfile users, both restorations are no-ops.
-      (pre_boot_paths - $LOAD_PATH).each { |p| $LOAD_PATH << p }
-      pre_boot_specs.each { |name, spec| Gem.loaded_specs[name] ||= spec }
-
-      # Loud warning if any required spec couldn't be restored — silent failure
-      # here means tools will crash later with `undefined method 'full_gem_path'
-      # for nil` from inside the MCP SDK.
-      missing = STANDALONE_REQUIRED_GEMS.reject { |g| Gem.loaded_specs.key?(g) }
-      if missing.any? && !ENV["BUNDLE_BIN_PATH"]
-        $stderr.puts "[rails-ai-context] WARNING: standalone CLI could not restore gemspec(s): #{missing.join(', ')}."
-        $stderr.puts "[rails-ai-context]   Tool calls may crash with `undefined method 'full_gem_path' for nil`."
-        $stderr.puts "[rails-ai-context]   Try `gem install rails-ai-context` to ensure all transitive deps are installed."
-      end
+      restore_standalone_environment!(pre_boot_paths, pre_boot_specs)
 
       require "rails_ai_context"
 
       RailsAiContext::Configuration.auto_load!
+    end
+
+    # Bundler.setup during app boot strips $LOAD_PATH and the spec registry
+    # to Gemfile-resolved gems; in standalone mode our own transitive deps
+    # (mcp, json-schema) vanish. Splice back what was captured pre-boot.
+    def restore_standalone_environment!(pre_boot_paths, pre_boot_specs)
+      (pre_boot_paths - $LOAD_PATH).each { |p| $LOAD_PATH << p }
+      pre_boot_specs.each { |name, spec| Gem.loaded_specs[name] ||= spec }
+
+      missing = STANDALONE_REQUIRED_GEMS.reject { |g| Gem.loaded_specs.key?(g) }
+      return if missing.none? || ENV["BUNDLE_BIN_PATH"]
+
+      $stderr.puts "[rails-ai-context] WARNING: standalone CLI could not restore gemspec(s): #{missing.join(', ')}."
+      $stderr.puts "[rails-ai-context]   Tool calls may crash with `undefined method 'full_gem_path' for nil`."
+      $stderr.puts "[rails-ai-context]   Try `gem install rails-ai-context` to ensure all transitive deps are installed."
+    end
+
+    # Static tier: the gem loads standalone (no app constants), introspection
+    # runs against the filesystem, and every tool response carries the tier
+    # banner so consumers know runtime data is absent.
+    def enter_static_tier!(reason)
+      require "rails_ai_context"
+      ::RailsAiContext.tier = :static
+      ::RailsAiContext.static_reason = reason
+      ::RailsAiContext.configuration.app_root = Dir.pwd
+      ::RailsAiContext::Configuration.auto_load!
+      $stderr.puts "[rails-ai-context] static tier active: #{reason}"
     end
 
     # Look up each required gem via Gem::Specification.find_by_name BEFORE
