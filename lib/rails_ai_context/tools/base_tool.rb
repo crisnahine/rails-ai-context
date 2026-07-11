@@ -95,9 +95,13 @@ module RailsAiContext
       SESSION_CONTEXT = { mutex: Mutex.new, queries: {} }
 
       class << self
-        # Convenience: access the Rails app and cached introspection
+        # Convenience: access the Rails app and cached introspection.
+        # Routes through RailsAiContext.default_app so this resolves to the
+        # booted app in runtime tier and to a StaticApp in static tier -
+        # tools that call rails_app directly (get_concern, analyze_feature,
+        # migration_advisor, ...) work in both tiers without their own checks.
         def rails_app
-          Rails.application
+          RailsAiContext.default_app
         end
 
         def config
@@ -235,6 +239,24 @@ module RailsAiContext
             "Data from those sections is missing, not empty._"
         end
 
+        # One banner per response in static tier: consumers must never
+        # mistake static analysis for runtime-confirmed data. Rides the
+        # suffix mechanism so it survives truncation.
+        def static_tier_banner
+          return nil unless RailsAiContext.static_tier?
+
+          reason = RailsAiContext.static_reason
+          headline = if reason.to_s.include?("--no-boot")
+            "Static mode (#{reason})"
+          elsif reason
+            "App boot failed (#{reason})"
+          else
+            "Static mode"
+          end
+          "\n\n---\n_#{headline}. Serving static analysis; runtime-only data is marked " \
+            "[UNAVAILABLE]. Run `rails-ai-context doctor` for details._"
+        end
+
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
         def find_closest_match(input, available)
           return nil if available.empty?
@@ -330,7 +352,12 @@ module RailsAiContext
         # `suffix:`, when given, is appended after the truncation footer (or after
         # the text itself when untruncated) so callers can attach a short trailing
         # note that must survive truncation instead of being cut off with the tail.
+        # In static tier, the tier banner rides along on the same mechanism so
+        # every response - caller-suffixed or not - ends with it.
         def text_response(text, suffix: nil)
+          suffix = [ suffix, static_tier_banner ].compact.join
+          suffix = nil if suffix.empty?
+
           # Auto-track: record this tool call in session context (skip SessionContext itself to avoid recursion)
           if respond_to?(:tool_name) && tool_name != "rails_session_context"
             summary = text.lines.first&.strip&.truncate(80)

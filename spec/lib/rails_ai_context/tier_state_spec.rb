@@ -24,7 +24,7 @@ RSpec.describe RailsAiContext do
     it "builds a StaticApp from configuration.app_root in static tier" do
       RailsAiContext.tier = :static
       RailsAiContext.configuration.app_root = "/tmp/static_root"
-      app = RailsAiContext.send(:default_app)
+      app = RailsAiContext.default_app
       expect(app).to be_a(RailsAiContext::StaticApp)
       expect(app.root.to_s).to eq("/tmp/static_root")
     ensure
@@ -32,7 +32,7 @@ RSpec.describe RailsAiContext do
     end
 
     it "returns Rails.application in runtime tier" do
-      expect(RailsAiContext.send(:default_app)).to eq(Rails.application)
+      expect(RailsAiContext.default_app).to eq(Rails.application)
     end
   end
 end

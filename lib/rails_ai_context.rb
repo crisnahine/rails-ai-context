@@ -84,8 +84,6 @@ module RailsAiContext
       Server.new(app, transport: transport).start
     end
 
-    private
-
     # The app object introspection runs against: the booted Rails app in
     # runtime tier, a filesystem-rooted stand-in in static tier.
     def default_app
