@@ -276,8 +276,8 @@ Syntax + semantic + Brakeman security validation in one call.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `files` | string | - | Comma-separated file paths |
-| `level` | enum | `syntax` | `syntax`, `rails`, `security` |
+| `files` | array | required | File paths to validate |
+| `level` | enum | `syntax` | `syntax`, `rails` (rails includes the Brakeman security pass) |
 
 ### `rails_security_scan`
 

@@ -145,6 +145,17 @@ module RailsAiContext
       def handle_read(params)
         uri = params[:uri]
 
+        # The two schemes are historical; accept either one for every
+        # template so clients don't have to remember which resource uses
+        # which. Bare "rails://controllers" (no path) stays a static
+        # resource; models already resolve under both schemes (legacy
+        # handler below, VFS for the rails-ai-context:// form). Contents are
+        # relabeled with the URI the client actually requested.
+        if uri.match?(%r{\Arails://(controllers|views|routes)/.})
+          normalized = uri.sub("rails://", "#{VFS::SCHEME}://")
+          return VFS.resolve(normalized).map { |content| content.merge(uri: uri) }
+        end
+
         # Delegate rails-ai-context:// URIs to the VFS dispatcher
         return VFS.resolve(uri) if uri.start_with?("#{VFS::SCHEME}://")
 

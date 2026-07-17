@@ -18,7 +18,7 @@
 | Guide | Description |
 |:------|:------------|
 | [Quickstart](QUICKSTART.md) | Get running in 5 minutes |
-| [Tools Reference](TOOLS.md) | All 38 MCP tools with parameters |
+| [Tools Reference](TOOLS.md) | All 39 MCP tools with parameters |
 | [Recipes](RECIPES.md) | Real-world workflows and examples |
 | [Custom Tools](CUSTOM_TOOLS.md) | Build your own MCP tools |
 | [Configuration](CONFIGURATION.md) | Every config option |
@@ -283,7 +283,7 @@ rails ai:context:claude           # Use this instead (no quoting needed)
 
 ## CLI Tools
 
-All 38 MCP tools can be run directly from the terminal - no MCP server or AI client needed.
+All 39 MCP tools can be run directly from the terminal - no MCP server or AI client needed.
 
 ### Rake
 
@@ -349,7 +349,7 @@ The `tool_mode` is selected during `rails generate rails_ai_context:install`.
 
 ## MCP Tools - Full Reference
 
-All 38 tools are **read-only** and **idempotent** - they never modify your application or database.
+All 39 tools are **read-only** and **idempotent** - they never modify your application or database.
 
 ### rails_get_schema
 
@@ -1169,7 +1169,7 @@ if defined?(RailsAiContext)
 end
 ```
 
-Both transports are **read-only** - they expose the same 38 tools and never modify your app.
+Both transports are **read-only** - they expose the same 39 tools and never modify your app.
 
 ### Controller Transport (Alternative)
 

@@ -10,6 +10,7 @@
 # Skip this when running under `bundle exec` — Bundler has already resolved gems
 # correctly, and clearing specs breaks gems that look up their own path at runtime
 # (e.g., MCP SDK reads Gem.loaded_specs["json-schema"].full_gem_path).
+stripped_framework_specs = {}
 if defined?(Gem) && Gem.respond_to?(:loaded_specs) && !ENV["BUNDLE_BIN_PATH"]
   # Also strip the Rails-family gems' lib paths. Leaving them in $LOAD_PATH
   # lets the app's boot resolve framework files from the NEWEST installed
@@ -27,10 +28,18 @@ if defined?(Gem) && Gem.respond_to?(:loaded_specs) && !ENV["BUNDLE_BIN_PATH"]
   ].freeze
   Gem.loaded_specs.each_value do |spec|
     next if spec.default_gem? || !rails_family.include?(spec.name)
+    stripped_framework_specs[spec.name] = spec
     spec.full_require_paths.each { |path| $LOAD_PATH.delete(path) }
   end
   Gem.loaded_specs.delete_if { |_, spec| !spec.default_gem? }
 end
+
+# App-less modes (--no-boot, tool --help, tool --list outside an app) need
+# these paths spliced back by hand: the specs above keep their activated
+# flag after the strip, so Gem.try_activate declines to re-add the paths and
+# any framework require fails. There is no Bundler.setup in those modes to
+# rebuild $LOAD_PATH either.
+STRIPPED_FRAMEWORK_SPECS = stripped_framework_specs.freeze
 
 require "thor"
 require "yaml"
@@ -73,7 +82,7 @@ class RailsAiContextCLI < Thor
       end
 
       if args.include?("--help") || args.include?("-h")
-        require "rails_ai_context"
+        require_gem_without_app!
         tool_class = ::RailsAiContext::CLI::ToolRunner.new(name, []).tool_class
         puts ::RailsAiContext::CLI::ToolRunner.tool_help(tool_class)
         return
@@ -295,10 +304,13 @@ class RailsAiContextCLI < Thor
       $stderr.puts "=" * 60
       $stderr.puts ""
 
+      # All framing goes to stderr so stdout stays pure tool output - mixing
+      # the two scrambles ordering under pipes (stderr is unbuffered, piped
+      # stdout is block-buffered).
       preset[:tools].each do |tool_spec|
         begin
           $stderr.puts "-" * 40
-          puts "Running: #{tool_spec[:name]}"
+          $stderr.puts "Running: #{tool_spec[:name]}"
           $stderr.puts "-" * 40
           runner = ::RailsAiContext::CLI::ToolRunner.new(
             tool_spec[:name],
@@ -563,7 +575,7 @@ class RailsAiContextCLI < Thor
       if defined?(::RailsAiContext::Server)
         ::RailsAiContext::Server.builtin_tools.size.to_s
       else
-        "38"
+        "39"
       end
     end
 
@@ -586,7 +598,7 @@ class RailsAiContextCLI < Thor
       end
 
       begin
-        require "rails_ai_context"
+        require_gem_without_app!
         puts ::RailsAiContext::CLI::ToolRunner.tool_list
         puts ""
         puts "Run inside a Rails app to execute tools - static source analysis works even when the app can't boot (see --no-boot)."
@@ -750,11 +762,23 @@ class RailsAiContextCLI < Thor
       $stderr.puts "[rails-ai-context]   Try `gem install rails-ai-context` to ensure all transitive deps are installed."
     end
 
+    # Loads the gem with no booted app. Framework gems whose load paths the
+    # top-of-file strip removed are spliced back from the stashed specs -
+    # except any gem a completed Bundler.setup already resolved, whose pinned
+    # paths must keep winning over the newest installed version.
+    def require_gem_without_app!
+      STRIPPED_FRAMEWORK_SPECS.each do |name, spec|
+        next if Gem.loaded_specs.key?(name)
+        spec.full_require_paths.each { |p| $LOAD_PATH.unshift(p) unless $LOAD_PATH.include?(p) }
+      end
+      require "rails_ai_context"
+    end
+
     # Static tier: the gem loads standalone (no app constants), introspection
     # runs against the filesystem, and every tool response carries the tier
     # banner so consumers know runtime data is absent.
     def enter_static_tier!(reason)
-      require "rails_ai_context"
+      require_gem_without_app!
       ::RailsAiContext.tier = :static
       ::RailsAiContext.static_reason = reason
       ::RailsAiContext.configuration.app_root = Dir.pwd

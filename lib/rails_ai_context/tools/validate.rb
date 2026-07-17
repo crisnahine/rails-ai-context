@@ -11,7 +11,8 @@ module RailsAiContext
       tool_name "rails_validate"
       description "Validate syntax and semantics of Ruby, ERB, and JavaScript files in a single call. " \
         "Use when: after editing files, before committing, to catch syntax errors and Rails-specific issues. " \
-        "Pass files:[\"app/models/user.rb\"], use level:\"rails\" for semantic checks (missing partials, bad column refs, orphaned routes)."
+        "Pass files:[\"app/models/user.rb\"], use level:\"rails\" for semantic checks (missing partials, route helpers, " \
+        "column refs in validates/permit/callbacks)."
 
       def self.max_files
         RailsAiContext.configuration.max_validate_files
@@ -27,7 +28,7 @@ module RailsAiContext
           level: {
             type: "string",
             enum: %w[syntax rails],
-            description: "Validation level. syntax: check syntax only (default, fast). rails: syntax + semantic checks (partial existence, route helpers, column references)."
+            description: "Validation level. syntax: check syntax only (default, fast). rails: syntax + semantic checks (partial existence, route helpers, column refs in validates/permit/callbacks)."
           }
         },
         required: %w[files]
@@ -398,14 +399,14 @@ module RailsAiContext
           args.each do |arg|
             case arg
             when Prism::StringNode
-              @render_calls << { name: arg.unescaped, line: node.location.start_line }
+              @render_calls << { name: arg.unescaped, line: node.location.start_line, explicit_partial: false }
             when Prism::KeywordHashNode
               arg.elements.each do |elem|
                 next unless elem.is_a?(Prism::AssocNode)
                 key = elem.key
                 val = elem.value
                 if key.is_a?(Prism::SymbolNode) && key.value == "partial" && val.is_a?(Prism::StringNode)
-                  @render_calls << { name: val.unescaped, line: node.location.start_line }
+                  @render_calls << { name: val.unescaped, line: node.location.start_line, explicit_partial: true }
                 end
               end
             end
@@ -494,6 +495,7 @@ module RailsAiContext
         elsif file.end_with?(".rb")
           if visitor
             warnings.concat(check_route_helpers_ast(visitor, context))
+            warnings.concat(check_partial_existence_ast(file, visitor, qualified_only: true))
             warnings.concat(check_column_references_ast(file, visitor, context))
             warnings.concat(check_strong_params_ast(file, visitor, context))
             warnings.concat(check_callback_existence_ast(file, visitor, context))
@@ -536,17 +538,29 @@ module RailsAiContext
 
       # ── CHECK 1: Partial existence (AST) ─────────────────────────────
 
-      private_class_method def self.check_partial_existence_ast(file, visitor)
+      # qualified_only: a Ruby file has no view directory to resolve bare
+      # partial names against, so only "dir/name" references are checkable.
+      private_class_method def self.check_partial_existence_ast(file, visitor, qualified_only: false)
         warnings = []
         visitor.render_calls.each do |rc|
           ref = rc[:name]
           next if ref.include?("@") || ref.include?("#") || ref.include?("{")
+          next if qualified_only && !ref.include?("/")
           possible = resolve_partial_paths(file, ref)
+          # In a Ruby file, bare `render "dir/name"` renders the TEMPLATE
+          # (only `partial:` has partial semantics there), so accept either.
+          template_semantics = qualified_only && !rc[:explicit_partial]
+          possible += resolve_template_paths(ref) if template_semantics
           unless possible.any? { |p| File.exist?(File.join(rails_app.root, "app", "views", p)) }
-            warnings << "render \"#{ref}\" - partial not found (checked: #{possible.first(2).join(', ')})"
+            label = template_semantics ? "template/partial not found" : "partial not found"
+            warnings << "render \"#{ref}\" - #{label} (checked: #{possible.first(2).join(', ')})"
           end
         end
         warnings
+      end
+
+      private_class_method def self.resolve_template_paths(ref)
+        %w[.html.erb .erb .turbo_stream.erb .json.jbuilder].map { |ext| "#{ref}#{ext}" }
       end
 
       # Regex fallback for non-Prism environments

@@ -21,7 +21,7 @@
 <br>
 [![Ruby](https://img.shields.io/badge/Ruby-3.1%20%7C%203.2%20%7C%203.3%20%7C%203.4-CC342D)](https://github.com/crisnahine/rails-ai-context)
 [![Rails](https://img.shields.io/badge/Rails-7.0%20%7C%207.1%20%7C%207.2%20%7C%208.0%20%7C%208.1-CC0000)](https://github.com/crisnahine/rails-ai-context)
-[![Tests](https://img.shields.io/badge/Tests-2501%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
+[![Tests](https://img.shields.io/badge/Tests-2608%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -245,7 +245,7 @@ rails 'ai:tool[stimulus]' controller=chart
 
 <br>
 
-## 38 Tools
+## 39 Tools
 
 Every tool is **read-only** and returns data verified against your actual app - not guesses, not training data.
 
@@ -509,7 +509,7 @@ empty listings.
 
 ## Build your own tools
 
-Register custom MCP tools alongside the 38 built-in ones:
+Register custom MCP tools alongside the 39 built-in ones:
 
 ```ruby
 # app/mcp_tools/rails_get_business_metrics.rb

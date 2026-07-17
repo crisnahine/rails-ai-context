@@ -75,16 +75,31 @@ module RailsAiContext
         list_helpers(helper_files, real_helpers_dir, real_root, max_size, detail, offset: offset, limit: limit)
       end
 
+      # Module name from the path under app/helpers, so nested helpers keep
+      # their namespace (admin/dashboard_helper.rb => Admin::DashboardHelper).
+      # app/helpers/concerns is its own autoload root (railties globs
+      # "{*,*/concerns}"), so concerns/formattable.rb defines Formattable,
+      # not Concerns::Formattable.
+      private_class_method def self.module_name_for(file_path, helpers_dir)
+        file_path.sub("#{helpers_dir}/", "").delete_prefix("concerns/").delete_suffix(".rb").camelize
+      end
+
       private_class_method def self.show_helper(name, helper_files, helpers_dir, root, max_size, detail)
-        # Find by module name or file name
+        # Find by module name (with or without namespace) or file name.
+        # Exact relative-path matches win before basename fallbacks so a
+        # top-level DashboardHelper isn't shadowed by admin/dashboard_helper.
         underscore = name.underscore.delete_suffix("_helper")
         file_path = helper_files.find do |f|
+          rel = f.sub("#{helpers_dir}/", "").delete_suffix(".rb")
+          rel == name.underscore || rel == "#{underscore}_helper"
+        end
+        file_path ||= helper_files.find do |f|
           basename = File.basename(f, ".rb")
           basename == "#{underscore}_helper" || basename == underscore || basename == name.underscore
         end
 
         unless file_path
-          available = helper_files.map { |f| File.basename(f, ".rb").camelize }
+          available = helper_files.map { |f| module_name_for(f, helpers_dir) }
           return not_found_response("Helper", name, available,
             recovery_tool: "Call rails_get_helper_methods() to see all helpers")
         end
@@ -96,7 +111,7 @@ module RailsAiContext
         source = RailsAiContext::SafeFile.read(file_path)
         return text_response("Could not read helper file: #{file_path}") unless source
         relative_path = file_path.sub("#{root}/", "")
-        module_name = File.basename(file_path, ".rb").camelize
+        module_name = module_name_for(file_path, helpers_dir)
 
         lines = [ "# #{module_name}", "" ]
         lines << "**File:** `#{relative_path}` (#{source.lines.size} lines)"
@@ -149,7 +164,7 @@ module RailsAiContext
       private_class_method def self.list_helpers(helper_files, helpers_dir, root, max_size, detail, offset: 0, limit: nil)
         helpers_data = helper_files.filter_map do |file_path|
           relative = file_path.sub("#{root}/", "")
-          module_name = File.basename(file_path, ".rb").camelize
+          module_name = module_name_for(file_path, helpers_dir)
 
           if File.size(file_path) <= max_size
             source = RailsAiContext::SafeFile.read(file_path)

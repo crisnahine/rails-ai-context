@@ -575,16 +575,19 @@ namespace :ai do
     end
 
     preset = presets[name]
-    puts "=" * 60
-    puts " Preset: #{name} - #{preset[:desc]}"
-    puts "=" * 60
-    puts ""
+    # All framing goes to stderr so stdout stays pure tool output - mixing
+    # the two scrambles ordering under pipes (stderr is unbuffered, piped
+    # stdout is block-buffered).
+    $stderr.puts "=" * 60
+    $stderr.puts " Preset: #{name} - #{preset[:desc]}"
+    $stderr.puts "=" * 60
+    $stderr.puts ""
 
     preset[:tools].each do |tool_spec|
       begin
-        puts "-" * 40
-        puts "Running: #{tool_spec[:name]}"
-        puts "-" * 40
+        $stderr.puts "-" * 40
+        $stderr.puts "Running: #{tool_spec[:name]}"
+        $stderr.puts "-" * 40
         runner = RailsAiContext::CLI::ToolRunner.new(
           tool_spec[:name],
           tool_spec[:params]

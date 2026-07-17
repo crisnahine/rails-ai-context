@@ -2,7 +2,7 @@
 
 # Custom Tools
 
-**Build your own MCP tools that run alongside the 38 built-in ones.**
+**Build your own MCP tools that run alongside the 39 built-in ones.**
 
 [Tools Reference](TOOLS.md) · [Configuration](CONFIGURATION.md) · [Architecture](ARCHITECTURE.md) · [FAQ](FAQ.md)
 
@@ -11,7 +11,7 @@
 ---
 
 > [!NOTE]
-> Custom tools have full access to your Rails environment - ActiveRecord, services, mailers, everything. They appear alongside the 38 built-in tools in both MCP and CLI.
+> Custom tools have full access to your Rails environment - ActiveRecord, services, mailers, everything. They appear alongside the 39 built-in tools in both MCP and CLI.
 
 ## Creating a custom tool
 

@@ -137,8 +137,32 @@ module RailsAiContext
         views_dir = Rails.root.join("app", "views")
         full_path = views_dir.join(path)
 
-        unless File.exist?(full_path)
-          content = JSON.pretty_generate(error: "View not found: #{path}")
+        # Extension-less lookup: "posts/index" resolves to the template file
+        # itself (posts/index.html.erb) so callers don't have to know the
+        # format/handler suffix chain. File.file? so a same-named directory
+        # (e.g. a posts/index/ partial dir) doesn't defeat the fallback.
+        unless File.file?(full_path)
+          dir = File.dirname(path)
+          base = File.basename(path)
+          parent = dir == "." ? views_dir.to_s : views_dir.join(dir).to_s
+          candidates = begin
+            Dir.children(parent).select { |e| e.start_with?("#{base}.") && File.file?(File.join(parent, e)) }
+          rescue SystemCallError
+            []
+          end
+          # Never let the fallback land on a sensitive file: "master" matching
+          # master.key would turn the not-found/not-allowed message split into
+          # an existence oracle for secrets placed under app/views.
+          candidates.reject! { |e| RailsAiContext::Tools::BaseTool.send(:sensitive_file?, dir == "." ? e : File.join(dir, e)) }
+          if candidates.any?
+            chosen = candidates.min_by { |e| [ e.end_with?(".html.erb") ? 0 : 1, e ] }
+            path = dir == "." ? chosen : File.join(dir, chosen)
+            full_path = views_dir.join(path)
+          end
+        end
+
+        unless File.file?(full_path)
+          content = JSON.pretty_generate(error: "View not found: #{path}. Paths are relative to app/views; the extension is optional (posts/index and posts/index.html.erb both resolve).")
           return [ { uri: uri, mimeType: "application/json", text: content } ]
         end
 

@@ -51,7 +51,7 @@ rails-ai-context version            # Show version
 2. **Restores `$LOAD_PATH`** entries that `Bundler.setup` strips (since the gem isn't in the Gemfile)
 3. **YAML config** - uses `.rails-ai-context.yml` instead of a Ruby initializer
 
-This means you get the same 38 tools, same MCP server, same context generation - without touching the project's Gemfile.
+This means you get the same 39 tools, same MCP server, same context generation - without touching the project's Gemfile.
 
 ## Configuration via YAML
 
@@ -140,7 +140,7 @@ bundle remove rails-ai-context
 rails-ai-context init
 ```
 
-The MCP config files are updated automatically. Both modes generate identical context files and provide the same 38 tools.
+The MCP config files are updated automatically. Both modes generate identical context files and provide the same 39 tools.
 
 ## Troubleshooting
 

@@ -111,7 +111,24 @@ module RailsAiContext
         "importmaps" => "Import maps (no JS bundler)",
         "docker" => "Dockerized",
         "kamal" => "Kamal deployment",
-        "ci_github_actions" => "GitHub Actions CI"
+        "ci_github_actions" => "GitHub Actions CI",
+        "concerns_models" => "Model concerns (app/models/concerns/)",
+        "concerns_controllers" => "Controller concerns (app/controllers/concerns/)",
+        "validators" => "Custom validators (app/validators/)",
+        "policies" => "Policy objects (app/policies/)",
+        "serializers" => "Serializers (app/serializers/)",
+        "notifiers" => "Notifiers (app/notifiers/)",
+        "phlex" => "Phlex views",
+        "pwa" => "PWA (app/views/pwa/)",
+        "dry_rb" => "dry-rb stack",
+        "multi_tenant" => "Multi-tenancy",
+        "feature_flags" => "Feature flags",
+        "error_monitoring" => "Error monitoring",
+        "event_driven" => "Event-driven messaging",
+        "zeitwerk" => "Zeitwerk autoloading",
+        "solid_queue" => "Solid Queue (jobs)",
+        "solid_cache" => "Solid Cache",
+        "solid_cable" => "Solid Cable"
       }.freeze
 
       PATTERN_LABELS = {

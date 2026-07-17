@@ -178,6 +178,22 @@ module RailsAiContext
               lines.concat(content_lines.map(&:rstrip))
               lines << "```"
             end
+          else
+            # In the HEAD flow a nil diff means the file is untracked -
+            # summarize it so the section isn't an empty heading. Against an
+            # arbitrary ref a nil diff can also mean a committed change that
+            # was later reverted in the working tree, so don't claim "new".
+            full_path = File.join(root, file)
+            if ref == "HEAD" && File.file?(full_path)
+              line_count = begin
+                File.foreach(full_path).count
+              rescue StandardError
+                nil
+              end
+              lines << (line_count ? "_new file, #{line_count} lines_" : "_new file_")
+            else
+              lines << "_no diff available_"
+            end
           end
 
           # Pull relevant context per file type

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "delegate"
+
 module RailsAiContext
   # Rails controller for serving MCP over Streamable HTTP.
   # Alternative to the Rack middleware - integrates with Rails routing,
@@ -16,6 +18,14 @@ module RailsAiContext
     # supported Rails versions.
     include ActionController::Live
 
+    # The MCP SDK's SSE writer calls stream.flush after every event, but
+    # Live's buffer writes straight through to the client and defines no
+    # flush - the NoMethodError would 500 the request after the payload was
+    # already delivered and tear down long-lived GET streams.
+    class FlushableStream < SimpleDelegator
+      def flush; end
+    end
+
     def handle
       status_code, rack_headers, body = self.class.mcp_transport.handle_request(request)
       self.status = status_code
@@ -29,8 +39,25 @@ module RailsAiContext
         body.close if body.respond_to?(:close)
         self.response_body = chunks.join
       elsif body.respond_to?(:call)
+        stream = response.stream
+        stream = FlushableStream.new(stream) unless stream.respond_to?(:flush)
         begin
-          body.call(response.stream)
+          body.call(stream)
+          # A GET opens the server-push channel: the transport registers the
+          # stream and returns, expecting it to outlive this call. Live closes
+          # the response when the action returns, so hold the thread until the
+          # transport's keepalive (or the client) closes the stream. Live also
+          # sends headers only on the first write - the transport writes
+          # nothing until its first keepalive ping, so commit with an SSE
+          # comment up front or clients sit waiting on headers.
+          if request.get?
+            begin
+              stream.write(": connected\n\n")
+            rescue IOError
+              nil
+            end
+            wait_for_stream_close
+          end
         ensure
           begin
             response.stream.close
@@ -41,6 +68,14 @@ module RailsAiContext
       else
         self.response_body = body
       end
+    end
+
+    private
+
+    def wait_for_stream_close
+      sleep 0.5 until response.stream.closed?
+    rescue IOError
+      nil
     end
 
     class << self

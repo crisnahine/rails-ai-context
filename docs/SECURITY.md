@@ -11,11 +11,11 @@
 ---
 
 > [!CAUTION]
-> This gem is designed for **development environments**. The query tool is disabled in production by default. Sensitive files are blocked. All 38 tools are read-only.
+> This gem is designed for **development environments**. The query tool is disabled in production by default. Sensitive files are blocked. All 39 tools are read-only.
 
 ## Design principles
 
-1. **Read-only by design** - All 38 tools are annotated as non-destructive in the MCP protocol
+1. **Read-only by design** - All 39 tools are annotated as non-destructive in the MCP protocol
 2. **Defense in depth** - Multiple security layers, not single points of failure
 3. **Sensitive data blocking** - Configurable patterns prevent access to secrets
 4. **Offline by default** - No network calls except optional `rails_search_docs` with `fetch: true`

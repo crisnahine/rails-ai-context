@@ -62,7 +62,7 @@ The install generator created:
 ## Verify it works
 
 ```bash
-# Check AI readiness (23 diagnostic checks)
+# Check AI readiness (25 diagnostic checks)
 rails ai:doctor          # In-Gemfile
 rails-ai-context doctor  # Standalone
 

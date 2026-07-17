@@ -40,7 +40,7 @@ rails-ai-context serve --transport http --port 6029   # HTTP transport
 
 ### `tool`
 
-Run any of the 38 MCP tools from the terminal.
+Run any of the 39 MCP tools from the terminal.
 
 ```bash
 # Rake syntax
@@ -93,7 +93,7 @@ rails-ai-context context --format claude # Specific format
 
 ### `doctor`
 
-Run 23 diagnostic checks and report AI readiness score.
+Run the diagnostic checks and report an AI readiness score.
 
 ```bash
 rails ai:doctor

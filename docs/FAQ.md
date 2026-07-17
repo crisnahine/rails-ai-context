@@ -25,7 +25,7 @@ Claude Code, Cursor, GitHub Copilot, OpenCode, and Codex CLI. Each gets tailored
 No. The gem works three ways:
 1. **MCP server** - AI calls tools via the protocol (best experience)
 2. **Static files** - Generated context files (CLAUDE.md, .cursor/rules/, etc.)
-3. **CLI** - Same 38 tools from the terminal, no server needed
+3. **CLI** - Same 39 tools from the terminal, no server needed
 
 ### Is this safe for production?
 
@@ -47,7 +47,7 @@ Yes. The gem gracefully degrades - it parses `db/schema.rb` as text when no data
 
 ### Can I switch between Gemfile and standalone?
 
-Yes, freely. Both generate identical context files and provide the same 38 tools. Just re-run the install/init to update MCP config files.
+Yes, freely. Both generate identical context files and provide the same 39 tools. Just re-run the install/init to update MCP config files.
 
 ### Do I need to commit the generated files?
 
@@ -69,7 +69,7 @@ Start with `rails_onboard` for an app overview, `rails_analyze_feature` for feat
 
 ### Can I add my own tools?
 
-Yes. See [Custom Tools](CUSTOM_TOOLS.md). Create an `MCP::Tool` subclass, register it via `config.custom_tools`, and it appears alongside the 38 built-in tools.
+Yes. See [Custom Tools](CUSTOM_TOOLS.md). Create an `MCP::Tool` subclass, register it via `config.custom_tools`, and it appears alongside the 39 built-in tools.
 
 ### Can I remove built-in tools?
 
