@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.16.2] - 2026-07-17
+
+### Fixed
+
+- **Standalone static tier works when installed via `gem install`.**
+  `tool <name> --no-boot`, `tool <name> --help`, and `tool --list` outside
+  an app all died with `cannot load such file -- active_support/...`. The
+  RubyGems binstub eagerly activates the whole dependency tree, so the
+  exe's framework-path strip left every rails-family spec still flagged as
+  activated and `Gem.try_activate` refused to re-add the stripped paths.
+  The exe now stashes the stripped specs and splices their load paths back
+  at every app-less require site (Bundler-pinned paths still win after a
+  boot). Verified through the real binstub in an empty directory, in an
+  app whose Gemfile does not include the gem, and on the boot-failed
+  static fallback.
+- **Engine-mounted MCP survives mcp SDK 0.24.** The SDK's SSE writer now
+  calls `stream.flush` after every event, and
+  `ActionController::Live::Buffer` defines no `flush` - every SSE-mode
+  `tools/call` through `mount RailsAiContext::Engine` 500'd on all
+  supported Rails versions (the payload still arrived, then the request
+  died). The controller now hands the transport a flush-capable stream.
+  Verified with live curl sessions on booted Rails 7.1 and 8.1 apps.
+- **Engine-mounted GET streams actually stay open.** The transport
+  registers the server-push stream and returns; Live then closed the
+  response as soon as the action returned, so the SSE channel died
+  instantly, `notifications/tools/list_changed` could never be delivered,
+  and (once held open) clients would have waited up to 30s for response
+  headers. The action now commits headers immediately with an SSE comment
+  and holds the thread until the transport or the client closes the
+  stream. SETUP.md documents the one-thread-per-connected-client cost.
+- **Helpers keep their namespaces.** `app/helpers/admin/dashboard_helper.rb`
+  was reported as `DashboardHelper`, and looking it up by its real constant
+  name `Admin::DashboardHelper` failed. Module names now derive from the
+  path under `app/helpers` (`app/helpers/concerns` stays its own root,
+  matching the railties autoload glob), and exact path matches win before
+  basename fallbacks so a top-level helper is not shadowed by a namespaced
+  one.
+- **`rails_validate` checks qualified render targets in Ruby files.**
+  `render partial: "posts/missing"` in a controller or service passed
+  `level:"rails"` silently (the partial check only ran for ERB). Bare
+  `render "posts/show"` keeps template semantics in Ruby files, so the
+  controller template-render idiom is not false-flagged. Tool descriptions
+  now state exactly which column references are checked
+  (validates/permit/callbacks).
+- **`rails_review_changes` describes untracked files.** New files rendered
+  as empty headings (a fresh app right after `rails new` plus install
+  showed 20 of them); they now read `_new file, N lines_`, and only the
+  HEAD flow makes that claim (a committed-then-reverted file against an
+  older ref reads `_no diff available_`).
+- **Views resource resolves extension-less paths.** Reading
+  `rails-ai-context://views/posts/index` now serves
+  `posts/index.html.erb`; a same-named directory no longer defeats the
+  lookup, and sensitive-file candidates are rejected so the
+  not-found/not-allowed message split cannot act as an existence oracle
+  for secrets placed under `app/views`.
+- **Resource templates accept both URI schemes.** `rails://` and
+  `rails-ai-context://` now both resolve for the controllers, views, and
+  routes templates, and contents echo the URI the client requested.
+- **`preset` output no longer scrambles under pipes** in either CLI:
+  all framing (banner, separators, "Running:" labels) goes to stderr and
+  stdout carries pure tool output.
+- **Context files stop leaking internal tokens.** Architecture sections
+  showed raw keys (`concerns_models`, `pwa`, `solid_queue`) next to
+  humanized labels; every token the convention introspector emits now has
+  a label. Stale doc counts corrected across README and docs (39 tools,
+  25 doctor checks).
+
 ## [5.16.1] - 2026-07-12
 
 ### Fixed
