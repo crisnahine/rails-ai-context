@@ -189,5 +189,22 @@ RSpec.describe RailsAiContext::Resources do
       result = read_handler.call(uri: "rails://schema")
       expect(result.first[:uri]).to eq("rails://schema")
     end
+
+    it "truncates payloads beyond max_tool_response_chars" do
+      allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(20)
+
+      result = read_handler.call(uri: "rails://schema")
+      text = result.first[:text]
+      expect(text.length).to be <= 150
+      expect(text).to include("truncated")
+      expect(text).to include("rails_get_*")
+    end
+
+    it "leaves payloads under the cap untouched" do
+      allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(200_000)
+
+      result = read_handler.call(uri: "rails://schema")
+      expect(result.first[:text]).not_to include("truncated")
+    end
   end
 end

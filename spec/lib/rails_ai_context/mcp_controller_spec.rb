@@ -139,6 +139,33 @@ RSpec.describe RailsAiContext::McpController do
       controller.handle
       expect(controller.response.status).to eq(405)
     end
+
+    context "when the transport raises" do
+      before do
+        allow(transport).to receive(:handle_request).and_raise(RuntimeError, "transport exploded")
+        allow(RailsAiContext).to receive(:log_warn)
+      end
+
+      it "answers with a 500 JSON-RPC error body instead of raising" do
+        controller.handle
+        expect(controller.response.status).to eq(500)
+      end
+
+      it "returns a -32603 JSON-RPC frame" do
+        controller.handle
+        body = controller.response_body.is_a?(Array) ? controller.response_body.join : controller.response_body
+        parsed = JSON.parse(body)
+        expect(parsed["jsonrpc"]).to eq("2.0")
+        expect(parsed["error"]["code"]).to eq(-32603)
+        expect(parsed["error"]["message"]).to include("transport exploded")
+        expect(parsed["id"]).to be_nil
+      end
+
+      it "logs the failure" do
+        controller.handle
+        expect(RailsAiContext).to have_received(:log_warn).with(a_string_matching("transport exploded"))
+      end
+    end
   end
 
   describe "class hierarchy" do

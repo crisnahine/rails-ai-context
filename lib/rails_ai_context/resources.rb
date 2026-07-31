@@ -164,17 +164,29 @@ module RailsAiContext
 
         if STATIC_RESOURCES.key?(uri)
           key = STATIC_RESOURCES[uri][:key]
-          content = JSON.pretty_generate(context[key] || {})
+          content = bounded_json(context[key] || {})
           [ { uri: uri, mimeType: "application/json", text: content } ]
         elsif (match = uri.match(%r{\Arails://models/(.+)\z}))
           model_name = match[1]
           models = context[:models] || {}
           data = models[model_name] || { error: "Model '#{model_name}' not found" }
-          content = JSON.pretty_generate(data)
+          content = bounded_json(data)
           [ { uri: uri, mimeType: "application/json", text: content } ]
         else
           raise RailsAiContext::Error, "Unknown resource: #{uri}"
         end
+      end
+
+      # Resource payloads ride a single JSON-RPC frame with no transport-level
+      # size guard, so apply the same char cap tool responses get: a huge
+      # schema or routes table must not produce an unbounded payload.
+      def bounded_json(data)
+        content = JSON.pretty_generate(data)
+        max = RailsAiContext.configuration.max_tool_response_chars
+        return content unless max && content.length > max
+
+        content[0...max] +
+          "\n... truncated (#{content.length} chars total; use the rails_get_* tools for paginated access)"
       end
     end
   end
