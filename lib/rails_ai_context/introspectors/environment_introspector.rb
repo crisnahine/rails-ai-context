@@ -83,9 +83,16 @@ module RailsAiContext
           next unless match
 
           value = match[1].sub(/\s+#.*$/, "").strip
-          notable[key] = value.truncate(60)
+          notable[key] = redact_credentials(value.truncate(60))
         end
         notable
+      end
+
+      # Values come from real config files and can embed credentials (a
+      # Redis URL is the classic case). Strip URI userinfo before serving,
+      # matching the gem's never-serve-secrets posture.
+      def redact_credentials(value)
+        value.gsub(%r{([a-z][a-z0-9+.-]*://)[^\s/]*:[^@\s]+@}i, "\\1[FILTERED]@")
       end
 
       def current_environment

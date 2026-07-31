@@ -28,6 +28,7 @@ module RailsAiContext
           lines << "" << "## Autoloaders"
           loaders.each do |l|
             lines << "- **#{l[:name]}**#{l[:tag] ? " (tag: #{l[:tag]})" : ""}"
+            lines << "  - [error: #{l[:error]}]" if l[:error]
             lines << "  - collapsed: #{l[:collapsed].join(', ')}" if l[:collapsed]&.any?
             lines << "  - ignored: #{l[:ignored].join(', ')}" if l[:ignored]&.any?
           end

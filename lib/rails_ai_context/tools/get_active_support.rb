@@ -95,7 +95,7 @@ module RailsAiContext
 
         def render_cache(lines, cache)
           cache = cache || {}
-          return if cache.empty?
+          return if cache.empty? || cache[:store].to_s.empty?
 
           lines << "" << "## Cache Store"
           lines << "- **Store:** #{cache[:store]}"

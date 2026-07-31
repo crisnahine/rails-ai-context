@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added - 6 new tools surfacing previously unserved introspection (45 tools total)
 
-An audit found five introspectors whose data reached context files but never
-the tool surface, plus one nervous-system gap nothing introspected. All six
-are now first-class tools, registered automatically in both MCP and CLI:
+An audit found five introspectors whose data never reached the tool
+surface (three only served context files; `:autoload` and
+`:active_support` were unreachable entirely), plus one nervous-system
+gap nothing introspected. All six are now first-class tools, registered
+automatically in both MCP and CLI:
 
 - **`rails_get_i18n`** - default/available locales, backend, locale files with
   key counts, per-locale coverage vs the default locale, and fallbacks

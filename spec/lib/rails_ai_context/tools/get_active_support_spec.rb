@@ -82,6 +82,18 @@ RSpec.describe RailsAiContext::Tools::GetActiveSupport do
       end
     end
 
+    context "with no cache store configured" do
+      before do
+        allow(described_class).to receive(:cached_context)
+          .and_return({ active_support: { cache_usage: { store: "" } } })
+      end
+
+      it "omits the cache section instead of rendering a blank store" do
+        text = described_class.call.content.first[:text]
+        expect(text).not_to include("## Cache Store")
+      end
+    end
+
     context "when the introspector is not configured" do
       before { allow(described_class).to receive(:cached_context).and_return({}) }
 

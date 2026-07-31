@@ -42,6 +42,13 @@ RSpec.describe RailsAiContext::Tools::GetAutoload do
       expect(text).to include("collapsed: app/models/concerns")
     end
 
+    it "surfaces per-loader extraction errors instead of hiding them" do
+      autoload_data[:autoloaders] = [ { name: "main", error: "loader exploded" } ]
+      text = described_class.call.content.first[:text]
+      expect(text).to include("**main**")
+      expect(text).to include("[error: loader exploded]")
+    end
+
     it "lists the three path groups with counts" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Autoload paths (3)")
