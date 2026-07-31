@@ -110,6 +110,30 @@ RSpec.describe RailsAiContext::Introspectors::EnvironmentIntrospector do
       expect(staging[:notable]["cache_store"]).to include('password: "[FILTERED]"')
     end
 
+    it "redacts underscore-prefixed credential keys" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.cache_store = :redis_cache_store, { auth_token: "tok_secret_123" }
+        end
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:notable]["cache_store"]).not_to include("tok_secret_123")
+      expect(staging[:notable]["cache_store"]).to include("[FILTERED]")
+    end
+
+    it "leaves non-credential values untouched" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.cache_store = :redis_cache_store, { namespace: "tokens", pool_size: 5 }
+        end
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:notable]["cache_store"]).to include('namespace: "tokens"')
+      expect(staging[:notable]["cache_store"]).not_to include("[FILTERED]")
+    end
+
     it "reports the current environment" do
       expect(result[:current]).to eq(Rails.env.to_s)
     end

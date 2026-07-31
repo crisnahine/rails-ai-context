@@ -137,6 +137,20 @@ module RailsAiContext
         end
       end
 
+      # Resource payloads ride a single JSON-RPC frame with no transport-level
+      # size guard, so apply the same char cap tool responses get: a huge
+      # schema or routes table must not produce an unbounded payload. Public:
+      # the VFS routes template (potentially the whole routing table) caps
+      # through the same funnel.
+      def bounded_json(data)
+        content = JSON.pretty_generate(data)
+        max = RailsAiContext.configuration.max_tool_response_chars
+        return content unless max && content.length > max
+
+        content[0...max] +
+          "\n... truncated (#{content.length} chars total; use the rails_get_* tools for paginated access)"
+      end
+
       private
 
       # Content hashes use MCP-spec camelCase keys (mimeType): the SDK places
@@ -175,18 +189,6 @@ module RailsAiContext
         else
           raise RailsAiContext::Error, "Unknown resource: #{uri}"
         end
-      end
-
-      # Resource payloads ride a single JSON-RPC frame with no transport-level
-      # size guard, so apply the same char cap tool responses get: a huge
-      # schema or routes table must not produce an unbounded payload.
-      def bounded_json(data)
-        content = JSON.pretty_generate(data)
-        max = RailsAiContext.configuration.max_tool_response_chars
-        return content unless max && content.length > max
-
-        content[0...max] +
-          "\n... truncated (#{content.length} chars total; use the rails_get_* tools for paginated access)"
       end
     end
   end

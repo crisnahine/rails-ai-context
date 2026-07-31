@@ -220,7 +220,7 @@ module RailsAiContext
 
         data = { filtered_by: controller, total_routes: routes.size, routes: routes }
 
-        [ { uri: uri, mimeType: "application/json", text: JSON.pretty_generate(data) } ]
+        [ { uri: uri, mimeType: "application/json", text: Resources.bounded_json(data) } ]
       end
     end
   end

@@ -161,6 +161,15 @@ RSpec.describe RailsAiContext::VFS do
         expect { described_class.resolve("rails-ai-context://routes") }
           .to raise_error(RailsAiContext::Error, /Unknown VFS URI/)
       end
+
+      it "truncates payloads beyond max_tool_response_chars" do
+        allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(40)
+
+        result = described_class.resolve("rails-ai-context://routes/posts")
+        text = result.first[:text]
+        expect(text).to include("truncated")
+        expect(text.length).to be <= 200
+      end
     end
 
     context "views" do
