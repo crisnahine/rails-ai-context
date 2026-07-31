@@ -279,7 +279,13 @@ module RailsAiContext
         [ 'rails_review_changes(ref:"main")', "review_changes", "ref=main", "PR/commit review: file context + warnings (missing indexes, removed validations)" ],
         [ 'rails_onboard(detail:"standard")', "onboard", "detail=standard", "Narrative app walkthrough for new developers or AI agents" ],
         [ 'rails_runtime_info(detail:"standard")', "runtime_info", "detail=standard", "Live runtime: DB pool, table sizes, cache stats, job queues, pending migrations" ],
-        [ 'rails_session_context(action:"status")', "session_context", "action=status", "Track what you've already queried, avoid redundant calls" ]
+        [ 'rails_session_context(action:"status")', "session_context", "action=status", "Track what you've already queried, avoid redundant calls" ],
+        [ 'rails_get_i18n(locale:"fr")', "i18n", "locale=fr", "Locales, locale files with key counts, per-locale coverage, fallbacks" ],
+        [ 'rails_get_mailers(mailer:"UserMailer")', "mailers", "mailer=UserMailer", "Mailer classes with delivery actions and delivery method" ],
+        [ "rails_get_engines", "engines", nil, "Mounted engines + loaded engine classes with route/model counts" ],
+        [ "rails_get_autoload", "autoload", nil, "Zeitwerk mode, autoload/eager-load paths, collapsed dirs, custom inflections" ],
+        [ "rails_get_active_support", "active_support", nil, "Concerns registry, deprecators, MessageVerifier usage, on_load hooks, cache store" ],
+        [ 'rails_get_environments(environment:"production")', "environments", "environment=production", "Per-environment config: notable toggles + config keys each env sets" ]
       ].freeze
 
       def build_tools_table(include_mcp:)
