@@ -589,7 +589,7 @@ end
 ## About
 
 Built by a Rails developer with 10+ years of production experience.<br>
-2701 tests + 158-example e2e harness. 45 tools. 5 resource templates. 40 introspectors. Standalone or in-Gemfile.<br>
+2703 tests + 158-example e2e harness. 45 tools. 5 resource templates. 40 introspectors. Standalone or in-Gemfile.<br>
 MIT licensed. [Contributions welcome.](CONTRIBUTING.md)
 
 <br>

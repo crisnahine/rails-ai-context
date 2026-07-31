@@ -95,7 +95,9 @@ module RailsAiContext
       # Redis URL is the classic case). Strip URI userinfo before serving,
       # matching the gem's never-serve-secrets posture.
       def redact_credentials(value)
-        value.gsub(%r{([a-z][a-z0-9+.-]*://)[^\s/]*:[^@\s]+@}i, "\\1[FILTERED]@")
+        value
+          .gsub(%r{([a-z][a-z0-9+.-]*://)[^\s/]*:[^@\s]+@}i, "\\1[FILTERED]@")
+          .gsub(/\b(?:password|passwd|secret|token|api_key)\s*(?::|=>)\s*["'][^"']*["']/i) { |m| m.sub(/["'][^"']*["']\s*\z/, '"[FILTERED]"') }
       end
 
       def current_environment
