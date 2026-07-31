@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added - 6 new tools surfacing previously unserved introspection (45 tools total)
+
+An audit found five introspectors whose data reached context files but never
+the tool surface, plus one nervous-system gap nothing introspected. All six
+are now first-class tools, registered automatically in both MCP and CLI:
+
+- **`rails_get_i18n`** - default/available locales, backend, locale files with
+  key counts, per-locale coverage vs the default locale, and fallbacks
+  (data: `:i18n` introspector, previously serializer-only).
+- **`rails_get_mailers`** - every ActionMailer class with its delivery actions
+  and delivery method (data: `:jobs` introspector's mailer extraction,
+  previously serializer-only). Filter with `mailer:"UserMailer"`.
+- **`rails_get_engines`** - engines mounted in `config/routes.rb` with
+  known-engine descriptions, plus loaded engine classes with route/model
+  counts (data: `:engines` introspector, previously resource-only).
+- **`rails_get_autoload`** - Zeitwerk vs Classic mode, autoloaders with
+  collapsed/ignored dirs, autoload/eager-load paths, and custom inflections
+  (data: `:autoload` introspector, previously unreachable).
+- **`rails_get_active_support`** - concerns registry, deprecators,
+  MessageVerifier/MessageEncryptor usage, tagged logging, subscribed
+  `on_load` hooks, and cache store (data: `:active_support` introspector,
+  previously unreachable).
+- **`rails_get_environments`** - per-environment configuration from
+  `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`,
+  caching, log level, queue adapter, mailer delivery) and every config key
+  each environment sets. Backed by the new **EnvironmentIntrospector**
+  (40 introspectors total, wired into `PRESETS[:full]`; file-based, so it
+  also works in the static tier).
+
+### Fixed
+
+- **Engine-mounted MCP returns JSON-RPC errors instead of Rails 500s.**
+  `McpController#handle` had no rescue around `handle_request` - a
+  transport-level exception escaped into a generic Rails HTML 500, breaking
+  the client's JSON-RPC loop. It now answers 500 with a JSON-RPC `-32603`
+  body, mirroring `RailsAiContext::Middleware`.
+- **Standalone HTTP transport survives transport exceptions.** The Rack
+  lambda behind `rails-ai-context serve --transport http` let a
+  `handle_request` exception propagate to rackup (dropped connection). It
+  now returns the same JSON-RPC `-32603` body.
+- **MCP resources honor `max_tool_response_chars`.** Static resource and
+  model payloads were emitted unbounded (a huge schema or routes table rode
+  a single JSON-RPC frame); they now truncate with a recovery note pointing
+  at the paginated tools.
+- **`server.json` tool count** said 38 while the gem served 39; now tracks
+  the real count (45). Broken `RAILS_NERVOUS_SYSTEM.md` link in
+  `docs/INTROSPECTORS.md` replaced with a plain reference.
+
 ## [5.16.2] - 2026-07-17
 
 ### Fixed
