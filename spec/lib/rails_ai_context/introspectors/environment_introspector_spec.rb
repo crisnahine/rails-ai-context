@@ -86,6 +86,18 @@ RSpec.describe RailsAiContext::Introspectors::EnvironmentIntrospector do
       expect(staging[:notable]["cache_store"]).to include("redis://[FILTERED]@")
     end
 
+    it "redacts credentials even when truncation would cut before the host" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.cache_store = :redis_cache_store, { url: "redis://:thisisaverylongsecretpassword@redis.internal:6379/0" }
+        end
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:notable]["cache_store"]).not_to include("thisisaverylongsecretpassword")
+      expect(staging[:notable]["cache_store"]).to include("[FILTERED]")
+    end
+
     it "reports the current environment" do
       expect(result[:current]).to eq(Rails.env.to_s)
     end

@@ -83,7 +83,10 @@ module RailsAiContext
           next unless match
 
           value = match[1].sub(/\s+#.*$/, "").strip
-          notable[key] = redact_credentials(value.truncate(60))
+          # Redact BEFORE truncating: a truncation cut landing between the
+          # password and its `@host` would leave the regex nothing to match
+          # and serve the credential prefix in plaintext.
+          notable[key] = redact_credentials(value).truncate(60)
         end
         notable
       end
