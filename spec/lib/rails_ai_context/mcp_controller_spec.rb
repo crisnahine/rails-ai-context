@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+# The controller reaches MCP::Server through Server#build but never requires
+# the SDK itself, so running this file alone leaves MCP undefined.
+require "mcp"
 
 RSpec.describe RailsAiContext::McpController do
   # McpController inherits from ActionController::API.
@@ -164,6 +167,69 @@ RSpec.describe RailsAiContext::McpController do
       it "logs the failure" do
         controller.handle
         expect(RailsAiContext).to have_received(:log_warn).with(a_string_matching("transport exploded"))
+      end
+    end
+
+    context "when a streaming body fails after the response is committed" do
+      let(:streaming_body) do
+        proc do |stream|
+          stream.write("data: partial\n\n")
+          raise "stream exploded"
+        end
+      end
+
+      before do
+        allow(transport).to receive(:handle_request).and_return(
+          [ 200, { "Content-Type" => "text/event-stream" }, streaming_body ]
+        )
+        allow(RailsAiContext).to receive(:log_warn)
+      end
+
+      it "re-raises so Rails' streaming error path owns the failure" do
+        expect { controller.handle }.to raise_error(RuntimeError, "stream exploded")
+      end
+
+      it "leaves the status already sent to the client alone" do
+        expect { controller.handle }.to raise_error(RuntimeError)
+        expect(controller.response.status).to eq(200)
+      end
+
+      it "leaves the headers already sent to the client alone" do
+        expect { controller.handle }.to raise_error(RuntimeError)
+        expect(controller.response.headers["Content-Type"]).to include("text/event-stream")
+      end
+
+      it "does not swap the stream the server is draining" do
+        expect { controller.handle }.to raise_error(RuntimeError)
+        expect(controller.response.body).to eq("data: partial\n\n")
+      end
+
+      it "does not report a committed-stream failure as an MCP request failure" do
+        expect { controller.handle }.to raise_error(RuntimeError)
+        expect(RailsAiContext).not_to have_received(:log_warn)
+      end
+    end
+
+    context "when the failure happens before anything is committed" do
+      let(:failing_body) do
+        Object.new.tap do |body|
+          def body.each
+            raise "body exploded"
+          end
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:log_warn)
+        allow(transport).to receive(:handle_request).and_return(
+          [ 200, { "Content-Type" => "application/json" }, failing_body ]
+        )
+      end
+
+      it "still answers with a 500 JSON-RPC frame" do
+        controller.handle
+        expect(controller.response.status).to eq(500)
+        expect(JSON.parse(Array(controller.response_body).join)["error"]["code"]).to eq(-32603)
       end
     end
   end

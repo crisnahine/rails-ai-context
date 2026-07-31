@@ -69,7 +69,7 @@ preset: full
 |:-------|:-----|:--------|:-----------|:------------|
 | `server_name` | String | `"rails-ai-context"` | - | MCP server name |
 | `cache_ttl` | Integer | `60` | Must be positive | Cache time-to-live in seconds |
-| `max_tool_response_chars` | Integer | `200_000` | Must be positive | Safety cap for tool response length |
+| `max_tool_response_chars` | Integer | `200_000` | Must be positive | Safety cap for tool responses and MCP resource payloads. An over-cap resource keeps its JSON shape: whole elements are dropped and reported under a `_truncated` key |
 | `live_reload` | Symbol/Boolean | `:auto` | - | `:auto` (uses `listen` gem if available), `true`, or `false` |
 | `live_reload_debounce` | Float | `1.5` | - | Seconds to wait before processing file changes |
 | `auto_mount` | Boolean | `false` | - | Auto-mount Rack middleware for HTTP transport |

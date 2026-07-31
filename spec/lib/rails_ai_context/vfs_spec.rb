@@ -169,6 +169,29 @@ RSpec.describe RailsAiContext::VFS do
         text = result.first[:text]
         expect(text).to include("truncated")
         expect(text.length).to be <= 200
+        expect { JSON.parse(text) }.not_to raise_error
+      end
+
+      it "caps a large routing table without breaking the JSON contract" do
+        many = 300.times.map { |i| { verb: "GET", path: "/posts/#{i}", action: "show", name: "post_#{i}" } }
+        allow(RailsAiContext).to receive(:introspect).and_return(
+          context.merge(routes: { by_controller: { "posts" => many } })
+        )
+        allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(2_000)
+
+        result = described_class.resolve("rails-ai-context://routes/posts")
+        text = result.first[:text]
+        expect(result.first[:mimeType]).to eq("application/json")
+        expect(text.length).to be <= 2_000
+
+        data = JSON.parse(text)
+        # The counts stay put and the surviving entries are whole: the budget
+        # comes out of the routes list, not off the end of the string.
+        expect(data["filtered_by"]).to eq("posts")
+        expect(data["total_routes"]).to eq(300)
+        expect(data["routes"].size).to be_between(1, 299)
+        expect(data["routes"]).to all(include("verb", "path", "action", "name", "controller"))
+        expect(data["_truncated"]["clipped"]).to include(hash_including("path" => "routes", "total" => 300))
       end
     end
 

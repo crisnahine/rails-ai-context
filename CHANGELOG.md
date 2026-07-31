@@ -49,10 +49,22 @@ automatically in both MCP and CLI:
   lambda behind `rails-ai-context serve --transport http` let a
   `handle_request` exception propagate to rackup (dropped connection). It
   now returns the same JSON-RPC `-32603` body.
-- **MCP resources honor `max_tool_response_chars`.** Static resource and
-  model payloads were emitted unbounded (a huge schema or routes table rode
-  a single JSON-RPC frame); they now truncate with a recovery note pointing
-  at the paginated tools.
+- **MCP resources honor `max_tool_response_chars` without breaking the JSON
+  contract.** Static resource, model, and VFS routes payloads were emitted
+  unbounded (a huge schema or routes table rode a single JSON-RPC frame).
+  They now fit the cap by dropping whole elements from the data rather than
+  slicing the serialized string, so a capped payload still parses as the
+  `application/json` it is labeled. What was dropped is reported under a
+  `_truncated` key, and every value still present is exact. New
+  `RailsAiContext::JsonBudget` owns the reduction.
+- **A committed SSE stream is no longer overwritten by the error handler.**
+  `McpController#handle`'s rescue set a status, headers, and a JSON body on
+  responses that were already on the wire - closing a stream commits it, so
+  every streaming failure reached the rescue committed. Assigning a body
+  there swapped the stream out from under the thread draining it, turning a
+  truncated SSE response into a garbled one. Committed failures now re-raise
+  to `ActionController::Live`, which logs them with a backtrace and closes
+  the connection; uncommitted failures still get the JSON-RPC `-32603` body.
 - **`server.json` tool count** said 38 while the gem served 39; now tracks
   the real count (45). Broken `RAILS_NERVOUS_SYSTEM.md` link in
   `docs/INTROSPECTORS.md` replaced with a plain reference.

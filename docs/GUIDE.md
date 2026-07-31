@@ -1314,7 +1314,7 @@ end
 | `introspectors` | Array | 40 (full preset) | Which introspectors to run |
 | `context_mode` | Symbol | `:compact` | `:compact` or `:full` |
 | `claude_max_lines` | Integer | `150` | Max lines for CLAUDE.md in compact mode |
-| `max_tool_response_chars` | Integer | `200_000` | Safety cap for MCP tool responses |
+| `max_tool_response_chars` | Integer | `200_000` | Safety cap for MCP tool responses and resource payloads |
 | `cache_ttl` | Integer | `60` | Cache TTL in seconds for introspection results |
 | `custom_tools` | Array | `[]` | Additional MCP tool classes to register alongside built-in tools |
 | `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g. `%w[rails_security_scan]`) |

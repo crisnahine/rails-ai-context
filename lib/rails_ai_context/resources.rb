@@ -142,13 +142,13 @@ module RailsAiContext
       # schema or routes table must not produce an unbounded payload. Public:
       # the VFS routes template (potentially the whole routing table) caps
       # through the same funnel.
+      #
+      # Every caller labels the result mimeType "application/json", so the cap
+      # is applied to the data rather than to the generated string - see
+      # JsonBudget. Slicing the string would end it mid-object and JSON.parse
+      # would raise on exactly the large apps the cap exists for.
       def bounded_json(data)
-        content = JSON.pretty_generate(data)
-        max = RailsAiContext.configuration.max_tool_response_chars
-        return content unless max && content.length > max
-
-        content[0...max] +
-          "\n... truncated (#{content.length} chars total; use the rails_get_* tools for paginated access)"
+        JsonBudget.generate(data, RailsAiContext.configuration.max_tool_response_chars)
       end
 
       private

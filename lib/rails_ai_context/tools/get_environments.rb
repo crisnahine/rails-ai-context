@@ -43,7 +43,10 @@ module RailsAiContext
         if list.any?
           list.each { |entry| render_environment(lines, entry) }
         else
-          lines << "" << "_No environment files found#{" matching '#{environment}'" if environment}._"
+          # A named environment that misses returns not_found_response above,
+          # so reaching here always means the app has no environment files at
+          # all - never a filter that matched nothing.
+          lines << "" << "_No environment files found._"
         end
 
         text_response(lines.join("\n"))
