@@ -137,6 +137,20 @@ module RailsAiContext
         end
       end
 
+      # Resource payloads ride a single JSON-RPC frame with no transport-level
+      # size guard, so apply the same char cap tool responses get: a huge
+      # schema or routes table must not produce an unbounded payload. Public:
+      # the VFS templates (model/controller/action payloads, and potentially
+      # the whole routing table) cap through the same funnel.
+      #
+      # Every caller labels the result mimeType "application/json", so the cap
+      # is applied to the data rather than to the generated string - see
+      # JsonBudget. Slicing the string would end it mid-object and JSON.parse
+      # would raise on exactly the large apps the cap exists for.
+      def bounded_json(data)
+        JsonBudget.generate(data, RailsAiContext.configuration.max_tool_response_chars)
+      end
+
       private
 
       # Content hashes use MCP-spec camelCase keys (mimeType): the SDK places
@@ -164,13 +178,13 @@ module RailsAiContext
 
         if STATIC_RESOURCES.key?(uri)
           key = STATIC_RESOURCES[uri][:key]
-          content = JSON.pretty_generate(context[key] || {})
+          content = bounded_json(context[key] || {})
           [ { uri: uri, mimeType: "application/json", text: content } ]
         elsif (match = uri.match(%r{\Arails://models/(.+)\z}))
           model_name = match[1]
           models = context[:models] || {}
           data = models[model_name] || { error: "Model '#{model_name}' not found" }
-          content = JSON.pretty_generate(data)
+          content = bounded_json(data)
           [ { uri: uri, mimeType: "application/json", text: content } ]
         else
           raise RailsAiContext::Error, "Unknown resource: #{uri}"

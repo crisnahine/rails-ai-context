@@ -189,5 +189,180 @@ RSpec.describe RailsAiContext::Resources do
       result = read_handler.call(uri: "rails://schema")
       expect(result.first[:uri]).to eq("rails://schema")
     end
+
+    it "truncates payloads beyond max_tool_response_chars" do
+      # Below the compact size of the fixture, so the reducer runs rather than
+      # the payload simply fitting once its indentation is dropped.
+      allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(10)
+
+      result = read_handler.call(uri: "rails://schema")
+      text = result.first[:text]
+      expect(text.length).to be <= 150
+      expect(text).to include("truncated")
+      # A cap this low leaves room for the marker and nothing else, but the
+      # body still has to parse under the application/json label it carries.
+      expect(result.first[:mimeType]).to eq("application/json")
+      expect { JSON.parse(text) }.not_to raise_error
+    end
+
+    it "keeps a truncated model payload parseable" do
+      allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(10)
+
+      result = read_handler.call(uri: "rails://models/User")
+      expect(result.first[:mimeType]).to eq("application/json")
+      expect { JSON.parse(result.first[:text]) }.not_to raise_error
+    end
+
+    it "leaves payloads under the cap untouched" do
+      allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(200_000)
+
+      result = read_handler.call(uri: "rails://schema")
+      expect(result.first[:mimeType]).to eq("application/json")
+      expect(result.first[:text]).not_to include("truncated")
+      expect(JSON.parse(result.first[:text])).to eq({ "tables" => [ "users" ] })
+    end
+  end
+
+  describe ".bounded_json" do
+    def cap(chars)
+      allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(chars)
+    end
+
+    # Mirrors SchemaIntrospector#call: scalars and one dominant :tables hash,
+    # with two of the scalars sitting after it in insertion order.
+    let(:schema) do
+      {
+        adapter: "postgresql",
+        tables: 40.times.to_h { |t|
+          [ "table_#{t}", { columns: 10.times.map { |c| { name: "col_#{c}", type: "string", null: false } },
+                            primary_key: "id" } ]
+        },
+        total_tables: 40,
+        schema_version: "20260731120000"
+      }
+    end
+
+    it "pretty-prints a payload that fits" do
+      cap(200_000)
+      expect(described_class.bounded_json({ a: 1 })).to eq(JSON.pretty_generate({ a: 1 }))
+    end
+
+    it "returns parseable JSON that fits the cap" do
+      cap(4_000)
+      text = described_class.bounded_json(schema)
+
+      expect(text.length).to be <= 4_000
+      expect { JSON.parse(text) }.not_to raise_error
+    end
+
+    it "keeps every surviving element whole" do
+      cap(4_000)
+      kept = JSON.parse(described_class.bounded_json(schema))["tables"]
+
+      expect(kept.size).to be_between(1, 39)
+      kept.each_value do |table|
+        expect(table["primary_key"]).to eq("id")
+        expect(table["columns"].size).to eq(10)
+      end
+    end
+
+    it "keeps the scalar keys that say how much is missing" do
+      cap(4_000)
+      parsed = JSON.parse(described_class.bounded_json(schema))
+
+      # total_tables and schema_version sit AFTER the dominant :tables hash;
+      # without hoisting they would be the first things dropped.
+      expect(parsed["adapter"]).to eq("postgresql")
+      expect(parsed["total_tables"]).to eq(40)
+      expect(parsed["schema_version"]).to eq("20260731120000")
+    end
+
+    it "reports what it dropped" do
+      cap(4_000)
+      note = JSON.parse(described_class.bounded_json(schema))["_truncated"]
+
+      expect(note["reason"]).to eq("response_size_cap")
+      expect(note["max_chars"]).to eq(4_000)
+      expect(note["original_chars"]).to eq(JSON.pretty_generate(schema).length)
+      expect(note["hint"]).to include("rails_get_*")
+      expect(note["clipped"]).to include(hash_including("path" => "tables", "total" => 40))
+    end
+
+    it "spends the budget on the collection that dominates" do
+      cap(1_500)
+      data = { filtered_by: "posts", total_routes: 300,
+               routes: 300.times.map { |i| { verb: "GET", path: "/posts/#{i}" } } }
+      parsed = JSON.parse(described_class.bounded_json(data))
+
+      expect(parsed["filtered_by"]).to eq("posts")
+      expect(parsed["total_routes"]).to eq(300)
+      expect(parsed["routes"].size).to be_between(1, 299)
+      expect(parsed["routes"]).to all(include("verb" => "GET"))
+    end
+
+    it "moves a non-object payload under a data key" do
+      cap(600)
+      parsed = JSON.parse(described_class.bounded_json(200.times.map { |i| { id: i } }))
+
+      expect(parsed["data"].first).to eq({ "id" => 0 })
+      expect(parsed["_truncated"]["reason"]).to eq("response_size_cap")
+    end
+
+    it "cuts an oversized string value in place with a marker" do
+      cap(600)
+      parsed = JSON.parse(described_class.bounded_json({ source: "x" * 5_000 }))
+
+      expect(parsed["source"]).to end_with("... (truncated)")
+      expect(parsed["source"].length).to be < 5_000
+    end
+
+    # Two things make this the case that bites: a SYMBOL key, since Hash#merge
+    # would already replace a string one, and an assertion on the emitted text,
+    # since JSON.parse silently keeps the last of two identical keys and would
+    # hide the duplicate entirely.
+    it "does not emit a duplicate key when the payload owns _truncated" do
+      cap(600)
+      text = described_class.bounded_json({ _truncated: "mine", rows: (1..500).to_a })
+
+      expect(text.scan('"_truncated"').size).to eq(1)
+      expect(JSON.parse(text)["_truncated"]["reason"]).to eq("response_size_cap")
+    end
+
+    # A cap just above the dominant collection's own encoded size used to make
+    # the reducer drop it whole and return a report with no data at all.
+    it "never trades the whole payload for its own truncation report" do
+      data = { routes: 300.times.map { |i| { verb: "GET", path: "/p/#{i}", name: "n#{i}" } } }
+      pretty = JSON.pretty_generate(data).length
+
+      (1_000..pretty).step(7) do |chars|
+        cap(chars)
+        parsed = JSON.parse(described_class.bounded_json(data))
+        expect(parsed["routes"]).to be_present, "cap #{chars} returned no routes"
+      end
+    end
+
+    it "drops the indentation before it drops data" do
+      data = { rows: 400.times.map { |i| { id: i, name: "row_#{i}" } } }
+      # A cap between the compact and pretty sizes is satisfied by compact
+      # output alone, so nothing is lost and nothing is reported as lost.
+      cap(JSON.generate(data).length + 10)
+      parsed = JSON.parse(described_class.bounded_json(data))
+
+      expect(parsed["rows"].size).to eq(400)
+      expect(parsed).not_to have_key("_truncated")
+    end
+
+    it "labels clip counts with their unit" do
+      cap(600)
+      note = JSON.parse(described_class.bounded_json({ source: "x" * 5_000 }))["_truncated"]
+
+      expect(note["clipped"]).to include(hash_including("path" => "source", "unit" => "chars"))
+      expect(note["hint"]).to include("... (truncated)")
+    end
+
+    it "still parses when the cap is too small for any payload" do
+      cap(20)
+      expect(JSON.parse(described_class.bounded_json(schema))).to eq({ "_truncated" => true })
+    end
   end
 end

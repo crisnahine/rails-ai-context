@@ -166,4 +166,60 @@ RSpec.describe RailsAiContext::Server do
       expect { s.start }.to raise_error(RailsAiContext::ConfigurationError, /Unknown transport/)
     end
   end
+
+  describe "#build_rack_app" do
+    let(:s) { described_class.new(app, transport: :http) }
+    let(:mcp_path) { RailsAiContext.configuration.http_path }
+
+    def call_rack_app(transport, path_info)
+      rack_app = s.send(:build_rack_app, transport, mcp_path)
+      rack_app.call(
+        "PATH_INFO" => path_info,
+        "REQUEST_METHOD" => "POST",
+        "rack.input" => StringIO.new("")
+      )
+    end
+
+    it "404s requests outside the MCP path" do
+      transport = instance_double("Transport")
+      status, _headers, body = call_rack_app(transport, "/other")
+      expect(status).to eq(404)
+      expect(body.join).to include("Not found")
+    end
+
+    it "delegates MCP-path requests to the transport" do
+      transport = instance_double("Transport")
+      allow(transport).to receive(:handle_request).and_return([ 200, { "Content-Type" => "application/json" }, [ "{}" ] ])
+
+      status, _headers, _body = call_rack_app(transport, mcp_path)
+      expect(status).to eq(200)
+      expect(transport).to have_received(:handle_request)
+    end
+
+    context "when the transport raises" do
+      let(:transport) { instance_double("Transport") }
+
+      before do
+        allow(transport).to receive(:handle_request).and_raise(RuntimeError, "transport exploded")
+        allow(RailsAiContext).to receive(:log_warn)
+      end
+
+      it "answers with a 500 JSON-RPC -32603 body instead of raising" do
+        status, headers, body = call_rack_app(transport, mcp_path)
+
+        expect(status).to eq(500)
+        expect(headers["Content-Type"]).to eq("application/json")
+        parsed = JSON.parse(body.join)
+        expect(parsed["jsonrpc"]).to eq("2.0")
+        expect(parsed["error"]["code"]).to eq(-32603)
+        expect(parsed["error"]["message"]).to include("transport exploded")
+        expect(parsed["id"]).to be_nil
+      end
+
+      it "logs the failure" do
+        call_rack_app(transport, mcp_path)
+        expect(RailsAiContext).to have_received(:log_warn).with(a_string_matching("transport exploded"))
+      end
+    end
+  end
 end

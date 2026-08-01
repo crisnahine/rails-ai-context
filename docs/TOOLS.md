@@ -2,7 +2,7 @@
 
 # MCP Tools Reference
 
-**All 39 read-only tools, with every parameter.**
+**All 45 read-only tools, with every parameter.**
 
 [Quickstart](QUICKSTART.md) · [Recipes](RECIPES.md) · [Custom Tools](CUSTOM_TOOLS.md) · [CLI Reference](CLI.md)
 
@@ -59,7 +59,7 @@ Individual lookup tools accept a **`detail`** parameter: `summary` (compact), `s
 | [Controllers & Routes](#controllers--routes) | `get_controllers`, `get_routes` |
 | [Views & Frontend](#views--frontend) | `get_view`, `get_stimulus`, `get_partial_interface`, `get_turbo_map`, `get_frontend_stack` |
 | [Testing & Quality](#testing--quality) | `get_test_info`, `generate_test`, `validate`, `security_scan`, `performance_check` |
-| [App Config & Services](#app-config--services) | `get_api`, `get_conventions`, `get_config`, `get_gems`, `get_env`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog` |
+| [App Config & Services](#app-config--services) | `get_api`, `get_conventions`, `get_config`, `get_gems`, `get_env`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog`, `get_i18n`, `get_mailers`, `get_engines`, `get_autoload`, `get_active_support`, `get_environments` |
 | [Data & Debugging](#data--debugging) | `dependency_graph`, `migration_advisor`, `search_docs`, `query`, `read_logs`, `diagnose`, `review_changes`, `runtime_info`, `session_context` |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
@@ -377,6 +377,52 @@ ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage ex
 |:----------|:-----|:--------|:------------|
 | `component` | string | - | Specific component name |
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
+
+### `rails_get_i18n`
+
+I18n setup: default/available locales, backend, locale files with key counts, per-locale coverage, fallbacks.
+
+| Parameter | Type | Default | Description |
+|:----------|:-----|:--------|:------------|
+| `locale` | string | - | Show only this locale's files and coverage |
+| `offset` | integer | `0` | Pagination offset over locale files |
+| `limit` | integer | `50` | Max locale files to return |
+
+### `rails_get_mailers`
+
+ActionMailer mailers: every mailer class with its delivery actions and delivery method.
+
+| Parameter | Type | Default | Description |
+|:----------|:-----|:--------|:------------|
+| `mailer` | string | - | Specific mailer name |
+| `offset` | integer | `0` | Pagination offset |
+| `limit` | integer | `50` | Max mailers to return |
+
+### `rails_get_engines`
+
+Rails engines: engines mounted in `config/routes.rb` (with known-engine descriptions) and loaded engine classes with route/model counts.
+
+*No parameters.*
+
+### `rails_get_autoload`
+
+Autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored dirs, autoload/eager-load paths, custom inflections.
+
+*No parameters.*
+
+### `rails_get_active_support`
+
+ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEncryptor usage, tagged logging, subscribed `on_load` hooks, cache store.
+
+*No parameters.*
+
+### `rails_get_environments`
+
+Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets.
+
+| Parameter | Type | Default | Description |
+|:----------|:-----|:--------|:------------|
+| `environment` | string | - | Specific environment (e.g. `production`) |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 

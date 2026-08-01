@@ -68,7 +68,7 @@ rails-ai-context serve    # start MCP server
 
 </div>
 
-Now your AI doesn't guess - it **asks your app directly.** 39 tools and 5 resource templates that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing - every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
+Now your AI doesn't guess - it **asks your app directly.** 45 tools and 5 resource templates that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing - every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
 
 <br>
 
@@ -163,7 +163,7 @@ Native Rails controller transport. No separate process needed.
 
 ### CLI
 
-Same 39 tools, no server needed. Works in any terminal, any AI tool.
+Same 45 tools, no server needed. Works in any terminal, any AI tool.
 
 ```bash
 rails 'ai:tool[search_code]' pattern="publishable?" match_type=trace
@@ -245,7 +245,7 @@ rails 'ai:tool[stimulus]' controller=chart
 
 <br>
 
-## 39 Tools
+## 45 Tools
 
 Every tool is **read-only** and returns data verified against your actual app - not guesses, not training data.
 
@@ -331,6 +331,12 @@ Every tool is **read-only** and returns data verified against your actual app - 
 | `get_service_pattern` | Interface, dependencies, side effects, callers |
 | `get_job_pattern` | Queue, retries, guard clauses, broadcasts, schedules |
 | `get_component_catalog` | ViewComponent/Phlex: props, slots, previews, sidecar assets |
+| `get_i18n` | Locales, translation files with key counts, per-locale coverage, fallbacks |
+| `get_mailers` | Mailer classes with delivery actions and delivery method |
+| `get_engines` | Mounted engines (with known-engine descriptions) + loaded engine classes |
+| `get_autoload` | Zeitwerk mode, autoload/eager-load paths, collapsed dirs, custom inflections |
+| `get_active_support` | Concerns registry, deprecators, MessageVerifier usage, on_load hooks, cache store |
+| `get_environments` | Per-environment config: notable toggles + every config key each env sets |
 
 </details>
 
@@ -351,7 +357,7 @@ Every tool is **read-only** and returns data verified against your actual app - 
 
 </details>
 
-> **[All 39 tools with parameters →](docs/TOOLS.md)** &nbsp;|&nbsp; **[Real-world recipes →](docs/RECIPES.md)**
+> **[All 45 tools with parameters →](docs/TOOLS.md)** &nbsp;|&nbsp; **[Real-world recipes →](docs/RECIPES.md)**
 
 <br>
 
@@ -397,12 +403,12 @@ Enabled by default. Disable with `config.anti_hallucination_rules = false` if yo
 
 ```mermaid
 graph TD
-    A["Your Rails App\nmodels + schema + routes + controllers + views + jobs"] -->|"39 introspectors"| B
+    A["Your Rails App\nmodels + schema + routes + controllers + views + jobs"] -->|"40 introspectors"| B
 
     B["rails-ai-context\nPrism AST parsing · Cached · Confidence-tagged\nVFS: rails-ai-context:// URIs introspected fresh"]
 
-    B --> C["MCP Server\nstdio / HTTP\n39 tools · 5 templates"]
-    B --> D["CLI Tools\nRake / Thor\nSame 39 tools"]
+    B --> C["MCP Server\nstdio / HTTP\n45 tools · 5 templates"]
+    B --> D["CLI Tools\nRake / Thor\nSame 45 tools"]
     B --> E["Static Files\nCLAUDE.md · .cursor/rules/ · .cursorrules\n.github/instructions/"]
 
     style A fill:#4a9eff,stroke:#2d7ad4,color:#fff
@@ -440,7 +446,7 @@ Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, Open
 | In-Gemfile | Standalone | What it does |
 |:-----------|:-----------|:------------|
 | `rails ai:context` | `rails-ai-context context` | Generate context files |
-| `rails 'ai:tool[NAME]'` | `rails-ai-context tool NAME` | Run any of the 39 tools |
+| `rails 'ai:tool[NAME]'` | `rails-ai-context tool NAME` | Run any of the 45 tools |
 | `rails ai:tool` | `rails-ai-context tool --list` | List all available tools |
 | `rails ai:serve` | `rails-ai-context serve` | Start MCP server (stdio) |
 | `rails ai:doctor` | `rails-ai-context doctor` | Diagnostics + AI readiness score |
@@ -491,13 +497,13 @@ empty listings.
 | | |
 |:------|:------------|
 | **[Quickstart](docs/QUICKSTART.md)** | 5-minute getting started |
-| **[Tools Reference](docs/TOOLS.md)** | All 39 tools with every parameter |
+| **[Tools Reference](docs/TOOLS.md)** | All 45 tools with every parameter |
 | **[Recipes](docs/RECIPES.md)** | Real-world workflows and examples |
 | **[Custom Tools](docs/CUSTOM_TOOLS.md)** | Build and test your own MCP tools |
 | **[Configuration](docs/CONFIGURATION.md)** | 40+ config options with defaults |
 | **[AI Tool Setup](docs/SETUP.md)** | Claude, Cursor, Copilot, OpenCode, Codex |
 | **[Architecture](docs/ARCHITECTURE.md)** | System design and internals |
-| **[Introspectors](docs/INTROSPECTORS.md)** | All 39 introspectors and AST engine |
+| **[Introspectors](docs/INTROSPECTORS.md)** | All 40 introspectors and AST engine |
 | **[Security](docs/SECURITY.md)** | 4-layer SQL safety and file blocking |
 | **[CLI Reference](docs/CLI.md)** | Commands and argument syntax |
 | **[Standalone](docs/STANDALONE.md)** | Use without Gemfile entry |
@@ -509,7 +515,7 @@ empty listings.
 
 ## Build your own tools
 
-Register custom MCP tools alongside the 39 built-in ones:
+Register custom MCP tools alongside the 45 built-in ones:
 
 ```ruby
 # app/mcp_tools/rails_get_business_metrics.rb
@@ -547,7 +553,7 @@ if defined?(RailsAiContext)
   RailsAiContext.configure do |config|
     config.ai_tools   = %i[claude cursor] # Which AI tools to generate for
     config.tool_mode  = :mcp              # :mcp (default) or :cli
-    config.preset     = :full             # :full (39 introspectors) or :standard (17)
+    config.preset     = :full             # :full (40 introspectors) or :standard (17)
   end
 end
 ```
@@ -583,7 +589,7 @@ end
 ## About
 
 Built by a Rails developer with 10+ years of production experience.<br>
-2154 tests + 100-example e2e harness. 39 tools. 5 resource templates. 39 introspectors. Standalone or in-Gemfile.<br>
+2727 tests + 158-example e2e harness. 45 tools. 5 resource templates. 40 introspectors. Standalone or in-Gemfile.<br>
 MIT licensed. [Contributions welcome.](CONTRIBUTING.md)
 
 <br>

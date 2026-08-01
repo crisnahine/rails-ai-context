@@ -134,7 +134,7 @@ The MCP tools rule uses `alwaysApply: false` with a descriptive `description:` f
 
 ```markdown
 ---
-description: 39 MCP tools for Rails introspection - schema, models, routes, controllers, views
+description: 45 MCP tools for Rails introspection - schema, models, routes, controllers, views
 alwaysApply: false
 ---
 ```

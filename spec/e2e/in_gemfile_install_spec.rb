@@ -149,11 +149,11 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
   end
 
   describe "CLI tool invocations" do
-    # Representative sample of the 39 tools - covers the main output
-    # channels (schema, routes, models, components, etc.). Running ALL 39
+    # Representative sample of the 45 tools - covers the main output
+    # channels (schema, routes, models, components, etc.). Running ALL 45
     # via subprocess per describe block would push wall-clock past 5
     # minutes; the in-process ToolRunner smoke spec covers complete
-    # coverage (spec/cli_smoke_spec.rb, 39 tools in 0.15s).
+    # coverage (spec/cli_smoke_spec.rb, 45 tools in 0.15s).
     %w[schema routes model_details controllers conventions context get_gems].each do |short|
       it "rake `ai:tool[#{short}]` exits 0" do
         result = @cli.rake_tool(short)

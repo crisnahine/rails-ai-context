@@ -250,7 +250,7 @@ RSpec.describe "Cursor MDC compliance" do
       expect(file[:content]).to include("PostsController")
     end
 
-    it "MCP tools rule includes all 39 tools" do
+    it "MCP tools rule includes all 45 tools" do
       file = generated_files["rails-mcp-tools.mdc"]
       content = file[:content]
       %w[
@@ -268,6 +268,8 @@ RSpec.describe "Cursor MDC compliance" do
         rails_search_docs rails_query rails_read_logs rails_generate_test
         rails_diagnose rails_review_changes rails_onboard rails_runtime_info
         rails_session_context
+        rails_get_i18n rails_get_mailers rails_get_engines
+        rails_get_autoload rails_get_active_support rails_get_environments
       ].each do |tool|
         expect(content).to include(tool),
           "MCP tools rule missing tool: #{tool}"

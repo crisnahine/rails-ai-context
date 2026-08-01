@@ -17,7 +17,7 @@
 | In-Gemfile (Rake) | `rails ai:` | `rails 'ai:tool[schema]' table=users` |
 | Standalone (Thor) | `rails-ai-context` | `rails-ai-context tool schema --table users` |
 
-Both provide the same 39 tools and functionality.
+Both provide the same 45 tools and functionality.
 
 ---
 
@@ -40,7 +40,7 @@ rails-ai-context serve --transport http --port 6029   # HTTP transport
 
 ### `tool`
 
-Run any of the 39 MCP tools from the terminal.
+Run any of the 45 MCP tools from the terminal.
 
 ```bash
 # Rake syntax

@@ -171,7 +171,7 @@ Proof sources:
    `static_call` (`lib/rails_ai_context/introspectors/view_introspector.rb`
    has none); `Introspector#run_introspector` reports `{ unavailable: reason
    }` for every such section regardless of shape.
-9. `spec/e2e/empty_app_spec.rb` - all 39 built-in tools swept against an app
+9. `spec/e2e/empty_app_spec.rb` - all 45 built-in tools swept against an app
    with no scaffold, no models, no controllers beyond
    `ApplicationController`, no routes beyond root.
 10. `spec/e2e/massive_app_spec.rb` - `schema`, `model_details`, and `routes`

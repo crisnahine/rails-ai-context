@@ -54,7 +54,7 @@ module RailsAiContext
         schema = context.dig(:schema, :tables, table_name) if table_name
         enriched = data.merge(schema: schema).compact
 
-        [ { uri: uri, mimeType: "application/json", text: JSON.pretty_generate(enriched) } ]
+        [ { uri: uri, mimeType: "application/json", text: Resources.bounded_json(enriched) } ]
       end
 
       def resolve_controller(uri, name)
@@ -74,7 +74,7 @@ module RailsAiContext
           return [ { uri: uri, mimeType: "application/json", text: content } ]
         end
 
-        [ { uri: uri, mimeType: "application/json", text: JSON.pretty_generate(controllers[key]) } ]
+        [ { uri: uri, mimeType: "application/json", text: Resources.bounded_json(controllers[key]) } ]
       end
 
       def resolve_controller_action(uri, controller_name, action_name)
@@ -116,7 +116,7 @@ module RailsAiContext
           strong_params: info[:strong_params]
         }.compact
 
-        [ { uri: uri, mimeType: "application/json", text: JSON.pretty_generate(action_data) } ]
+        [ { uri: uri, mimeType: "application/json", text: Resources.bounded_json(action_data) } ]
       end
 
       def resolve_view(uri, path)
@@ -220,7 +220,7 @@ module RailsAiContext
 
         data = { filtered_by: controller, total_routes: routes.size, routes: routes }
 
-        [ { uri: uri, mimeType: "application/json", text: JSON.pretty_generate(data) } ]
+        [ { uri: uri, mimeType: "application/json", text: Resources.bounded_json(data) } ]
       end
     end
   end
