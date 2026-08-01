@@ -126,6 +126,18 @@ RSpec.describe RailsAiContext::McpController do
       expect(controller.response.headers["X-Custom"]).to eq("value")
     end
 
+    # mcp >= 1.0 returns Rack 3-style lowercase header keys. On Rails 7.0 the
+    # response header hash is case-sensitive, so a lowercase "content-type"
+    # would never register and Rails would fall back to text/html.
+    it "normalizes a lowercase content-type key to Content-Type" do
+      allow(transport).to receive(:handle_request).and_return(
+        [ 200, { "content-type" => "application/json" }, [ '{"jsonrpc":"2.0","result":{}}' ] ]
+      )
+
+      controller.handle
+      expect(controller.response.headers["Content-Type"]).to eq("application/json")
+    end
+
     it "sets the response body from the Rack response" do
       controller.handle
       expect(controller.response_body).to eq([ '{"jsonrpc":"2.0","result":{}}' ])

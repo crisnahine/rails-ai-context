@@ -29,7 +29,14 @@ module RailsAiContext
     def handle
       status_code, rack_headers, body = self.class.mcp_transport.handle_request(request)
       self.status = status_code
-      rack_headers.each { |k, v| response.headers[k] = v }
+      rack_headers.each do |k, v|
+        # mcp >= 1.0 returns Rack 3-style lowercase header keys. Rails 7.0's
+        # response header hash is case-sensitive (Rack 2), so a lowercase
+        # "content-type" never registers and Rails falls back to text/html on
+        # an otherwise valid JSON body. Write it with the canonical case.
+        key = k.casecmp("content-type").zero? ? "Content-Type" : k
+        response.headers[key] = v
+      end
 
       if body.respond_to?(:each)
         # Plain enumerable body (initialize, errors, JSON mode): join to a
