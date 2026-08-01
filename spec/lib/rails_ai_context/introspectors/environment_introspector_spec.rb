@@ -61,6 +61,17 @@ RSpec.describe RailsAiContext::Introspectors::EnvironmentIntrospector do
       expect(dev[:config_keys]).to eq(dev[:config_keys].sort.uniq)
     end
 
+    it "captures config keys deeper than two segments" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.active_record.encryption.primary_key = "x"
+        end
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:config_keys]).to include("active_record.encryption.primary_key")
+    end
+
     it "lifts notable values per environment" do
       prod = result[:environments].find { |e| e[:name] == "production" }
       expect(prod[:notable]["force_ssl"]).to eq("true")
@@ -72,6 +83,17 @@ RSpec.describe RailsAiContext::Introspectors::EnvironmentIntrospector do
     it "strips trailing comments from notable values" do
       prod = result[:environments].find { |e| e[:name] == "production" }
       expect(prod[:notable]["force_ssl"]).not_to include("redirect")
+    end
+
+    it "does not strip a ' #' inside a string literal" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.cache_store = :mem_cache_store, { namespace: "team #2" }
+        end
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:notable]["cache_store"]).to include('namespace: "team #2"')
     end
 
     it "redacts URI credentials from notable values" do

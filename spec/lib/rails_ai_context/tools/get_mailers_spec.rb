@@ -56,6 +56,15 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       end
     end
 
+    context "when introspection failed" do
+      before { allow(described_class).to receive(:cached_context).and_return({ jobs: { error: "boom" } }) }
+
+      it "reports the failure honestly" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("Mailer introspection failed: boom")
+      end
+    end
+
     context "when the jobs introspector is not configured" do
       before { allow(described_class).to receive(:cached_context).and_return({}) }
 

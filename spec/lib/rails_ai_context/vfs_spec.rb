@@ -89,6 +89,16 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["error"]).to include("not found")
         expect(data["available"]).to include("Post", "User")
       end
+
+      it "caps an oversized model payload without breaking the JSON contract" do
+        allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(40)
+
+        result = described_class.resolve("rails-ai-context://models/Post")
+        text = result.first[:text]
+        expect(text).to include("truncated")
+        expect(text.length).to be <= 200
+        expect { JSON.parse(text) }.not_to raise_error
+      end
     end
 
     context "controllers" do
@@ -108,6 +118,16 @@ RSpec.describe RailsAiContext::VFS do
         result = described_class.resolve("rails-ai-context://controllers/WidgetsController")
         data = JSON.parse(result.first[:text])
         expect(data["error"]).to include("not found")
+      end
+
+      it "caps an oversized controller payload without breaking the JSON contract" do
+        allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(40)
+
+        result = described_class.resolve("rails-ai-context://controllers/PostsController")
+        text = result.first[:text]
+        expect(text).to include("truncated")
+        expect(text.length).to be <= 200
+        expect { JSON.parse(text) }.not_to raise_error
       end
     end
 

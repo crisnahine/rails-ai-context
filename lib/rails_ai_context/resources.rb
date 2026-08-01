@@ -140,8 +140,8 @@ module RailsAiContext
       # Resource payloads ride a single JSON-RPC frame with no transport-level
       # size guard, so apply the same char cap tool responses get: a huge
       # schema or routes table must not produce an unbounded payload. Public:
-      # the VFS routes template (potentially the whole routing table) caps
-      # through the same funnel.
+      # the VFS templates (model/controller/action payloads, and potentially
+      # the whole routing table) cap through the same funnel.
       #
       # Every caller labels the result mimeType "application/json", so the cap
       # is applied to the data rather than to the generated string - see

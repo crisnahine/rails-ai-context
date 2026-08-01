@@ -69,10 +69,11 @@ module RailsAiContext
         nil
       end
 
-      # Sorted unique list of assigned `config.*` paths (up to two levels:
-      # `config.eager_load` and `config.action_mailer.delivery_method`).
+      # Sorted unique list of assigned `config.*` paths, any depth:
+      # `config.eager_load`, `config.action_mailer.delivery_method`,
+      # `config.active_record.encryption.primary_key`.
       def extract_config_keys(content)
-        content.scan(/^\s*config\.([a-z_][\w]*(?:\.[a-z_][\w]*)?)\s*=/i)
+        content.scan(/^\s*config\.([a-z_][\w]*(?:\.[a-z_][\w]*)*)\s*=/i)
                .flatten.uniq.sort
       end
 
@@ -82,13 +83,23 @@ module RailsAiContext
           match = content.match(/^\s*config\.#{Regexp.escape(key)}\s*=\s*(.+)$/i)
           next unless match
 
-          value = match[1].sub(/\s+#.*$/, "").strip
+          value = strip_trailing_comment(match[1]).strip
           # Redact BEFORE truncating: a truncation cut landing between the
           # password and its `@host` would leave the regex nothing to match
           # and serve the credential prefix in plaintext.
           notable[key] = redact_credentials(value).truncate(60)
         end
         notable
+      end
+
+      # Strip a trailing `# ...` comment, but not a " #" inside a string
+      # literal - `namespace: "team #2"` is data, not a comment. Double-quote
+      # parity heuristic: a cut preceded by an odd number of `"` sits inside
+      # a literal, so keep looking past it.
+      def strip_trailing_comment(rhs)
+        cut = rhs.index(/\s+#/)
+        cut = rhs.index(/\s+#/, cut + 1) while cut && rhs[0...cut].count('"').odd?
+        cut ? rhs[0...cut] : rhs
       end
 
       # Values come from real config files and can embed credentials (a
