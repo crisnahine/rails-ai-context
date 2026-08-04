@@ -2,6 +2,8 @@
 
 # rails-ai-context
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.crisnahine%2Frails-ai-context.svg)](https://mcptoplist.com/server/io.github.crisnahine%2Frails-ai-context)
+
 **Your AI is guessing your Rails app. Every guess costs you time.**
 
 
