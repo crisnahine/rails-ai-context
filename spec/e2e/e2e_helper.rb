@@ -27,6 +27,23 @@ RSpec.configure do |config|
   config.filter_run_when_matching :focus
   config.disable_monkey_patching!
   config.order = :random
+
+  # Test apps pull the gem in as a path source, and Bundler commands that
+  # resolve it rewrite the gem's own Gemfile.lock with the app's resolution.
+  # That lock is gitignored, so the damage outlives the run - the next
+  # `bundle exec rspec` dies loading a database adapter. Put it back.
+  config.before(:suite) do
+    lockfile = File.join(E2E::GEM_ROOT, "Gemfile.lock")
+    contents = File.exist?(lockfile) ? File.read(lockfile) : nil
+    next unless contents
+
+    # Bundler rewrites by replace, so the lock can also be missing here.
+    # at_exit rather than after(:suite): it also fires on an interrupted
+    # run, which is exactly when a half-written lock would otherwise survive.
+    at_exit do
+      File.write(lockfile, contents) unless File.exist?(lockfile) && File.read(lockfile) == contents
+    end
+  end
 end
 
 module E2E

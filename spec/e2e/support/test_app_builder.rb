@@ -171,6 +171,11 @@ module E2E
     # actually have content to introspect.
     def scaffold_sample_model!
       in_app("bin/rails", "generate", "scaffold", "Post", "title:string", "body:text", "published:boolean")
+      # SQLite gets a fresh file inside the throwaway app, but every Postgres
+      # run shares one server-side database, so last run's `posts` table is
+      # still there and the migration dies on PG::DuplicateTable. CI hides
+      # this behind a fresh container per job; locally the spec passes once.
+      in_app("bin/rails", "db:drop", "db:create") if database == :postgresql
       in_app("bin/rails", "db:migrate")
     end
 
