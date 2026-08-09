@@ -53,7 +53,7 @@ module RailsAiContext
         tables = schema[:tables] || {}
 
         # Return full JSON if requested (existing behavior)
-        return text_response(schema.to_json) if format == "json" && detail == "full"
+        return text_response(schema.to_json) if format == "json" && RailsAiContext::DetailLevel.full?(detail)
 
         total = tables.size
         offset = [ offset.to_i, 0 ].max

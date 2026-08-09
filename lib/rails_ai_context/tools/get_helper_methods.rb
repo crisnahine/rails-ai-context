@@ -135,7 +135,7 @@ module RailsAiContext
         end
 
         # For full detail: cross-reference with views
-        if detail == "full"
+        if RailsAiContext::DetailLevel.full?(detail)
           method_names = methods.map { |m| m.split("(").first }
           if method_names.any?
             view_refs = find_view_references(method_names, root)

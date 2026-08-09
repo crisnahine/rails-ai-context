@@ -85,7 +85,7 @@ module RailsAiContext
         # Organize callbacks in execution order
         ordered = order_callbacks(callbacks)
 
-        if detail == "full"
+        if RailsAiContext::DetailLevel.full?(detail)
           # Show callback source code
           lines << "_Callbacks shown in execution order with source code:_"
           lines << ""
@@ -120,7 +120,7 @@ module RailsAiContext
         concern_callbacks = find_concern_callbacks(name, data)
         if concern_callbacks.any?
           lines << "" << "## From Concerns"
-          if detail == "full"
+          if RailsAiContext::DetailLevel.full?(detail)
             concern_callbacks.each do |concern_name, info|
               lines << "### #{concern_name}"
               info[:callbacks].each do |cb|

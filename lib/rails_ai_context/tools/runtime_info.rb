@@ -98,7 +98,7 @@ module RailsAiContext
             lines << "" << "### Table Sizes"
             lines << "| Table | Size |"
             lines << "|-------|------|"
-            sizes.first(detail == "summary" ? 5 : 30).each do |row|
+            sizes.first(RailsAiContext::DetailLevel.summary?(detail) ? 5 : 30).each do |row|
               lines << "| #{row[:name]} | #{format_bytes(row[:bytes])} |"
             end
             total = sizes.sum { |r| r[:bytes] }
@@ -118,7 +118,7 @@ module RailsAiContext
           end
 
           # Index usage (full detail only)
-          if detail == "full"
+          if RailsAiContext::DetailLevel.full?(detail)
             index_usage = gather_index_usage(conn, adapter)
             if index_usage&.any?
               lines << "" << "### Index Usage"
@@ -280,7 +280,7 @@ module RailsAiContext
               lines << "**Retries:** #{stats.retry_size}"
               lines << "**Dead:** #{stats.dead_size}"
 
-              if detail == "full"
+              if RailsAiContext::DetailLevel.full?(detail)
                 queues = Sidekiq::Queue.all
                 if queues.any?
                   lines << "" << "### Queues"

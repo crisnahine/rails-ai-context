@@ -170,7 +170,7 @@ RSpec.describe RailsAiContext::Tools::Validate do
     end
 
     it "does not report private inline _url method definitions in regex fallback mode" do
-      allow(described_class).to receive(:parse_and_visit).and_return(nil)
+      allow(RailsAiContext::Tools::ValidateSemantics).to receive(:parse_and_visit).and_return(nil)
 
       File.write(file_path, <<~RUBY)
         class LocalRouteHelperTest

@@ -77,7 +77,7 @@ module RailsAiContext
         lines << "**Total issues found:** #{filtered_count}"
         lines << ""
 
-        if detail == "summary"
+        if RailsAiContext::DetailLevel.summary?(detail)
           n1_items = filter_items(all_sections[:n_plus_one], model)
           lines << "- N+1 risks: #{n1_items.size}#{risk_summary_counts(n1_items)}"
           lines << "- Missing counter_cache: #{filter_items(all_sections[:counter_cache], model).size}"
@@ -158,7 +158,7 @@ module RailsAiContext
             badge = RISK_BADGES[item[:risk].to_s] || ""
             lines << "- #{badge} **#{item[:model] || "Unknown"}**.#{item[:association]}"
             lines << "  #{item[:suggestion]}" if item[:suggestion]
-            if detail == "full"
+            if RailsAiContext::DetailLevel.full?(detail)
               lines << "  Controller: #{item[:controller]}" if item[:controller]
               lines << "  Action: #{item[:action]}" if item[:action]
             end
@@ -179,7 +179,7 @@ module RailsAiContext
           filtered.each do |item|
             lines << "- **#{item[:model] || item[:table] || "Unknown"}**"
             lines << "  #{item[:suggestion]}" if item[:suggestion]
-            if detail == "full"
+            if RailsAiContext::DetailLevel.full?(detail)
               lines << "  Controller: #{item[:controller]}" if item[:controller]
               lines << "  Association: #{item[:association]}" if item[:association]
               lines << "  Column: #{item[:column]}" if item[:column]
