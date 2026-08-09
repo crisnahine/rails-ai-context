@@ -14,13 +14,21 @@ module RailsAiContext
           environment: {
             type: "string",
             description: "Show only this environment (e.g. \"production\"). Default: all environments."
+          },
+          offset: {
+            type: "integer",
+            description: "Skip this many config keys per environment for pagination. Default: 0."
+          },
+          limit: {
+            type: "integer",
+            description: "Max config keys to list per environment. Default: 50."
           }
         }
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      def self.call(environment: nil, server_context: nil)
+      def self.call(environment: nil, offset: 0, limit: nil, server_context: nil)
         envs = cached_context[:env_config]
         return text_response("Environment config introspection not available. Add :env_config to introspectors.") unless envs
         return text_response("Environment config introspection failed: #{envs[:error]}") if envs[:error]
@@ -42,7 +50,7 @@ module RailsAiContext
         lines << "_Current: **#{envs[:current]}** - #{envs[:count]} environment file(s) under config/environments/_"
 
         if list.any?
-          list.each { |entry| render_environment(lines, entry) }
+          list.each { |entry| render_environment(lines, entry, offset: offset, limit: limit) }
         else
           # A named environment that misses returns not_found_response above,
           # so reaching here always means the app has no environment files at
@@ -56,7 +64,10 @@ module RailsAiContext
       class << self
         private
 
-        def render_environment(lines, entry)
+        # Paging is per environment, so one offset/limit reads the same slice
+        # of every environment listed - which is what makes comparing the same
+        # page across development and production useful.
+        def render_environment(lines, entry, offset:, limit:)
           lines << "" << "## #{entry[:name]}"
           lines << "_#{entry[:file]}_"
 
@@ -68,7 +79,11 @@ module RailsAiContext
           end
 
           keys = entry[:config_keys] || []
-          lines << "" << "**Config keys set (#{keys.size}):** #{keys.map { |k| "`#{k}`" }.join(', ')}" if keys.any?
+          return if keys.empty?
+
+          page = paginate(keys, offset: offset, limit: limit, default_limit: 50)
+          lines << "" << "**Config keys set (#{page[:total]}):** #{page[:items].map { |k| "`#{k}`" }.join(', ')}"
+          lines << page[:hint] unless page[:hint].empty?
         end
       end
     end

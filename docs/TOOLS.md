@@ -423,6 +423,8 @@ Per-environment configuration from `config/environments/*.rb`: notable toggles (
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
 | `environment` | string | - | Specific environment (e.g. `production`) |
+| `offset` | integer | `0` | Skip this many config keys per environment |
+| `limit` | integer | `50` | Max config keys listed per environment |
 
 <p align="right"><a href="#table-of-contents">↑ back to top</a></p>
 
