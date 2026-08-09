@@ -56,8 +56,23 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
 
-      - name: Run specs
-        run: bundle exec rspec
+      # A publish must not depend on which order RSpec happened to pick. CI
+      # runs a random seed to keep discovering order bugs; the release gate
+      # runs fixed ones so the same commit always gets the same verdict.
+      # 27377 is kept because it caught a real cross-example cache leak that a
+      # random seed had waved through on the same commit.
+      - name: Run specs (fixed seeds)
+        run: |
+          for seed in 1 27377 90210; do
+            echo "::group::rspec --seed $seed"
+            bundle exec rspec --seed "$seed" || exit 1
+            echo "::endgroup::"
+          done
+
+      # Defined order is a fourth ordering no random seed reproduces: every
+      # example runs in file order, so state leaking forward shows up here.
+      - name: Run specs (defined order)
+        run: bundle exec rspec --order defined
 
       - name: Run RuboCop
         run: bundle exec rubocop --parallel
