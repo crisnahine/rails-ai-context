@@ -29,7 +29,7 @@ module RailsAiContext
     def handle
       status_code, rack_headers, body = self.class.mcp_transport.handle_request(request)
       self.status = status_code
-      rack_headers.each { |k, v| response.headers[k] = v }
+      apply_transport_headers(rack_headers)
       if body.respond_to?(:each)
         # Plain enumerable body (initialize, errors, JSON mode): join to a
         # string so Content-Length/ETag semantics stay conventional.
@@ -93,10 +93,38 @@ module RailsAiContext
 
     private
 
+    # Rack 3 transports name their headers in lowercase, and the MCP SDK
+    # switched to that in 1.0. Rails 7.0 keeps response headers in a
+    # case-sensitive Hash, so a lowercase "content-type" is invisible to the
+    # canonical lookup Rails makes when it commits, and it labels the response
+    # with its own text/html default - a correct JSON-RPC body under a type no
+    # client will parse. Rails 7.1 moved to case-insensitive Rack::Headers and
+    # does not have the problem. Only the type needs the canonical spelling,
+    # because Rails is the only reader that looks a header up by name; the
+    # value is passed through so nothing gains a charset it did not have.
+    def apply_transport_headers(rack_headers)
+      rack_headers.each do |name, value|
+        key = name.to_s.casecmp?("content-type") ? "Content-Type" : name
+        response.headers[key] = value
+      end
+    end
+
     def wait_for_stream_close
-      sleep 0.5 until response.stream.closed?
+      sleep 0.5 until stream_finished?
     rescue IOError
       nil
+    end
+
+    # A client hangup aborts the buffer instead of closing it, so `closed?`
+    # alone leaves this thread parked until the transport's next keepalive
+    # write notices the hangup - up to the keepalive interval per dropped
+    # client. Live's buffer reports the hangup through `connected?`; the plain
+    # buffer used off the streaming path does not define it, so ask first.
+    def stream_finished?
+      stream = response.stream
+      return true if stream.closed?
+
+      stream.respond_to?(:connected?) && !stream.connected?
     end
 
     class << self

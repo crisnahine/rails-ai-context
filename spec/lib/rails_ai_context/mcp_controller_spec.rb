@@ -4,6 +4,7 @@ require "spec_helper"
 # The controller reaches MCP::Server through Server#build but never requires
 # the SDK itself, so running this file alone leaves MCP undefined.
 require "mcp"
+require "timeout"
 
 RSpec.describe RailsAiContext::McpController do
   # McpController inherits from ActionController::API.
@@ -143,6 +144,52 @@ RSpec.describe RailsAiContext::McpController do
       expect(controller.response.status).to eq(405)
     end
 
+    # The MCP SDK names headers in lowercase from 1.0 on. Rails 7.1+ stores
+    # them case-insensitively so either spelling resolves here; on Rails 7.0
+    # the canonical lookup misses a lowercase key and Rails labels the response
+    # text/html instead. These pin the contract the controller owns on every
+    # version - the 7.0 regression itself is caught by that CI matrix cell.
+    %w[content-type Content-Type CONTENT-TYPE].each do |header_name|
+      context "when the transport spells the type #{header_name.inspect}" do
+        let(:rack_response) do
+          [ 200, { header_name => "application/json", "mcp-session-id" => "abc" }, [ "{}" ] ]
+        end
+
+        it "types the response as JSON" do
+          controller.handle
+          expect(controller.response.media_type).to eq("application/json")
+        end
+
+        it "passes other headers through untouched" do
+          controller.handle
+          expect(controller.response.headers["mcp-session-id"]).to eq("abc")
+        end
+      end
+    end
+
+    # Rails 7.1+ resolves either spelling, so the examples above cannot fail on
+    # a modern Rails even without the normalization. This one can: it writes
+    # into a plain case-sensitive Hash, which is exactly what Rails 7.0's
+    # get_header reads (actionpack 7.0 response.rb:179, `headers[key]`).
+    it "writes the type under the canonical key a case-sensitive Hash needs" do
+      captured = {}
+      allow(controller).to receive(:response).and_return(double(headers: captured))
+
+      controller.send(:apply_transport_headers,
+                      "content-type" => "application/json", "mcp-session-id" => "abc")
+
+      expect(captured["Content-Type"]).to eq("application/json")
+      expect(captured["mcp-session-id"]).to eq("abc")
+    end
+
+    it "keeps an SSE content type from a lowercase transport header" do
+      allow(transport).to receive(:handle_request)
+        .and_return([ 200, { "content-type" => "text/event-stream" }, [ "" ] ])
+
+      controller.handle
+      expect(controller.response.media_type).to eq("text/event-stream")
+    end
+
     context "when the transport raises" do
       before do
         allow(transport).to receive(:handle_request).and_raise(RuntimeError, "transport exploded")
@@ -231,6 +278,49 @@ RSpec.describe RailsAiContext::McpController do
         expect(controller.response.status).to eq(500)
         expect(JSON.parse(Array(controller.response_body).join)["error"]["code"]).to eq(-32603)
       end
+    end
+  end
+
+  describe "#wait_for_stream_close" do
+    let(:controller) { described_class.new }
+
+    def with_stream(stream)
+      response = ActionDispatch::TestResponse.new
+      allow(response).to receive(:stream).and_return(stream)
+      controller.instance_variable_set(:@_response, response)
+      controller
+    end
+
+    it "returns once the stream is closed" do
+      stream = instance_double("Buffer", closed?: true)
+      expect { Timeout.timeout(2) { with_stream(stream).send(:wait_for_stream_close) } }.not_to raise_error
+    end
+
+    # The case the poll used to miss: a client hangup calls Live::Buffer#abort,
+    # which flips connected? but leaves closed? false.
+    it "returns when the client hung up without the stream being closed" do
+      stream = instance_double("Live::Buffer", closed?: false, connected?: false)
+      expect { Timeout.timeout(2) { with_stream(stream).send(:wait_for_stream_close) } }.not_to raise_error
+    end
+
+    it "keeps waiting while the client is still connected" do
+      stream = instance_double("Live::Buffer", closed?: false, connected?: true)
+      expect { Timeout.timeout(1) { with_stream(stream).send(:wait_for_stream_close) } }
+        .to raise_error(Timeout::Error)
+    end
+
+    # The plain buffer off the streaming path answers closed? only; asking it
+    # for connected? would raise rather than end the wait.
+    it "keeps waiting on a buffer that does not report connectedness" do
+      stream = instance_double("Buffer", closed?: false)
+      expect { Timeout.timeout(1) { with_stream(stream).send(:wait_for_stream_close) } }
+        .to raise_error(Timeout::Error)
+    end
+
+    it "swallows an IOError from a torn-down stream" do
+      stream = instance_double("Buffer")
+      allow(stream).to receive(:closed?).and_raise(IOError, "closed stream")
+      expect { Timeout.timeout(2) { with_stream(stream).send(:wait_for_stream_close) } }.not_to raise_error
     end
   end
 
