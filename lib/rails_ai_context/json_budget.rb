@@ -45,6 +45,10 @@ module RailsAiContext
     # when the budget is below the size of a usable report.
     MINIMUM_TRUNCATION_JSON = %({"#{TRUNCATION_KEY}":true})
 
+    # What take_child hands back to a container: the value to keep, its exact
+    # compact JSON size, and whether it survived intact.
+    Taken = Data.define(:value, :chars, :whole)
+
     class << self
       # Resource payloads ride a single JSON-RPC frame with no transport-level
       # size guard, so they get the same char cap tool responses do: a huge
@@ -92,10 +96,10 @@ module RailsAiContext
           break if taken.nil?
           # Dropping the indentation was enough on its own: nothing was lost,
           # so nothing is reported.
-          return JSON.generate(taken[0]) if clips.empty?
+          return JSON.generate(taken.value) if clips.empty?
 
           note = truncation_note(original_chars, max, clips)
-          candidate = JSON.generate(with_note(taken[0], note))
+          candidate = JSON.generate(with_note(taken.value, note))
           return candidate if candidate.length <= max
 
           # Aim straight at the measured report size, but never above what the
@@ -139,13 +143,13 @@ module RailsAiContext
         }
       end
 
-      # Decides what one child contributes to its container. Returns
-      # [ value, exact compact JSON chars, whole? ] or nil when the child has
-      # to be dropped. The chars are always the truth about the value being
-      # returned, so a container can trust them for its own accounting.
+      # Decides what one child contributes to its container, or nil when the
+      # child has to be dropped. `chars` is always the truth about the value
+      # being returned, so a container can trust it for its own accounting;
+      # `whole` false means the container must stop after taking this one.
       def take_child(value, room, budget, depth, path, clips)
         size = measure(value)
-        return [ value, size, true ] if size <= room
+        return Taken.new(value: value, chars: size, whole: true) if size <= room
         # A child that would have fit in an emptier container is dropped whole
         # rather than cut open: its siblings already spent the room, and a
         # clean drop the report can name beats a half-written value. That only
@@ -159,7 +163,7 @@ module RailsAiContext
         reduced, chars = reduce(value, room, depth, path, clips)
         return nil if reduced.nil?
 
-        [ reduced, chars, false ]
+        Taken.new(value: reduced, chars: chars, whole: false)
       end
 
       def reduce(value, budget, depth, path, clips)
@@ -187,12 +191,12 @@ module RailsAiContext
           taken = take_child(value, room, budget, depth + 1, child_path(path, key), clips)
           break if taken.nil?
 
-          kept[key] = taken[0]
-          used += overhead + taken[1]
+          kept[key] = taken.value
+          used += overhead + taken.chars
           # At most one child per container is opened up, which keeps the
           # reduction to a single path down the tree - and with it the report
           # short and the work bounded.
-          break unless taken[2]
+          break unless taken.whole
         end
 
         record_clip(clips, path, kept.size, hash.size)
@@ -224,9 +228,9 @@ module RailsAiContext
           taken = take_child(element, room, budget, depth + 1, "#{path}[]", clips)
           break if taken.nil?
 
-          kept << taken[0]
-          used += separator + taken[1]
-          break unless taken[2]
+          kept << taken.value
+          used += separator + taken.chars
+          break unless taken.whole
         end
 
         record_clip(clips, path, kept.size, array.size)
