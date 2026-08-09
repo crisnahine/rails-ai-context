@@ -243,11 +243,7 @@ module RailsAiContext
           model.columns_hash.key?("type")
         else
           schema_path = File.join(app.root.to_s, "db", "schema.rb")
-          if File.exist?(schema_path)
-            schema = RailsAiContext::SafeFile.read(schema_path)
-            table_section = schema[/create_table\s+"#{Regexp.escape(model.table_name)}".*?end/m]
-            table_section&.match?(/t\.\w+\s+"type"/)
-          end
+          SchemaReader.new(schema_path).column?(model.table_name, "type") if File.exist?(schema_path)
         end
 
         return nil unless has_type_column

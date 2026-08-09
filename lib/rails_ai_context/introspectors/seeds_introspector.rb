@@ -48,6 +48,8 @@ module RailsAiContext
           uses_create: chained.any? { |c| c[:method].start_with?("create") },
           uses_upsert: chained.any? { |c| c[:method].start_with?("upsert") },
           uses_insert_all: chained.any? { |c| c[:method].start_with?("insert_all") },
+          # Which libraries the seed file reaches for is vocabulary, not
+          # structure; a mention anywhere is the signal. Regex stays.
           uses_faker: content.match?(/Faker::/),
           uses_factory_bot: content.match?(/FactoryBot/),
           uses_csv: content.match?(/CSV\.|require.*csv/i),
@@ -91,17 +93,10 @@ module RailsAiContext
             chained: -> { Listeners::ChainedCallListener.new(:create, :create!, :find_or_create_by, :find_or_create_by!, :upsert, :insert_all, :new, :first_or_create, :seed) }
           })
 
-          next if ast_data[:chained].empty?
-          content = RailsAiContext::SafeFile.read(path) or next
-          lines = content.lines
-
           ast_data[:chained].each do |entry|
-            line = lines[entry[:location] - 1]
-            next unless line
-            if (m = line.match(/\b([A-Z][A-Za-z0-9]+(?:::[A-Z][A-Za-z0-9]+)*)\s*\.\s*#{Regexp.escape(entry[:method])}/))
-              model_name = m[1]
-              models << model_name unless non_models.include?(model_name.split("::").first)
-            end
+            model_name = entry[:receiver]
+            next unless model_name&.match?(/\A[A-Z]/)
+            models << model_name unless non_models.include?(model_name.split("::").first)
           end
         end
 

@@ -5,6 +5,12 @@ module RailsAiContext
     # Static analysis for common performance anti-patterns:
     # N+1 query risks, missing counter_cache, Model.all in controllers,
     # missing foreign key indexes.
+    #
+    # Model and class structure is read from the AST. The N+1 detection below
+    # deliberately stays on text: a risk is a correlation between a controller
+    # action, a query chain and an association touched in an ERB view, and ERB
+    # has no Ruby AST to walk. Matching both sides as text keeps them
+    # comparable, and every finding here is a heuristic, not a fact.
     class PerformanceIntrospector
       attr_reader :app
 
@@ -38,21 +44,23 @@ module RailsAiContext
         SchemaReader.new(File.join(root, "db/schema.rb")).tables
       end
 
+      def active_record_class_name(classes)
+        classes.find { |c| c[:superclass] == "ApplicationRecord" }&.fetch(:name)
+      end
+
       def load_model_data
         models_dir = File.join(root, "app/models")
         return [] unless Dir.exist?(models_dir)
 
         Dir.glob(File.join(models_dir, "**/*.rb")).filter_map do |path|
-          content = RailsAiContext::SafeFile.read(path)
-          next unless content&.match?(/< ApplicationRecord/)
-
-          class_name = content.match(/class\s+(\w+)/)[1] rescue nil
-          next unless class_name
-
           ast = SourceIntrospector.walk(path, {
+            classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
             includes: -> { Listeners::ChainedCallListener.new(:includes) }
           })
+
+          class_name = active_record_class_name(ast[:classes])
+          next unless class_name
 
           has_many = ast[:associations].select { |a| a[:type] == :has_many }.map do |a|
             opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
@@ -66,17 +74,12 @@ module RailsAiContext
 
           includes_calls = ast[:includes].map { |h| h[:args].map(&:to_s).join(", ") }
 
-          # scopes_with_includes: keep regex - complex inline lambda pattern
-          scopes_with_includes = content.scan(/scope\s+:\w+.*\.includes\(/).any?
-
           {
             name: class_name,
             file: path.sub("#{root}/", ""),
             has_many: has_many,
             belongs_to: belongs_to,
-            includes_calls: includes_calls,
-            scopes_with_includes: scopes_with_includes,
-            content: content
+            includes_calls: includes_calls
           }
         rescue => e
           $stderr.puts "[rails-ai-context] load_model_data failed: #{e.message}" if ENV["DEBUG"]
@@ -341,9 +344,8 @@ module RailsAiContext
         models_dir = File.join(root, "app/models")
         model_names = if Dir.exist?(models_dir)
           Dir.glob(File.join(models_dir, "**/*.rb")).filter_map do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            match = content.match(/class\s+(\w+)\s*<\s*ApplicationRecord/)
-            match[1] if match
+            ast = SourceIntrospector.walk(path, { classes: Listeners::ClassDefinitionListener })
+            active_record_class_name(ast[:classes])
           end
         else
           []
@@ -351,7 +353,9 @@ module RailsAiContext
 
         return findings if model_names.empty?
 
-        # Build a single regex matching any model's .all call to avoid O(n*m) scanning
+        # One regex over every controller beats one AST walk per controller per
+        # model, and a `Model.all` mention is all this heuristic needs. Regex
+        # stays; the model names it looks for come from the AST above.
         escaped_names = model_names.map { |n| Regexp.escape(n) }
         combined_pattern = /(#{escaped_names.join("|")})\.all\b/
 
@@ -382,12 +386,12 @@ module RailsAiContext
         return candidates unless Dir.exist?(models_dir)
 
         Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path)
-          next unless content&.match?(/< ApplicationRecord/)
+          ast = SourceIntrospector.walk(path, {
+            classes: Listeners::ClassDefinitionListener,
+            associations: Listeners::AssociationsListener
+          })
 
-          class_name = content.match(/class\s+(\w+)/)[1] rescue next
-
-          ast = SourceIntrospector.walk(path, { associations: Listeners::AssociationsListener })
+          class_name = active_record_class_name(ast[:classes]) or next
           has_many_assocs = ast[:associations]
             .select { |a| a[:type] == :has_many }
             .map { |a| a[:name].to_s }

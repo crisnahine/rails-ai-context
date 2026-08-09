@@ -34,6 +34,37 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       expect(result[:authorization][:cancancan]).to be_nil
     end
 
+    context "with Devise settings in the initializer" do
+      let(:devise_init) { File.join(Rails.root, "config/initializers/devise.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(devise_init))
+        File.write(devise_init, <<~RUBY)
+          Devise.setup do |config|
+            config.timeout_in = 30.minutes
+            config.lock_strategy = :failed_attempts
+            config.maximum_attempts =
+              5
+            config.unlock_strategy = :time
+            config.password_length = 6..128
+            config.mailer_sender = "noreply@example.com"
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f(devise_init) }
+
+      it "reads the settings from the assignment nodes" do
+        expect(result[:authentication][:devise_settings]).to eq(
+          timeout_in: "30.minutes",
+          lock_strategy: "failed_attempts",
+          maximum_attempts: 5,
+          unlock_strategy: "time",
+          password_length: "6..128"
+        )
+      end
+    end
+
     context "with has_secure_password in a model" do
       let(:fixture_model) { File.join(Rails.root, "app/models/account.rb") }
 

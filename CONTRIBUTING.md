@@ -51,11 +51,13 @@ Listeners extract specific concerns (associations, validations, etc.) from the A
 1. Create `lib/rails_ai_context/introspectors/listeners/your_listener.rb` inheriting from `BaseListener`
 2. Implement `on_call_node_enter(node)` and/or `on_def_node_enter(node)` - only the events your concern needs
 3. Use `confidence_for(node)` from `BaseListener` to tag results `[VERIFIED]` or `[INFERRED]`
-4. Store results in `@results` (accessed via `#results`)
-5. Register the key/class pair in `SourceIntrospector::LISTENER_MAP`
-6. Write specs in `spec/lib/rails_ai_context/introspectors/listeners/your_listener_spec.rb`
+4. Store results in `@results` (accessed via `#results`) as plain hashes, never Prism nodes
+5. If your listener needs an event `SourceIntrospector.register_listener` doesn't already wire up, add it there
+6. Register the key/class pair in `SourceIntrospector::LISTENER_MAP` only if the listener should run on every model walk; listeners used by one introspector are passed to `SourceIntrospector.walk(path, key => Listener)` at the call site instead
+7. Write specs in `spec/lib/rails_ai_context/introspectors/listeners/your_listener_spec.rb`
+8. Add a row to the listener catalogue in `docs/INTROSPECTORS.md`
 
-See existing listeners in `lib/rails_ai_context/introspectors/listeners/` for reference patterns.
+See existing listeners in `lib/rails_ai_context/introspectors/listeners/` for reference patterns, and `docs/INTROSPECTORS.md` for the catalogue and the AST-vs-regex rule.
 
 ## Adding a CLI Tool Interface
 

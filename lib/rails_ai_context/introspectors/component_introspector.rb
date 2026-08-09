@@ -51,16 +51,18 @@ module RailsAiContext
         class_name = extract_class_name(content)
         return nil unless class_name
 
+        structure = extract_structure(content)
+        type = detect_component_type(content)
         props = extract_props(content)
-        enum_values = extract_enum_values(content)
-        attach_enum_values_to_props(props, enum_values, content)
+        enum_values = extract_enum_values(structure)
+        attach_enum_values_to_props(props, enum_values, structure)
 
         component = {
           name: class_name,
           file: relative,
-          type: detect_component_type(content),
+          type: type,
           props: props,
-          slots: extract_slots(content)
+          slots: extract_slots(structure, type)
         }
 
         preview = find_preview(path, class_name)
@@ -235,70 +237,43 @@ module RailsAiContext
         nil
       end
 
-      def extract_slots(content)
-        slots = []
+      # Structural facts about the component class, grouped by kind so each
+      # consumer reads its own bucket instead of re-filtering the whole list.
+      def extract_structure(content)
+        results = SourceIntrospector.walk_source(content, {
+          structure: Listeners::ComponentStructureListener
+        })[:structure]
 
-        # Use AST for renders_one / renders_many detection
-        ast_data = SourceIntrospector.walk_source(content, {
-          slot_macros: -> { Listeners::GenericMacroListener.new(:renders_one, :renders_many) }
-        })
+        results.group_by { |entry| entry[:kind] }
+      end
 
-        ast_data[:slot_macros].each do |macro|
-          slot_name = macro[:args]&.first&.to_s
-          next unless slot_name
-
-          type = macro[:macro] == :renders_one ? :one : :many
-          slot = { name: slot_name, type: type }
-
-          # Check if there's a renderer argument (second arg or options)
-          remaining_args = macro[:args][1..]
-          if remaining_args&.any?
-            slot[:renderer] = remaining_args.map(&:to_s).join(", ")
-          end
-
-          slots << slot
+      def extract_slots(structure, type)
+        slots = structure.fetch(:slot_macro, []).map do |entry|
+          entry.slice(:name, :type, :renderer).compact
         end
 
-        # Phlex slots: def slot_name(&block) - keep regex for this (Phlex-specific, diminishing returns)
-        if detect_component_type(content) == :phlex
-          content.scan(/def\s+(\w+)\s*\(\s*&\s*\w*\s*\)/).each do |name,|
-            next if %w[initialize template view_template before_template after_template].include?(name)
-            slots << { name: name, type: :phlex_slot }
+        # Phlex slots are plain methods taking a block.
+        if type == :phlex
+          structure.fetch(:slot, []).each do |entry|
+            slots << { name: entry[:name], type: :phlex_slot }
           end
         end
 
         slots
       end
 
-      # Extracts enumerable values from constants and case statements.
-      # Returns a hash mapping downcased constant/variable names to arrays of symbol values.
-      # Detects three patterns:
-      #   1. Hash constants: VARIANTS = { primary: "...", secondary: "..." } -> keys
-      #   2. Array constants: SIZES = [:sm, :md, :lg] -> elements
-      #   3. Case statements: case @variant; when :primary; when :secondary -> when values
-      def extract_enum_values(content)
+      # Enumerable values a prop can take, keyed by downcased constant name
+      # (VARIANTS -> "variants") or by the instance variable a `case` branches on.
+      def extract_enum_values(structure)
         enums = {}
 
-        # Pattern 1: Hash constants - NAME = { key: "value", ... }
-        content.scan(/([A-Z][A-Z_0-9]*)\s*=\s*\{([^}]*)\}/m) do |name, body|
-          keys = body.scan(/(\w+):/).map(&:first)
-          enums[name.downcase] = keys if keys.any?
+        structure.fetch(:constant_table, []).each do |entry|
+          enums[entry[:name].downcase] = entry[:values]
         end
 
-        # Pattern 2: Array constants - NAME = [:sym, :sym, ...]
-        content.scan(/([A-Z][A-Z_0-9]*)\s*=\s*\[([^\]]*)\]/) do |name, body|
-          values = body.scan(/:(\w+)/).map(&:first)
-          enums[name.downcase] = values if values.any?
-        end
-
-        # Pattern 3: Case statements - case @ivar; when :val1 ... when :val2
-        # Use a non-greedy match that stops at the next `end`, `case`, or `def` keyword
-        content.scan(/case\s+@(\w+)\s*\n(.*?)(?=\n\s*(?:end|case|def)\b)/m) do |ivar, block|
-          values = block.scan(/when\s+:(\w+)/).map(&:first)
-          next if values.empty?
-          # Merge with existing values for same ivar (handles multiple case blocks)
-          existing = enums[ivar] || []
-          enums[ivar] = (existing + values).uniq
+        # Several case blocks can branch on the same ivar.
+        structure.fetch(:variant_branch, []).each do |entry|
+          enums[entry[:ivar]] = ((enums[entry[:ivar]] || []) + entry[:values]).uniq
         end
 
         enums
@@ -308,7 +283,7 @@ module RailsAiContext
       #   1. Direct ivar match: prop "variant" matches case @variant values
       #   2. Constant name match: prop "size" matches SIZES constant, prop "variant" matches VARIANTS constant
       #   3. Constant usage in initialize: @size referenced as SIZES[@size] matches prop "size"
-      def attach_enum_values_to_props(props, enum_values, content)
+      def attach_enum_values_to_props(props, enum_values, structure)
         props.each do |prop|
           name = prop[:name]
           values = nil
@@ -328,13 +303,14 @@ module RailsAiContext
             end
           end
 
-          # Constant usage match: find CONST[@ivar] patterns in the file
+          # Constant usage match: CONST[@ivar] ties the prop to that table
           unless values
-            content.scan(/([A-Z][A-Z_0-9]*)\[@#{name}\]/) do |const_name,|
-              if enum_values.key?(const_name.downcase)
-                values = enum_values[const_name.downcase]
-                break
-              end
+            structure.fetch(:constant_index, []).each do |entry|
+              next unless entry[:ivar] == name
+              table = enum_values[entry[:constant].downcase]
+              next unless table
+              values = table
+              break
             end
           end
 

@@ -39,22 +39,9 @@ module RailsAiContext
         namespace_indents = []
         tasks = []
 
-        # RakeTaskDslListener returns results in source order.
-        # Walk results: accumulate namespaces, track descs, emit tasks.
-        # For namespace scope tracking, fall back to indent-based tracking
-        # since the listener doesn't track block scope.
-        content.each_line.with_index(1) do |line, line_no|
-          indent = line.match(/^(\s*)/)[1].length
-
-          if line.match?(/^\s*end\b/) && namespace_indents.any? && indent <= namespace_indents.last
-            current_namespace.pop
-            namespace_indents.pop
-          end
-        end
-
-        # Re-walk with indent tracking alongside AST results
-        current_namespace = []
-        namespace_indents = []
+        # RakeTaskDslListener returns tasks, descs and namespaces in source
+        # order but without block scope, so where a `namespace` block closes is
+        # tracked by indentation. Regex over the line, not over Ruby structure.
         line_events = {}
         results.each { |r| (line_events[r[:location]] ||= []) << r }
 

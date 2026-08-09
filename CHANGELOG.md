@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.18.0] - 2026-08-09
+
+### Added
+
+- **Three new Prism listeners.** `ConfigAssignmentListener` reads
+  `config.key = value` and `config.key.subkey = value` in initializers, matching
+  the root anywhere in the chain so `Rails.application.config.assets.paths`
+  resolves too. `ComponentStructureListener` reads ViewComponent and Phlex
+  structure: `renders_one`/`renders_many`, slot methods, constant tables,
+  `case @ivar` variant branching, and `CONST[@ivar]` indexing.
+  `ClassDefinitionListener` reads class definitions with their superclass.
+- **`docs/INTROSPECTORS.md` documents the listener catalogue**, how to add a
+  listener, and when regex is the right tool instead of the AST.
+
+### Changed
+
+- **Auth, component, channel, controller, inflection and initializer reading
+  moved from regex to the AST.** Devise and Doorkeeper settings, devise-jwt
+  detection, ViewComponent and Phlex structure, Action Cable `identified_by` /
+  `stream_from` / `stream_for` / `periodically`, `rate_limit` options, custom
+  inflections, CORS origins, RSpec helper `include`s, `DatabaseCleaner.strategy`
+  and model class detection are all read structurally now. Formatting that used
+  to defeat the patterns (multi-line arguments, adjacent string literals,
+  `%i[]` and `%w[]` forms) is read correctly.
+- **A filter's `if:` condition reports the action it names.** A lambda has no
+  literal value, so `if: -> { action_name == "create" }` used to surface as
+  `[INFERRED]`; it now reads `action_name == "create"`. Same key, same type.
+- **`rate_limit_parsed[:within]` no longer keeps a trailing comma.**
+  `within: 1.minute, only: :create` returned `"1.minute,"` and now returns
+  `"1.minute"`.
+- **Initializer `setup_calls` sees more.** The old pattern only matched a line
+  beginning with `config.`, so `Rails.application.config.x = y` and multi-line
+  chains were missed.
+- **Every remaining regex over Ruby source carries a note** saying why regex is
+  right there: non-Ruby files, mixed-extension globs, vocabulary matching, or
+  scope the listeners cannot see.
+
+### Fixed
+
+- **Dead namespace-tracking loop removed from `RakeTaskIntrospector`**, which
+  walked every line of every `.rake` file and discarded the result.
+
 ## [5.17.0] - 2026-08-09
 
 ### Added

@@ -14,11 +14,14 @@ module RailsAiContext
           return unless @target_methods.include?(node.name)
 
           @results << {
-            macro:      node.name,
-            args:       extract_symbol_args(node),
-            options:    extract_keyword_options(node),
-            location:   node.location.start_line,
-            confidence: confidence_for(node)
+            macro:         node.name,
+            args:          extract_symbol_args(node),
+            values:        extract_arg_values(node),
+            options:       extract_keyword_options(node),
+            option_values: extract_keyword_sources(node),
+            option_nodes:  extract_keyword_nodes(node),
+            location:      node.location.start_line,
+            confidence:    confidence_for(node)
           }
         end
       end

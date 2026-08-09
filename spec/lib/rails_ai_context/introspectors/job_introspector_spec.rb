@@ -130,6 +130,23 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(entry[:every]).to include("current_user.interval")
     end
 
+    it "reads macros split across lines" do
+      wrapped = <<~RUBY
+        class WrappedChannel < ApplicationCable::Channel
+          identified_by :current_user,
+                        :tenant
+
+          def subscribed
+            stream_from "notifications:" \\
+                        "global"
+          end
+        end
+      RUBY
+
+      expect(introspector.send(:extract_identified_by, wrapped)).to contain_exactly("current_user", "tenant")
+      expect(introspector.send(:extract_channel_streams, wrapped)[:stream_from]).to eq([ "notifications:global" ])
+    end
+
     it "returns nil when source has no identified_by" do
       expect(introspector.send(:extract_identified_by, "class Foo; end")).to be_nil
     end

@@ -117,7 +117,7 @@ module RailsAiContext
         source = RailsAiContext::SafeFile.read(path)
         return { error: "unreadable" } unless source
         parent = extract_parent_class_ast(source)
-        rate_limit_raw = extract_rate_limit(source)
+        rate_limit = rate_limit_entry(source)
         details = {
           parent_class: parent,
           api_controller: parent.include?("API"),
@@ -127,8 +127,8 @@ module RailsAiContext
           strong_params: extract_strong_params(source),
           respond_to_formats: extract_respond_to(source),
           rescue_from: extract_rescue_from(source),
-          rate_limit: rate_limit_raw,
-          rate_limit_parsed: parse_rate_limit(rate_limit_raw),
+          rate_limit: extract_rate_limit(source, rate_limit),
+          rate_limit_parsed: parse_rate_limit(rate_limit),
           turbo_stream_actions: extract_turbo_stream_actions(source)
         }.compact
         details
@@ -138,7 +138,7 @@ module RailsAiContext
 
       def extract_controller_details(ctrl)
         source = read_source(ctrl)
-        rate_limit_raw = extract_rate_limit(source)
+        rate_limit = rate_limit_entry(source)
 
         {
           parent_class: ctrl.superclass.name,
@@ -149,8 +149,8 @@ module RailsAiContext
           strong_params: extract_strong_params(source),
           respond_to_formats: extract_respond_to(source),
           rescue_from: extract_rescue_from(source),
-          rate_limit: rate_limit_raw,
-          rate_limit_parsed: parse_rate_limit(rate_limit_raw),
+          rate_limit: extract_rate_limit(source, rate_limit),
+          rate_limit_parsed: parse_rate_limit(rate_limit),
           turbo_stream_actions: extract_turbo_stream_actions(source)
         }.compact
       end
@@ -279,7 +279,11 @@ module RailsAiContext
             filter[:unless] = opts[:unless].to_s
           end
           if opts[:if]
-            filter[:if] = opts[:if].to_s
+            # A lambda has no literal value, so `opts[:if]` is "[INFERRED]".
+            # When the condition is an action_name comparison the AST can say
+            # exactly which action it names; report that instead of nothing.
+            actions = extract_action_condition(entry[:option_nodes][:if])
+            filter[:if] = actions ? %(action_name == "#{actions.first}") : opts[:if].to_s
           end
 
           filter
@@ -325,10 +329,28 @@ module RailsAiContext
         false
       end
 
-      def extract_action_condition(condition)
-        return nil unless condition.is_a?(String) || condition.respond_to?(:to_s)
-        match = condition.to_s.match(/action_name\s*==\s*['"](\w+)['"]/)
-        match ? [ match[1] ] : nil
+      # `if: -> { action_name == "create" }` narrows a filter to one action the
+      # same way `only:` does. Returns the action name, or nil for any other
+      # condition.
+      def extract_action_condition(node)
+        node = lambda_body(node)
+        return nil unless node.is_a?(Prism::CallNode) && node.name == :==
+
+        receiver = node.receiver
+        return nil unless receiver.is_a?(Prism::CallNode) && receiver.name == :action_name && receiver.receiver.nil?
+
+        operand = node.arguments&.arguments&.first
+        case operand
+        when Prism::StringNode then [ operand.unescaped ]
+        when Prism::SymbolNode then [ operand.value.to_s ]
+        end
+      end
+
+      def lambda_body(node)
+        return node unless node.is_a?(Prism::LambdaNode) || node.is_a?(Prism::BlockNode)
+        statements = node.body
+        return nil unless statements.is_a?(Prism::StatementsNode) && statements.body.size == 1
+        statements.body.first
       end
 
       def extract_concerns(ctrl)
@@ -655,16 +677,21 @@ module RailsAiContext
         node.child_nodes.compact.each { |child| find_call_at_line(child, method_name, line_number, constants) }
       end
 
-      def extract_rate_limit(source)
+      def rate_limit_entry(source)
         return nil if source.nil?
 
         ast_result = SourceIntrospector.walk_source(source, {
           rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
         })
-        entries = ast_result[:rate_limit] || []
-        return nil if entries.empty?
+        (ast_result[:rate_limit] || []).first
+      rescue => e
+        $stderr.puts "[rails-ai-context] rate_limit_entry failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
 
-        entry = entries.first
+      def extract_rate_limit(source, entry)
+        return nil unless entry
+
         line_num = entry[:location]
         lines = source.lines
         return nil unless line_num && line_num > 0 && line_num <= lines.size
@@ -676,13 +703,16 @@ module RailsAiContext
         nil
       end
 
-      def parse_rate_limit(rate_limit_raw)
-        return nil if rate_limit_raw.nil?
+      def parse_rate_limit(entry)
+        return nil unless entry
+
+        options = entry[:options] || {}
+        sources = entry[:option_values] || {}
 
         parsed = {}
-        parsed[:to] = $1.to_i if rate_limit_raw.match(/to:\s*(\d+)/)
-        parsed[:within] = $1 if rate_limit_raw.match(/within:\s*(\S+)/)
-        parsed[:only] = $1.scan(/:(\w+)/).flatten if rate_limit_raw.match(/only:\s*(.+?)(?:,\s*\w+:|$)/)
+        parsed[:to] = options[:to] if options[:to].is_a?(Integer)
+        parsed[:within] = sources[:within].to_s if sources.key?(:within)
+        parsed[:only] = Array(options[:only]).map(&:to_s) if options.key?(:only)
 
         parsed.empty? ? nil : parsed
       rescue => e

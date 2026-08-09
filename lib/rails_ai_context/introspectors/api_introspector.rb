@@ -103,17 +103,7 @@ module RailsAiContext
         origin_calls = ast_data[:origins]
         return nil if origin_calls.empty?
 
-        # Extract origin strings from macro args
-        origins = origin_calls.flat_map { |macro| macro[:args].map(&:to_s) }
-        # GenericMacroListener extracts symbol args; for string origins we need
-        # the raw content fallback
-        if origins.empty?
-          content = RailsAiContext::SafeFile.read(cors_path)
-          return nil unless content
-          origins = content.scan(/origins\s+(.+)$/).flatten.flat_map do |line|
-            line.scan(/["']([^"']+)["']/).flatten
-          end
-        end
+        origins = origin_calls.flat_map { |macro| macro[:values].flatten.map(&:to_s) }
 
         { file: "config/initializers/cors.rb", origins: origins }
       rescue => e

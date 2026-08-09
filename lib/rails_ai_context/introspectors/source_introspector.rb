@@ -75,6 +75,8 @@ module RailsAiContext
         events << :on_module_node_leave if listener.respond_to?(:on_module_node_leave)
         events << :on_block_node_enter  if listener.respond_to?(:on_block_node_enter)
         events << :on_block_node_leave  if listener.respond_to?(:on_block_node_leave)
+        events << :on_case_node_enter   if listener.respond_to?(:on_case_node_enter)
+        events << :on_constant_write_node_enter if listener.respond_to?(:on_constant_write_node_enter)
 
         dispatcher.register(listener, *events) if events.any?
       end

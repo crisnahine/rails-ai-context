@@ -102,6 +102,8 @@ module RailsAiContext
           # and would produce non-deterministic output on large monorepos.
           Dir.glob(File.join(dir, "**/*.rb")).sort.first(2000).each do |path|
             content = RailsAiContext::SafeFile.read(path) or next
+            # Mention of the class anywhere counts, so a text scan over 2000
+            # files beats parsing each one. Regex stays.
             next unless content.match?(/MessageEncryptor|MessageVerifier/)
             relative = path.sub("#{root}/", "")
             hits << { file: relative, encryptor: content.include?("MessageEncryptor"), verifier: content.include?("MessageVerifier") }

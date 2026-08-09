@@ -61,6 +61,8 @@ module RailsAiContext
             initializes_app: init_app
           }
 
+          # Vocabulary matching, not structure: what a middleware body talks
+          # about is the signal, and no AST node carries that. Regex stays.
           patterns = []
           patterns << "authentication" if content.match?(/auth|token|session|jwt/i)
           patterns << "rate_limiting" if content.match?(/rate.?limit|throttl/i)

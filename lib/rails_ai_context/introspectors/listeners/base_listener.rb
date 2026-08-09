@@ -30,12 +30,17 @@ module RailsAiContext
         # Extract keyword options from a call node.
         # e.g. `has_many :posts, dependent: :destroy` → { dependent: :destroy }
         def extract_keyword_options(node)
+          keyword_hash(node) { |value| extract_value(value) }
+        end
+
+        # The call's keyword arguments, each value passed through the block.
+        def keyword_hash(node)
           args = node.arguments&.arguments || []
-          keywords = args.select { |a| a.is_a?(Prism::KeywordHashNode) }
-          keywords.flat_map(&:elements).each_with_object({}) do |assoc, h|
+          args.select { |a| a.is_a?(Prism::KeywordHashNode) }
+              .flat_map(&:elements)
+              .each_with_object({}) do |assoc, h|
             next unless assoc.is_a?(Prism::AssocNode)
-            key = extract_key(assoc.key)
-            h[key] = extract_value(assoc.value)
+            h[extract_key(assoc.key)] = yield(assoc.value)
           end
         end
 
@@ -52,6 +57,30 @@ module RailsAiContext
           }
         end
 
+        # Extract every positional argument as a value, falling back to the raw
+        # source slice for expressions that have no literal value (`2.hours`).
+        def extract_arg_values(node)
+          args = node.arguments&.arguments || []
+          args.reject { |a| a.is_a?(Prism::KeywordHashNode) }.map { |a| value_or_source(a) }
+        end
+
+        # Keyword options with the raw source slice kept for expressions that
+        # have no literal value (`every: 3.seconds`).
+        def extract_keyword_sources(node)
+          keyword_hash(node) { |value| value_or_source(value) }
+        end
+
+        # Keyword options as their raw Prism nodes, for callers that need to
+        # inspect the structure of an expression rather than its value.
+        def extract_keyword_nodes(node)
+          keyword_hash(node) { |value| value }
+        end
+
+        def value_or_source(node)
+          value = extract_value(node)
+          value == RailsAiContext::Confidence::INFERRED ? node.slice : value
+        end
+
         def extract_key(node)
           case node
           when Prism::SymbolNode then node.value.to_sym
@@ -64,6 +93,7 @@ module RailsAiContext
           case node
           when Prism::SymbolNode         then node.value.to_sym
           when Prism::StringNode         then node.unescaped
+          when Prism::InterpolatedStringNode then adjacent_literals(node)
           when Prism::IntegerNode        then node.value
           when Prism::FloatNode          then node.value
           when Prism::TrueNode           then true
@@ -76,6 +106,14 @@ module RailsAiContext
           when Prism::KeywordHashNode    then hash_node_to_hash(node)
           else RailsAiContext::Confidence::INFERRED
           end
+        end
+
+        # `"a" "b"` and its line-continued form parse as one interpolated node
+        # with only literal parts. Anything with a real `#{}` stays inferred.
+        def adjacent_literals(node)
+          parts = node.parts
+          return RailsAiContext::Confidence::INFERRED unless parts.all? { |p| p.is_a?(Prism::StringNode) }
+          parts.map(&:unescaped).join
         end
 
         def constant_path_string(node)

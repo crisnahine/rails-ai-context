@@ -66,11 +66,16 @@ module RailsAiContext
         return [] unless Dir.exist?(dir)
 
         Dir.glob(File.join(dir, "*.rb")).sort.filter_map do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          initializer_count = content.scan(/^\s*initializer\s+["']/).size
+          next unless RailsAiContext::SafeFile.read(path)
+
+          ast = SourceIntrospector.walk(path, {
+            initializers: -> { Listeners::GenericMacroListener.new(:initializer) },
+            config:       Listeners::ConfigAssignmentListener
+          })
+
           entry = { file: path.sub("#{root}/", "") }
-          entry[:initializers] = initializer_count if initializer_count > 0
-          entry[:setup_calls]  = content.scan(/^\s*config\.(\w+)/).flatten.uniq.first(10)
+          entry[:initializers] = ast[:initializers].size if ast[:initializers].any?
+          entry[:setup_calls]  = ast[:config].map { |hit| hit[:path].first.to_s }.uniq.first(10)
           entry
         end
       end
