@@ -21,7 +21,7 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      def self.call(detail: "standard", server_context: nil) # rubocop:disable Metrics
+      def self.call(detail: "standard", server_context: nil)
         data = cached_context[:frontend_frameworks]
 
         note = unavailable_note(data)

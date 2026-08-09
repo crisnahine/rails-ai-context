@@ -69,6 +69,109 @@ automatically in both MCP and CLI:
   the real count (45). Broken `RAILS_NERVOUS_SYSTEM.md` link in
   `docs/INTROSPECTORS.md` replaced with a plain reference.
 
+## [5.18.0] - 2026-08-09
+
+### Added
+
+- **Three new Prism listeners.** `ConfigAssignmentListener` reads
+  `config.key = value` and `config.key.subkey = value` in initializers, matching
+  the root anywhere in the chain so `Rails.application.config.assets.paths`
+  resolves too. `ComponentStructureListener` reads ViewComponent and Phlex
+  structure: `renders_one`/`renders_many`, slot methods, constant tables,
+  `case @ivar` variant branching, and `CONST[@ivar]` indexing.
+  `ClassDefinitionListener` reads class definitions with their superclass.
+- **`docs/INTROSPECTORS.md` documents the listener catalogue**, how to add a
+  listener, and when regex is the right tool instead of the AST.
+
+### Changed
+
+- **Auth, component, channel, controller, inflection and initializer reading
+  moved from regex to the AST.** Devise and Doorkeeper settings, devise-jwt
+  detection, ViewComponent and Phlex structure, Action Cable `identified_by` /
+  `stream_from` / `stream_for` / `periodically`, `rate_limit` options, custom
+  inflections, CORS origins, RSpec helper `include`s, `DatabaseCleaner.strategy`
+  and model class detection are all read structurally now. Formatting that used
+  to defeat the patterns (multi-line arguments, adjacent string literals,
+  `%i[]` and `%w[]` forms) is read correctly.
+- **A filter's `if:` condition reports the action it names.** A lambda has no
+  literal value, so `if: -> { action_name == "create" }` used to surface as
+  `[INFERRED]`; it now reads `action_name == "create"`. Same key, same type.
+- **`rate_limit_parsed[:within]` no longer keeps a trailing comma.**
+  `within: 1.minute, only: :create` returned `"1.minute,"` and now returns
+  `"1.minute"`.
+- **Initializer `setup_calls` sees more.** The old pattern only matched a line
+  beginning with `config.`, so `Rails.application.config.x = y` and multi-line
+  chains were missed.
+- **Every remaining regex over Ruby source carries a note** saying why regex is
+  right there: non-Ruby files, mixed-extension globs, vocabulary matching, or
+  scope the listeners cannot see.
+
+### Fixed
+
+- **Dead namespace-tracking loop removed from `RakeTaskIntrospector`**, which
+  walked every line of every `.rake` file and discarded the result.
+
+## [5.17.0] - 2026-08-09
+
+### Added
+
+- **`config.query_allowed_columns`** exempts a column name from the built-in
+  sensitive list used by `rails_query`. The rejection message told you to
+  subtract from `query_redacted_columns`, which could never work: that list is
+  unioned with a frozen suffix list, so an app with its own
+  `oauth_applications.secret` had no way to query it.
+
+### Fixed
+
+- **Documented security behaviour now matches the code.** The ReDoS timeout on
+  user-supplied regexes needs `Regexp.timeout`, which Ruby 3.1 does not have,
+  so `SECURITY.md` no longer promises it unconditionally on a version the gem
+  still supports. Layer 4 was documented as post-execution redaction; it has
+  rejected the query outright since 5.8.1, which is what the doc now says.
+- **`config.introspectors = %i[source]` no longer appears to be supported.**
+  `SourceIntrospector` was listed in the introspector table but is
+  infrastructure, not a registered introspector, so configuring it raised
+  `ConfigurationError`.
+- **Corrected documented defaults**, which had drifted: `sensitive_patterns` is
+  27 patterns not 8, `excluded_middleware` 25 not 24, `excluded_filters` 5 not
+  3, and the listener count is 21. `extra_app_paths` and
+  `instrumentation_include_arguments` were undocumented.
+- **Secondary database dumps report their own generated columns.** Parsing
+  `db/queue_schema.rb` read generated columns from the primary `db/schema.rb`
+  instead of the dump being parsed.
+- **Polymorphic foreign keys no longer always report a missing index.** The
+  compound check compared one joined string against two column names, so it
+  could never match an existing index.
+- **A column is no longer treated as indexed because a wider column name is.**
+  Index matching compared substrings, so an index on `user_id` counted as
+  covering `id`.
+
+### Changed
+
+- **schema.rb is read through one AST-backed reader.** `SchemaIntrospector`,
+  `PerformanceIntrospector` and `ConventionIntrospector` each parsed the dump
+  line by line with their own `create_table` regex; they now share
+  `SchemaReader`, built on the existing `SchemaDslListener`, as do the static
+  tier's table parse and the check-constraint, enum and generated-column
+  reads that each walked the dump separately.
+- **The static schema tier reports four things differently.** Where no live
+  connection is available and `db/schema.rb` is parsed instead: a `t.references`
+  or `t.belongs_to` column is reported by its foreign key name (`author_id`,
+  not `author`), which is what the live tier has always reported; a column
+  default written as a proc reports its source rather than being omitted; a
+  default split across lines is picked up; and an expression index declared at
+  the top level is flagged `expression: true`, as an in-table one already was.
+- **`rails_validate`'s Rails-aware rules moved to `ValidateSemantics`.** The
+  tool entry point kept syntax validation and orchestration; the 15 lint rules
+  now live in their own class. Behaviour is unchanged.
+- **`detail` has a type.** `DetailLevel` defines the three levels, their
+  ordering and normalization. An unrecognised value now reads as `standard`
+  rather than silently selecting whichever branch happened to be last.
+- **Soft-delete detection prefers the schema.** A `deleted_at` column in the
+  dump now drives the `soft_delete` convention, instead of matching the word
+  anywhere in model source. Apps dumping `structure.sql` keep the old source
+  match, and the `acts_as_paranoid` / `discard` macro check is unchanged.
+
 ## [5.16.2] - 2026-07-17
 
 ### Fixed

@@ -91,8 +91,8 @@ preset: full
 | `excluded_models` | Array | 8 framework models | Models to skip during introspection |
 | `excluded_controllers` | Array | 2 framework controllers | Controllers to skip |
 | `excluded_route_prefixes` | Array | 6 framework prefixes | Route prefixes to skip |
-| `excluded_filters` | Array | 3 framework filters | Controller filters to skip |
-| `excluded_middleware` | Array | 24 framework middleware | Middleware to skip in listing |
+| `excluded_filters` | Array | 5 framework filters | Controller filters to skip |
+| `excluded_middleware` | Array | 25 framework middleware | Middleware to skip in listing |
 | `excluded_paths` | Array | `["node_modules", "tmp", "log", "vendor", ".git", "doc", "docs"]` | Paths excluded from search |
 | `excluded_association_names` | Array | 7 framework associations | Association names to hide from model output |
 | `excluded_concerns` | Array of Regex | Framework concerns | Concerns to skip (supports regex) |
@@ -116,6 +116,16 @@ preset: full
 | `search_extensions` | Array | `["rb", "js", "erb", "yml", "yaml", "json", "ts", "tsx", "vue", "svelte", "haml", "slim"]` | File extensions to search |
 | `concern_paths` | Array | `["app/models/concerns", "app/controllers/concerns"]` | Paths to scan for concerns |
 | `frontend_paths` | Array | `nil` (auto-detect) | Override frontend file paths |
+| `extra_app_paths` | Array | `[]` | Extra directories under the app root to treat as application code |
+
+### Instrumentation
+
+| Option | Type | Default | Description |
+|:-------|:-----|:--------|:------------|
+| `instrumentation_include_arguments` | Boolean | `false` | Include tool arguments in instrumentation events |
+
+> [!WARNING]
+> `instrumentation_include_arguments` forwards raw tool arguments to your subscribers, which for `rails_query` means the SQL text and for other tools can mean environment variable names. Leave it off unless your subscriber is as trusted as your logs.
 
 ### Database Query Safety
 
@@ -123,7 +133,8 @@ preset: full
 |:-------|:-----|:--------|:-----------|:------------|
 | `query_timeout` | Integer | `5` | - | SQL query timeout in seconds |
 | `query_row_limit` | Integer | `100` | 1–1000 | Maximum rows returned |
-| `query_redacted_columns` | Array | 10+ patterns | - | Column names/suffixes to redact |
+| `query_redacted_columns` | Array | 14 patterns | - | Column names that cause a query to be rejected |
+| `query_allowed_columns` | Array | `[]` | - | Column names exempted from the built-in sensitive list |
 | `allow_query_in_production` | Boolean | `false` | - | Allow `rails_query` tool in production |
 
 ### Logs
@@ -136,7 +147,7 @@ preset: full
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `sensitive_patterns` | Array | 8 patterns | File patterns blocked from search/read (`.env*`, `*.key`, `*.pem`, `credentials.yml.enc`, etc.) |
+| `sensitive_patterns` | Array | 27 patterns | File patterns blocked from search/read (`.env*`, `*.key`, `*.pem`, `config/credentials.yml.enc`, `.ssh/*`, etc.) |
 
 ### Extensibility
 

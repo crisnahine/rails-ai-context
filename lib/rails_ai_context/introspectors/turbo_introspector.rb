@@ -202,15 +202,14 @@ module RailsAiContext
         { detected: false, native_helpers: [], native_navigation: [], native_conditionals: 0 }
       end
 
-      # `include Turbo::Native::Navigation` passes a constant path, not a
-      # symbol, so GenericMacroListener won't capture the argument. Keep
-      # regex for this specific constant-reference check.
       def detect_native_include(controllers_dir)
         return false unless Dir.exist?(controllers_dir)
 
         Dir.glob(File.join(controllers_dir, "**/*.rb")).any? do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
-          content.match?(/include\s+Turbo::Native::Navigation/)
+          ast = SourceIntrospector.walk(path, {
+            includes: -> { Listeners::GenericMacroListener.new(:include) }
+          })
+          ast[:includes].any? { |hit| hit[:values].include?("Turbo::Native::Navigation") }
         end
       rescue => e
         $stderr.puts "[rails-ai-context] detect_native_include failed: #{e.message}" if ENV["DEBUG"]
@@ -222,6 +221,8 @@ module RailsAiContext
 
         Dir.glob(File.join(controllers_dir, "**/*.rb")).filter_map do |path|
           content = RailsAiContext::SafeFile.read(path) or next
+          # A mention of the helper anywhere in the file is the signal, whether
+          # it is called, referenced or guarded. Regex stays.
           if content.match?(/turbo_native_app\?|hotwire_native_app\?/)
             path.sub("#{root}/", "")
           end
@@ -238,6 +239,9 @@ module RailsAiContext
           recede_or_redirect_to resume_or_redirect_to refresh_or_redirect_to
           recede_or_redirect_back_or_to resume_or_redirect_back_or_to refresh_or_redirect_back_or_to
         ]
+        # A mention of any of these helpers counts wherever it appears, in a
+        # method body, a callback or a comment-free guard. Vocabulary, not
+        # structure, so regex stays.
         pattern = Regexp.union(navigation_methods)
 
         results = []
@@ -280,7 +284,8 @@ module RailsAiContext
           content = RailsAiContext::SafeFile.read(path) or next
           controller_name = File.basename(path, ".rb").camelize
 
-          # Parse action names by tracking def ... end blocks
+          # Tying a `format.turbo_stream` call to the action it sits in needs
+          # block scope, which the listeners do not track. Line scanning stays.
           current_action = nil
           content.each_line do |line|
             if (match = line.match(/^\s*def\s+(\w+)/))

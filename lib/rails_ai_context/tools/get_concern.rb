@@ -168,7 +168,7 @@ module RailsAiContext
         public_methods = parse_public_methods(source)
         if public_methods.any?
           lines << "" << "## Public Methods"
-          if detail == "full"
+          if RailsAiContext::DetailLevel.full?(detail)
             public_methods.each do |m|
               method_name = m.to_s.split("(").first
               method_source = extract_method_source_from_string(source, method_name)
@@ -191,7 +191,7 @@ module RailsAiContext
         class_methods = parse_class_methods(source)
         if class_methods.any?
           lines << "" << "## Class Methods"
-          if detail == "full"
+          if RailsAiContext::DetailLevel.full?(detail)
             class_methods.each do |m|
               method_name = m.to_s.split("(").first
               # Try both `def method_name` and `def self.method_name`

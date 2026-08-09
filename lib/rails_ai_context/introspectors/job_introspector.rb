@@ -5,6 +5,8 @@ module RailsAiContext
     # Discovers background jobs (ActiveJob/Sidekiq), mailers,
     # and Action Cable channels.
     class JobIntrospector
+      CHANNEL_MACROS = %i[identified_by stream_from stream_for periodically].freeze
+
       attr_reader :app
 
       def initialize(app)
@@ -310,35 +312,40 @@ module RailsAiContext
         path.start_with?(rails_root) ? path.sub("#{rails_root}/", "") : path
       end
 
+      def channel_macros(source, macro)
+        return [] unless source
+        ast = SourceIntrospector.walk_source(source, {
+          channel: -> { Listeners::GenericMacroListener.new(CHANNEL_MACROS) }
+        })
+        ast[:channel].select { |hit| hit[:macro] == macro }
+      end
+
       # `identified_by :current_user, :tenant` - declared on ApplicationCable::Connection,
       # but channels can also use it. Returns array of attribute names.
       def extract_identified_by(source)
-        return nil unless source
-        matches = source.scan(/\bidentified_by\s+([^\n]+)/)
-        return nil if matches.empty?
-        matches.flat_map { |m| m.first.scan(/:(\w+)/).flatten }.uniq
+        hits = channel_macros(source, :identified_by)
+        return nil if hits.empty?
+        hits.flat_map { |hit| hit[:args].map(&:to_s) }.uniq
       end
 
       # `stream_from "channel_name"` and `stream_for object` - what the channel broadcasts.
       def extract_channel_streams(source)
         return nil unless source
-        from_targets = source.scan(/\bstream_from\s+["']([^"']+)["']/).flatten
-        for_targets  = source.scan(/\bstream_for\s+([^\s\n,]+)/).flatten
+        from_targets = channel_macros(source, :stream_from).filter_map { |hit| hit[:values].first&.to_s }
+        for_targets  = channel_macros(source, :stream_for).filter_map { |hit| hit[:values].first&.to_s }
         result = {}
         result[:stream_from] = from_targets.uniq if from_targets.any?
         result[:stream_for]  = for_targets.uniq  if for_targets.any?
         result.empty? ? nil : result
       end
 
-      # `periodically :method_name, every: 3.seconds`
-      # The `[^\n]+` capture group is already line-bounded, so we keep the full
-      # captured value (after stripping whitespace). Earlier versions tried to
-      # trim past the first comma/whitespace, which mangled lambdas and
-      # complex intervals like `-> { current_user.interval }`.
+      # `periodically :method_name, every: 3.seconds`. The interval keeps its
+      # source form so lambdas like `-> { current_user.interval }` survive whole.
       def extract_channel_periodic(source)
-        return nil unless source
-        timers = source.scan(/\bperiodically\s+:(\w+),\s*every:\s*([^\n]+)/).map do |method_name, interval|
-          { method: method_name, every: interval.strip }
+        timers = channel_macros(source, :periodically).filter_map do |hit|
+          method_name = hit[:args].first
+          next unless method_name
+          { method: method_name.to_s, every: hit[:option_values][:every].to_s }
         end
         timers.any? ? timers : nil
       end

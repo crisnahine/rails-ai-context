@@ -7,12 +7,12 @@
     "url": "https://github.com/crisnahine/rails-ai-context",
     "source": "github"
   },
-  "version": "5.12.0",
+  "version": "5.18.0",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/crisnahine/rails-ai-context/releases/download/v5.12.0/rails-ai-context-mcp.mcpb",
-      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "identifier": "https://github.com/crisnahine/rails-ai-context/releases/download/vX.Y.Z/rails-ai-context-mcp.mcpb",
+      "fileSha256": "PLACEHOLDER-computed-from-the-mcpb-at-release-time",
       "transport": {
         "type": "stdio"
       }

@@ -68,7 +68,7 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      def self.call(pattern:, path: nil, file_type: nil, match_type: "any", exact_match: false, exclude_tests: false, group_by_file: false, offset: 0, limit: nil, context_lines: 2, server_context: nil) # rubocop:disable Metrics
+      def self.call(pattern:, path: nil, file_type: nil, match_type: "any", exact_match: false, exclude_tests: false, group_by_file: false, offset: 0, limit: nil, context_lines: 2, server_context: nil)
         root = rails_app.root.to_s
         original_pattern = pattern
 
@@ -340,7 +340,7 @@ module RailsAiContext
       # ── Trace Mode ─────────────────────────────────────────────────
       # Shows definition + source + callers + internal calls in one response
 
-      private_class_method def self.trace_method(method_name, root, path, exclude_tests) # rubocop:disable Metrics
+      private_class_method def self.trace_method(method_name, root, path, exclude_tests)
         # Clean input: strip "def ", "self.", parens
         cleaned = method_name.sub(/\A\s*def\s+/, "").sub(/\Aself\./, "").sub(/\(.*/, "").strip
         return text_response("Provide a method name to trace.") if cleaned.empty?

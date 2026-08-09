@@ -112,6 +112,7 @@ module RailsAiContext
           next false unless Dir.exist?(dir)
           Dir.glob(File.join(dir, "**/*.{erb,haml,slim,js,ts,jsx,tsx,mjs,rb}")).any? do |f|
             next false if File.directory?(f)
+            # The glob spans ERB, JS and Ruby, so one text scan covers them all.
             (RailsAiContext::SafeFile.read(f) || "").match?(/direct.upload|DirectUpload|direct_upload/)
           end
         end

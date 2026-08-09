@@ -24,6 +24,15 @@ RSpec.configure do |config|
   config.order = :random
   Kernel.srand config.seed
 
+  # Tools share one introspection cache with a TTL fast path that skips
+  # fingerprint invalidation. A spec that stubs Rails.application.root fills
+  # that cache from its fixture app, and the entry outlives the stub, so the
+  # next example to call a tool reads another app's context. Clear between
+  # examples so ordering cannot decide whether a spec passes. Runs before
+  # rather than after: an example that sets a message expectation on
+  # reset_cache! would otherwise count the teardown call as its own.
+  config.before(:each) { RailsAiContext::Tools::BaseTool.reset_cache! }
+
   # Skip e2e specs unless explicitly requested via E2E=1.
   # E2E specs spawn fresh Rails apps per install path and take minutes
   # per run; they belong on a dedicated CI pipeline, not every push.

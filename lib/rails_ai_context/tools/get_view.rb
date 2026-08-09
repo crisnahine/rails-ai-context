@@ -262,7 +262,7 @@ module RailsAiContext
           next if sensitive_file?(relative_real) || sensitive_file?(relative)
           next if File.size(real) > max_size
 
-          if detail == "full"
+          if RailsAiContext::DetailLevel.full?(detail)
             content = RailsAiContext::SafeFile.read(real) || "(error reading)"
             lines << "## #{relative}" << "```erb" << strip_svg(content) << "```" << ""
           else

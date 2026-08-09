@@ -64,5 +64,45 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
         expect(result[:custom_inflections].map { |i| i[:rule] }).to include("acronym: XYZ")
       end
     end
+
+    context "when an initializer is formatted awkwardly" do
+      let(:init_path) { File.join(Rails.root, "config/initializers/inflection_odd_test.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(init_path))
+        File.write(init_path, <<~RUBY)
+          ActiveSupport::Inflector.inflections(:en) do |inflect|
+            inflect.irregular(
+              "person",
+              "people"
+            )
+            inflect.uncountable "fish"
+            inflect.singular(/(quiz)zes$/i, '\\1')
+            inflect.plural(/(quiz)$/i, '\\1zes')
+            inflect.human "legacy_col", "Legacy column"
+          end
+
+          Rails.autoloaders.each do |loader|
+            loader.inflector.inflect(
+              "api" => "API",
+              "xml" => "XML"
+            )
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f(init_path) }
+
+      it "reads every directive and the hash form" do
+        rules = result[:custom_inflections].map { |i| i[:rule] }
+
+        expect(rules).to include("irregular: person => people")
+        expect(rules).to include("uncountable: fish")
+        expect(rules).to include("human: legacy_col => Legacy column")
+        expect(rules).to include("api => API", "xml => XML")
+        expect(rules.grep(/\Aplural: /).size).to eq(1)
+        expect(rules.grep(/\Asingular: /).size).to eq(1)
+      end
+    end
   end
 end

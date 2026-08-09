@@ -102,21 +102,21 @@ module RailsAiContext
 
           # STI detection via AST: extract parent class from ClassNode, check schema
           app_model_names = model_files.filter_map { |f| File.basename(f, ".rb").camelize }
-          schema_path = File.join(root, "db/schema.rb")
-          schema_content = File.exist?(schema_path) ? (RailsAiContext::SafeFile.read(schema_path) || "") : ""
+          schema = SchemaReader.new(File.join(root, "db/schema.rb"))
+          schema_readable = schema.tables.any?
 
           has_sti_subclass = false
           has_inheritance_column = false
           has_current_attributes = false
-          has_deleted_at = false
 
           model_files.first(500).each do |f|
             parent = extract_parent_class(f)
             if parent && app_model_names.include?(parent) && parent != "ApplicationRecord"
               parent_table = parent.underscore.pluralize
-              if schema_content.match?(/create_table\s+"#{Regexp.escape(parent_table)}".*?t\.\w+\s+"type"/m)
-                has_sti_subclass = true
-              end
+              # Only the dump says whether the parent table carries a type
+              # column, so an unreadable schema leaves this to the
+              # inheritance_column check below rather than a source guess.
+              has_sti_subclass = true if schema_readable && schema.column?(parent_table, "type")
             end
 
             superclass = extract_superclass_path(f)
@@ -127,12 +127,15 @@ module RailsAiContext
               inh: -> { Listeners::ChainedCallListener.new(:inheritance_column=) }
             })
             has_inheritance_column = true if inheritance_check[:inh].any?
+          end
 
-            # deleted_at is a keyword/content check, not structural -- keep regex
-            unless has_deleted_at
-              src = RailsAiContext::SafeFile.read(f)
-              has_deleted_at = true if src&.match?(/deleted_at/)
-            end
+          # A soft-delete column is a schema fact, so prefer the dump. Apps on
+          # structure.sql have no schema.rb to read, and fall back to the
+          # looser source match.
+          has_deleted_at = if schema_readable
+            schema.any_column?("deleted_at")
+          else
+            model_files.first(500).any? { |f| RailsAiContext::SafeFile.read(f)&.match?(/deleted_at/) }
           end
 
           patterns << "sti" if has_inheritance_column || has_sti_subclass

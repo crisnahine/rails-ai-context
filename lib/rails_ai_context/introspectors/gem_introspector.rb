@@ -9,7 +9,6 @@ module RailsAiContext
 
       # Known gems that significantly affect how the app works.
       # The AI needs to know about these to give accurate advice.
-      # rubocop:disable Metrics/CollectionLiteralLength
       NOTABLE_GEMS = {
         # Auth
         "devise"          => { category: :auth, note: "Authentication via Devise. Check User model for devise modules." },
@@ -147,7 +146,6 @@ module RailsAiContext
         "bullet"          => { category: :utilities, note: "N+1 query detection via Bullet." },
         "rack-attack"     => { category: :utilities, note: "Rate limiting and throttling via Rack::Attack." }
       }.freeze
-      # rubocop:enable Metrics/CollectionLiteralLength
 
       def initialize(app)
         @app = app

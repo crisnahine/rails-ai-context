@@ -634,11 +634,77 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      raw = introspector.send(:extract_rate_limit, source)
+      raw = introspector.send(:extract_rate_limit, source, introspector.send(:rate_limit_entry, source))
       expect(raw).to include("to")
       expect(raw).to include("within")
       # The old regex would return: "to: 5, within: 1.minute, only: :create"
       # The AST version returns options reconstructed as "to: 5, within: ..."
+    end
+
+    it "reads the options from the macro's argument nodes" do
+      source = <<~RUBY
+        class RateController < ApplicationController
+          rate_limit to: 5,
+                     within: 1.minute,
+                     only: %i[create update]
+        end
+      RUBY
+
+      parsed = introspector.send(:parse_rate_limit, introspector.send(:rate_limit_entry, source))
+      expect(parsed).to eq(to: 5, within: "1.minute", only: %w[create update])
+    end
+
+    it "reads a single-symbol only: constraint" do
+      source = "class C < ApplicationController; rate_limit to: 1, within: 1.hour, only: :create; end"
+
+      parsed = introspector.send(:parse_rate_limit, introspector.send(:rate_limit_entry, source))
+      expect(parsed[:only]).to eq([ "create" ])
+    end
+  end
+
+  describe "action_name filter conditions" do
+    it "names the action its condition compares against" do
+      source = <<~RUBY
+        class GuardedController < ApplicationController
+          before_action :verify_captcha, if: -> { action_name == "create" }
+        end
+      RUBY
+
+      filter = introspector.send(:extract_filters_from_source, source).first
+      expect(filter[:if]).to eq('action_name == "create"')
+    end
+
+    it "does not invent an only: constraint the source never stated" do
+      source = <<~RUBY
+        class GuardedController < ApplicationController
+          before_action :verify_captcha, if: -> { action_name == "create" }
+        end
+      RUBY
+
+      filter = introspector.send(:extract_filters_from_source, source).first
+      expect(filter).not_to have_key(:only)
+    end
+
+    it "leaves other conditions as they were" do
+      source = <<~RUBY
+        class GuardedController < ApplicationController
+          before_action :verify_captcha, if: -> { current_user.suspicious? }
+        end
+      RUBY
+
+      filter = introspector.send(:extract_filters_from_source, source).first
+      expect(filter[:if]).to eq(RailsAiContext::Confidence::INFERRED)
+    end
+
+    it "keeps a symbol condition readable" do
+      source = <<~RUBY
+        class GuardedController < ApplicationController
+          before_action :verify_captcha, if: :signed_in?
+        end
+      RUBY
+
+      filter = introspector.send(:extract_filters_from_source, source).first
+      expect(filter[:if]).to eq("signed_in?")
     end
   end
 

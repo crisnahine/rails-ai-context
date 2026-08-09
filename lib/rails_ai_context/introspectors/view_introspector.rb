@@ -149,6 +149,8 @@ module RailsAiContext
       def detect_form_builders
         return {} unless Dir.exist?(views_dir)
 
+        # The glob spans ERB, HAML, Slim and Phlex `.rb`, and only the last has
+        # a Ruby AST. One text matcher keeps the count consistent across them.
         counts = Hash.new(0)
         view_files = Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim,rb}"))
         view_files.each do |path|
@@ -172,6 +174,7 @@ module RailsAiContext
         view_files = Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim,rb}"))
         view_files.each do |path|
           content = RailsAiContext::SafeFile.read(path) or next
+          # Same mixed-extension glob as above: text matching, not AST.
           # Match render ComponentName.new(...) or render(ComponentName.new(...))
           content.scan(/render\s*\(?\s*([A-Z]\w+(?:::\w+)*(?:Component)?)\.new/).each do |match|
             components << match[0]

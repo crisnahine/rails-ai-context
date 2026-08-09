@@ -434,6 +434,26 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(error).to include("password_digest")
       end
 
+      it "allows a built-in sensitive name that the app exempts" do
+        RailsAiContext.configuration.query_allowed_columns = %w[api_secret]
+        valid, error = described_class.validate_sql("SELECT api_secret FROM oauth_applications")
+        expect(error).to be_nil
+        expect(valid).to be true
+      end
+
+      it "keeps blocking the names the app did not exempt" do
+        RailsAiContext.configuration.query_allowed_columns = %w[api_secret]
+        valid, error = described_class.validate_sql("SELECT password_digest FROM users")
+        expect(valid).to be false
+        expect(error).to include("password_digest")
+      end
+
+      it "exempts case-insensitively" do
+        RailsAiContext.configuration.query_allowed_columns = %w[API_SECRET]
+        valid, = described_class.validate_sql("SELECT api_secret FROM oauth_applications")
+        expect(valid).to be true
+      end
+
       it "rejects references to configured query_redacted_columns" do
         RailsAiContext.configuration.query_redacted_columns = %w[custom_secret_field]
         valid, error = described_class.validate_sql("SELECT custom_secret_field AS y FROM tenants")

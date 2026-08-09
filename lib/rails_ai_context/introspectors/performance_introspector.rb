@@ -5,6 +5,12 @@ module RailsAiContext
     # Static analysis for common performance anti-patterns:
     # N+1 query risks, missing counter_cache, Model.all in controllers,
     # missing foreign key indexes.
+    #
+    # Model and class structure is read from the AST. The N+1 detection below
+    # deliberately stays on text: a risk is a correlation between a controller
+    # action, a query chain and an association touched in an ERB view, and ERB
+    # has no Ruby AST to walk. Matching both sides as text keeps them
+    # comparable, and every finding here is a heuristic, not a fact.
     class PerformanceIntrospector
       attr_reader :app
 
@@ -35,41 +41,11 @@ module RailsAiContext
       end
 
       def load_schema_data
-        schema_path = File.join(root, "db/schema.rb")
-        return {} unless File.exist?(schema_path)
+        SchemaReader.new(File.join(root, "db/schema.rb")).tables
+      end
 
-        content = RailsAiContext::SafeFile.read(schema_path)
-        return {} unless content
-        tables = {}
-
-        current_table = nil
-        inside_create_table = false
-        content.each_line do |line|
-          if (match = line.match(/create_table\s+"(\w+)"/))
-            current_table = match[1]
-            inside_create_table = true
-            tables[current_table] = { columns: [], indexes: [] }
-          elsif inside_create_table && line.match?(/\A\s*end\b/)
-            inside_create_table = false
-            current_table = nil
-          elsif inside_create_table
-            if (col = line.match(/t\.(\w+)\s+"(\w+)"/))
-              tables[current_table][:columns] << { type: col[1], name: col[2] }
-            elsif (ref = line.match(/t\.references\s+"(\w+)"/))
-              tables[current_table][:columns] << { type: "references", name: "#{ref[1]}_id" }
-            elsif (tidx = line.match(/t\.index\s+\[([^\]]+)\]/))
-              # t.index ["col_name"] inside create_table block
-              cols = tidx[1].gsub(/["'\s]/, "").split(",")
-              cols.each { |c| tables[current_table][:indexes] << c }
-            end
-          elsif (idx = line.match(/add_index\s+"(\w+)",\s+(?:"(\w+)"|\[([^\]]+)\])/))
-            table = idx[1]
-            col_name = idx[2] || idx[3]&.gsub(/["'\s]/, "")
-            tables[table][:indexes] << col_name if tables[table]
-          end
-        end
-
-        tables
+      def active_record_class_name(classes)
+        classes.find { |c| c[:superclass] == "ApplicationRecord" }&.fetch(:name)
       end
 
       def load_model_data
@@ -77,16 +53,14 @@ module RailsAiContext
         return [] unless Dir.exist?(models_dir)
 
         Dir.glob(File.join(models_dir, "**/*.rb")).filter_map do |path|
-          content = RailsAiContext::SafeFile.read(path)
-          next unless content&.match?(/< ApplicationRecord/)
-
-          class_name = content.match(/class\s+(\w+)/)[1] rescue nil
-          next unless class_name
-
           ast = SourceIntrospector.walk(path, {
+            classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
             includes: -> { Listeners::ChainedCallListener.new(:includes) }
           })
+
+          class_name = active_record_class_name(ast[:classes])
+          next unless class_name
 
           has_many = ast[:associations].select { |a| a[:type] == :has_many }.map do |a|
             opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
@@ -100,17 +74,12 @@ module RailsAiContext
 
           includes_calls = ast[:includes].map { |h| h[:args].map(&:to_s).join(", ") }
 
-          # scopes_with_includes: keep regex - complex inline lambda pattern
-          scopes_with_includes = content.scan(/scope\s+:\w+.*\.includes\(/).any?
-
           {
             name: class_name,
             file: path.sub("#{root}/", ""),
             has_many: has_many,
             belongs_to: belongs_to,
-            includes_calls: includes_calls,
-            scopes_with_includes: scopes_with_includes,
-            content: content
+            includes_calls: includes_calls
           }
         rescue => e
           $stderr.puts "[rails-ai-context] load_model_data failed: #{e.message}" if ENV["DEBUG"]
@@ -332,9 +301,9 @@ module RailsAiContext
           columns.each do |col|
             next unless col[:name].end_with?("_id")
 
-            indexed = table[:indexes].any? { |idx| idx.include?(col[:name]) }
-            # References type auto-creates index in Rails
-            next if col[:type] == "references"
+            indexed = table[:indexes].any? { |idx| idx[:columns].include?(col[:name]) }
+            # Rails indexes a reference column when it creates it.
+            next if %w[references belongs_to].include?(col[:type])
             next if indexed
 
             # Check for polymorphic association (_type column alongside _id)
@@ -344,8 +313,7 @@ module RailsAiContext
             if type_col
               # Polymorphic: need compound index on [type, id]
               compound_indexed = table[:indexes].any? { |idx|
-                idx_str = idx.to_s
-                idx_str.include?("#{base_name}_type") && idx_str.include?("#{base_name}_id")
+                idx[:columns].include?("#{base_name}_type") && idx[:columns].include?("#{base_name}_id")
               }
               unless compound_indexed
                 missing << {
@@ -376,9 +344,8 @@ module RailsAiContext
         models_dir = File.join(root, "app/models")
         model_names = if Dir.exist?(models_dir)
           Dir.glob(File.join(models_dir, "**/*.rb")).filter_map do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            match = content.match(/class\s+(\w+)\s*<\s*ApplicationRecord/)
-            match[1] if match
+            ast = SourceIntrospector.walk(path, { classes: Listeners::ClassDefinitionListener })
+            active_record_class_name(ast[:classes])
           end
         else
           []
@@ -386,7 +353,9 @@ module RailsAiContext
 
         return findings if model_names.empty?
 
-        # Build a single regex matching any model's .all call to avoid O(n*m) scanning
+        # One regex over every controller beats one AST walk per controller per
+        # model, and a `Model.all` mention is all this heuristic needs. Regex
+        # stays; the model names it looks for come from the AST above.
         escaped_names = model_names.map { |n| Regexp.escape(n) }
         combined_pattern = /(#{escaped_names.join("|")})\.all\b/
 
@@ -417,12 +386,12 @@ module RailsAiContext
         return candidates unless Dir.exist?(models_dir)
 
         Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path)
-          next unless content&.match?(/< ApplicationRecord/)
+          ast = SourceIntrospector.walk(path, {
+            classes: Listeners::ClassDefinitionListener,
+            associations: Listeners::AssociationsListener
+          })
 
-          class_name = content.match(/class\s+(\w+)/)[1] rescue next
-
-          ast = SourceIntrospector.walk(path, { associations: Listeners::AssociationsListener })
+          class_name = active_record_class_name(ast[:classes]) or next
           has_many_assocs = ast[:associations]
             .select { |a| a[:type] == :has_many }
             .map { |a| a[:name].to_s }

@@ -1,11 +1,25 @@
 # frozen_string_literal: true
 
+require "fileutils"
+require "securerandom"
+
 module RailsAiContext
   # Safe file reading with size limits and error handling.
   # Returns String on success, nil on any failure (missing, too large, unreadable).
   # Designed as a drop-in replacement for unguarded File.read calls across
   # introspectors and tools where nil is already handled.
   module SafeFile
+    # Write through a temp file in the same directory, then rename. A reader
+    # racing the write sees either the old file or the new one, never a
+    # half-written one.
+    def self.atomic_write(path, content)
+      dir = File.dirname(path)
+      FileUtils.mkdir_p(dir)
+      tmp = File.join(dir, ".#{File.basename(path)}.#{SecureRandom.hex(4)}.tmp")
+      File.write(tmp, content)
+      File.rename(tmp, path)
+    end
+
     def self.read(path, max_size: nil)
       return nil unless path && File.file?(path)
 

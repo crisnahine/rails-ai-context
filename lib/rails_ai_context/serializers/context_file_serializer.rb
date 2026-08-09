@@ -99,7 +99,7 @@ module RailsAiContext
         if File.exist?(filepath) && File.read(filepath) == content
           skipped << filepath
         else
-          atomic_write(filepath, content)
+          RailsAiContext::SafeFile.atomic_write(filepath, content)
           written << filepath
         end
       end
@@ -113,13 +113,6 @@ module RailsAiContext
         when :written then written << filepath
         when :skipped then skipped << filepath
         end
-      end
-
-      # Atomic write - same temp-file + rename pattern as
-      # SectionMarkerWriter.atomic_write. Kept here because write_plain
-      # (JSON path) calls it directly without the marker layer.
-      def atomic_write(filepath, content)
-        SectionMarkerWriter.atomic_write(filepath, content)
       end
 
       def generate_split_rules(formats, output_dir, written, skipped)

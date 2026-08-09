@@ -173,8 +173,11 @@ module RailsAiContext
         helpers.each do |rel|
           path = File.join(root, rel)
           next unless File.exist?(path)
-          content = RailsAiContext::SafeFile.read(path) or next
-          content.scan(/(?:config\.)?include\s+([\w:]+)/).each { |m| setup << m[0] }
+          ast = SourceIntrospector.walk(path, {
+            bare:    -> { Listeners::GenericMacroListener.new(:include) },
+            chained: -> { Listeners::ChainedCallListener.new(:include, receiver: :config) }
+          })
+          (ast[:bare] + ast[:chained]).each { |hit| setup.concat(hit[:values].map(&:to_s)) }
         end
         setup.uniq
       end
@@ -279,11 +282,11 @@ module RailsAiContext
           %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb].each do |helper|
             path = File.join(root, helper)
             next unless File.exist?(path)
-            helper_content = RailsAiContext::SafeFile.read(path)
-            next unless helper_content
-            if (match = helper_content.match(/DatabaseCleaner\.strategy\s*=\s*:(\w+)/))
-              strategy = match[1]
-            end
+            ast = SourceIntrospector.walk(path, {
+              cleaner: -> { Listeners::ConfigAssignmentListener.new(:DatabaseCleaner) }
+            })
+            hit = ast[:cleaner].find { |h| h[:assignment] && h[:path] == [ :strategy ] }
+            strategy = hit[:value].to_s if hit
           end
           { detected: true, strategy: strategy }.compact
         end

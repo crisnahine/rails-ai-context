@@ -327,7 +327,7 @@ module RailsAiContext
           names.uniq
         end
 
-        def gather_context(parsed, classification, file, line, action) # rubocop:disable Metrics
+        def gather_context(parsed, classification, file, line, action)
           lines = []
 
           # Controller context from action: parameter
@@ -421,7 +421,7 @@ module RailsAiContext
         end
 
         # Infer a specific diagnosis from the error + context
-        def infer_specific_cause(parsed, classification, file, action) # rubocop:disable Metrics
+        def infer_specific_cause(parsed, classification, file, action)
           msg = parsed[:message].to_s
           method = parsed[:method_name]
 

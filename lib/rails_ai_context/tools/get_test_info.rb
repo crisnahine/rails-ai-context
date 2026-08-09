@@ -234,7 +234,7 @@ module RailsAiContext
           next unless content
 
           # Summary/standard: return just test names (saves 2000+ tokens vs full source)
-          if detail == "summary" || detail == "standard"
+          if RailsAiContext::DetailLevel.summary?(detail) || RailsAiContext::DetailLevel.normalize(detail) == RailsAiContext::DetailLevel::STANDARD
             test_names = content.each_line.filter_map do |line|
               if line.match?(/^\s*(test|it|describe|context|specify)\s+["']/)
                 "- #{line.strip}"

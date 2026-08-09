@@ -179,8 +179,19 @@ module RailsAiContext
             column_type: node.name.to_s,
             name:        col_name,
             options:     options,
+            # A proc default (`default: -> { "now()" }`) has no literal value,
+            # so keep its source for callers that report defaults verbatim.
+            default_source: default_source(node),
             location:    node.location.start_line
           }
+        end
+
+        def default_source(node)
+          args = node.arguments&.arguments || []
+          assoc = args.grep(Prism::KeywordHashNode)
+                      .flat_map(&:elements)
+                      .find { |e| e.is_a?(Prism::AssocNode) && extract_key(e.key) == :default }
+          assoc&.value&.slice
         end
 
         def extract_index(node)

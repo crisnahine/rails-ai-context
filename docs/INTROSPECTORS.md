@@ -94,7 +94,6 @@ end
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| SourceIntrospector | `:source` | Prism AST: associations, validations, scopes, enums, callbacks, macros, methods |
 | MigrationIntrospector | `:migrations` | Migration files, versions, reversibility |
 | SeedsIntrospector | `:seeds` | Seed file analysis |
 | DatabaseStatsIntrospector | `:database_stats` | Table sizes, row counts, index stats |
@@ -171,9 +170,11 @@ These introspectors map directly onto the internal RAILS_NERVOUS_SYSTEM checklis
 
 ## AST-based introspection
 
-The **SourceIntrospector** uses Prism AST parsing for model analysis. It runs a single-pass Dispatcher that walks the AST once and feeds events to 7 listeners simultaneously:
+The **SourceIntrospector** uses Prism AST parsing for model analysis. It is infrastructure shared by the introspectors above rather than an introspector you can enable: there is no `:source` key for `config.introspectors`.
 
-### 7 Prism listeners
+It runs a single-pass Dispatcher that walks the AST once and feeds events to all registered listeners simultaneously. Model analysis uses the seven below by default; the rest are used through targeted walks (schema dumps, migrations, Gemfiles, rake tasks, initializers, components, and so on).
+
+### The 7 default Prism listeners
 
 | Listener | What it detects |
 |:---------|:---------------|
@@ -184,6 +185,51 @@ The **SourceIntrospector** uses Prism AST parsing for model analysis. It runs a 
 | CallbacksListener | All AR callback types, `after_commit` with `on:` resolution |
 | MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` |
 | MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self` |
+
+### The targeted-walk listeners
+
+Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file needs reading. Several take arguments, so one class serves many callers.
+
+| Listener | What it detects |
+|:---------|:---------------|
+| GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes |
+| ChainedCallListener | Calls on a receiver: `ChainedCallListener.new(:includes)`, or `receiver: :inflect` to pin the receiver. Reports the receiver name |
+| ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers, plus bare `config.jwt do ... end` section references. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`) |
+| ClassDefinitionListener | Class definitions with their superclass, namespaces resolved |
+| ComponentStructureListener | ViewComponent and Phlex structure: `renders_one`/`renders_many`, slot methods, hash/array constant tables, `case @ivar` variant branching, `CONST[@ivar]` indexing |
+| MiddlewareConfigListener | `config.middleware.use` / `insert_before` / `insert_after` |
+| SchemaDslListener | `schema.rb`: `create_table`, `t.string`, `t.index`, `add_foreign_key`, `create_enum` |
+| MigrationDslListener | Migration DSL: `create_table`, `add_column`, `add_index`, `add_reference`, and friends |
+| RoutesDslListener | `config/routes.rb`, resolving namespace/scope/resources nesting into flat routes |
+| MountListener | `mount Sidekiq::Web, at: "/sidekiq"` and the hash form |
+| GemfileDslListener | `gem "name", "version"` and `group :development do ... end` |
+| RakeTaskDslListener | `namespace`, `desc`, `task` in `.rake` files |
+| EnvAccessListener | `ENV["KEY"]`, `ENV.fetch("KEY")`, `ENV.fetch("KEY", default)` |
+| MongoidFieldsListener | Mongoid `field`, embedded relations, custom collection names |
+| MailboxRoutingListener | Action Mailbox `routing` and processing callbacks |
+| ModelReferenceListener | Model constants used in controllers: `Post.find`, `params.require(:post)`, ivar writes |
+| VariantCallListener | `variant` calls (ChainedCallListener with `:variant` preset) |
+
+### Adding a listener
+
+1. Subclass `BaseListener` in `lib/rails_ai_context/introspectors/listeners/`. Use its helpers rather than re-reading nodes: `extract_symbol_args`, `extract_keyword_options`, `extract_arg_values` (source-slice fallback for expressions like `2.hours`), `extract_keyword_sources`, `extract_keyword_nodes`, `keyword_hash`, `constant_path_string`.
+2. Implement the `on_*_node_enter` hooks you need and push plain hashes onto `@results`. Never return Prism nodes as the result itself; `option_nodes` is the one deliberate exception, for callers that must inspect an expression's shape.
+3. Register the event in `SourceIntrospector.register_listener` if it is not already in the list (call, def, class, module, block, singleton class, case, constant write).
+4. Add a spec of the same name under `spec/lib/rails_ai_context/introspectors/listeners/`.
+5. Add a row to the table above.
+
+### Choosing between AST and regex
+
+Use the AST when the thing you want **is** a Ruby construct: a macro call and its arguments, a method definition, a class and its superclass, an assignment, a constant, a `case`. If you find yourself running a regex over text you already parsed, that is a parse of a parse. Fix it at the node.
+
+Regex is the right tool, and stays, for:
+
+- **Files that are not Ruby.** `Gemfile.lock`, YAML (`database.yml`, `sidekiq.yml`, fixtures), `structure.sql`, Dockerfiles, ERB, HAML, Slim, JavaScript.
+- **Mixed-extension globs.** A view scan spanning ERB and Phlex `.rb` needs one matcher, or the two halves drift apart.
+- **Vocabulary classification.** "Does this middleware body talk about auth?" is about words, not structure; no node carries it.
+- **Anything the listeners cannot scope.** Tying a call to the enclosing action or `namespace` block needs block scope the listeners do not track, so those fall back to line scanning.
+
+Every remaining regex over `.rb` content carries a one-line comment saying which of these it is. If you add one without a reason, convert it instead.
 
 ### Confidence tagging
 

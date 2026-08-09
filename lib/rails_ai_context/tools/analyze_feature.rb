@@ -33,7 +33,7 @@ module RailsAiContext
       MAX_SCAN_FILES = 500
       AUTH_GEM_NAMES = %w[devise omniauth rodauth sorcery clearance authlogic warden jwt].freeze
 
-      def self.call(feature:, server_context: nil) # rubocop:disable Metrics
+      def self.call(feature:, server_context: nil)
         feature = feature.to_s.strip
         return text_response("Please provide a feature keyword (e.g. 'post', 'payment', 'authentication').") if feature.empty?
         set_call_params(feature: feature)

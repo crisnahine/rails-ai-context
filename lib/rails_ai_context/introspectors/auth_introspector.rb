@@ -5,6 +5,11 @@ module RailsAiContext
     # Discovers authentication and authorization setup: Devise, Rails 8 auth,
     # Pundit, CanCanCan, CORS, CSP.
     class AuthIntrospector
+      # Settings reported as a bare word rather than as their literal value,
+      # matching how Devise's own docs name the strategies.
+      SYMBOL_DEVISE_SETTINGS = %i[lock_strategy unlock_strategy].freeze
+      DEVISE_SETTINGS = (%i[timeout_in maximum_attempts password_length] + SYMBOL_DEVISE_SETTINGS).freeze
+
       attr_reader :app
 
       def initialize(app)
@@ -192,8 +197,8 @@ module RailsAiContext
 
         devise_init = File.join(root, "config/initializers/devise.rb")
         if File.exist?(devise_init)
-          content = RailsAiContext::SafeFile.read(devise_init)
-          return { detected: true, jwt_configured: content&.match?(/config\.jwt\b/) || false }
+          jwt = config_assignments(devise_init).any? { |hit| hit[:path].first == :jwt }
+          return { detected: true, jwt_configured: jwt }
         end
 
         { detected: true }
@@ -208,13 +213,15 @@ module RailsAiContext
         doorkeeper_init = File.join(root, "config/initializers/doorkeeper.rb")
         return { detected: true } unless File.exist?(doorkeeper_init)
 
-        content = RailsAiContext::SafeFile.read(doorkeeper_init)
-        return { detected: true } unless content
+        ast = SourceIntrospector.walk(doorkeeper_init, {
+          settings: -> { Listeners::GenericMacroListener.new(:grant_flows, :access_token_expires_in) }
+        })
 
-        grant_flows = content.scan(/grant_flows\s+%w\[([^\]]+)\]/).flatten.first
-        grant_flows = grant_flows&.split&.map(&:strip)
+        grant_flows = ast[:settings].find { |h| h[:macro] == :grant_flows }
+        grant_flows = Array(grant_flows[:values].first).map(&:to_s) if grant_flows
 
-        expires_in = content.match(/access_token_expires_in\s+(\S+)/)&.send(:[], 1)
+        expires_in = ast[:settings].find { |h| h[:macro] == :access_token_expires_in }
+        expires_in = expires_in[:values].first&.to_s if expires_in
 
         result = { detected: true }
         result[:grant_flows] = grant_flows if grant_flows
@@ -281,19 +288,28 @@ module RailsAiContext
       def extract_devise_settings
         path = File.join(app.root, "config", "initializers", "devise.rb")
         return {} unless File.exist?(path)
-        content = RailsAiContext::SafeFile.read(path)
-        return {} unless content
 
         settings = {}
-        settings[:timeout_in] = $1 if content.match(/config\.timeout_in\s*=\s*(\S+)/)
-        settings[:lock_strategy] = $1 if content.match(/config\.lock_strategy\s*=\s*:(\w+)/)
-        settings[:maximum_attempts] = $1.to_i if content.match(/config\.maximum_attempts\s*=\s*(\d+)/)
-        settings[:unlock_strategy] = $1 if content.match(/config\.unlock_strategy\s*=\s*:(\w+)/)
-        settings[:password_length] = $1 if content.match(/config\.password_length\s*=\s*(\S+)/)
-        settings.empty? ? {} : settings
+        config_assignments(path).each do |hit|
+          next unless hit[:assignment] && hit[:path].size == 1
+          key = hit[:path].first
+          next unless DEVISE_SETTINGS.include?(key)
+          settings[key] = devise_setting_value(key, hit)
+        end
+        settings
       rescue => e
         $stderr.puts "[rails-ai-context] extract_devise_settings failed: #{e.message}" if ENV["DEBUG"]
         {}
+      end
+
+      def devise_setting_value(key, hit)
+        return hit[:value].to_s if SYMBOL_DEVISE_SETTINGS.include?(key)
+        return hit[:value] if key == :maximum_attempts && hit[:value].is_a?(Integer)
+        hit[:source]
+      end
+
+      def config_assignments(path)
+        SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })[:config]
       end
 
       def scan_models_for_devise

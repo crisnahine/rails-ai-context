@@ -50,13 +50,8 @@ module RailsAiContext
         end
       end
 
-      # Write via temp file + rename so concurrent readers never see a partial.
       def atomic_write(filepath, content)
-        dir = File.dirname(filepath)
-        FileUtils.mkdir_p(dir)
-        tmp = File.join(dir, ".#{File.basename(filepath)}.#{SecureRandom.hex(4)}.tmp")
-        File.write(tmp, content)
-        File.rename(tmp, filepath)
+        RailsAiContext::SafeFile.atomic_write(filepath, content)
       end
     end
   end

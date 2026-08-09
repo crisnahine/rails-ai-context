@@ -64,7 +64,7 @@ module RailsAiContext
         end
 
         # Scan existing tests to learn project patterns
-        def detect_patterns(framework) # rubocop:disable Metrics
+        def detect_patterns(framework)
           root = rails_app.root.to_s
           real_root = File.realpath(root).to_s
           patterns = { factory_style: :create, let_style: true, expect_style: true, described_class: true }

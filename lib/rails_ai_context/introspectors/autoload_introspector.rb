@@ -6,6 +6,8 @@ module RailsAiContext
     # inflections, autoload/eager-load paths, collapsed dirs, and ignored
     # paths. Covers RAILS_NERVOUS_SYSTEM.md §3 (Autoloading - Zeitwerk).
     class AutoloadIntrospector
+      INFLECTION_DIRECTIVES = %i[acronym plural singular irregular uncountable human].freeze
+
       attr_reader :app
 
       def initialize(app)
@@ -102,26 +104,33 @@ module RailsAiContext
 
         inflections = []
         Dir.glob(File.join(dir, "*.rb")).sort.each do |path|
-          content = RailsAiContext::SafeFile.read(path) or next
           rel = path.sub("#{root}/", "")
+          ast = SourceIntrospector.walk(path, {
+            directives: -> { Listeners::ChainedCallListener.new(INFLECTION_DIRECTIVES, receiver: :inflect) },
+            chained:    -> { Listeners::ChainedCallListener.new(:inflect) },
+            bare:       -> { Listeners::GenericMacroListener.new(:inflect) }
+          })
 
           # inflect "api" => "API", "xml" => "XML"
-          content.scan(/inflect\(?\s*((?:["'][^"']+["']\s*=>\s*["'][^"']+["'],?\s*)+)/).each do |match|
-            pairs = match[0].scan(/["']([^"']+)["']\s*=>\s*["']([^"']+)["']/)
-            inflections.concat(pairs.map { |k, v| { file: rel, rule: "#{k} => #{v}" } })
+          (ast[:chained] + ast[:bare]).each do |hit|
+            hit[:options].each { |k, v| inflections << { file: rel, rule: "#{k} => #{v}" } }
           end
 
-          # inflect.acronym "API" / inflect.plural /…/, "…" / inflect.irregular "…", "…"
-          # Matches both inside `do |inflect|` blocks and via direct Inflector calls.
-          content.scan(/\binflect\.(acronym|plural|singular|irregular|uncountable|human)\s+["']([^"']+)["'](?:\s*,\s*["']([^"']+)["'])?/).each do |method, arg1, arg2|
-            rule = arg2 ? "#{method}: #{arg1} => #{arg2}" : "#{method}: #{arg1}"
-            inflections << { file: rel, rule: rule }
+          # inflect.acronym "API" / inflect.plural(/…/, "…") / inflect.irregular "…", "…"
+          ast[:directives].each do |hit|
+            inflections << { file: rel, rule: directive_rule(hit) }
           end
         end
         inflections.uniq
       rescue => e
         $stderr.puts "[rails-ai-context] extract_custom_inflections failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      def directive_rule(hit)
+        values = hit[:values].map(&:to_s)
+        return "#{hit[:method]}: #{values.first} => #{values.last}" if values.size > 1
+        "#{hit[:method]}: #{values.first}"
       end
 
       def relativize(paths)

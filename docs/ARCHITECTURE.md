@@ -26,7 +26,7 @@ graph TD
         subgraph engine["Introspection Engine"]
             direction LR
             I["Introspectors\n40 modules\nPresets\nCached"]
-            AST["AST Engine\nPrism\n20 listeners\nConfidence tags"]
+            AST["AST Engine\nPrism\n24 listeners\nConfidence tags"]
             H["Hydration Layer\nSchema hints\ninjected into\ntool responses"]
         end
 
@@ -115,8 +115,8 @@ The `Introspector` orchestrator runs configured introspectors and merges results
 **Prism AST parsing** replaced all regex-based Ruby source parsing in v5.2.0.
 
 - **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by path + SHA256 + mtime
-- **SourceIntrospector** - Single-pass Prism Dispatcher walks the AST once, feeds events to all 7 listeners simultaneously
-- **7 Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros, Methods
+- **SourceIntrospector** - Single-pass Prism Dispatcher walks the AST once, feeding every registered listener simultaneously
+- **21 Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros and Methods are the default map for model analysis; the rest are used through targeted walks over schema dumps, migrations, Gemfiles, rake tasks and initializers
 - **Confidence** - Every result carries `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions)
 
 ### Tool Registry (`lib/rails_ai_context/tools/base_tool.rb`)

@@ -5,6 +5,11 @@ module RailsAiContext
     # Reads actual view template contents and extracts metadata:
     # partial references, Stimulus controller usage, line counts.
     # Separate from ViewIntrospector which focuses on structural discovery.
+    #
+    # Every extractor here is regex by design. The same matcher runs over ERB,
+    # HAML, Slim and Phlex `.rb` views, and only the last of those has a Ruby
+    # AST. Splitting the Phlex path onto listeners would mean two definitions
+    # of "what a partial reference is" that could drift apart.
     class ViewTemplateIntrospector
       attr_reader :app
 
