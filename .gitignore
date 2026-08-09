@@ -13,7 +13,9 @@ spec/internal/log/
 
 # AI assistant configuration (local only)
 .claude/
+.superpowers/
 CLAUDE.md
+docs/superpowers/
 
 # MCP Registry auth tokens
 .mcpregistry_*
