@@ -35,41 +35,7 @@ module RailsAiContext
       end
 
       def load_schema_data
-        schema_path = File.join(root, "db/schema.rb")
-        return {} unless File.exist?(schema_path)
-
-        content = RailsAiContext::SafeFile.read(schema_path)
-        return {} unless content
-        tables = {}
-
-        current_table = nil
-        inside_create_table = false
-        content.each_line do |line|
-          if (match = line.match(/create_table\s+"(\w+)"/))
-            current_table = match[1]
-            inside_create_table = true
-            tables[current_table] = { columns: [], indexes: [] }
-          elsif inside_create_table && line.match?(/\A\s*end\b/)
-            inside_create_table = false
-            current_table = nil
-          elsif inside_create_table
-            if (col = line.match(/t\.(\w+)\s+"(\w+)"/))
-              tables[current_table][:columns] << { type: col[1], name: col[2] }
-            elsif (ref = line.match(/t\.references\s+"(\w+)"/))
-              tables[current_table][:columns] << { type: "references", name: "#{ref[1]}_id" }
-            elsif (tidx = line.match(/t\.index\s+\[([^\]]+)\]/))
-              # t.index ["col_name"] inside create_table block
-              cols = tidx[1].gsub(/["'\s]/, "").split(",")
-              cols.each { |c| tables[current_table][:indexes] << c }
-            end
-          elsif (idx = line.match(/add_index\s+"(\w+)",\s+(?:"(\w+)"|\[([^\]]+)\])/))
-            table = idx[1]
-            col_name = idx[2] || idx[3]&.gsub(/["'\s]/, "")
-            tables[table][:indexes] << col_name if tables[table]
-          end
-        end
-
-        tables
+        SchemaReader.new(File.join(root, "db/schema.rb")).tables
       end
 
       def load_model_data

@@ -157,36 +157,16 @@ module RailsAiContext
         [] # Some adapters don't support foreign_keys
       end
 
-      # Parse default values from schema.rb for a specific table.
-      # Used to supplement live DB column data when the adapter returns nil defaults.
-      # Caches the schema.rb content to avoid re-reading once per table.
+      # Supplements live DB column data when the adapter returns nil defaults.
       def parse_schema_defaults_for_table(table)
-        return {} unless File.exist?(schema_file_path)
-
-        @schema_rb_content ||= RailsAiContext::SafeFile.read(schema_file_path, max_size: RailsAiContext.configuration.max_schema_file_size)
-        return {} unless @schema_rb_content
-        defaults = {}
-        in_table = false
-
-        @schema_rb_content.each_line do |line|
-          if line.match?(/create_table\s+"#{Regexp.escape(table)}"/)
-            in_table = true
-          elsif in_table && line.match?(/\A\s*end\b/)
-            break
-          elsif in_table
-            # Match column with a simple default value (skip proc defaults like -> { })
-            if (match = line.match(/t\.\w+\s+"(\w+)".*,\s*default:\s*("[^"]*"|\d+(?:\.\d+)?|true|false)/))
-              col_name = match[1]
-              raw = match[2]
-              defaults[col_name] = raw.start_with?('"') ? raw[1..-2] : raw
-            end
-          end
-        end
-
-        defaults
+        schema_reader.defaults_for(table)
       rescue => e
         $stderr.puts "[rails-ai-context] parse_schema_defaults_for_table failed: #{e.message}" if ENV["DEBUG"]
         {}
+      end
+
+      def schema_reader
+        @schema_reader ||= SchemaReader.new(schema_file_path)
       end
 
       def current_schema_version
