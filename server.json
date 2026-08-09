@@ -2,17 +2,17 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.crisnahine/rails-ai-context",
   "title": "Rails AI Context",
-  "description": "38 MCP tools give AI agents live Rails schema, routes, models, and conventions.",
+  "description": "39 MCP tools give AI agents live Rails schema, routes, models, and conventions.",
   "repository": {
     "url": "https://github.com/crisnahine/rails-ai-context",
     "source": "github"
   },
-  "version": "5.12.0",
+  "version": "5.18.0",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/crisnahine/rails-ai-context/releases/download/v5.12.0/rails-ai-context-mcp.mcpb",
-      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "identifier": "https://github.com/crisnahine/rails-ai-context/releases/download/v5.18.0/rails-ai-context-mcp.mcpb",
+      "fileSha256": "dd711a0ad6c4de943ae4da94eaf59a6dc9494b9d57f726e24649ed4e2f156990",
       "transport": {
         "type": "stdio"
       }
