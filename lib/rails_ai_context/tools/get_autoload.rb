@@ -7,6 +7,10 @@ module RailsAiContext
       description "Get autoloading setup: Zeitwerk vs Classic mode, autoloaders with collapsed/ignored dirs, autoload/eager-load paths, and custom inflections. " \
         "Use when: debugging NameError/unloaded-constant issues, naming a file or class to match Zeitwerk rules, or checking custom inflections."
 
+      # Framework path lists run long; enough rows to cover an app's own paths
+      # plus the Rails defaults under them.
+      MAX_PATHS_SHOWN = 40
+
       input_schema(properties: {})
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
@@ -58,8 +62,8 @@ module RailsAiContext
           return if paths.empty?
 
           lines << "" << "## #{title} (#{paths.size})"
-          paths.first(40).each { |p| lines << "- `#{p}`" }
-          lines << "_... #{paths.size - 40} more_" if paths.size > 40
+          paths.first(MAX_PATHS_SHOWN).each { |p| lines << "- `#{p}`" }
+          lines << "_... #{paths.size - MAX_PATHS_SHOWN} more_" if paths.size > MAX_PATHS_SHOWN
         end
       end
     end

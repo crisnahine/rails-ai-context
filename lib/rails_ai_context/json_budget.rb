@@ -113,8 +113,9 @@ module RailsAiContext
 
       # The report rides inside the caller's own top-level object so existing
       # key paths still resolve - data["routes"] keeps working. A payload that
-      # is not an object has nowhere to hang it, so it moves under "data";
-      # that is the only shape change the reducer makes.
+      # is not an object has nowhere to hang it, so it moves under "data".
+      # Key order also changes on a reduced hash, since ordered_pairs spends
+      # the budget on scalars first.
       def with_note(kept, note)
         return { TRUNCATION_KEY => note, "data" => kept } unless kept.is_a?(Hash)
 

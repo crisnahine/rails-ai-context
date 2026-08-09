@@ -75,19 +75,7 @@ module RailsAiContext
             end
           end
 
-          lines << "" << "## Locale Files"
-          if page[:items].any?
-            page[:items].each do |f|
-              line = "- `#{f[:file]}`"
-              line += " - #{f[:key_count]} keys" if f[:key_count]
-              line += " - [parse error]" if f[:parse_error]
-              lines << line
-            end
-          else
-            lines << "_No locale files found under config/locales/._"
-          end
-
-          lines << "" << page[:hint] unless page[:hint].empty?
+          render_file_list(lines, page, "Locale Files", "_No locale files found under config/locales/._")
           text_response(lines.join("\n"))
         end
 
@@ -105,20 +93,26 @@ module RailsAiContext
           fallbacks = i18n[:fallbacks] || {}
           lines << "- **Fallbacks:** #{Array(fallbacks[locale.to_sym] || fallbacks[locale]).join(', ')}" if fallbacks[locale.to_sym] || fallbacks[locale]
 
-          lines << "" << "## Files for #{locale}"
+          render_file_list(lines, page, "Files for #{locale}", "_No locale files found for '#{locale}'._")
+          text_response(lines.join("\n"))
+        end
+
+        def render_file_list(lines, page, heading, empty_message)
+          lines << "" << "## #{heading}"
           if page[:items].any?
-            page[:items].each do |f|
-              line = "- `#{f[:file]}`"
-              line += " - #{f[:key_count]} keys" if f[:key_count]
-              line += " - [parse error]" if f[:parse_error]
-              lines << line
-            end
+            page[:items].each { |f| lines << file_line(f) }
           else
-            lines << "_No locale files found for '#{locale}'._"
+            lines << empty_message
           end
 
           lines << "" << page[:hint] unless page[:hint].empty?
-          text_response(lines.join("\n"))
+        end
+
+        def file_line(file)
+          line = "- `#{file[:file]}`"
+          line += " - #{file[:key_count]} keys" if file[:key_count]
+          line += " - [parse error]" if file[:parse_error]
+          line
         end
 
         # Mirrors the introspector's locale-file matching: en.yml, devise.en.yml,
