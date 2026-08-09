@@ -68,7 +68,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
         end
       RUBY
 
-      expect(reader.tables["profiles"][:indexes]).to contain_exactly(
+      expect(reader.tables["profiles"][:indexes].map { |i| i[:columns] }).to contain_exactly(
         %w[user_id primary], %w[user_id]
       )
     end
@@ -82,7 +82,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
         add_index "users", [ "email" ], unique: true
       RUBY
 
-      expect(reader.tables["users"][:indexes]).to eq([ %w[email] ])
+      expect(reader.tables["users"][:indexes].map { |i| i[:columns] }).to eq([ %w[email] ])
     end
 
     it "ignores an add_index naming a table it never saw" do
@@ -166,6 +166,85 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
       reader = reader_for('create_table "users" do |t|; t.string "email"; end')
 
       expect(reader.defaults_for("orders")).to eq({})
+    end
+  end
+
+  describe "column and index detail" do
+    it "keeps the declared options on a column" do
+      reader = reader_for(<<~RUBY)
+        create_table "users" do |t|
+          t.string "email", null: false, comment: "login"
+          t.string "tags", array: true
+        end
+      RUBY
+
+      email, tags = reader.tables["users"][:columns]
+      expect(email[:options]).to include(null: false, comment: "login")
+      expect(tags[:options]).to include(array: true)
+    end
+
+    it "keeps the declared options on an index" do
+      reader = reader_for(<<~RUBY)
+        create_table "users" do |t|
+          t.index [ "email" ], name: "idx_users_email", unique: true
+        end
+      RUBY
+
+      index = reader.tables["users"][:indexes].first
+      expect(index[:columns]).to eq(%w[email])
+      expect(index[:options]).to include(name: "idx_users_email", unique: true)
+    end
+
+    it "keeps the create_table options for the table" do
+      reader = reader_for('create_table "users", id: false, force: :cascade do |t|; end')
+
+      expect(reader.tables["users"][:options]).to include(id: false)
+    end
+  end
+
+  describe "#foreign_keys" do
+    it "reads top-level foreign keys" do
+      reader = reader_for(<<~RUBY)
+        create_table "posts" do |t|
+          t.integer "author_id"
+        end
+
+        add_foreign_key "posts", "users"
+      RUBY
+
+      expect(reader.foreign_keys).to eq([ { from: "posts", to: "users" } ])
+    end
+  end
+
+  describe "#enums" do
+    it "reads enum type declarations" do
+      reader = reader_for('create_enum "status", [ "draft", "live" ]')
+
+      expect(reader.enums).to eq([ { name: "status", values: %w[draft live] } ])
+    end
+  end
+
+  describe "#check_constraints" do
+    it "attaches an in-table constraint to its table" do
+      reader = reader_for(<<~RUBY)
+        create_table "users" do |t|
+          t.check_constraint "age > 0"
+        end
+      RUBY
+
+      expect(reader.check_constraints).to eq([ { table: "users", expression: "age > 0" } ])
+    end
+
+    it "reads a top-level constraint with its own table" do
+      reader = reader_for(<<~RUBY)
+        create_table "users" do |t|
+          t.integer "age"
+        end
+
+        add_check_constraint "users", "age < 200"
+      RUBY
+
+      expect(reader.check_constraints).to eq([ { table: "users", expression: "age < 200" } ])
     end
   end
 

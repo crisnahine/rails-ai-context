@@ -740,6 +740,35 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    it "reads each dump's own generated columns" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 2024_01_01_000000) do
+            create_table "users" do |t|
+              t.virtual "full_name", type: :string, as: "first || last", stored: true
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "db", "queue_schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 2019_09_20_000000) do
+            create_table "solid_queue_jobs" do |t|
+              t.virtual "priority_label", type: :string, as: "x", stored: true
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:generated_columns]).to contain_exactly(
+          a_hash_including(table: "users", column: "full_name")
+        )
+        expect(result[:secondary_databases]["queue"][:generated_columns]).to contain_exactly(
+          a_hash_including(table: "solid_queue_jobs", column: "priority_label")
+        )
+      end
+    end
+
     it "omits the key entirely when no secondary dumps exist" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "db"))

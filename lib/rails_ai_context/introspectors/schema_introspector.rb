@@ -16,28 +16,6 @@ module RailsAiContext
         return attach_secondary_databases(static_schema_parse) unless active_record_connected?
         return attach_secondary_databases(static_schema_parse) if table_names.empty?
 
-        schema_content = File.exist?(schema_file_path) ? (RailsAiContext::SafeFile.read(schema_file_path, max_size: RailsAiContext.configuration.max_schema_file_size) || "") : ""
-
-        check_constraints = []
-        enum_types = []
-        if File.exist?(schema_file_path) && defined?(Listeners::SchemaDslListener)
-          ast_results = SourceIntrospector.walk(schema_file_path, { schema: -> { Listeners::SchemaDslListener.new } })
-          schema_results = ast_results[:schema]
-
-          current_table = nil
-          schema_results.sort_by { |r| r[:location] }.each do |entry|
-            case entry[:type]
-            when :create_table then current_table = entry[:table]
-            when :check_constraint
-              check_constraints << { table: current_table, expression: entry[:expression] } if current_table
-            when :add_check_constraint
-              check_constraints << { table: entry[:table], expression: entry[:expression] }
-            when :enum
-              enum_types << { name: entry[:name], values: entry[:values] }
-            end
-          end
-        end
-
         attach_secondary_databases({
           adapter: adapter_name,
           tables: extract_tables,
@@ -45,7 +23,7 @@ module RailsAiContext
           schema_version: current_schema_version,
           check_constraints: check_constraints,
           enum_types: enum_types,
-          generated_columns: parse_generated_columns(schema_content)
+          generated_columns: generated_columns(schema_reader)
         })
       end
 
@@ -169,6 +147,16 @@ module RailsAiContext
         @schema_reader ||= SchemaReader.new(schema_file_path)
       end
 
+      # Constraints and enum types are declared in the dump, not reported by
+      # the adapter, so the live tier reads them from schema.rb too.
+      def check_constraints
+        schema_reader.check_constraints
+      end
+
+      def enum_types
+        schema_reader.enums
+      end
+
       def current_schema_version
         RailsAiContext::SchemaVersion.current(app.root.to_s)
       rescue => e
@@ -284,93 +272,71 @@ module RailsAiContext
         result
       end
 
+      # create_table implies an id primary key unless disabled; the runtime
+      # tier reports it, so the static parse must too. Composite primary keys
+      # (primary_key: [...]) dump their columns as explicit t.* lines -
+      # synthesizing an id there would invent a column that does not exist.
+      def implicit_primary_key(options, path)
+        pk_opt = options[:primary_key]
+        composite_pk = !pk_opt.nil? && !pk_opt.is_a?(String) && !pk_opt.is_a?(Symbol)
+        return [] if options[:id] == false || composite_pk
+
+        id_type = options[:id].is_a?(String) || options[:id].is_a?(Symbol) ? options[:id].to_s : implicit_pk_type(path)
+        [ { name: pk_opt ? pk_opt.to_s : "id", type: id_type, null: false, primary_key: true } ]
+      end
+
+      def static_column(column)
+        options = column[:options]
+        entry = { name: column[:name], type: column[:type] }
+        entry[:null] = false if options[:null] == false
+        entry[:default] = column[:default] unless column[:default].nil?
+        entry[:array] = true if options[:array] == true
+        entry[:comment] = options[:comment] if options[:comment].is_a?(String)
+        entry
+      end
+
+      def static_index(index)
+        columns = index[:columns]
+        return nil if columns.empty?
+
+        entry = {
+          name:    index[:options][:name]&.to_s,
+          columns: columns,
+          unique:  index[:options][:unique] == true
+        }
+        # An expression index (e.g. "lower(email)") names no plain column.
+        entry[:expression] = true if columns.size == 1 && !columns.first.match?(/\A\w+\z/)
+        entry.compact
+      end
+
       def parse_schema_rb(path)
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "schema.rb too large (#{File.size(path)} bytes)" } unless content
 
-        ast_data = SourceIntrospector.walk(path, { schema: -> { Listeners::SchemaDslListener.new } })
-        results = ast_data[:schema].sort_by { |r| r[:location] }
+        schema = SchemaReader.new(path)
 
         tables = {}
-        current_table = nil
+        schema.tables.each do |table_name, declared|
+          next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
 
-        results.each do |entry|
-          case entry[:type]
-          when :create_table
-            table_name = entry[:table]
-            if table_name.start_with?("ar_internal_metadata", "schema_migrations")
-              current_table = nil
-            else
-              current_table = table_name
-              tables[current_table] = { columns: [], indexes: [], foreign_keys: [] }
-              # create_table implies an id primary key unless disabled; the
-              # runtime tier reports it, so the static parse must too.
-              # Composite primary keys (primary_key: [...]) dump their columns
-              # as explicit t.* lines - synthesizing an id there would invent
-              # a column that does not exist.
-              opts = entry[:options] || {}
-              pk_opt = opts[:primary_key]
-              composite_pk = !pk_opt.nil? && !pk_opt.is_a?(String) && !pk_opt.is_a?(Symbol)
-              unless opts[:id] == false || composite_pk
-                id_type = opts[:id].is_a?(String) || opts[:id].is_a?(Symbol) ? opts[:id].to_s : implicit_pk_type(path)
-                pk_name = pk_opt ? pk_opt.to_s : "id"
-                tables[current_table][:columns] << { name: pk_name, type: id_type, null: false, primary_key: true }
-              end
-            end
-          when :column
-            next unless current_table && tables[current_table]
-            col = { name: entry[:name], type: entry[:column_type] }
-            opts = entry[:options] || {}
-            col[:null] = false if opts[:null] == false
-            unless opts[:default].nil? || opts[:default] == RailsAiContext::Confidence::INFERRED
-              raw = opts[:default]
-              col[:default] = raw.is_a?(String) ? raw : raw.to_s
-            end
-            col[:array] = true if opts[:array] == true
-            col[:comment] = opts[:comment] if opts[:comment].is_a?(String)
-            tables[current_table][:columns] << col
-          when :index
-            next unless current_table && tables[current_table]
-            cols = entry[:columns].map(&:to_s)
-            opts = entry[:options] || {}
-            unique = opts[:unique] == true
-            idx_name = opts[:name]&.to_s
-            if cols.size == 1 && !cols.first.match?(/\A\w+\z/)
-              # Expression index (e.g. "lower(email)")
-              tables[current_table][:indexes] << { name: idx_name, columns: cols, unique: unique, expression: true }.compact
-            else
-              tables[current_table][:indexes] << { name: idx_name, columns: cols, unique: unique }.compact if cols.any?
-            end
-          when :foreign_key
-            from_table = entry[:from]
-            to_table = entry[:to]
-            # SchemaDslListener doesn't capture column/primary_key options for
-            # add_foreign_key; fall back to convention.
-            column = "#{to_table.singularize}_id"
-            tables[from_table]&.dig(:foreign_keys)&.push({
-              from_table: from_table, to_table: to_table,
-              column: column, primary_key: "id"
-            })
-          end
+          tables[table_name] = {
+            columns: implicit_primary_key(declared[:options], path) + declared[:columns].map { |c| static_column(c) },
+            indexes: declared[:indexes].filter_map { |i| static_index(i) },
+            foreign_keys: []
+          }
         end
 
-        # Handle top-level add_index statements via AST (SchemaDslListener :add_index type)
-        results.select { |r| r[:type] == :add_index }.each do |entry|
-          table_name = entry[:table]
-          cols = entry[:columns].map(&:to_s)
-          opts = entry[:options] || {}
-          unique = opts[:unique] == true
-          idx_name = opts[:name]&.to_s
-          tables[table_name]&.dig(:indexes)&.push({ name: idx_name, columns: cols, unique: unique }.compact) if cols.any?
+        schema.foreign_keys.each do |fk|
+          # SchemaDslListener doesn't capture column/primary_key options for
+          # add_foreign_key; fall back to convention.
+          tables[fk[:from]]&.dig(:foreign_keys)&.push({
+            from_table: fk[:from], to_table: fk[:to],
+            column: "#{fk[:to].singularize}_id", primary_key: "id"
+          })
         end
 
-        # Extract check constraints via AST
-        check_constraints = extract_check_constraints_from_ast(results, tables)
-
-        # Extract enum types via AST (SchemaDslListener :enum type)
-        enum_types = results.select { |r| r[:type] == :enum }.map do |entry|
-          { name: entry[:name], values: entry[:values] }
-        end
+        check_constraints = schema.check_constraints
+        enum_types = schema.enums
 
         version = schema_version_for(path)
         # schema.rb records only the max applied version, so pending here
@@ -390,7 +356,7 @@ module RailsAiContext
           pending_migrations: pending,
           check_constraints: check_constraints,
           enum_types: enum_types,
-          generated_columns: parse_generated_columns(content),
+          generated_columns: generated_columns(schema),
           note: "Parsed from db/schema.rb (no DB connection)"
         }
       end
@@ -642,62 +608,19 @@ module RailsAiContext
         columns
       end
 
-      # Extract check constraints from AST results (SchemaDslListener).
-      # Handles both t.check_constraint (inside create_table) and
-      # top-level add_check_constraint.
-      def extract_check_constraints_from_ast(ast_results, tables)
-        constraints = []
-        current_table = nil
+      # Reads the dump it is given: a secondary database declares its own
+      # generated columns, which are not in the primary schema.rb.
+      def generated_columns(schema)
+        schema.tables.flat_map { |table, declared|
+          declared[:columns].filter_map { |column|
+            options = column[:options]
+            next unless options[:virtual] == true || options[:stored] == true
 
-        ast_results.sort_by { |r| r[:location] }.each do |entry|
-          case entry[:type]
-          when :create_table
-            current_table = entry[:table]
-          when :check_constraint
-            constraints << { table: current_table, expression: entry[:expression] } if current_table
-          when :add_check_constraint
-            constraints << { table: entry[:table], expression: entry[:expression] }
-          end
-        end
-
-        constraints
+            { table: table, column: column[:name], stored: options[:stored] == true }
+          }
+        }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_check_constraints_from_ast failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      # Extract generated/virtual columns from AST results (SchemaDslListener).
-      # Detects columns with virtual: true or stored: true options.
-      def parse_generated_columns(content)
-        return [] if content.nil? || content.empty?
-
-        # Parse with SchemaDslListener if not already done
-        path = schema_file_path
-        return [] unless File.exist?(path)
-
-        ast_results = SourceIntrospector.walk(path, { schema: -> { Listeners::SchemaDslListener.new } })
-        results = ast_results[:schema].sort_by { |r| r[:location] }
-
-        columns = []
-        current_table = nil
-
-        results.each do |entry|
-          case entry[:type]
-          when :create_table
-            current_table = entry[:table]
-          when :column
-            next unless current_table
-            opts = entry[:options] || {}
-            if opts[:virtual] == true || opts[:stored] == true
-              stored = opts[:stored] == true
-              columns << { table: current_table, column: entry[:name], stored: stored }
-            end
-          end
-        end
-
-        columns
-      rescue => e
-        $stderr.puts "[rails-ai-context] parse_generated_columns failed: #{e.message}" if ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] generated_columns failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

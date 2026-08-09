@@ -298,7 +298,7 @@ module RailsAiContext
           columns.each do |col|
             next unless col[:name].end_with?("_id")
 
-            indexed = table[:indexes].any? { |idx| idx.include?(col[:name]) }
+            indexed = table[:indexes].any? { |idx| idx[:columns].include?(col[:name]) }
             # References type auto-creates index in Rails
             next if col[:type] == "references"
             next if indexed
@@ -310,8 +310,7 @@ module RailsAiContext
             if type_col
               # Polymorphic: need compound index on [type, id]
               compound_indexed = table[:indexes].any? { |idx|
-                idx_str = idx.to_s
-                idx_str.include?("#{base_name}_type") && idx_str.include?("#{base_name}_id")
+                idx[:columns].include?("#{base_name}_type") && idx[:columns].include?("#{base_name}_id")
               }
               unless compound_indexed
                 missing << {

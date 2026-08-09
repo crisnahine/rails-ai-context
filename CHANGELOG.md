@@ -7,12 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Secondary database dumps report their own generated columns.** Parsing
+  `db/queue_schema.rb` read generated columns from the primary `db/schema.rb`
+  instead of the dump being parsed.
+
 ### Changed
 
 - **schema.rb is read through one AST-backed reader.** `SchemaIntrospector`,
   `PerformanceIntrospector` and `ConventionIntrospector` each parsed the dump
   line by line with their own `create_table` regex; they now share
-  `SchemaReader`, built on the existing `SchemaDslListener`. Column defaults
+  `SchemaReader`, built on the existing `SchemaDslListener`, as do the static
+  tier's table parse and the check-constraint, enum and generated-column
+  reads that each walked the dump separately. Column defaults
   split across lines are picked up, a proc default reports its source instead
   of being dropped, index matching compares whole column names rather than
   substrings, and a reference column is recorded as its foreign key.
