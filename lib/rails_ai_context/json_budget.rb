@@ -46,6 +46,13 @@ module RailsAiContext
     MINIMUM_TRUNCATION_JSON = %({"#{TRUNCATION_KEY}":true})
 
     class << self
+      # Resource payloads ride a single JSON-RPC frame with no transport-level
+      # size guard, so they get the same char cap tool responses do: a huge
+      # schema or routing table must not produce an unbounded payload.
+      def for_resource(data)
+        generate(data, RailsAiContext.configuration.max_tool_response_chars)
+      end
+
       # Pretty JSON when the payload fits, a reduced compact document when it
       # does not. Never returns a string that fails to parse.
       def generate(data, max)
