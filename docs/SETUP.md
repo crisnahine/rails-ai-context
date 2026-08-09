@@ -298,7 +298,7 @@ Type in Claude Code's prompt:
 What MCP tools do you have access to?
 ```
 
-You should see `rails_get_schema`, `rails_search_code`, and the other 36 tools listed.
+You should see `rails_get_schema`, `rails_search_code`, and the other 43 tools listed.
 
 ### Cursor
 

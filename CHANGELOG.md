@@ -31,10 +31,10 @@ automatically in both MCP and CLI:
   MessageVerifier/MessageEncryptor usage, tagged logging, subscribed
   `on_load` hooks, and cache store (data: `:active_support` introspector,
   previously unreachable).
-- **`rails_get_environments`** - per-environment configuration from
+- **`rails_get_env_config`** - per-environment configuration from
   `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`,
   caching, log level, queue adapter, mailer delivery) and every config key
-  each environment sets. Backed by the new **EnvironmentIntrospector**
+  each environment sets. Backed by the new **EnvConfigIntrospector**
   (40 introspectors total, wired into `PRESETS[:full]`; file-based, so it
   also works in the static tier).
 
@@ -55,8 +55,8 @@ automatically in both MCP and CLI:
   They now fit the cap by dropping whole elements from the data rather than
   slicing the serialized string, so a capped payload still parses as the
   `application/json` it is labeled. What was dropped is reported under a
-  `_truncated` key, and every value still present is exact. New
-  `RailsAiContext::JsonBudget` owns the reduction.
+  `_truncated` key, which also counts any over-long string value that had to
+  be cut. New `RailsAiContext::JsonBudget` owns the reduction.
 - **A committed SSE stream is no longer overwritten by the error handler.**
   `McpController#handle`'s rescue set a status, headers, and a JSON body on
   responses that were already on the wire - closing a stream commits it, so

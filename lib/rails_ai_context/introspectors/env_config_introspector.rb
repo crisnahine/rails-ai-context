@@ -8,8 +8,12 @@ module RailsAiContext
     # compare across environments (force_ssl, eager_load, caching, logging,
     # queue adapter, mailer delivery).
     #
+    # Not EnvIntrospector, which reads environment variables and ENV[] usage.
+    # This one reads the environment config files; that one reads the process
+    # environment.
+    #
     # File-based only: works in the static tier, so static_call aliases call.
-    class EnvironmentIntrospector
+    class EnvConfigIntrospector
       attr_reader :app
 
       # Assignments whose values are lifted into the per-env `notable` hash.
@@ -38,7 +42,7 @@ module RailsAiContext
           environments: files
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] EnvironmentIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] EnvConfigIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
         { error: e.message }
       end
 

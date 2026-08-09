@@ -2,10 +2,10 @@
 
 require "spec_helper"
 
-RSpec.describe RailsAiContext::Tools::GetEnvironments do
+RSpec.describe RailsAiContext::Tools::GetEnvConfig do
   before { described_class.reset_cache! }
 
-  let(:environments_data) do
+  let(:env_config_data) do
     {
       current: "development",
       count: 2,
@@ -27,7 +27,7 @@ RSpec.describe RailsAiContext::Tools::GetEnvironments do
   end
 
   before do
-    allow(described_class).to receive(:cached_context).and_return({ environments: environments_data })
+    allow(described_class).to receive(:cached_context).and_return({ env_config: env_config_data })
   end
 
   describe ".call" do
@@ -66,7 +66,7 @@ RSpec.describe RailsAiContext::Tools::GetEnvironments do
     context "when no environment files exist" do
       before do
         allow(described_class).to receive(:cached_context)
-          .and_return({ environments: { current: "development", count: 0, environments: [] } })
+          .and_return({ env_config: { current: "development", count: 0, environments: [] } })
       end
 
       it "says so plainly" do
@@ -80,16 +80,16 @@ RSpec.describe RailsAiContext::Tools::GetEnvironments do
 
       it "says how to enable it" do
         text = described_class.call.content.first[:text]
-        expect(text).to include("Add :environments to introspectors")
+        expect(text).to include("Add :env_config to introspectors")
       end
     end
 
     context "when introspection failed" do
-      before { allow(described_class).to receive(:cached_context).and_return({ environments: { error: "boom" } }) }
+      before { allow(described_class).to receive(:cached_context).and_return({ env_config: { error: "boom" } }) }
 
       it "reports the failure honestly" do
         text = described_class.call.content.first[:text]
-        expect(text).to include("Environment introspection failed: boom")
+        expect(text).to include("Environment config introspection failed: boom")
       end
     end
   end

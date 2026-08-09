@@ -269,7 +269,7 @@ RSpec.describe "Cursor MDC compliance" do
         rails_diagnose rails_review_changes rails_onboard rails_runtime_info
         rails_session_context
         rails_get_i18n rails_get_mailers rails_get_engines
-        rails_get_autoload rails_get_active_support rails_get_environments
+        rails_get_autoload rails_get_active_support rails_get_env_config
       ].each do |tool|
         expect(content).to include(tool),
           "MCP tools rule missing tool: #{tool}"

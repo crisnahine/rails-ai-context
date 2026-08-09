@@ -58,7 +58,7 @@ graph LR
         F13["multi_database"] ~~~ F14["frontend_frameworks"]
         F15["initializers"] ~~~ F16["autoload"] ~~~ F17["connection_pool"]
         F18["active_support"] ~~~ F19["credentials"] ~~~ F20["security"]
-        F21["observability"] ~~~ F22["env"] ~~~ F23["environments"]
+        F21["observability"] ~~~ F22["env"] ~~~ F23["env_config"]
     end
 
     standard --> full_only
@@ -120,7 +120,7 @@ end
 | I18nIntrospector | `:i18n` | Locale files, translation keys |
 | MiddlewareIntrospector | `:middleware` | Rack middleware stack |
 | EngineIntrospector | `:engines` | Mounted engines |
-| EnvironmentIntrospector | `:environments` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys |
+| EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys |
 | DevopsIntrospector | `:devops` | Dockerfile, CI config, deployment |
 
 ### Jobs & Services

@@ -25,7 +25,7 @@ graph TD
 
         subgraph engine["Introspection Engine"]
             direction LR
-            I["Introspectors\n31 modules\nPresets\nCached"]
+            I["Introspectors\n40 modules\nPresets\nCached"]
             AST["AST Engine\nPrism\n20 listeners\nConfidence tags"]
             H["Hydration Layer\nSchema hints\ninjected into\ntool responses"]
         end
@@ -73,7 +73,7 @@ sequenceDiagram
     alt cache hit (TTL + fingerprint valid)
         Cache-->>TR: cached context
     else cache miss
-        Cache->>App: introspect (31 modules)
+        Cache->>App: introspect (40 modules)
         App-->>Cache: structured data
         Cache-->>TR: fresh context
     end

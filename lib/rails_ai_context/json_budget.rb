@@ -11,7 +11,8 @@ module RailsAiContext
   # mime type, so the same trick ends the body mid-object and JSON.parse raises.
   # The budget is applied to the DATA instead: whole elements are dropped until
   # what remains fits, and what went missing is reported under a reserved
-  # "_truncated" key. Every value still present is exact.
+  # "_truncated" key. Values are otherwise served exact, except an over-long
+  # string, which is cut at a marker and counted in the report.
   module JsonBudget
     # Reserved key carrying the reduction report on an oversized payload, and
     # the marker left inside a string value that had to be cut.

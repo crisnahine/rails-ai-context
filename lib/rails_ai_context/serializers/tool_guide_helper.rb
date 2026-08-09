@@ -285,7 +285,7 @@ module RailsAiContext
         [ "rails_get_engines", "engines", nil, "Mounted engines + loaded engine classes with route/model counts" ],
         [ "rails_get_autoload", "autoload", nil, "Zeitwerk mode, autoload/eager-load paths, collapsed dirs, custom inflections" ],
         [ "rails_get_active_support", "active_support", nil, "Concerns registry, deprecators, MessageVerifier usage, on_load hooks, cache store" ],
-        [ 'rails_get_environments(environment:"production")', "environments", "environment=production", "Per-environment config: notable toggles + config keys each env sets" ]
+        [ 'rails_get_env_config(environment:"production")', "environments", "environment=production", "Per-environment config: notable toggles + config keys each env sets" ]
       ].freeze
 
       def build_tools_table(include_mcp:)

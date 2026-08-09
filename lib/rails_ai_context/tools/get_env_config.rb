@@ -2,11 +2,12 @@
 
 module RailsAiContext
   module Tools
-    class GetEnvironments < BaseTool
-      tool_name "rails_get_environments"
+    class GetEnvConfig < BaseTool
+      tool_name "rails_get_env_config"
       description "Get per-environment configuration from config/environments/*.rb: notable toggles (force_ssl, eager_load, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. " \
         "Use when: comparing development vs production behavior, debugging env-specific bugs, or checking what a custom environment changes. " \
-        "Filter with environment:\"production\". Omit for all environments."
+        "Filter with environment:\"production\". Omit for all environments. " \
+        "For environment variables and ENV[] usage, use rails_get_env instead."
 
       input_schema(
         properties: {
@@ -20,9 +21,9 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(environment: nil, server_context: nil)
-        envs = cached_context[:environments]
-        return text_response("Environment introspection not available. Add :environments to introspectors.") unless envs
-        return text_response("Environment introspection failed: #{envs[:error]}") if envs[:error]
+        envs = cached_context[:env_config]
+        return text_response("Environment config introspection not available. Add :env_config to introspectors.") unless envs
+        return text_response("Environment config introspection failed: #{envs[:error]}") if envs[:error]
         note = unavailable_note(envs)
         return text_response(note) if note
 

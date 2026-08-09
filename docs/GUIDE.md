@@ -1415,7 +1415,7 @@ Includes all standard introspectors plus:
 | `seeds` | db/seeds.rb analysis (Faker usage, environment conditionals), seed files in db/seeds/, models seeded. |
 | `middleware` | Custom Rack middleware in app/middleware/ with detected patterns (auth, rate limiting, tenant isolation, logging). Full middleware stack. |
 | `engines` | Mounted Rails engines from routes.rb with paths and descriptions for 23+ known engines (Sidekiq::Web, Flipper::UI, PgHero, ActiveAdmin, etc.). |
-| `environments` | Per-environment config files (`config/environments/*.rb`): notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) with URI credentials redacted, assigned config keys. |
+| `env_config` | Per-environment config files (`config/environments/*.rb`): notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) with URI credentials redacted, assigned config keys. |
 | `multi_database` | Multiple databases, replicas, sharding config, model-specific `connects_to` declarations. database.yml parsing fallback. |
 | `frontend_frameworks` | Frontend JS framework detection (React/Vue/Svelte/Angular), mounting strategy (Inertia/react-rails), TypeScript config, state management, package manager. |
 | `database_stats` | PostgreSQL approximate row counts via `pg_stat_user_tables`. Gracefully skips on non-PostgreSQL adapters. |

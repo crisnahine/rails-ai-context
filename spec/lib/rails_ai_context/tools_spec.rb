@@ -111,7 +111,7 @@ RSpec.describe "MCP Tool Integration" do
         "rails_get_engines",
         "rails_get_autoload",
         "rails_get_active_support",
-        "rails_get_environments"
+        "rails_get_env_config"
       )
     end
 

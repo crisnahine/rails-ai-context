@@ -336,7 +336,7 @@ Every tool is **read-only** and returns data verified against your actual app - 
 | `get_engines` | Mounted engines (with known-engine descriptions) + loaded engine classes |
 | `get_autoload` | Zeitwerk mode, autoload/eager-load paths, collapsed dirs, custom inflections |
 | `get_active_support` | Concerns registry, deprecators, MessageVerifier usage, on_load hooks, cache store |
-| `get_environments` | Per-environment config: notable toggles + every config key each env sets |
+| `get_env_config` | Per-environment config: notable toggles + every config key each env sets |
 
 </details>
 

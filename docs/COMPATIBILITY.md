@@ -80,6 +80,7 @@ that define a `static_call` path can answer without a booted app:
 | `routes` | `config/routes.rb` parsed with a dedicated Prism listener |
 | `models` | `app/models/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
 | `controllers` | `app/controllers/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
+| `env_config` | `config/environments/*.rb` read from disk - file-based, so the static tier serves the same data as a booted app |
 
 The other 34 introspectors (views, jobs, gems, turbo, i18n, active_storage,
 auth, api, and the rest) have no static path and report `{ unavailable: reason
@@ -167,7 +168,7 @@ Proof sources:
    prints to stdout, writes via the `STDOUT` constant, hangs past the
    timeout) plus `spec/e2e/static_tier_spec.rb` ("broken-boot app over the
    CLI", "broken-boot app over MCP stdio", "syntax error in one model file").
-8. No introspector outside the five in the operating-tiers table defines
+8. No introspector outside the six in the operating-tiers table defines
    `static_call` (`lib/rails_ai_context/introspectors/view_introspector.rb`
    has none); `Introspector#run_introspector` reports `{ unavailable: reason
    }` for every such section regardless of shape.

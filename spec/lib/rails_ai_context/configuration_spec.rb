@@ -65,7 +65,7 @@ RSpec.describe RailsAiContext::Configuration do
     it "sets introspectors to full preset" do
       config.preset = :full
       expect(config.introspectors.size).to eq(40)
-      expect(config.introspectors).to include(:stimulus, :database_stats, :views, :view_templates, :turbo, :auth, :api, :devops, :migrations, :seeds, :middleware, :engines, :environments, :multi_database, :components, :performance, :frontend_frameworks)
+      expect(config.introspectors).to include(:stimulus, :database_stats, :views, :view_templates, :turbo, :auth, :api, :devops, :migrations, :seeds, :middleware, :engines, :env_config, :multi_database, :components, :performance, :frontend_frameworks)
       expect(config.introspectors).to include(:initializers, :autoload, :connection_pool, :active_support, :credentials, :security, :observability, :env)
     end
 

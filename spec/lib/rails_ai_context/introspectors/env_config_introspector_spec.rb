@@ -4,7 +4,7 @@ require "spec_helper"
 require "tmpdir"
 require "fileutils"
 
-RSpec.describe RailsAiContext::Introspectors::EnvironmentIntrospector do
+RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
   let(:app) { Rails.application }
   let(:introspector) { described_class.new(app) }
   let(:env_dir) { File.join(app.root.to_s, "config", "environments") }
