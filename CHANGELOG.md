@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`config.query_allowed_columns`** exempts a column name from the built-in
+  sensitive list used by `rails_query`. The rejection message told you to
+  subtract from `query_redacted_columns`, which could never work: that list is
+  unioned with a frozen suffix list, so an app with its own
+  `oauth_applications.secret` had no way to query it.
+
 ### Fixed
 
+- **Documented security behaviour now matches the code.** The ReDoS timeout on
+  user-supplied regexes needs `Regexp.timeout`, which Ruby 3.1 does not have,
+  so `SECURITY.md` no longer promises it unconditionally on a version the gem
+  still supports. Layer 4 was documented as post-execution redaction; it has
+  rejected the query outright since 5.8.1, which is what the doc now says.
+- **`config.introspectors = %i[source]` no longer appears to be supported.**
+  `SourceIntrospector` was listed in the introspector table but is
+  infrastructure, not a registered introspector, so configuring it raised
+  `ConfigurationError`.
+- **Corrected documented defaults**, which had drifted: `sensitive_patterns` is
+  27 patterns not 8, `excluded_middleware` 25 not 24, `excluded_filters` 5 not
+  3, and the listener count is 21. `extra_app_paths` and
+  `instrumentation_include_arguments` were undocumented.
 - **Secondary database dumps report their own generated columns.** Parsing
   `db/queue_schema.rb` read generated columns from the primary `db/schema.rb`
   instead of the dump being parsed.
@@ -34,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default written as a proc reports its source rather than being omitted; a
   default split across lines is picked up; and an expression index declared at
   the top level is flagged `expression: true`, as an in-table one already was.
+- **`rails_validate`'s Rails-aware rules moved to `ValidateSemantics`.** The
+  tool entry point kept syntax validation and orchestration; the 15 lint rules
+  now live in their own class. Behaviour is unchanged.
+- **`detail` has a type.** `DetailLevel` defines the three levels, their
+  ordering and normalization. An unrecognised value now reads as `standard`
+  rather than silently selecting whichever branch happened to be last.
 - **Soft-delete detection prefers the schema.** A `deleted_at` column in the
   dump now drives the `soft_delete` convention, instead of matching the word
   anywhere in model source. Apps dumping `structure.sql` keep the old source
