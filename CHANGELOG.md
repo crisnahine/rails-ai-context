@@ -36,7 +36,10 @@ automatically in both MCP and CLI:
   caching, log level, queue adapter, mailer delivery) and every config key
   each environment sets. Backed by the new **EnvConfigIntrospector**
   (40 introspectors total, wired into `PRESETS[:full]`; file-based, so it
-  also works in the static tier).
+  also works in the static tier). Config keys and values are read with
+  `ConfigAssignmentListener`, so a multi-line value, an assignment nested in
+  a conditional, and the `Rails.application.config.x = y` form all read
+  correctly. The key list pages with `offset`/`limit`.
 
 ### Fixed
 

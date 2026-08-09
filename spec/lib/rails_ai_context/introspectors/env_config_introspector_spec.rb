@@ -156,6 +156,60 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       expect(staging[:notable]["cache_store"]).not_to include("[FILTERED]")
     end
 
+    it "reads an assignment whose value spans lines" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.cache_store = :redis_cache_store, {
+            url: "redis://cache.internal:6379/0",
+            pool_size: 5
+          }
+        end
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:config_keys]).to include("cache_store")
+      # The value is the whole expression, not the fragment before the first
+      # newline, and it renders on one line.
+      expect(staging[:notable]["cache_store"]).to include("redis://cache.internal")
+      expect(staging[:notable]["cache_store"]).not_to include("\n")
+    end
+
+    it "reads an assignment indented inside a nested block" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          if ENV["SSL"]
+            config.force_ssl = true
+          end
+        end
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:config_keys]).to include("force_ssl")
+      expect(staging[:notable]["force_ssl"]).to eq("true")
+    end
+
+    it "reads an assignment written on the fully qualified receiver" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.config.log_level = :warn
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:config_keys]).to include("log_level")
+      expect(staging[:notable]["log_level"]).to eq(":warn")
+    end
+
+    it "ignores a config-shaped assignment that is only a comment" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          # config.force_ssl = true
+          config.log_level = :info
+        end
+      RUBY
+
+      staging = result[:environments].find { |e| e[:name] == "staging" }
+      expect(staging[:config_keys]).to eq(%w[log_level])
+    end
+
     it "reports the current environment" do
       expect(result[:current]).to eq(Rails.env.to_s)
     end
