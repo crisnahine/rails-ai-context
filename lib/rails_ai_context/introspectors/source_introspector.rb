@@ -66,6 +66,7 @@ module RailsAiContext
       def self.register_listener(dispatcher, listener)
         events = []
         events << :on_call_node_enter  if listener.respond_to?(:on_call_node_enter)
+        events << :on_call_node_leave  if listener.respond_to?(:on_call_node_leave)
         events << :on_def_node_enter   if listener.respond_to?(:on_def_node_enter)
         events << :on_singleton_class_node_enter if listener.respond_to?(:on_singleton_class_node_enter)
         events << :on_singleton_class_node_leave if listener.respond_to?(:on_singleton_class_node_leave)

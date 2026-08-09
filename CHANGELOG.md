@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Static-tier routes no longer inherit a closed `namespace` block.**
+  `SourceIntrospector` registered its listeners for every Prism event except
+  `:on_call_node_leave`, so the two listeners that pop a scope stack never
+  received it. With `--no-boot`, every route declared after a
+  `namespace :admin do ... end` block was reported under that namespace, so an
+  app with `/comments` and `/health` served `/admin/comments` and
+  `/admin/health` tagged `[VERIFIED]`. The same cause put a gem declared after
+  a `group :development do ... end` block into that group in
+  `rails_get_gems`' group listing. Booted mode was never affected.
+
 ## [5.19.0] - 2026-08-09
 
 ### Added - 6 new tools surfacing previously unserved introspection (45 tools total)

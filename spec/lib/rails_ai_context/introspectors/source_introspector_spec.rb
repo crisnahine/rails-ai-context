@@ -214,6 +214,43 @@ RSpec.describe RailsAiContext::Introspectors::SourceIntrospector do
       })
       expect(result[:macros]).to eq([])
     end
+
+    # Listeners that track block scope pop their stack on the leave event.
+    # Register that event here or every scope stays open for the rest of the
+    # file, and siblings after a block inherit its prefix.
+    it "closes a routes namespace so later routes keep their own path" do
+      source = <<~RUBY
+        Rails.application.routes.draw do
+          namespace :admin do
+            resources :posts, only: [:index]
+          end
+          resources :comments, only: [:index]
+        end
+      RUBY
+
+      routes = described_class.walk_source(source, {
+        routes: RailsAiContext::Introspectors::Listeners::RoutesDslListener
+      })[:routes].select { |r| r[:type] == :route }
+
+      expect(routes.map { |r| r[:path] }).to contain_exactly("/admin/posts", "/comments")
+    end
+
+    it "closes a Gemfile group so later gems are ungrouped" do
+      source = <<~RUBY
+        source "https://rubygems.org"
+        group :development, :test do
+          gem "debug"
+        end
+        gem "puma"
+      RUBY
+
+      gems = described_class.walk_source(source, {
+        gemfile: RailsAiContext::Introspectors::Listeners::GemfileDslListener
+      })[:gemfile].select { |e| e[:type] == :gem }
+
+      expect(gems.find { |g| g[:name] == "debug" }[:groups]).to eq([ :development, :test ])
+      expect(gems.find { |g| g[:name] == "puma" }[:groups]).to eq([])
+    end
   end
 
   describe ".from_source" do
