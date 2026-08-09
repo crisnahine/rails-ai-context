@@ -94,7 +94,6 @@ end
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| SourceIntrospector | `:source` | Prism AST: associations, validations, scopes, enums, callbacks, macros, methods |
 | MigrationIntrospector | `:migrations` | Migration files, versions, reversibility |
 | SeedsIntrospector | `:seeds` | Seed file analysis |
 | DatabaseStatsIntrospector | `:database_stats` | Table sizes, row counts, index stats |
@@ -170,9 +169,11 @@ These introspectors map directly onto [`RAILS_NERVOUS_SYSTEM.md`](../RAILS_NERVO
 
 ## AST-based introspection
 
-The **SourceIntrospector** uses Prism AST parsing for model analysis. It runs a single-pass Dispatcher that walks the AST once and feeds events to 7 listeners simultaneously:
+The **SourceIntrospector** uses Prism AST parsing for model analysis. It is infrastructure shared by the introspectors above rather than an introspector you can enable: there is no `:source` key for `config.introspectors`.
 
-### 7 Prism listeners
+It runs a single-pass Dispatcher that walks the AST once and feeds events to all registered listeners simultaneously. Model analysis uses the seven below by default; the other fourteen listener classes are used through targeted walks (schema dumps, migrations, Gemfiles, rake tasks, initializers, and so on), for 21 in total.
+
+### The 7 default Prism listeners
 
 | Listener | What it detects |
 |:---------|:---------------|

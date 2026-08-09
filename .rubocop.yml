@@ -11,13 +11,6 @@ AllCops:
 Style/Documentation:
   Enabled: false
 
-Metrics/MethodLength:
-  Max: 25
-
-Metrics/ClassLength:
-  Max: 200
-
-Metrics/BlockLength:
-  Exclude:
-    - "spec/**/*"
-    - "*.gemspec"
+# rubocop-rails-omakase disables the whole Metrics department. Setting Max on a
+# disabled cop does not re-enable it, so size limits here would enforce nothing.
+# Turning it on would need ~40 existing files brought under the limit first.

@@ -10,22 +10,13 @@ module RailsAiContext
       include StackOverviewHelper
       include ToolGuideHelper
       include CompactSerializerHelper
-
-      attr_reader :context
-
-      def initialize(context)
-        @context = context
-      end
-
-      def call
-        if RailsAiContext.configuration.context_mode == :full
-          FullOpencodeSerializer.new(context).call
-        else
-          render_compact
-        end
-      end
+      include ContextModeDispatch
 
       private
+
+      def full_serializer_class
+        FullOpencodeSerializer
+      end
 
       def render_compact
         lines = []

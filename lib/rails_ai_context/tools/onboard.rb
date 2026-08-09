@@ -84,7 +84,7 @@ module RailsAiContext
 
         # ── Standard: structured walkthrough ─────────────────────────────
 
-        def compose_standard(ctx) # rubocop:disable Metrics
+        def compose_standard(ctx)
           lines = [ "# Welcome to #{ctx[:app_name] || 'This Rails App'}", "" ]
           lines.concat(section_stack(ctx))
           lines.concat(section_data_model(ctx))
@@ -99,7 +99,7 @@ module RailsAiContext
 
         # ── Full: standard + all subsystems ──────────────────────────────
 
-        def compose_full(ctx) # rubocop:disable Metrics
+        def compose_full(ctx)
           lines = [ "# Welcome to #{ctx[:app_name] || 'This Rails App'} (Full Walkthrough)", "" ]
           lines.concat(section_stack(ctx))
           lines.concat(section_data_model(ctx))
@@ -643,7 +643,7 @@ module RailsAiContext
         end
 
         # Collect domain signals from jobs, services, models, gems, and conventions
-        def collect_purpose_signals(ctx) # rubocop:disable Metrics
+        def collect_purpose_signals(ctx)
           signals = []
 
           # Gather raw names from all sources

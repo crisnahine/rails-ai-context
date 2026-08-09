@@ -21,7 +21,7 @@ module RailsAiContext
       sensitive_patterns search_extensions concern_paths frontend_paths extra_app_paths
       max_file_size max_test_file_size max_schema_file_size max_view_total_size
       max_view_file_size max_search_results max_validate_files
-      query_timeout query_row_limit query_redacted_columns allow_query_in_production
+      query_timeout query_row_limit query_redacted_columns query_allowed_columns allow_query_in_production
       log_lines introspectors
       hydration_enabled hydration_max_hints
       instrumentation_include_arguments
@@ -244,6 +244,7 @@ module RailsAiContext
     attr_accessor :query_timeout              # Statement timeout in seconds (default: 5)
     attr_accessor :query_row_limit            # Max rows returned (default: 100, hard cap: 1000)
     attr_accessor :query_redacted_columns     # Column names whose values are redacted in output
+    attr_accessor :query_allowed_columns      # Column names to exempt from the built-in sensitive list
     attr_accessor :allow_query_in_production  # Allow rails_query in production (default: false)
 
     # Log reading settings (rails_read_logs)
@@ -317,6 +318,7 @@ module RailsAiContext
         otp_secret session_data secret_key
         api_key api_secret access_token refresh_token jti
       ]
+      @query_allowed_columns    = []
       @allow_query_in_production = false
       @log_lines                = 50
       @hydration_enabled        = true

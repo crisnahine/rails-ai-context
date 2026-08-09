@@ -4,7 +4,7 @@ module RailsAiContext
   module Introspectors
     # Discovers mounted Rails engines and Rack apps from config/routes.rb.
     # Identifies well-known engines and provides context about what each does.
-    class EngineIntrospector # rubocop:disable Metrics/ClassLength
+    class EngineIntrospector
       attr_reader :app
 
       KNOWN_ENGINES = {

@@ -84,7 +84,7 @@ module RailsAiContext
 
         # ── Database section ─────────────────────────────────────────────
 
-        def gather_database(detail) # rubocop:disable Metrics
+        def gather_database(detail)
           return [ "## Database", "", "_ActiveRecord not available._", "" ] unless defined?(ActiveRecord::Base)
 
           conn = ActiveRecord::Base.connection

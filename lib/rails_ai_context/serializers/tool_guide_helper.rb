@@ -126,7 +126,7 @@ module RailsAiContext
         ]
       end
 
-      def tools_workflow_section # rubocop:disable Metrics/MethodLength
+      def tools_workflow_section
         [
           "### Step-by-step workflows (follow this order)",
           "",

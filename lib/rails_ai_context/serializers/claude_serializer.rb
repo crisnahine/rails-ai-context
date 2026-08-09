@@ -10,19 +10,17 @@ module RailsAiContext
       include StackOverviewHelper
       include ToolGuideHelper
       include CompactSerializerHelper
+      include ContextModeDispatch
 
-      attr_reader :context
+      private
 
-      def initialize(context)
-        @context = context
+      def full_serializer_class
+        FullClaudeSerializer
       end
 
-      def call
-        if RailsAiContext.configuration.context_mode == :full
-          FullClaudeSerializer.new(context).call
-        else
-          render_compact_rules
-        end
+      # CompactSerializerHelper names it for the rules file it produces.
+      def render_compact
+        render_compact_rules
       end
     end
 

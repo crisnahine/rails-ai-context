@@ -9,22 +9,13 @@ module RailsAiContext
       include TestCommandDetection
       include StackOverviewHelper
       include ToolGuideHelper
-
-      attr_reader :context
-
-      def initialize(context)
-        @context = context
-      end
-
-      def call
-        if RailsAiContext.configuration.context_mode == :full
-          FullCopilotSerializer.new(context).call
-        else
-          render_compact
-        end
-      end
+      include ContextModeDispatch
 
       private
+
+      def full_serializer_class
+        FullCopilotSerializer
+      end
 
       def render_compact
         lines = []

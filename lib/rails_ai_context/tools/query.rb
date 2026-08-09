@@ -85,9 +85,9 @@ module RailsAiContext
       # Post-execution redaction operates on the column names the DB returns,
       # which the caller controls via aliases and expressions. The only
       # defense that works is to reject queries that TEXTUALLY reference
-      # any sensitive column, before execution. Users who need to query
-      # non-sensitive columns with a similar name can subtract from
-      # `config.query_redacted_columns` in an initializer.
+      # any sensitive column, before execution. This list is frozen, so an app
+      # whose own column merely looks sensitive exempts it by name through
+      # `config.query_allowed_columns`.
       SENSITIVE_COLUMN_SUFFIXES = %w[
         password_digest password_hash encrypted_password
         password_reset_token confirmation_token unlock_token
@@ -271,9 +271,9 @@ module RailsAiContext
           return [ false,
             "Blocked: query references sensitive column `#{offending}`. " \
             "Post-execution redaction cannot survive aliases / expressions, so " \
-            "the entire query is rejected. Remove the reference or subtract " \
-            "from config.query_redacted_columns in an initializer if this " \
-            "column is not actually sensitive in your app." ]
+            "the entire query is rejected. Remove the reference, or add " \
+            "\"#{offending}\" to config.query_allowed_columns in an initializer " \
+            "if this column is not actually sensitive in your app." ]
         end
 
         [ true, nil ]
@@ -289,7 +289,10 @@ module RailsAiContext
         # Build the combined list ONCE per call and dedupe.
         configured = Array(config.query_redacted_columns).map { |c| c.to_s.downcase }
         suffixed   = SENSITIVE_COLUMN_SUFFIXES.map(&:downcase)
-        (configured + suffixed).uniq.each do |col|
+        # An app whose own column merely looks sensitive (oauth_applications.secret)
+        # exempts it here; the built-in list is frozen and cannot be subtracted from.
+        allowed    = Array(config.query_allowed_columns).map { |c| c.to_s.downcase }
+        ((configured + suffixed).uniq - allowed).each do |col|
           next if col.empty?
           return col if down.match?(/\b#{Regexp.escape(col)}\b/)
         end

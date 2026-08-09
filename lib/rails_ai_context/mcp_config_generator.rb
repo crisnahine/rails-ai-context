@@ -123,10 +123,10 @@ module RailsAiContext
         end
 
         existing[root_key][SERVER_NAME] = entry
-        atomic_write(path, JSON.pretty_generate(existing) + "\n")
+        RailsAiContext::SafeFile.atomic_write(path, JSON.pretty_generate(existing) + "\n")
       else
         content = JSON.pretty_generate({ root_key => { SERVER_NAME => entry } }) + "\n"
-        atomic_write(path, content)
+        RailsAiContext::SafeFile.atomic_write(path, content)
       end
 
       :written
@@ -154,14 +154,14 @@ module RailsAiContext
           if new_content == content
             return :skipped
           end
-          atomic_write(path, new_content)
+          RailsAiContext::SafeFile.atomic_write(path, new_content)
         else
           # Append our section
           separator = content.end_with?("\n") ? "\n" : "\n\n"
-          atomic_write(path, content + separator + section)
+          RailsAiContext::SafeFile.atomic_write(path, content + separator + section)
         end
       else
-        atomic_write(path, section)
+        RailsAiContext::SafeFile.atomic_write(path, section)
       end
 
       :written
@@ -227,13 +227,6 @@ module RailsAiContext
       else
         [ "bundle", "exec", "rails-ai-context", "serve" ]
       end
-    end
-
-    def atomic_write(path, content)
-      dir = File.dirname(path)
-      tmp = File.join(dir, ".#{File.basename(path)}.#{SecureRandom.hex(4)}.tmp")
-      File.write(tmp, content)
-      File.rename(tmp, path)
     end
 
     # --- Merge-safe removal ---

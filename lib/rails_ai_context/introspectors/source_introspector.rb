@@ -25,14 +25,12 @@ module RailsAiContext
 
       # Introspect a file on disk (cached parse) with default listeners.
       def self.call(path)
-        result = AstCache.parse(path)
-        walk_dispatch(result, LISTENER_MAP)
+        walk(path)
       end
 
       # Introspect a source string (no caching) with default listeners.
       def self.from_source(source)
-        result = AstCache.parse_string(source)
-        walk_dispatch(result, LISTENER_MAP)
+        walk_source(source)
       end
 
       # Walk a file with a custom listener map. Returns { key => results_array }.

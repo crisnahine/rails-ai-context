@@ -371,7 +371,7 @@ module RailsAiContext
       # follows it: without it, the lazy scan has no "\n)" to stop at inside
       # that one-line statement, so it keeps consuming lines - including the
       # next CREATE TABLE - until it finds one.
-      def parse_structure_sql(path) # rubocop:disable Metrics/MethodLength
+      def parse_structure_sql(path)
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "structure.sql too large (#{File.size(path)} bytes)" } unless content
 
@@ -868,7 +868,7 @@ module RailsAiContext
         end
       end
 
-      def normalize_sql_type(type) # rubocop:disable Metrics/MethodLength, Metrics/CyclomaticComplexity
+      def normalize_sql_type(type)
         # MySQL's boolean columns are a sized tinyint. This has to run
         # before the size-stripping below (and before the generic tinyint
         # match) because bare tinyint is a real 1-byte integer column.

@@ -155,7 +155,7 @@ module RailsAiContext
           end
         end
 
-        def gather_file_context(file, type, root, ref) # rubocop:disable Metrics
+        def gather_file_context(file, type, root, ref)
           lines = [ "### #{file} (#{type})", "" ]
 
           # Show diff summary
@@ -258,7 +258,7 @@ module RailsAiContext
           status.success? && !output.strip.empty? ? output : nil
         end
 
-        def detect_warnings(classified, root, ref) # rubocop:disable Metrics
+        def detect_warnings(classified, root, ref)
           warnings = []
 
           migration_files = classified.select { |c| c[:type] == :migration }
