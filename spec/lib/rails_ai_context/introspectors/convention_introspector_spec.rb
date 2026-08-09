@@ -154,6 +154,77 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       end
     end
 
+    # Built in a tmpdir rather than Rails.root: these need their own schema.rb,
+    # and the dummy app ships one every other example depends on.
+    def patterns_for(models:, schema: nil)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        models.each { |name, source| File.write(File.join(dir, "app/models", name), source) }
+        if schema
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db/schema.rb"), schema)
+        end
+
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+        described_class.new(app).call[:patterns]
+      end
+    end
+
+    context "soft delete" do
+      it "detects the pattern from a deleted_at column in the dump" do
+        patterns = patterns_for(
+          models: { "thing.rb" => "class Thing < ApplicationRecord\nend\n" },
+          schema: %(create_table "things" do |t|\n  t.datetime "deleted_at"\nend\n)
+        )
+
+        expect(patterns).to include("soft_delete")
+      end
+
+      it "does not fire on a model that merely mentions deleted_at" do
+        patterns = patterns_for(
+          models: { "thing.rb" => "class Thing < ApplicationRecord\n  # deleted_at was rejected here\nend\n" },
+          schema: %(create_table "things" do |t|\n  t.string "name"\nend\n)
+        )
+
+        expect(patterns).not_to include("soft_delete")
+      end
+
+      it "falls back to model source when there is no readable dump" do
+        patterns = patterns_for(
+          models: { "thing.rb" => "class Thing < ApplicationRecord\n  scope :kept, -> { where(deleted_at: nil) }\nend\n" }
+        )
+
+        expect(patterns).to include("soft_delete")
+      end
+    end
+
+    context "single table inheritance" do
+      let(:models) do
+        {
+          "vehicle.rb" => "class Vehicle < ApplicationRecord\nend\n",
+          "car.rb"     => "class Car < Vehicle\nend\n"
+        }
+      end
+
+      it "detects sti when the parent table carries a type column" do
+        patterns = patterns_for(
+          models: models,
+          schema: %(create_table "vehicles" do |t|\n  t.string "type"\nend\n)
+        )
+
+        expect(patterns).to include("sti")
+      end
+
+      it "stays quiet when the parent table has no type column" do
+        patterns = patterns_for(
+          models: models,
+          schema: %(create_table "vehicles" do |t|\n  t.string "name"\nend\n)
+        )
+
+        expect(patterns).not_to include("sti")
+      end
+    end
+
     context "without async query usage anywhere" do
       it "does not include async_queries in patterns" do
         expect(result[:patterns]).not_to include("async_queries")

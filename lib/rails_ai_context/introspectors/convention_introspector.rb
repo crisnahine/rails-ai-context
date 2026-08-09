@@ -103,6 +103,7 @@ module RailsAiContext
           # STI detection via AST: extract parent class from ClassNode, check schema
           app_model_names = model_files.filter_map { |f| File.basename(f, ".rb").camelize }
           schema = SchemaReader.new(File.join(root, "db/schema.rb"))
+          schema_readable = schema.tables.any?
 
           has_sti_subclass = false
           has_inheritance_column = false
@@ -112,7 +113,10 @@ module RailsAiContext
             parent = extract_parent_class(f)
             if parent && app_model_names.include?(parent) && parent != "ApplicationRecord"
               parent_table = parent.underscore.pluralize
-              has_sti_subclass = true if schema.column?(parent_table, "type")
+              # Only the dump says whether the parent table carries a type
+              # column, so an unreadable schema leaves this to the
+              # inheritance_column check below rather than a source guess.
+              has_sti_subclass = true if schema_readable && schema.column?(parent_table, "type")
             end
 
             superclass = extract_superclass_path(f)
@@ -128,7 +132,7 @@ module RailsAiContext
           # A soft-delete column is a schema fact, so prefer the dump. Apps on
           # structure.sql have no schema.rb to read, and fall back to the
           # looser source match.
-          has_deleted_at = if schema.tables.any?
+          has_deleted_at = if schema_readable
             schema.any_column?("deleted_at")
           else
             model_files.first(500).any? { |f| RailsAiContext::SafeFile.read(f)&.match?(/deleted_at/) }

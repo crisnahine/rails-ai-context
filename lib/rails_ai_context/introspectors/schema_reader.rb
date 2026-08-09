@@ -66,34 +66,54 @@ module RailsAiContext
         @parse ||= build
       end
 
-      def build
-        empty = { tables: {}, foreign_keys: [], enums: [], check_constraints: [] }
-        return empty unless path && File.exist?(path)
-
-        # Read against the configured schema limit rather than walking the
-        # path directly: AstCache caps parses well below it, and a schema
-        # between the two would silently read as having no tables at all.
-        source = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
-        return empty unless source
-
-        events = SourceIntrospector.walk_source(source, { schema: -> { Listeners::SchemaDslListener.new } })[:schema] || []
-        events.sort_by { |e| e[:location] }.each_with_object(empty) do |event, schema|
-          absorb(event, schema)
-        end
-      rescue => e
-        $stderr.puts "[rails-ai-context] SchemaReader failed: #{e.message}" if ENV["DEBUG"]
+      def empty_schema
         { tables: {}, foreign_keys: [], enums: [], check_constraints: [] }
       end
 
-      def absorb(event, schema)
+      def build
+        schema = empty_schema
+        current = nil
+
+        events.sort_by { |e| e[:location] }.each do |event|
+          current = absorb(event, schema, current)
+        end
+
+        schema
+      rescue => e
+        $stderr.puts "[rails-ai-context] SchemaReader failed: #{e.message}" if ENV["DEBUG"]
+        empty_schema
+      end
+
+      # AstCache caps parses below the configured schema limit, so a dump
+      # between the two has to be parsed directly. Everything under the cap
+      # goes through the cache, which the other introspectors share.
+      def events
+        return [] unless path && File.exist?(path)
+
+        size = File.size(path)
+        return [] if size > RailsAiContext.configuration.max_schema_file_size
+
+        listeners = { schema: -> { Listeners::SchemaDslListener.new } }
+        results = if size <= RailsAiContext::AstCache::MAX_PARSE_SIZE
+          SourceIntrospector.walk(path, listeners)
+        else
+          source = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
+          source ? SourceIntrospector.walk_source(source, listeners) : {}
+        end
+
+        results[:schema] || []
+      end
+
+      # Returns the table each subsequent column and index belongs to.
+      def absorb(event, schema, current)
         case event[:type]
         when :create_table
-          @current = event[:table]
-          schema[:tables][@current] ||= { options: event[:options] || {}, columns: [], indexes: [] }
+          schema[:tables][event[:table]] ||= { options: event[:options] || {}, columns: [], indexes: [] }
+          return event[:table]
         when :column
-          current_table(schema)&.dig(:columns)&.push(column_entry(event))
+          schema[:tables][current]&.dig(:columns)&.push(column_entry(event)) if current
         when :index
-          current_table(schema)&.dig(:indexes)&.push(index_entry(event))
+          schema[:tables][current]&.dig(:indexes)&.push(index_entry(event)) if current
         when :add_index
           schema[:tables][event[:table]]&.dig(:indexes)&.push(index_entry(event))
         when :foreign_key
@@ -101,14 +121,12 @@ module RailsAiContext
         when :enum
           schema[:enums] << { name: event[:name], values: event[:values] }
         when :check_constraint
-          schema[:check_constraints] << { table: @current, expression: event[:expression] } if @current
+          schema[:check_constraints] << { table: current, expression: event[:expression] } if current
         when :add_check_constraint
           schema[:check_constraints] << { table: event[:table], expression: event[:expression] }
         end
-      end
 
-      def current_table(schema)
-        @current && schema[:tables][@current]
+        current
       end
 
       def column_entry(event)

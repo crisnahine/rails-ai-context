@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Secondary database dumps report their own generated columns.** Parsing
   `db/queue_schema.rb` read generated columns from the primary `db/schema.rb`
   instead of the dump being parsed.
+- **Polymorphic foreign keys no longer always report a missing index.** The
+  compound check compared one joined string against two column names, so it
+  could never match an existing index.
+- **A column is no longer treated as indexed because a wider column name is.**
+  Index matching compared substrings, so an index on `user_id` counted as
+  covering `id`.
 
 ### Changed
 
@@ -20,10 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line by line with their own `create_table` regex; they now share
   `SchemaReader`, built on the existing `SchemaDslListener`, as do the static
   tier's table parse and the check-constraint, enum and generated-column
-  reads that each walked the dump separately. Column defaults
-  split across lines are picked up, a proc default reports its source instead
-  of being dropped, index matching compares whole column names rather than
-  substrings, and a reference column is recorded as its foreign key.
+  reads that each walked the dump separately.
+- **The static schema tier reports four things differently.** Where no live
+  connection is available and `db/schema.rb` is parsed instead: a `t.references`
+  or `t.belongs_to` column is reported by its foreign key name (`author_id`,
+  not `author`), which is what the live tier has always reported; a column
+  default written as a proc reports its source rather than being omitted; a
+  default split across lines is picked up; and an expression index declared at
+  the top level is flagged `expression: true`, as an in-table one already was.
 - **Soft-delete detection prefers the schema.** A `deleted_at` column in the
   dump now drives the `soft_delete` convention, instead of matching the word
   anywhere in model source. Apps dumping `structure.sql` keep the old source

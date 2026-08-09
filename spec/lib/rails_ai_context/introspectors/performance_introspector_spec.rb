@@ -24,6 +24,60 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
       expect(result[:missing_fk_indexes]).to be_an(Array)
     end
 
+    context "missing foreign key indexes" do
+      def missing_for(schema_source)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), schema_source)
+          described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_fk_indexes]
+        end
+      end
+
+      it "reports an unindexed foreign key column" do
+        missing = missing_for(<<~RUBY)
+          create_table "posts" do |t|
+            t.integer "author_id"
+          end
+        RUBY
+
+        expect(missing).to contain_exactly(a_hash_including(table: "posts", column: "author_id"))
+      end
+
+      it "stays quiet when an index covers the column" do
+        missing = missing_for(<<~RUBY)
+          create_table "posts" do |t|
+            t.integer "author_id"
+            t.index [ "author_id" ]
+          end
+        RUBY
+
+        expect(missing).to be_empty
+      end
+
+      it "does not mistake a wider column name for an index on it" do
+        missing = missing_for(<<~RUBY)
+          create_table "posts" do |t|
+            t.integer "id_verified"
+            t.integer "author_id"
+            t.index [ "id_verified" ]
+          end
+        RUBY
+
+        expect(missing).to contain_exactly(a_hash_including(column: "author_id"))
+      end
+
+      it "skips reference and belongs_to columns, which Rails indexes itself" do
+        missing = missing_for(<<~RUBY)
+          create_table "posts" do |t|
+            t.references "author"
+            t.belongs_to "editor"
+          end
+        RUBY
+
+        expect(missing).to be_empty
+      end
+    end
+
     it "detects Model.all in controllers" do
       expect(result[:model_all_in_controllers]).to be_an(Array)
       models = result[:model_all_in_controllers].map { |f| f[:model] }

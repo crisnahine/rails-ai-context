@@ -299,8 +299,8 @@ module RailsAiContext
             next unless col[:name].end_with?("_id")
 
             indexed = table[:indexes].any? { |idx| idx[:columns].include?(col[:name]) }
-            # References type auto-creates index in Rails
-            next if col[:type] == "references"
+            # Rails indexes a reference column when it creates it.
+            next if %w[references belongs_to].include?(col[:type])
             next if indexed
 
             # Check for polymorphic association (_type column alongside _id)
