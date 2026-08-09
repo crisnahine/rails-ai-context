@@ -211,6 +211,11 @@ jobs:
 
           git fetch origin main
           git checkout -B main origin/main
+          # The publish step above rewrote server.json in this checkout, and
+          # checkout -B carries that edit across. Take main's own copy back
+          # before deciding whether main needs the bump, or the guard reads
+          # the version it is about to write and always exits early.
+          git checkout origin/main -- server.json
 
           if [ "$(jq -r .version server.json)" = "$VERSION" ]; then
             echo "server.json already records $VERSION"
