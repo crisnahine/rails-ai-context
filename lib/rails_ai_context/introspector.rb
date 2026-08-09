@@ -82,6 +82,7 @@ module RailsAiContext
       seeds: Introspectors::SeedsIntrospector,
       middleware: Introspectors::MiddlewareIntrospector,
       engines: Introspectors::EngineIntrospector,
+      env_config: Introspectors::EnvConfigIntrospector,
       multi_database: Introspectors::MultiDatabaseIntrospector,
       components: Introspectors::ComponentIntrospector,
       performance: Introspectors::PerformanceIntrospector,

@@ -575,7 +575,7 @@ class RailsAiContextCLI < Thor
       if defined?(::RailsAiContext::Server)
         ::RailsAiContext::Server.builtin_tools.size.to_s
       else
-        "39"
+        "45"
       end
     end
 

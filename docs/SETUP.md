@@ -134,7 +134,7 @@ The MCP tools rule uses `alwaysApply: false` with a descriptive `description:` f
 
 ```markdown
 ---
-description: 39 MCP tools for Rails introspection - schema, models, routes, controllers, views
+description: 45 MCP tools for Rails introspection - schema, models, routes, controllers, views
 alwaysApply: false
 ---
 ```
@@ -298,7 +298,7 @@ Type in Claude Code's prompt:
 What MCP tools do you have access to?
 ```
 
-You should see `rails_get_schema`, `rails_search_code`, and the other 36 tools listed.
+You should see `rails_get_schema`, `rails_search_code`, and the other 43 tools listed.
 
 ### Cursor
 

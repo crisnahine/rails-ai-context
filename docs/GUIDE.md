@@ -18,13 +18,13 @@
 | Guide | Description |
 |:------|:------------|
 | [Quickstart](QUICKSTART.md) | Get running in 5 minutes |
-| [Tools Reference](TOOLS.md) | All 39 MCP tools with parameters |
+| [Tools Reference](TOOLS.md) | All 45 MCP tools with parameters |
 | [Recipes](RECIPES.md) | Real-world workflows and examples |
 | [Custom Tools](CUSTOM_TOOLS.md) | Build your own MCP tools |
 | [Configuration](CONFIGURATION.md) | Every config option |
 | [AI Tool Setup](SETUP.md) | Per-editor setup |
 | [Architecture](ARCHITECTURE.md) | System design and internals |
-| [Introspectors](INTROSPECTORS.md) | All 39 introspectors |
+| [Introspectors](INTROSPECTORS.md) | All 40 introspectors |
 | [Security](SECURITY.md) | Security model and SQL safety |
 | [CLI Reference](CLI.md) | All commands and argument syntax |
 | [Standalone Mode](STANDALONE.md) | Use without Gemfile |
@@ -40,7 +40,7 @@
 - [Generated Files](#generated-files)
 - [All Commands](#all-commands)
 - [CLI Tools](#cli-tools)
-- [MCP Tools - Full Reference](#mcp-tools--full-reference)
+- [MCP Tools - Common Reference](#mcp-tools--common-reference)
 - [MCP Resources](#mcp-resources)
 - [MCP Server Setup](#mcp-server-setup)
 - [Configuration - All Options](#configuration--all-options)
@@ -283,7 +283,7 @@ rails ai:context:claude           # Use this instead (no quoting needed)
 
 ## CLI Tools
 
-All 39 MCP tools can be run directly from the terminal - no MCP server or AI client needed.
+All 45 MCP tools can be run directly from the terminal - no MCP server or AI client needed.
 
 ### Rake
 
@@ -347,9 +347,11 @@ The `tool_mode` is selected during `rails generate rails_ai_context:install`.
 
 ---
 
-## MCP Tools - Full Reference
+## MCP Tools - Common Reference
 
-All 39 tools are **read-only** and **idempotent** - they never modify your application or database.
+The 24 tools below are the ones worth reading about before you start. [Tools Reference](TOOLS.md) carries all 45 with their parameters.
+
+Every tool is **read-only** and **idempotent** - they never modify your application or database.
 
 ### rails_get_schema
 
@@ -1169,7 +1171,7 @@ if defined?(RailsAiContext)
 end
 ```
 
-Both transports are **read-only** - they expose the same 39 tools and never modify your app.
+Both transports are **read-only** - they expose the same 45 tools and never modify your app.
 
 ### Controller Transport (Alternative)
 
@@ -1192,7 +1194,7 @@ if defined?(RailsAiContext)
   RailsAiContext.configure do |config|
     # --- Introspectors ---
 
-    # Presets: :full (39 introspectors, default) or :standard (17)
+    # Presets: :full (40 introspectors, default) or :standard (17)
     config.preset = :full
 
     # Cherry-pick on top of a preset
@@ -1311,10 +1313,10 @@ end
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `preset` | Symbol | `:full` | Introspector preset (`:full` or `:standard`) |
-| `introspectors` | Array | 39 (full preset) | Which introspectors to run |
+| `introspectors` | Array | 40 (full preset) | Which introspectors to run |
 | `context_mode` | Symbol | `:compact` | `:compact` or `:full` |
 | `claude_max_lines` | Integer | `150` | Max lines for CLAUDE.md in compact mode |
-| `max_tool_response_chars` | Integer | `200_000` | Safety cap for MCP tool responses |
+| `max_tool_response_chars` | Integer | `200_000` | Safety cap for MCP tool responses and resource payloads |
 | `cache_ttl` | Integer | `60` | Cache TTL in seconds for introspection results |
 | `custom_tools` | Array | `[]` | Additional MCP tool classes to register alongside built-in tools |
 | `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g. `%w[rails_security_scan]`) |
@@ -1398,7 +1400,7 @@ Core Rails structure only. Use `config.preset = :standard` for a lighter footpri
 | `performance` | N+1 query risks, missing counter_cache, missing FK indexes, Model.all anti-patterns, eager load candidates. |
 | `i18n` | Default locale, available locales, locale files with key counts, backend class, parse errors. |
 
-### Full preset (39 introspectors) - default
+### Full preset (40 introspectors) - default
 
 Includes all standard introspectors plus:
 
@@ -1415,6 +1417,7 @@ Includes all standard introspectors plus:
 | `seeds` | db/seeds.rb analysis (Faker usage, environment conditionals), seed files in db/seeds/, models seeded. |
 | `middleware` | Custom Rack middleware in app/middleware/ with detected patterns (auth, rate limiting, tenant isolation, logging). Full middleware stack. |
 | `engines` | Mounted Rails engines from routes.rb with paths and descriptions for 23+ known engines (Sidekiq::Web, Flipper::UI, PgHero, ActiveAdmin, etc.). |
+| `env_config` | Per-environment config files (`config/environments/*.rb`): notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) with URI credentials redacted, assigned config keys. |
 | `multi_database` | Multiple databases, replicas, sharding config, model-specific `connects_to` declarations. database.yml parsing fallback. |
 | `frontend_frameworks` | Frontend JS framework detection (React/Vue/Svelte/Angular), mounting strategy (Inertia/react-rails), TypeScript config, state management, package manager. |
 | `database_stats` | PostgreSQL approximate row counts via `pg_stat_user_tables`. Gracefully skips on non-PostgreSQL adapters. |
@@ -1534,11 +1537,11 @@ OpenCode uses **per-directory lazy-loading**: when the agent reads a file, it wa
 
 | Setup | Coverage | Notes |
 |-------|----------|-------|
-| Rails full-stack (ERB + Hotwire) | 39/39 | All introspectors relevant |
-| Rails + Inertia.js (React/Vue) | ~33/39 | Views/Turbo partially useful, backend fully covered |
-| Rails API + React/Next.js SPA | ~31/39 | Schema, models, routes, API, auth, jobs - all covered |
-| Rails API + mobile app | ~31/39 | Same as SPA - backend introspection is identical |
-| Rails engine (mountable gem) | ~26/39 | Core introspectors (schema, models, routes, gems) work |
+| Rails full-stack (ERB + Hotwire) | 40/40 | All introspectors relevant |
+| Rails + Inertia.js (React/Vue) | ~34/40 | Views/Turbo partially useful, backend fully covered |
+| Rails API + React/Next.js SPA | ~32/40 | Schema, models, routes, API, auth, jobs - all covered |
+| Rails API + mobile app | ~32/40 | Same as SPA - backend introspection is identical |
+| Rails engine (mountable gem) | ~27/40 | Core introspectors (schema, models, routes, gems) work |
 
 Frontend introspectors (views, Turbo, Stimulus, assets) degrade gracefully - they report nothing when those features aren't present.
 

@@ -2,7 +2,7 @@
 
 # Introspectors
 
-**39 modules that extract structured data from your Rails application.**
+**40 modules that extract structured data from your Rails application.**
 
 [Architecture](ARCHITECTURE.md) · [Configuration](CONFIGURATION.md) · [Tools Reference](TOOLS.md) · [Security](SECURITY.md)
 
@@ -21,7 +21,7 @@ Each introspector:
 
 ## Presets
 
-### `:full` (default) - all 39 introspectors
+### `:full` (default) - all 40 introspectors
 
 Full AI context. Covers every aspect of your app.
 
@@ -49,7 +49,7 @@ graph LR
         S16["performance"] ~~~ S17["i18n"]
     end
 
-    subgraph full_only["Full Preset adds +22"]
+    subgraph full_only["Full Preset adds +23"]
         direction TB
         F1["views"] ~~~ F2["database_stats"] ~~~ F3["api"]
         F4["active_storage"] ~~~ F5["action_text"] ~~~ F6["action_mailbox"]
@@ -58,7 +58,7 @@ graph LR
         F13["multi_database"] ~~~ F14["frontend_frameworks"]
         F15["initializers"] ~~~ F16["autoload"] ~~~ F17["connection_pool"]
         F18["active_support"] ~~~ F19["credentials"] ~~~ F20["security"]
-        F21["observability"] ~~~ F22["env"]
+        F21["observability"] ~~~ F22["env"] ~~~ F23["env_config"]
     end
 
     standard --> full_only
@@ -77,7 +77,7 @@ end
 
 ---
 
-## All 39 introspectors
+## All 40 introspectors
 
 ### Core
 
@@ -119,6 +119,7 @@ end
 | I18nIntrospector | `:i18n` | Locale files, translation keys |
 | MiddlewareIntrospector | `:middleware` | Rack middleware stack |
 | EngineIntrospector | `:engines` | Mounted engines |
+| EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys |
 | DevopsIntrospector | `:devops` | Dockerfile, CI config, deployment |
 
 ### Jobs & Services
@@ -152,7 +153,7 @@ end
 
 ### Runtime & Framework Internals
 
-These introspectors map directly onto [`RAILS_NERVOUS_SYSTEM.md`](../RAILS_NERVOUS_SYSTEM.md) sections and capture framework-level surface that `:config`, `:auth`, and `:middleware` don't.
+These introspectors map directly onto the internal RAILS_NERVOUS_SYSTEM checklist sections and capture framework-level surface that `:config`, `:auth`, and `:middleware` don't.
 
 | Introspector | Key | Nervous-system § | What it extracts |
 |:-------------|:----|:---|:-----------------|
@@ -193,7 +194,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 |:---------|:---------------|
 | GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes |
 | ChainedCallListener | Calls on a receiver: `ChainedCallListener.new(:includes)`, or `receiver: :inflect` to pin the receiver. Reports the receiver name |
-| ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers, plus bare `config.jwt do ... end` section references. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`) |
+| ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers and `config/environments/*.rb`, plus bare `config.jwt do ... end` section references. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`) |
 | ClassDefinitionListener | Class definitions with their superclass, namespaces resolved |
 | ComponentStructureListener | ViewComponent and Phlex structure: `renders_one`/`renders_many`, slot methods, hash/array constant tables, `case @ivar` variant branching, `CONST[@ivar]` indexing |
 | MiddlewareConfigListener | `config.middleware.use` / `insert_before` / `insert_after` |

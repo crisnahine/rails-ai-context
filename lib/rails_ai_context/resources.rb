@@ -164,13 +164,13 @@ module RailsAiContext
 
         if STATIC_RESOURCES.key?(uri)
           key = STATIC_RESOURCES[uri][:key]
-          content = JSON.pretty_generate(context[key] || {})
+          content = JsonBudget.for_resource(context[key] || {})
           [ { uri: uri, mimeType: "application/json", text: content } ]
         elsif (match = uri.match(%r{\Arails://models/(.+)\z}))
           model_name = match[1]
           models = context[:models] || {}
           data = models[model_name] || { error: "Model '#{model_name}' not found" }
-          content = JSON.pretty_generate(data)
+          content = JsonBudget.for_resource(data)
           [ { uri: uri, mimeType: "application/json", text: content } ]
         else
           raise RailsAiContext::Error, "Unknown resource: #{uri}"

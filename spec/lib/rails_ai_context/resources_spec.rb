@@ -189,5 +189,37 @@ RSpec.describe RailsAiContext::Resources do
       result = read_handler.call(uri: "rails://schema")
       expect(result.first[:uri]).to eq("rails://schema")
     end
+
+    it "truncates payloads beyond max_tool_response_chars" do
+      # Below the compact size of the fixture, so the reducer runs rather than
+      # the payload simply fitting once its indentation is dropped.
+      allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(10)
+
+      result = read_handler.call(uri: "rails://schema")
+      text = result.first[:text]
+      expect(text.length).to be <= 150
+      expect(text).to include("truncated")
+      # A cap this low leaves room for the marker and nothing else, but the
+      # body still has to parse under the application/json label it carries.
+      expect(result.first[:mimeType]).to eq("application/json")
+      expect { JSON.parse(text) }.not_to raise_error
+    end
+
+    it "keeps a truncated model payload parseable" do
+      allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(10)
+
+      result = read_handler.call(uri: "rails://models/User")
+      expect(result.first[:mimeType]).to eq("application/json")
+      expect { JSON.parse(result.first[:text]) }.not_to raise_error
+    end
+
+    it "leaves payloads under the cap untouched" do
+      allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(200_000)
+
+      result = read_handler.call(uri: "rails://schema")
+      expect(result.first[:mimeType]).to eq("application/json")
+      expect(result.first[:text]).not_to include("truncated")
+      expect(JSON.parse(result.first[:text])).to eq({ "tables" => [ "users" ] })
+    end
   end
 end

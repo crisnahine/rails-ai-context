@@ -29,15 +29,7 @@ module RailsAiContext
     def handle
       status_code, rack_headers, body = self.class.mcp_transport.handle_request(request)
       self.status = status_code
-      rack_headers.each do |k, v|
-        # mcp >= 1.0 returns Rack 3-style lowercase header keys. Rails 7.0's
-        # response header hash is case-sensitive (Rack 2), so a lowercase
-        # "content-type" never registers and Rails falls back to text/html on
-        # an otherwise valid JSON body. Write it with the canonical case.
-        key = k.casecmp("content-type").zero? ? "Content-Type" : k
-        response.headers[key] = v
-      end
-
+      apply_transport_headers(rack_headers)
       if body.respond_to?(:each)
         # Plain enumerable body (initialize, errors, JSON mode): join to a
         # string so Content-Length/ETag semantics stay conventional.
@@ -75,14 +67,64 @@ module RailsAiContext
       else
         self.response_body = body
       end
+    rescue => e
+      # Once the response is committed the status and headers are already on
+      # the wire, so a JSON-RPC frame written here cannot reach the client.
+      # Worse, assigning a body swaps the stream out from under the thread
+      # still draining the old one, turning a truncated SSE stream into a
+      # garbled one. The streaming branch's ensure always closes the stream,
+      # and closing commits, so every streaming failure lands here committed.
+      # Hand those to Live, which logs them with a backtrace and tears the
+      # connection down.
+      raise if response.committed?
+
+      # Mirror Middleware#json_rpc_error_response: a transport failure must
+      # still answer in JSON-RPC shape. Without this the exception escapes
+      # into a generic Rails 500 (HTML), breaking the client's JSON-RPC loop.
+      RailsAiContext.log_warn "[rails-ai-context] MCP request failed: #{e.class}: #{e.message}"
+      self.status = 500
+      response.headers["Content-Type"] = "application/json"
+      self.response_body = {
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Internal error: #{e.message}" },
+        id: nil
+      }.to_json
     end
 
     private
 
+    # Rack 3 transports name their headers in lowercase, and the MCP SDK
+    # switched to that in 1.0. Rails 7.0 keeps response headers in a
+    # case-sensitive Hash, so a lowercase "content-type" is invisible to the
+    # canonical lookup Rails makes when it commits, and it labels the response
+    # with its own text/html default - a correct JSON-RPC body under a type no
+    # client will parse. Rails 7.1 moved to case-insensitive Rack::Headers and
+    # does not have the problem. Only the type needs the canonical spelling,
+    # because Rails is the only reader that looks a header up by name; the
+    # value is passed through so nothing gains a charset it did not have.
+    def apply_transport_headers(rack_headers)
+      rack_headers.each do |name, value|
+        key = name.to_s.casecmp?("content-type") ? "Content-Type" : name
+        response.headers[key] = value
+      end
+    end
+
     def wait_for_stream_close
-      sleep 0.5 until response.stream.closed?
+      sleep 0.5 until stream_finished?
     rescue IOError
       nil
+    end
+
+    # A client hangup aborts the buffer instead of closing it, so `closed?`
+    # alone leaves this thread parked until the transport's next keepalive
+    # write notices the hangup - up to the keepalive interval per dropped
+    # client. Live's buffer reports the hangup through `connected?`; the plain
+    # buffer used off the streaming path does not define it, so ask first.
+    def stream_finished?
+      stream = response.stream
+      return true if stream.closed?
+
+      stream.respond_to?(:connected?) && !stream.connected?
     end
 
     class << self

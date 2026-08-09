@@ -18,19 +18,19 @@ graph TD
         A["models + schema + routes + controllers + views + jobs + config"]
     end
 
-    A -->|"39 introspectors"| gem
+    A -->|"40 introspectors"| gem
 
     subgraph gem["rails-ai-context"]
         direction TB
 
         subgraph engine["Introspection Engine"]
             direction LR
-            I["Introspectors\n39 modules\nPresets\nCached"]
+            I["Introspectors\n40 modules\nPresets\nCached"]
             AST["AST Engine\nPrism\n24 listeners\nConfidence tags"]
             H["Hydration Layer\nSchema hints\ninjected into\ntool responses"]
         end
 
-        engine --> R["Tool Registry\n39 tools auto-discovered via inherited\n+ custom_tools - skip_tools = active tools"]
+        engine --> R["Tool Registry\n45 tools auto-discovered via inherited\n+ custom_tools - skip_tools = active tools"]
     end
 
     R --> MCP
@@ -40,7 +40,7 @@ graph TD
     subgraph outputs["Output"]
         direction LR
         MCP["MCP Server\nstdio / HTTP\nResources\nVFS URIs"]
-        CLI["CLI Runner\nRake / Thor\nSame 39 tools\nNo server needed"]
+        CLI["CLI Runner\nRake / Thor\nSame 45 tools\nNo server needed"]
         S["Serializers\n14 modules\nStatic files\nPer-AI-tool"]
     end
 
@@ -73,7 +73,7 @@ sequenceDiagram
     alt cache hit (TTL + fingerprint valid)
         Cache-->>TR: cached context
     else cache miss
-        Cache->>App: introspect (39 modules)
+        Cache->>App: introspect (40 modules)
         App-->>Cache: structured data
         Cache-->>TR: fresh context
     end
@@ -101,7 +101,7 @@ flowchart LR
 
 ### Introspectors (`lib/rails_ai_context/introspectors/`)
 
-39 modules that extract structured data from your Rails app. Each introspector:
+40 modules that extract structured data from your Rails app. Each introspector:
 
 - Returns a Hash (never raises - wraps errors in `{ error: msg }`)
 - Is registered in `INTROSPECTOR_MAP` with a symbol key
@@ -192,7 +192,7 @@ Thor-based CLI that works standalone (no Gemfile entry):
 
 - `ToolRunner` - Parses CLI args, resolves tool names, executes tools, formats output
 - Supports `--json` mode for machine-readable output
-- Same 39 tools available as MCP and CLI
+- Same 45 tools available as MCP and CLI
 
 ### Caching
 
@@ -215,7 +215,7 @@ SHA256-based change detection:
 ## Key design decisions
 
 1. **Official MCP SDK** - Not a custom protocol. Uses `mcp` gem's `MCP::Tool`, `MCP::Server`, transports.
-2. **Read-only tools** - All 39 tools annotated as non-destructive. Defense-in-depth for query tool.
+2. **Read-only tools** - All 45 tools annotated as non-destructive. Defense-in-depth for query tool.
 3. **Graceful degradation** - Works without database (parses schema.rb as text), without Brakeman, without ripgrep, without listen gem.
 4. **Zeitwerk autoloading** - Files loaded on-demand. No `require_relative` in the gem.
 5. **Diff-aware generation** - Context file regeneration skips unchanged files using fingerprinting.
