@@ -149,13 +149,13 @@ module RailsAiContext
         def serialization_label(serializers)
           parts = []
           jbuilder = serializers[:jbuilder].to_i
-          parts << "Jbuilder (#{jbuilder} #{jbuilder == 1 ? 'template' : 'templates'})" if jbuilder > 0
+          parts << "Jbuilder (#{count_phrase(jbuilder, "template")})" if jbuilder > 0
 
           classes = serializers[:serializer_classes]
           if classes.is_a?(Array) && classes.any?
             shown = classes.first(8).join(", ")
             shown += ", ..." if classes.size > 8
-            parts << "#{classes.size} serializer #{classes.size == 1 ? 'class' : 'classes'} (#{shown})"
+            parts << "#{count_phrase(classes.size, "serializer class")} (#{shown})"
           end
 
           parts.join(" + ")
@@ -167,7 +167,7 @@ module RailsAiContext
         end
 
         def graphql_label(graphql)
-          "#{graphql[:types]} types, #{graphql[:mutations]} mutations, #{graphql[:queries]} queries (app/graphql)"
+          "#{count_phrase(graphql[:types], "type")}, #{count_phrase(graphql[:mutations], "mutation")}, #{count_phrase(graphql[:queries], "query")} (app/graphql)"
         end
 
         def rate_limiting_label(rate)

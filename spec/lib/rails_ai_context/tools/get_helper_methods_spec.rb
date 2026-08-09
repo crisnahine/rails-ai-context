@@ -19,7 +19,7 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       text = result.content.first[:text]
       expect(text).to include("ApplicationHelper")
       expect(text).to include("PostsHelper")
-      expect(text).to include("methods")
+      expect(text).to include("- 1 method")
     end
 
     it "lists helpers with method signatures for detail:standard" do

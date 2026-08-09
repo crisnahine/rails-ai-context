@@ -5,6 +5,8 @@ module RailsAiContext
   # sending notifications to connected AI clients so they re-query fresh data.
   # Runs a background thread alongside the MCP server (stdio or HTTP).
   class LiveReload
+    include CountPhrase
+
     WATCH_DIRS = (Watcher::WATCH_PATTERNS | Fingerprinter::WATCHED_DIRS).freeze
 
     attr_reader :app, :mcp_server
@@ -83,12 +85,12 @@ module RailsAiContext
         when %r{app/views}           then "view"
         when %r{app/jobs}            then "job"
         when %r{app/mailers}         then "mailer"
-        when %r{app/javascript}      then "javascript"
+        when %r{app/javascript}      then "JavaScript file"
         when %r{config/routes}       then "route"
         when %r{config/}             then "config"
         when %r{db/migrate}          then "migration"
         when %r{db/}                 then "database"
-        when %r{lib/tasks}           then "rake_task"
+        when %r{lib/tasks}           then "rake task"
         else                              "file"
         end
 
@@ -98,9 +100,9 @@ module RailsAiContext
       categories
     end
 
-    # Build a readable summary like "Files changed: 2 model(s), 1 controller(s)."
+    # Build a readable summary like "Files changed: 2 models, 1 controller."
     def format_change_message(categories)
-      parts = categories.map { |cat, count| "#{count} #{cat}(s)" }
+      parts = categories.map { |cat, count| count_phrase(count, cat) }
       "Files changed: #{parts.join(", ")}."
     end
   end

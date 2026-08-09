@@ -104,5 +104,27 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
         expect(rules.grep(/\Asingular: /).size).to eq(1)
       end
     end
+
+    # `config.autoload_lib` plus an engine leaves lib in the array twice.
+    context "when Rails lists a path once per contributing railtie" do
+      let(:config) do
+        double(
+          autoload_paths: [ Rails.root.join("lib"), Rails.root.join("lib") ],
+          autoload_once_paths: [],
+          eager_load_paths: [ Rails.root.join("lib"), Rails.root.join("app/services"), Rails.root.join("lib") ],
+          eager_load: false
+        )
+      end
+
+      let(:introspector) { described_class.new(double(root: Rails.root, config: config)) }
+
+      it "reports each autoload path once" do
+        expect(result[:autoload_paths]).to eq([ "lib" ])
+      end
+
+      it "reports each eager-load path once, in declaration order" do
+        expect(result[:eager_load_paths]).to eq([ "lib", "app/services" ])
+      end
+    end
   end
 end

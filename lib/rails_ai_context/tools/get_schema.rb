@@ -93,14 +93,14 @@ module RailsAiContext
           if paginated.empty? && total > 0
             return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
           end
-          lines = [ "# Schema Summary (#{total} #{total == 1 ? 'table' : 'tables'})", "" ]
+          lines = [ "# Schema Summary (#{count_phrase(total, "table")})", "" ]
           lines << "**Adapter:** #{schema[:adapter]}" if schema[:adapter]
           lines.concat(static_source_lines(schema))
           paginated.each do |name|
             data = tables[name]
             col_count = data[:columns]&.size || 0
             idx_count = data[:indexes]&.size || 0
-            lines << "- **#{name}** - #{col_count} #{col_count == 1 ? 'column' : 'columns'}, #{idx_count} #{idx_count == 1 ? 'index' : 'indexes'}"
+            lines << "- **#{name}** - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
           end
           lines.concat(secondary_databases_lines(schema))
           if offset + limit < total
@@ -118,7 +118,7 @@ module RailsAiContext
           if paginated.empty?
             return text_response("No tables at offset #{offset}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
           end
-          lines = [ "# Schema (#{total} #{total == 1 ? 'table' : 'tables'}, showing #{paginated.size})", "" ]
+          lines = [ "# Schema (#{count_phrase(total, "table")}, showing #{paginated.size})", "" ]
           lines.concat(static_source_lines(schema))
           paginated.each do |name|
             data = tables[name]
@@ -180,7 +180,7 @@ module RailsAiContext
           end
 
           lines.concat(secondary_databases_lines(schema))
-          lines << "_Use `detail:\"summary\"` for all #{total} tables, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > limit
+          lines << "_Use `detail:\"summary\"` for all #{count_phrase(total, "table")}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > limit
           text_response(lines.join("\n"))
 
         when "full"
@@ -190,7 +190,7 @@ module RailsAiContext
           if paginated.empty? && total > 0
             return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
           end
-          lines = [ "# Schema Full Detail (#{paginated.size} of #{total} #{total == 1 ? 'table' : 'tables'})", "" ]
+          lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
           paginated.each do |name|
             lines << format_table_markdown(name, tables[name])
             lines << ""
@@ -248,7 +248,7 @@ module RailsAiContext
         lines = [ "", "## Secondary databases", "" ]
         secondary.each do |name, db|
           count = db[:total_tables]
-          lines << "- **#{name}**: #{count} #{count == 1 ? 'table' : 'tables'} (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
+          lines << "- **#{name}**: #{count_phrase(count, "table")} (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
         end
         lines
       end

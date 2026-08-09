@@ -67,7 +67,7 @@ module RailsAiContext
             return text_response("# Session Context\n\nNo queries recorded yet. Tools will be tracked as you use them.\n\n_Use `mark:\"tool:params\"` to manually record a query._\n_Note: CLI (`rails ai:tool`) runs each call in a separate process - session tracking only works via MCP._")
           end
 
-          lines = [ "# Session Context (#{queries.size} queries)", "" ]
+          lines = [ "# Session Context (#{count_phrase(queries.size, "query")})", "" ]
           lines << "| Tool | Params | When |"
           lines << "|------|--------|------|"
 
@@ -95,7 +95,7 @@ module RailsAiContext
           total_calls = queries.sum { |q| q[:call_count] || 1 }
           unique_tools = queries.map { |q| q[:tool] }.uniq.size
           lines = [ "# Session Summary", "" ]
-          lines << "You have made #{total_calls} tool call(s) across #{unique_tools} unique tool(s) in this session:"
+          lines << "You have made #{count_phrase(total_calls, "tool call")} across #{count_phrase(unique_tools, "unique tool")} in this session:"
           lines << ""
 
           # Group by tool name, summing actual call counts

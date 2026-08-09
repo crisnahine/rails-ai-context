@@ -49,11 +49,11 @@ module RailsAiContext
         when "summary"
           lines = [ "# Test Infrastructure", "" ]
           lines << "- **Framework:** #{data[:framework]}"
-          lines << "- **Factories:** #{data[:factories][:count]} files" if data[:factories]
-          lines << "- **Fixtures:** #{data[:fixtures][:count]} files" if data[:fixtures]
+          lines << "- **Factories:** #{count_phrase(data[:factories][:count], "file")}" if data[:factories]
+          lines << "- **Fixtures:** #{count_phrase(data[:fixtures][:count], "file")}" if data[:fixtures]
           if data[:test_files]&.any?
             total = data[:test_files].values.sum { |v| v[:count] }
-            lines << "- **Test files:** #{total} across #{data[:test_files].size} categories"
+            lines << "- **Test files:** #{total} across #{count_phrase(data[:test_files].size, "category")}"
           end
           lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
           text_response(lines.join("\n"))
@@ -61,8 +61,8 @@ module RailsAiContext
         when "standard"
           lines = [ "# Test Infrastructure", "" ]
           lines << "- **Framework:** #{data[:framework]}"
-          lines << "- **Factories:** #{data[:factories][:location]} (#{data[:factories][:count]} files)" if data[:factories]
-          lines << "- **Fixtures:** #{data[:fixtures][:location]} (#{data[:fixtures][:count]} files)" if data[:fixtures]
+          lines << "- **Factories:** #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
+          lines << "- **Fixtures:** #{data[:fixtures][:location]} (#{count_phrase(data[:fixtures][:count], "file")})" if data[:fixtures]
           lines << "- **System tests:** #{data[:system_tests][:location]}" if data[:system_tests]
           lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
           lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
@@ -77,7 +77,7 @@ module RailsAiContext
           if data[:test_files]&.any?
             lines << "" << "## Test Files"
             data[:test_files].each do |cat, info|
-              lines << "- #{cat}: #{info[:count]} files (#{info[:location]})"
+              lines << "- #{cat}: #{count_phrase(info[:count], "file")} (#{info[:location]})"
             end
           end
 
@@ -167,7 +167,7 @@ module RailsAiContext
           if data[:test_files]&.any?
             lines << "" << "## Test Files"
             data[:test_files].each do |cat, info|
-              lines << "- #{cat}: #{info[:count]} files (#{info[:location]})"
+              lines << "- #{cat}: #{count_phrase(info[:count], "file")} (#{info[:location]})"
             end
           end
 
@@ -242,7 +242,7 @@ module RailsAiContext
                 "- #{line.strip}"
               end
             end
-            return "# #{rel} (#{test_names.size} #{test_names.size == 1 ? 'test' : 'tests'})\n\n#{test_names.join("\n")}"
+            return "# #{rel} (#{count_phrase(test_names.size, "test")})\n\n#{test_names.join("\n")}"
           end
 
           return "# #{rel}\n\n```ruby\n#{content}\n```"

@@ -41,7 +41,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       helper = test_class.new(ctx)
       text = helper.full_preset_stack_lines.join("\n")
       expect(text).to include("Hotwire")
-      expect(text).to include("1 frames")
+      expect(text).to include("1 frame, 2 streams")
       expect(text).to include("2 streams")
     end
 
@@ -72,7 +72,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       helper = test_class.new(ctx)
       text = helper.full_preset_stack_lines.join("\n")
       expect(text).to include("RichText: ActionText")
-      expect(text).to include("1 fields")
+      expect(text).to include("1 field")
     end
 
     it "renders assets line with pipeline and framework" do

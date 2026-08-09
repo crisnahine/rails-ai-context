@@ -62,5 +62,49 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
         expect(bad_file[:parse_error]).to be true
       end
     end
+
+    # en.yml carries hello, posts.index.title and posts.show.title.
+    context "with a locale that translates one key and adds four of its own" do
+      let(:es_locale) { File.join(Rails.root, "config/locales/es.yml") }
+
+      before do
+        File.write(es_locale, <<~YML)
+          es:
+            hello: "Hola"
+            solo:
+              uno: "1"
+              dos: "2"
+              tres: "3"
+              cuatro: "4"
+        YML
+        allow(I18n).to receive(:available_locales).and_return([ :en, :es ])
+      end
+
+      after { FileUtils.rm_f(es_locale) }
+
+      it "measures coverage against the default locale's own keys" do
+        expect(result[:locale_coverage]["es"]).to include(
+          keys: 5, coverage_pct: 33.3, missing: 2, extra: 4
+        )
+      end
+    end
+
+    context "with a locale file whose root key is a symbol" do
+      let(:es_locale) { File.join(Rails.root, "config/locales/es.yml") }
+
+      before do
+        File.write(es_locale, <<~YML)
+          :es:
+            hello: "Hola"
+        YML
+        allow(I18n).to receive(:available_locales).and_return([ :en, :es ])
+      end
+
+      after { FileUtils.rm_f(es_locale) }
+
+      it "strips the root so its keys still line up with the default locale" do
+        expect(result[:locale_coverage]["es"]).to include(keys: 1, missing: 2, extra: 0)
+      end
+    end
   end
 end

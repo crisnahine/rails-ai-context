@@ -39,8 +39,8 @@ module RailsAiContext
         if loaded.any?
           loaded.each do |e|
             parts = []
-            parts << "#{e[:route_count]} routes" if e[:route_count]
-            parts << "#{e[:model_count]} models" if e[:model_count]
+            parts << count_phrase(e[:route_count], "route") if e[:route_count]
+            parts << count_phrase(e[:model_count], "model") if e[:model_count]
             line = "- **#{e[:name]}**"
             line += " - #{parts.join(', ')}" if parts.any?
             lines << line

@@ -98,22 +98,22 @@ module RailsAiContext
         case detail
         when "summary"
           all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
-          lines = [ "# Views (#{templates.size} templates, #{partials.size} partials)", "" ]
+          lines = [ "# Views (#{count_phrase(templates.size, "template")}, #{count_phrase(partials.size, "partial")})", "" ]
           all_dirs.each do |ctrl|
             ctrl_templates = templates.select { |k, _| k.start_with?("#{ctrl}/") }
             ctrl_partials = partials.select { |k, _| k.start_with?("#{ctrl}/") }
             file_count = ctrl_templates.size + ctrl_partials.size
             # Skip redundant section header when filtered to a single controller
-            lines << "## #{ctrl}/ (#{file_count} files)" unless controller && all_dirs.size == 1
+            lines << "## #{ctrl}/ (#{count_phrase(file_count, "file")})" unless controller && all_dirs.size == 1
             ctrl_templates.sort.each do |name, meta|
               parts = meta[:partials]&.any? ? " renders: #{meta[:partials].join(', ')}" : ""
               stim = meta[:stimulus]&.any? ? " stimulus: #{meta[:stimulus].join(', ')}" : ""
               comps = meta[:components]&.any? ? " components: #{meta[:components].join(', ')}" : ""
               phlex_tag = meta[:phlex] ? " [phlex]" : ""
-              lines << "- #{name} (#{meta[:lines]} lines#{phlex_tag})#{parts}#{comps}#{stim}"
+              lines << "- #{name} (#{count_phrase(meta[:lines], "line")}#{phlex_tag})#{parts}#{comps}#{stim}"
             end
             ctrl_partials.sort.each do |name, meta|
-              lines << "- #{name} (#{meta[:lines]} lines)"
+              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})"
             end
             lines << ""
           end
@@ -121,7 +121,7 @@ module RailsAiContext
 
         when "standard"
           all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
-          lines = [ "# Views (#{templates.size} templates, #{partials.size} partials)", "" ]
+          lines = [ "# Views (#{count_phrase(templates.size, "template")}, #{count_phrase(partials.size, "partial")})", "" ]
 
           # Form builders and component usage from views introspector
           form_builders = data[:form_builders_detected]
@@ -163,14 +163,14 @@ module RailsAiContext
 
               phlex_tag = meta[:phlex] ? " [phlex]" : ""
               details = detail_parts.any? ? " - #{detail_parts.join(' | ')}" : ""
-              lines << "- **#{name}** (#{meta[:lines]} lines#{phlex_tag})#{details}"
+              lines << "- **#{name}** (#{count_phrase(meta[:lines], "line")}#{phlex_tag})#{details}"
             end
             ctrl_partials.sort.each do |name, meta|
               fields = meta[:fields]&.any? ? " fields: #{meta[:fields].join(', ')}" : ""
               helpers = meta[:helpers]&.any? ? " helpers: #{meta[:helpers].join(', ')}" : ""
               locals = extract_partial_locals(name, templates)
               locals_str = locals&.any? ? " **locals:** #{locals.join(', ')}" : ""
-              lines << "- #{name} (#{meta[:lines]} lines)#{fields}#{helpers}#{locals_str}"
+              lines << "- #{name} (#{count_phrase(meta[:lines], "line")})#{fields}#{helpers}#{locals_str}"
             end
             lines << ""
           end
@@ -213,7 +213,7 @@ module RailsAiContext
             all_dirs.each do |ctrl|
               count = templates.count { |k, _| k.start_with?("#{ctrl}/") } +
                       partials.count { |k, _| k.start_with?("#{ctrl}/") }
-              lines << "- `controller:\"#{ctrl}\"` (#{count} files)"
+              lines << "- `controller:\"#{ctrl}\"` (#{count_phrase(count, "file")})"
             end
             lines << "" << "_Or use `path:\"controller/action.html.erb\"` for a specific file._"
             text_response(lines.join("\n"))
@@ -236,7 +236,7 @@ module RailsAiContext
         real_base = File.realpath(layouts_dir).to_s
         max_size  = max_file_size
 
-        lines = [ "# Layouts (#{files.size} files)", "" ]
+        lines = [ "# Layouts (#{count_phrase(files.size, "file")})", "" ]
         files.each do |path|
           relative = "layouts/#{File.basename(path)}"
 
@@ -267,7 +267,7 @@ module RailsAiContext
             lines << "## #{relative}" << "```erb" << strip_svg(content) << "```" << ""
           else
             content = RailsAiContext::SafeFile.read(real) || ""
-            lines << "- #{relative} (#{content.lines.size} lines)"
+            lines << "- #{relative} (#{count_phrase(content.lines.size, "line")})"
           end
         end
         text_response(lines.join("\n"))
@@ -539,7 +539,7 @@ module RailsAiContext
           }
         end
 
-        lines = [ "# Views (#{templates.size} templates)", "" ]
+        lines = [ "# Views (#{count_phrase(templates.size, "template")})", "" ]
         templates.each { |t| lines << "- #{t}" }
         text_response(lines.join("\n"))
       end

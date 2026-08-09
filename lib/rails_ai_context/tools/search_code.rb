@@ -168,7 +168,7 @@ module RailsAiContext
         pagination = page[:hint].empty? ? "" : "\n#{page[:hint]}"
 
         showing = paginated.size.to_s
-        header = "# Search: `#{original_pattern}`\n**#{total} total results**#{" in #{path}" if path}, showing #{showing}\n"
+        header = "# Search: `#{original_pattern}`\n**#{count_phrase(total, "total result")}**#{" in #{path}" if path}, showing #{showing}\n"
 
         # When context lines are interleaved with matches, prefix matches with
         # '>' and context with a space so they stay distinguishable. Pure-match
@@ -313,7 +313,7 @@ module RailsAiContext
         lines = []
         grouped.each do |file, matches|
           match_count = matches.count { |r| r[:match] != false }
-          lines << "## #{file} (#{match_count} matches)"
+          lines << "## #{file} (#{count_phrase(match_count, "match")})"
           lines << "```"
           matches.each { |r| lines << "#{line_marker(r, mixed)}#{r[:line_number]}: #{r[:content].strip}" }
           lines << "```"
@@ -412,7 +412,7 @@ module RailsAiContext
           test_callers = callers.select { |r| r[:file].match?(/\A(test|spec)\//) }
 
           if app_callers.any?
-            lines << "## Called from (#{app_callers.size} #{app_callers.size == 1 ? "site" : "sites"})"
+            lines << "## Called from (#{count_phrase(app_callers.size, "site")})"
             grouped = app_callers.group_by { |r| r[:file] }
             grouped.each do |file, matches|
               category = case file
@@ -443,9 +443,9 @@ module RailsAiContext
           end
 
           if test_callers.any?
-            lines << "" << "## Tested by (#{test_callers.size} references)"
+            lines << "" << "## Tested by (#{count_phrase(test_callers.size, "reference")})"
             test_callers.group_by { |r| r[:file] }.each do |file, matches|
-              lines << "- `#{file}` (#{matches.size} references)"
+              lines << "- `#{file}` (#{count_phrase(matches.size, "reference")})"
             end
           end
         else

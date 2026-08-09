@@ -17,7 +17,7 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
         { file: "broken.fr.yml", parse_error: true }
       ],
       total_locale_files: 4,
-      locale_coverage: { "fr" => { keys: 80, coverage_pct: 80.0 } },
+      locale_coverage: { "fr" => { keys: 80, coverage_pct: 80.0, missing: 20, extra: 0 } },
       fallbacks: { fr: %w[en] }
     }
   end
@@ -39,7 +39,14 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
     it "renders coverage vs the default locale" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Coverage (vs en)")
-      expect(text).to include("**fr**: 80 keys (80.0%)")
+      expect(text).to include("**fr**: 80.0% - 80 unique keys")
+    end
+
+    # Coverage counts a key path once; the per-file list below it counts each
+    # file's leaves. Without the label the two numbers look like a bug.
+    it "says the coverage key total counts unique paths" do
+      text = described_class.call.content.first[:text]
+      expect(text).to include("80 unique keys")
     end
 
     it "renders fallbacks" do
@@ -66,7 +73,7 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
 
       it "shows coverage for the filtered locale" do
         text = described_class.call(locale: "fr").content.first[:text]
-        expect(text).to include("**Keys:** 80 (80.0% of en)")
+        expect(text).to include("**Unique keys:** 80 (80.0% of en)")
       end
 
       it "returns not-found with suggestions for an unknown locale" do

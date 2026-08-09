@@ -4,6 +4,8 @@ module RailsAiContext
   # Diagnostic checker that validates the environment and reports
   # AI readiness with pass/warn/fail checks and a readiness score.
   class Doctor
+    include CountPhrase
+
     Check = Data.define(:name, :status, :message, :fix)
 
     CHECKS = %i[
@@ -67,7 +69,7 @@ module RailsAiContext
       structure_path = File.join(app.root, "db/structure.sql")
       if File.exist?(schema_path)
         lines = File.readlines(schema_path).size
-        Check.new(name: "Schema", status: :pass, message: "db/schema.rb found (#{lines} lines)", fix: nil)
+        Check.new(name: "Schema", status: :pass, message: "db/schema.rb found (#{count_phrase(lines, "line")})", fix: nil)
       elsif File.exist?(structure_path)
         size = (File.size(structure_path) / 1024.0).round(1)
         Check.new(name: "Schema", status: :pass, message: "db/structure.sql found (#{size}KB)", fix: nil)
@@ -86,7 +88,7 @@ module RailsAiContext
         Check.new(name: "Pending migrations", status: :pass, message: "No pending migrations", fix: nil)
       else
         Check.new(name: "Pending migrations", status: :fail,
-          message: "#{pending.size} pending migration(s) - schema data will be stale",
+          message: "#{count_phrase(pending.size, "pending migration")} - schema data will be stale",
           fix: "Run `rails db:migrate`")
       end
     end
@@ -95,7 +97,7 @@ module RailsAiContext
       models_dir = File.join(app.root, "app/models")
       if Dir.exist?(models_dir) && Dir.glob(File.join(models_dir, "**/*.rb")).any?
         count = Dir.glob(File.join(models_dir, "**/*.rb")).size
-        Check.new(name: "Models", status: :pass, message: "#{count} model files found", fix: nil)
+        Check.new(name: "Models", status: :pass, message: "#{count_phrase(count, "model file")} found", fix: nil)
       else
         Check.new(name: "Models", status: :warn, message: "No model files in app/models/", fix: "Generate models with `rails generate model`")
       end
@@ -123,7 +125,7 @@ module RailsAiContext
       dir = File.join(app.root, "app/controllers")
       if Dir.exist?(dir) && Dir.glob(File.join(dir, "**/*.rb")).any?
         count = Dir.glob(File.join(dir, "**/*.rb")).size
-        Check.new(name: "Controllers", status: :pass, message: "#{count} controller files found", fix: nil)
+        Check.new(name: "Controllers", status: :pass, message: "#{count_phrase(count, "controller file")} found", fix: nil)
       else
         Check.new(name: "Controllers", status: :warn, message: "No controller files", fix: nil)
       end
@@ -133,7 +135,7 @@ module RailsAiContext
       dir = File.join(app.root, "app/views")
       if Dir.exist?(dir)
         count = Dir.glob(File.join(dir, "**/*")).reject { |f| File.directory?(f) }.size
-        Check.new(name: "Views", status: :pass, message: "#{count} view files found", fix: nil)
+        Check.new(name: "Views", status: :pass, message: "#{count_phrase(count, "view file")} found", fix: nil)
       else
         Check.new(name: "Views", status: :warn, message: "No view files", fix: nil)
       end
@@ -153,7 +155,7 @@ module RailsAiContext
       migrate_dir = File.join(app.root, "db/migrate")
       if Dir.exist?(migrate_dir) && Dir.glob(File.join(migrate_dir, "*.rb")).any?
         count = Dir.glob(File.join(migrate_dir, "*.rb")).size
-        Check.new(name: "Migrations", status: :pass, message: "#{count} migration #{count == 1 ? 'file' : 'files'}", fix: nil)
+        Check.new(name: "Migrations", status: :pass, message: count_phrase(count, "migration file"), fix: nil)
       else
         Check.new(name: "Migrations", status: :warn, message: "No migrations", fix: nil)
       end
@@ -289,13 +291,13 @@ module RailsAiContext
 
       if failures.empty?
         Check.new(name: "MCP configs", status: :pass,
-          message: "#{checks.size} of #{checks.size} MCP config(s) valid",
+          message: "#{checks.size} of #{count_phrase(checks.size, "MCP config")} valid",
           fix: nil)
       else
         labels = failures.map { |c| c.name }
         worst_status = failures.any? { |c| c.status == :fail } ? :fail : :warn
         Check.new(name: "MCP configs", status: worst_status,
-          message: "#{failures.size} of #{checks.size} MCP config(s) need attention: #{labels.join(', ')}",
+          message: "#{failures.size} of #{count_phrase(checks.size, "MCP config")} #{failures.size == 1 ? "needs" : "need"} attention: #{labels.join(', ')}",
           fix: "Run `rails generate rails_ai_context:install` to fix")
       end
     end
@@ -401,12 +403,12 @@ module RailsAiContext
 
       if errors.empty?
         Check.new(name: "Introspector health", status: :pass,
-          message: "All #{config.introspectors.size} introspectors return data " \
-            "(these feed the #{Server.builtin_tools.size} MCP tools)",
+          message: "All #{count_phrase(config.introspectors.size, "introspector")} return data " \
+            "(these feed the #{count_phrase(Server.builtin_tools.size, "MCP tool")})",
           fix: nil)
       else
         Check.new(name: "Introspector health", status: :warn,
-          message: "#{errors.size} introspector(s) returned errors: #{errors.join(', ')}",
+          message: "#{count_phrase(errors.size, "introspector")} returned errors: #{errors.join(', ')}",
           fix: "Check if the app has the required features (e.g., stimulus needs app/javascript/controllers/)")
       end
     rescue => e
@@ -420,7 +422,8 @@ module RailsAiContext
 
       stimulus_dir = File.join(app.root, "app/javascript/controllers")
       if Dir.exist?(stimulus_dir) && Dir.glob(File.join(stimulus_dir, "**/*_controller.{js,ts}")).any? && !config.introspectors.include?(:stimulus)
-        suggestions << "stimulus (#{Dir.glob(File.join(stimulus_dir, '**/*_controller.{js,ts}')).size} controllers found)"
+        stimulus_count = Dir.glob(File.join(stimulus_dir, "**/*_controller.{js,ts}")).size
+        suggestions << "stimulus (#{count_phrase(stimulus_count, "controller")} found)"
       end
 
       views_dir = File.join(app.root, "app/views")
@@ -429,8 +432,9 @@ module RailsAiContext
       end
 
       i18n_dir = File.join(app.root, "config/locales")
-      if Dir.exist?(i18n_dir) && Dir.glob(File.join(i18n_dir, "**/*.{yml,yaml}")).size > 1 && !config.introspectors.include?(:i18n)
-        suggestions << "i18n (#{Dir.glob(File.join(i18n_dir, '**/*.{yml,yaml}')).size} locale files)"
+      locale_file_count = Dir.exist?(i18n_dir) ? Dir.glob(File.join(i18n_dir, "**/*.{yml,yaml}")).size : 0
+      if locale_file_count > 1 && !config.introspectors.include?(:i18n)
+        suggestions << "i18n (#{count_phrase(locale_file_count, "locale file")})"
       end
 
       graphql_dir = File.join(app.root, "app/graphql")
@@ -440,7 +444,7 @@ module RailsAiContext
 
       if suggestions.empty?
         Check.new(name: "Preset coverage", status: :pass,
-          message: "#{config.introspectors.size} introspectors cover detected features",
+          message: "#{count_phrase(config.introspectors.size, "introspector")} cover detected features",
           fix: nil)
       else
         Check.new(name: "Preset coverage", status: :warn,
@@ -647,11 +651,11 @@ module RailsAiContext
 
       if pct >= 80
         Check.new(name: "View aggregation size", status: :warn,
-          message: "#{count} view files totaling #{(total_size / 1_000_000.0).round(1)}MB (#{pct}% of #{(limit / 1_000_000.0).round}MB limit for UI pattern extraction)",
+          message: "#{count_phrase(count, "view file")} totaling #{(total_size / 1_000_000.0).round(1)}MB (#{pct}% of #{(limit / 1_000_000.0).round}MB limit for UI pattern extraction)",
           fix: "Increase `config.max_view_total_size` or `config.max_view_file_size`")
       else
         Check.new(name: "View aggregation size", status: :pass,
-          message: "#{count} view files (#{(total_size / 1024.0).round}KB total, within limits)",
+          message: "#{count_phrase(count, "view file")} (#{(total_size / 1024.0).round}KB total, within limits)",
           fix: nil)
       end
     end

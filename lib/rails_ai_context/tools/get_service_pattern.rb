@@ -73,7 +73,7 @@ module RailsAiContext
         class_name = extract_class_name(source) || File.basename(file, ".rb").camelize
 
         lines = [ "# #{class_name}", "" ]
-        lines << "**File:** `#{relative}` (#{line_count} lines)"
+        lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
 
         # Initialize params
         init_params = extract_initialize_params(source)
@@ -166,14 +166,14 @@ module RailsAiContext
         when "standard"
           service_data.each do |s|
             methods_str = s[:public_methods].any? ? s[:public_methods].join(", ") : "none"
-            lines << "- **#{s[:class_name]}** (#{s[:line_count]} lines) - #{methods_str}"
+            lines << "- **#{s[:class_name]}** (#{count_phrase(s[:line_count], "line")}) - #{methods_str}"
           end
           lines << "" << "_Use `service:\"Name\"` for dependencies, error handling, and callers._"
 
         when "full"
           service_data.each do |s|
             lines << "## #{s[:class_name]}"
-            lines << "- **File:** `#{s[:file]}` (#{s[:line_count]} lines)"
+            lines << "- **File:** `#{s[:file]}` (#{count_phrase(s[:line_count], "line")})"
             methods_str = s[:public_methods].any? ? s[:public_methods].join(", ") : "none"
             lines << "- **Methods:** #{methods_str}"
 

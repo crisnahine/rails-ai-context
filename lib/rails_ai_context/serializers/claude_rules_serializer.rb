@@ -43,7 +43,7 @@ module RailsAiContext
         # Compact counts - gems and architecture are already in the root file (CLAUDE.md/AGENTS.md)
         schema = context[:schema]
         if SectionGuard.usable?(schema)
-          lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables"
+          lines << "- Database: #{schema[:adapter]} - #{count_phrase(schema[:total_tables], "table")}"
         end
 
         models = context[:models]
@@ -133,7 +133,7 @@ module RailsAiContext
             .map { |i| i[:unique] ? "#{Array(i[:columns]).join('+')}(unique)" : Array(i[:columns]).join("+") }
           idx_str = idxs.any? ? " | Idx: #{idxs.join(', ')}" : ""
 
-          lines << "- **#{name}** (#{col_count} cols)#{col_str}#{fk_str}#{idx_str}"
+          lines << "- **#{name}** (#{count_phrase(col_count, 'col')})#{col_str}#{fk_str}#{idx_str}"
 
           # Include enum values if model has them
           model_name = name.classify
@@ -146,7 +146,7 @@ module RailsAiContext
         end
 
         if tables.size > 30
-          lines << "- ...#{tables.size - 30} more tables (use `rails_get_schema` MCP tool)"
+          lines << "- ...#{count_phrase(tables.size - 30, "more table")} (use `rails_get_schema` MCP tool)"
         end
 
         lines.join("\n")
@@ -191,7 +191,7 @@ module RailsAiContext
           table = data[:table_name]
           line = "- #{name}"
           line += " (table: #{table})" if table
-          line += " - #{assocs} assocs, #{vals} validations"
+          line += " - #{count_phrase(assocs, "assoc")}, #{count_phrase(vals, "validation")}"
           lines << line
 
           # Include app-specific concerns (filter out Rails/gem internals)

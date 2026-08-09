@@ -61,9 +61,8 @@ module RailsAiContext
         Dir.glob(File.join(dir, "**/*.{yml,yaml,rb}")).size
       end
 
-      def count_keys(hash, depth: 0)
-        return 0 unless hash.is_a?(Hash)
-        hash.sum { |_, v| v.is_a?(Hash) ? count_keys(v, depth: depth + 1) : 1 }
+      def count_keys(hash)
+        nested_key_paths(hash).size
       end
 
       def detect_fallback_config
@@ -79,12 +78,21 @@ module RailsAiContext
         locales = I18n.available_locales
         return {} if locales.size < 2
 
-        # Compare key counts between default and other locales
+        # Coverage is the share of the default locale's keys that the other
+        # locale also defines. Comparing raw counts instead reports over 100%
+        # for a locale that translates few default keys but adds many of its
+        # own - the one number a translator must not be told is fine.
         coverage = {}
-        default_count = count_keys_for_locale(I18n.default_locale)
+        default_keys = key_paths_for_locale(I18n.default_locale)
         locales.reject { |l| l == I18n.default_locale }.each do |locale|
-          locale_count = count_keys_for_locale(locale)
-          coverage[locale.to_s] = { keys: locale_count, coverage_pct: default_count > 0 ? ((locale_count.to_f / default_count) * 100).round(1) : 0 }
+          locale_keys = key_paths_for_locale(locale)
+          translated = (default_keys & locale_keys).size
+          coverage[locale.to_s] = {
+            keys: locale_keys.size,
+            missing: (default_keys - locale_keys).size,
+            extra: (locale_keys - default_keys).size,
+            coverage_pct: default_keys.any? ? ((translated.to_f / default_keys.size) * 100).round(1) : 0
+          }
         end
         coverage
       rescue => e
@@ -92,20 +100,26 @@ module RailsAiContext
         {}
       end
 
-      def count_keys_for_locale(locale)
-        paths = find_locale_paths(locale)
-        return 0 if paths.empty?
-        paths.sum do |path|
+      # Dotted key paths a locale defines, with the locale root stripped so
+      # `en.posts.title` and `es.posts.title` compare as the same key.
+      def key_paths_for_locale(locale)
+        loc = locale.to_s
+        find_locale_paths(locale).flat_map do |path|
           content = RailsAiContext::SafeFile.read(path)
-          next 0 unless content
+          next [] unless content
           data = YAML.safe_load(content, permitted_classes: [ Symbol ])
-          count_nested_keys(data)
+          next [] unless data.is_a?(Hash)
+
+          # A locale root may be written `en:` or `:en:` - both load, and both
+          # have to be stripped or this locale's paths compare against nothing.
+          root = data.key?(loc) ? data[loc] : data.fetch(locale.to_sym, data)
+          nested_key_paths(root)
         rescue StandardError
-          0
-        end
+          []
+        end.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] count_keys_for_locale failed: #{e.message}" if ENV["DEBUG"]
-        0
+        $stderr.puts "[rails-ai-context] key_paths_for_locale failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
       # Finds all YAML files contributing translations for the given locale:
@@ -124,10 +138,13 @@ module RailsAiContext
         end
       end
 
-      def count_nested_keys(hash, count = 0)
-        return count unless hash.is_a?(Hash)
-        hash.each_value { |v| count = v.is_a?(Hash) ? count_nested_keys(v, count) : count + 1 }
-        count
+      def nested_key_paths(hash, prefix = nil, paths = [])
+        return paths unless hash.is_a?(Hash)
+        hash.each do |key, value|
+          path = prefix ? "#{prefix}.#{key}" : key.to_s
+          value.is_a?(Hash) ? nested_key_paths(value, path, paths) : paths << path
+        end
+        paths
       end
     end
   end

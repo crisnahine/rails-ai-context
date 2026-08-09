@@ -29,7 +29,7 @@ module RailsAiContext
         schema = context[:schema]
         if SectionGuard.usable?(schema)
           tables = schema[:total_tables]
-          lines << "- Database: #{schema[:adapter]} - #{tables} #{tables == 1 ? 'table' : 'tables'}"
+          lines << "- Database: #{schema[:adapter]} - #{count_phrase(tables, "table")}"
         end
 
         models = context[:models]
@@ -43,8 +43,8 @@ module RailsAiContext
           by_controller = routes[:by_controller] || {}
           app_ctrls = by_controller.keys.reject { |k| internal.any? { |p| k.downcase.start_with?(p) } }
           app_routes = app_ctrls.sum { |k| Array(by_controller[k]).size }
-          lines << "- Routes: #{app_routes} app #{app_routes == 1 ? 'route' : 'routes'} across " \
-                   "#{app_ctrls.size} #{app_ctrls.size == 1 ? 'controller' : 'controllers'} " \
+          lines << "- Routes: #{count_phrase(app_routes, "app route")} across " \
+                   "#{count_phrase(app_ctrls.size, "controller")} " \
                    "(#{routes[:total_routes]} total incl. framework)"
         end
 

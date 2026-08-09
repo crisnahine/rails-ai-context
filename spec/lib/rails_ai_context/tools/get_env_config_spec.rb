@@ -34,7 +34,7 @@ RSpec.describe RailsAiContext::Tools::GetEnvConfig do
     it "renders the current environment and file count" do
       text = described_class.call.content.first[:text]
       expect(text).to include("# Environments")
-      expect(text).to include("_Current: **development** - 2 environment file(s)")
+      expect(text).to include("_Current: **development** - 2 environment files")
     end
 
     it "renders notable toggles per environment" do

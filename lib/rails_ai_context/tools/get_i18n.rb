@@ -63,7 +63,7 @@ module RailsAiContext
           if coverage.any?
             lines << "" << "## Coverage (vs #{i18n[:default_locale]})"
             coverage.sort.each do |loc, data|
-              lines << "- **#{loc}**: #{data[:keys]} keys (#{data[:coverage_pct]}%)"
+              lines << "- **#{loc}**: #{data[:coverage_pct]}% - #{count_phrase(data[:keys], "unique key")}#{coverage_gap(data)}"
             end
           end
 
@@ -87,7 +87,7 @@ module RailsAiContext
           coverage = (i18n[:locale_coverage] || {})[locale]
           if coverage
             lines << ""
-            lines << "- **Keys:** #{coverage[:keys]} (#{coverage[:coverage_pct]}% of #{i18n[:default_locale]})"
+            lines << "- **Unique keys:** #{coverage[:keys]} (#{coverage[:coverage_pct]}% of #{i18n[:default_locale]})#{coverage_gap(coverage)}"
           end
 
           fallbacks = i18n[:fallbacks] || {}
@@ -95,6 +95,13 @@ module RailsAiContext
 
           render_file_list(lines, page, "Files for #{locale}", "_No locale files found for '#{locale}'._")
           text_response(lines.join("\n"))
+        end
+
+        def coverage_gap(data)
+          parts = []
+          parts << "#{data[:missing]} missing" if data[:missing].positive?
+          parts << "#{data[:extra]} not in default" if data[:extra].positive?
+          parts.empty? ? "" : " - #{parts.join(', ')}"
         end
 
         def render_file_list(lines, page, heading, empty_message)
@@ -110,7 +117,7 @@ module RailsAiContext
 
         def file_line(file)
           line = "- `#{file[:file]}`"
-          line += " - #{file[:key_count]} keys" if file[:key_count]
+          line += " - #{count_phrase(file[:key_count], "key")}" if file[:key_count]
           line += " - [parse error]" if file[:parse_error]
           line
         end

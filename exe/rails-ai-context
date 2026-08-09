@@ -222,7 +222,7 @@ class RailsAiContextCLI < Thor
 
       failed = result[:checks].count { |c| c.status == :fail }
       if options[:strict] && failed > 0
-        $stderr.puts "#{failed} check#{'s' unless failed == 1} failed (--strict)"
+        $stderr.puts "#{RailsAiContext::CountPhrase.call(failed, "check")} failed (--strict)"
         exit 1
       end
     end
@@ -552,7 +552,7 @@ class RailsAiContextCLI < Thor
       $stderr.puts ""
       $stderr.puts "Commands:"
       $stderr.puts "  rails-ai-context context    # Regenerate context files"
-      $stderr.puts "  rails-ai-context tool NAME  # Run any of the #{tool_count_str} tools"
+      $stderr.puts "  rails-ai-context tool NAME  # Run any of the #{RailsAiContext::CountPhrase.call(builtin_tool_count, "tool")}"
       if tool_mode == :mcp
         $stderr.puts "  rails-ai-context serve      # Start MCP server"
       end
@@ -571,12 +571,10 @@ class RailsAiContextCLI < Thor
       $stderr.puts ""
     end
 
-    def tool_count_str
-      if defined?(::RailsAiContext::Server)
-        ::RailsAiContext::Server.builtin_tools.size.to_s
-      else
-        "45"
-      end
+    def builtin_tool_count
+      return ::RailsAiContext::Server.builtin_tools.size if defined?(::RailsAiContext::Server)
+
+      45
     end
 
     def print_context_result(result)

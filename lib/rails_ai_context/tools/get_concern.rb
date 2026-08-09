@@ -144,7 +144,7 @@ module RailsAiContext
         relative_path = file_path.sub("#{File.realpath(root)}/", "")
 
         lines = [ "# #{name}", "" ]
-        lines << "**File:** `#{relative_path}` (#{source.lines.size} lines)"
+        lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
         lines << "**Type:** #{concern_type} concern"
 
         # Parse included/extended modules
@@ -296,7 +296,7 @@ module RailsAiContext
         if model_concerns.any?
           lines << "## Model Concerns (#{model_concerns.size})"
           model_concerns.each do |c|
-            lines << "- **#{c[:name]}** - #{c[:method_count]} methods (`#{c[:path]}`)"
+            lines << "- **#{c[:name]}** - #{count_phrase(c[:method_count], "method")} (`#{c[:path]}`)"
           end
           lines << ""
         end
@@ -304,7 +304,7 @@ module RailsAiContext
         if controller_concerns.any?
           lines << "## Controller Concerns (#{controller_concerns.size})"
           controller_concerns.each do |c|
-            lines << "- **#{c[:name]}** - #{c[:method_count]} methods (`#{c[:path]}`)"
+            lines << "- **#{c[:name]}** - #{count_phrase(c[:method_count], "method")} (`#{c[:path]}`)"
           end
           lines << ""
         end

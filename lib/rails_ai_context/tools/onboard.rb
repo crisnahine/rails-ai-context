@@ -181,7 +181,7 @@ module RailsAiContext
           end
 
           remaining = models.size - top.size
-          lines << "- _...and #{remaining} more #{remaining == 1 ? 'model' : 'models'}._" if remaining > 0
+          lines << "- _...and #{count_phrase(remaining, "more model")}._" if remaining > 0
           lines << ""
           lines
         end
@@ -426,7 +426,7 @@ module RailsAiContext
           if turbo.is_a?(Hash) && !turbo[:error]
             broadcasts = turbo[:broadcasts] || turbo[:explicit_broadcasts] || []
             if broadcasts.any?
-              lines << "Turbo Stream broadcasts: #{broadcasts.size} broadcast points."
+              lines << "Turbo Stream broadcasts: #{count_phrase(broadcasts.size, "broadcast point")}."
               has_content = true
             end
             streams = turbo[:stream_subscriptions] || turbo[:subscriptions] || []
@@ -461,10 +461,10 @@ module RailsAiContext
 
           lines = [ "## File Storage & Rich Text", "" ]
           if storage.is_a?(Hash) && !storage[:error] && storage[:attachments]&.any?
-            lines << "Active Storage: #{storage[:attachments].size} attachment(s) across models."
+            lines << "Active Storage: #{count_phrase(storage[:attachments].size, "attachment")} across models."
           end
           if text.is_a?(Hash) && !text[:error] && text[:models]&.any?
-            lines << "Action Text: #{text[:models].size} model(s) with rich text fields."
+            lines << "Action Text: #{count_phrase(text[:models].size, "model")} with rich text fields."
           end
           lines << ""
           lines
@@ -480,7 +480,7 @@ module RailsAiContext
             lines << "GraphQL API detected."
           end
           if api[:endpoints]&.any?
-            lines << "#{api[:endpoints].size} API endpoint(s)."
+            lines << "#{count_phrase(api[:endpoints].size, "API endpoint")}."
           end
           if api[:serializers]&.any?
             lines << "Serializers: #{api[:serializers].size}."
@@ -566,11 +566,6 @@ module RailsAiContext
         end
 
         # ── Helpers ──────────────────────────────────────────────────────
-
-        # "1 model" / "3 models" - raw interpolation reads wrong at count 1
-        def count_phrase(count, noun)
-          "#{count} #{count == 1 ? noun : noun.pluralize}"
-        end
 
         # True when every validation on the model is the presence validator
         # ActiveRecord adds automatically for required belongs_to associations.

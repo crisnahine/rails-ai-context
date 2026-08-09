@@ -45,7 +45,7 @@ module RailsAiContext
 
         schema = context[:schema]
         if SectionGuard.usable?(schema)
-          lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables"
+          lines << "- Database: #{schema[:adapter]} - #{count_phrase(schema[:total_tables], "table")}"
         end
 
         models = context[:models]
@@ -108,7 +108,7 @@ module RailsAiContext
         models.keys.sort.first(30).each do |name|
           data = models[name]
           assocs = (data[:associations] || []).size
-          lines << "- #{name} (#{assocs} associations)"
+          lines << "- #{name} (#{count_phrase(assocs, "association")})"
           extras = model_extras_line(data)
           lines << extras if extras
         end
@@ -146,7 +146,7 @@ module RailsAiContext
           "---",
           "applyTo: \"**/*\"",
           "name: \"Rails MCP Tools\"",
-          "description: \"#{tool_count} introspection tools - schema, models, routes, controllers, search, testing, validation\"",
+          "description: \"#{count_phrase(tool_count, "introspection tool")} - schema, models, routes, controllers, search, testing, validation\"",
           "excludeAgent: \"code-review\"",
           "---",
           ""

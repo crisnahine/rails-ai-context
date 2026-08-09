@@ -23,7 +23,7 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
     it "lists controllers with counts for detail:summary" do
       result = described_class.call(detail: "summary")
       text = result.content.first[:text]
-      expect(text).to include("**hello** - 2 targets, 1 values, 1 actions")
+      expect(text).to include("**hello** - 2 targets, 1 value, 1 action")
       expect(text).to include("**search** - 2 targets, 2 actions")
     end
 

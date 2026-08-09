@@ -522,7 +522,7 @@ namespace :ai do
     puts ""
 
     if context[:schema] && !context[:schema][:error]
-      puts "📦 Database: #{context[:schema][:total_tables]} tables (#{context[:schema][:adapter]})"
+      puts "📦 Database: #{RailsAiContext::CountPhrase.call(context[:schema][:total_tables], "table")} (#{context[:schema][:adapter]})"
     end
 
     if context[:models] && !context[:models].is_a?(Hash)
@@ -634,7 +634,7 @@ namespace :ai do
     if %w[1 true yes].include?(ENV["STRICT"].to_s.downcase)
       failed = result[:checks].count { |c| c.status == :fail }
       if failed > 0
-        puts "#{failed} check#{'s' unless failed == 1} failed (STRICT mode)"
+        puts "#{RailsAiContext::CountPhrase.call(failed, "check")} failed (STRICT mode)"
         exit 1
       end
     end

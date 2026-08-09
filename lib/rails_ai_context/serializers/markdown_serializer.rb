@@ -84,7 +84,7 @@ module RailsAiContext
         schema = context[:schema]
         return unless SectionGuard.usable?(schema)
 
-        lines = [ "## Database Schema (#{schema[:total_tables]} tables)" ]
+        lines = [ "## Database Schema (#{count_phrase(schema[:total_tables], "table")})" ]
         schema[:tables]&.each do |name, data|
           cols = (data[:columns] || []).map { |c| "`#{c[:name]}` (#{c[:type]})" }.join(", ")
           lines << "### #{escape_markdown(name)}"
@@ -170,7 +170,7 @@ module RailsAiContext
 
         lines = [ "## Project Structure" ]
         conv[:directory_structure].sort.each do |dir, count|
-          lines << "- `#{dir}/` - #{count} files"
+          lines << "- `#{dir}/` - #{count_phrase(count, "file")}"
         end
         lines.join("\n")
       end
@@ -353,8 +353,8 @@ module RailsAiContext
 
         lines = [ "## Testing" ]
         lines << "- Framework: #{data[:framework]}"
-        lines << "- Factories: #{data[:factories][:location]} (#{data[:factories][:count]} files)" if data[:factories]
-        lines << "- Fixtures: #{data[:fixtures][:location]} (#{data[:fixtures][:count]} files)" if data[:fixtures]
+        lines << "- Factories: #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
+        lines << "- Fixtures: #{data[:fixtures][:location]} (#{count_phrase(data[:fixtures][:count], "file")})" if data[:fixtures]
         lines << "- System tests: #{data[:system_tests][:location]}" if data[:system_tests]
         lines << "- CI: #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
         lines << "- Coverage: #{data[:coverage]}" if data[:coverage]

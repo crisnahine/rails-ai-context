@@ -120,7 +120,7 @@ module RailsAiContext
           lines << "**Locals:** none detected"
         end
 
-        lines << "**Rendered from:** #{render_sites.size} location(s)"
+        lines << "**Rendered from:** #{count_phrase(render_sites.size, "location")}"
         lines << ""
         lines << "_Use `detail:\"standard\"` for usage examples, or `detail:\"full\"` for full partial source._"
 
@@ -129,7 +129,7 @@ module RailsAiContext
 
       private_class_method def self.format_standard(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls)
         lines = [ "# Partial: #{partial_name}", "" ]
-        lines << "**File:** `#{relative_path}` (#{source.lines.size} lines)"
+        lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
 
         # Magic comment locals
         if magic_locals.any?
@@ -174,7 +174,7 @@ module RailsAiContext
 
       private_class_method def self.format_full(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls)
         lines = [ "# Partial: #{partial_name}", "" ]
-        lines << "**File:** `#{relative_path}` (#{source.lines.size} lines)"
+        lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
 
         # Magic comment locals
         if magic_locals.any?

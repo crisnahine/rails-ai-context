@@ -114,7 +114,7 @@ module RailsAiContext
         module_name = module_name_for(file_path, helpers_dir)
 
         lines = [ "# #{module_name}", "" ]
-        lines << "**File:** `#{relative_path}` (#{source.lines.size} lines)"
+        lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
 
         # Parse method signatures
         methods = parse_helper_methods(source)
@@ -189,7 +189,7 @@ module RailsAiContext
         case detail
         when "summary"
           page[:items].each do |h|
-            lines << "- **#{h[:name]}** - #{h[:method_count]} methods"
+            lines << "- **#{h[:name]}** - #{count_phrase(h[:method_count], "method")}"
           end
           lines << "" << "_Use `helper:\"Name\"` for method signatures._"
 

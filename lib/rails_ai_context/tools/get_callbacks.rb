@@ -160,14 +160,14 @@ module RailsAiContext
           return text_response("No models with callbacks found.")
         end
 
-        lines = [ "# Model Callbacks (#{models_with_callbacks.size} models)", "" ]
+        lines = [ "# Model Callbacks (#{count_phrase(models_with_callbacks.size, "model")})", "" ]
 
         case detail
         when "summary"
           models_with_callbacks.sort_by { |_name, data| -(data[:callbacks]&.values&.flatten&.size || 0) }.each do |name, data|
             total = data[:callbacks].values.flatten.size
             types = data[:callbacks].keys.join(", ")
-            lines << "- **#{name}** - #{total} callbacks (#{types})"
+            lines << "- **#{name}** - #{count_phrase(total, "callback")} (#{types})"
           end
           lines << "" << "_Use `model:\"Name\"` for callbacks in execution order._"
 

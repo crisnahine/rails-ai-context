@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/admin/health` tagged `[VERIFIED]`. The same cause put a gem declared after
   a `group :development do ... end` block into that group in
   `rails_get_gems`' group listing. Booted mode was never affected.
+- **`rails_get_i18n` coverage is measured against the default locale's keys.**
+  It compared raw key counts, so a locale defining five keys against a
+  one-key default reported `500.0%`. Coverage is now the share of the default
+  locale's keys the other locale also defines, and each locale reports how
+  many keys are missing and how many it adds beyond the default.
+- **`rails_get_autoload` reports each path once.** Rails lists a path once per
+  railtie that contributed it, so an app using `config.autoload_lib` showed
+  `lib` twice under a count of two.
+- **Counts of one read as singular.** Tools, generated context files, `doctor`,
+  `facts`, the rake tasks and the standalone CLI wrote `1 keys`,
+  `1 associations`, `1 pending migration(s)` and the like. A locale file with
+  one key now reads `1 key`, a model with one association reads
+  `1 association`, and `facts` reads `1 index, 1 FK`. Counts render through
+  one shared helper, replacing the four spellings that had grown up across the
+  render code: raw interpolation, a `== 1 ?` ternary, an `#{"s" unless n == 1}`
+  suffix, and the `(s)` hedge. A handful of sites keep raw interpolation on
+  purpose: ratios (`1/1 files passed`), diff stats, and byte or row counts
+  whose branch only runs past a limit.
+- **A locale file with a symbol root key counts toward coverage.** Both `en:`
+  and `:en:` load as valid YAML, but only the string form had its root
+  stripped, so a symbol-rooted locale compared its `es.`-prefixed paths
+  against nothing and scored 0%.
 
 ## [5.19.0] - 2026-08-09
 

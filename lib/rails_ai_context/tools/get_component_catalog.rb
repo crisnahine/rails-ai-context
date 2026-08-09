@@ -91,7 +91,7 @@ module RailsAiContext
           lines = [ "# Component Catalog", "" ]
 
           if summary
-            lines << "**Total:** #{summary[:total]} components " \
+            lines << "**Total:** #{count_phrase(summary[:total], "component")} " \
               "(#{summary[:view_component]} ViewComponent, #{summary[:phlex]} Phlex)"
             lines << "**With slots:** #{summary[:with_slots]} | **With previews:** #{summary[:with_previews]}"
             lines << ""
@@ -100,7 +100,7 @@ module RailsAiContext
           page[:items].each do |comp|
             case detail
             when "summary"
-              lines << "- **#{comp[:name]}** (#{comp[:type]}) - #{comp[:slots]&.size || 0} slots, #{comp[:props]&.size || 0} props"
+              lines << "- **#{comp[:name]}** (#{comp[:type]}) - #{count_phrase(comp[:slots]&.size || 0, "slot")}, #{count_phrase(comp[:props]&.size || 0, "prop")}"
             when "standard"
               lines.concat(render_component_standard(comp))
             when "full"

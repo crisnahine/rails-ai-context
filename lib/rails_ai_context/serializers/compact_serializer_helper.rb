@@ -6,6 +6,8 @@ module RailsAiContext
     # Include in any serializer that has a `context` reader and includes
     # StackOverviewHelper, ToolGuideHelper, and TestCommandDetection.
     module CompactSerializerHelper
+      include CountPhrase
+
       private
 
       def render_header
@@ -24,7 +26,7 @@ module RailsAiContext
         schema = context[:schema]
         if SectionGuard.usable?(schema)
           tables = schema[:total_tables]
-          lines << "- Database: #{schema[:adapter]} - #{tables} #{tables == 1 ? 'table' : 'tables'}"
+          lines << "- Database: #{schema[:adapter]} - #{count_phrase(tables, "table")}"
         end
 
         models = context[:models]
@@ -41,8 +43,8 @@ module RailsAiContext
           # routes across app controllers, with the grand total (framework
           # routes included) alongside for scale.
           app_routes = app_ctrls.sum { |k| Array(by_controller[k]).size }
-          lines << "- Routes: #{app_routes} app #{app_routes == 1 ? 'route' : 'routes'} across " \
-                   "#{app_ctrls.size} #{app_ctrls.size == 1 ? 'controller' : 'controllers'} " \
+          lines << "- Routes: #{count_phrase(app_routes, "app route")} across " \
+                   "#{count_phrase(app_ctrls.size, "controller")} " \
                    "(#{routes[:total_routes]} total incl. framework)"
         end
 
@@ -52,9 +54,9 @@ module RailsAiContext
           mailer_count = jobs[:mailers]&.size || 0
           channel_count = jobs[:channels]&.size || 0
           parts = []
-          parts << "#{job_count} jobs" if job_count > 0
-          parts << "#{mailer_count} mailers" if mailer_count > 0
-          parts << "#{channel_count} channels" if channel_count > 0
+          parts << count_phrase(job_count, "job") if job_count > 0
+          parts << count_phrase(mailer_count, "mailer") if mailer_count > 0
+          parts << count_phrase(channel_count, "channel") if channel_count > 0
           lines << "- Async: #{parts.join(', ')}" if parts.any?
         end
 

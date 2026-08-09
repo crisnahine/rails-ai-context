@@ -90,7 +90,7 @@ module RailsAiContext
           return if hooks.empty?
 
           lines << "" << "## Subscribed on_load Hooks"
-          hooks.each { |h| lines << "- `#{h[:hook]}` - #{h[:callbacks]} subscriber(s)" }
+          hooks.each { |h| lines << "- `#{h[:hook]}` - #{count_phrase(h[:callbacks], "subscriber")}" }
         end
 
         def render_cache(lines, cache)

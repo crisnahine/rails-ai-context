@@ -74,7 +74,7 @@ module RailsAiContext
 
         schema = context[:schema]
         if SectionGuard.usable?(schema)
-          lines << "- Database: #{schema[:adapter]} - #{schema[:total_tables]} tables"
+          lines << "- Database: #{schema[:adapter]} - #{count_phrase(schema[:total_tables], "table")}"
         end
 
         models = context[:models]
@@ -143,7 +143,7 @@ module RailsAiContext
         models.keys.sort.first(30).each do |name|
           data = models[name]
           assocs = (data[:associations] || []).size
-          lines << "- #{name} (#{assocs} associations, table: #{data[:table_name] || '?'})"
+          lines << "- #{name} (#{count_phrase(assocs, "association")}, table: #{data[:table_name] || '?'})"
           extras = model_extras_line(data)
           lines << extras if extras
         end
@@ -185,7 +185,7 @@ module RailsAiContext
       def render_mcp_tools_rule
         lines = [
           "---",
-          "description: \"Rails MCP tools reference - #{tool_count} tools for schema, models, routes, controllers, search, testing, and more\"",
+          "description: \"Rails MCP tools reference - #{count_phrase(tool_count, "tool")} for schema, models, routes, controllers, search, testing, and more\"",
           "alwaysApply: false",
           "---",
           ""

@@ -78,7 +78,7 @@ module RailsAiContext
             assoc_count = (data[:associations] || []).size
             val_count = (data[:validations] || []).size
             line = "- **#{name}**"
-            line += " - #{assoc_count} associations, #{val_count} validations" if assoc_count > 0 || val_count > 0
+            line += " - #{count_phrase(assoc_count, "association")}, #{count_phrase(val_count, "validation")}" if assoc_count > 0 || val_count > 0
             lines << line
           end
           lines << "" << "_Use `model:\"Name\"` for full detail, or `detail:\"full\"` for association lists._#{pagination_hint}"
@@ -120,7 +120,7 @@ module RailsAiContext
         # File structure - compact one-line format
         structure = extract_model_structure(name)
         if structure
-          lines << "**File:** `#{structure[:path]}` (#{structure[:total_lines]} lines)"
+          lines << "**File:** `#{structure[:path]}` (#{count_phrase(structure[:total_lines], "line")})"
           map = structure[:sections].map { |s| "#{s[:label]}(#{s[:start]}-#{s[:end]})" }.join(" → ")
           lines << "**Structure:** #{map}"
         end

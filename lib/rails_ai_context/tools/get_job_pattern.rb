@@ -129,7 +129,7 @@ module RailsAiContext
         class_name = extract_class_name(source) || File.basename(file, ".rb").camelize
 
         lines = [ "# #{class_name}", "" ]
-        lines << "**File:** `#{relative}` (#{line_count} lines)"
+        lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
 
         # Queue
         queue = extract_queue(source)
@@ -242,14 +242,14 @@ module RailsAiContext
             queue_label = j[:queue] ? " [#{j[:queue]}]" : ""
             retry_label = j[:retry_config].any? ? " - #{j[:retry_config].first}" : ""
             deps_label = j[:dependencies].any? ? " → #{j[:dependencies].join(', ')}" : ""
-            lines << "- **#{j[:class_name]}**#{queue_label} (#{j[:line_count]} lines)#{retry_label}#{deps_label}"
+            lines << "- **#{j[:class_name]}**#{queue_label} (#{count_phrase(j[:line_count], "line")})#{retry_label}#{deps_label}"
           end
           lines << "" << "_Use `job:\"Name\"` for guards, broadcasts, schedules, and enqueuers._"
 
         when "full"
           job_data.each do |j|
             lines << "## #{j[:class_name]}"
-            lines << "- **File:** `#{j[:file]}` (#{j[:line_count]} lines)"
+            lines << "- **File:** `#{j[:file]}` (#{count_phrase(j[:line_count], "line")})"
             lines << "- **Queue:** `#{j[:queue]}`" if j[:queue]
             lines << "- **Perform:** `#{j[:perform_sig]}`" if j[:perform_sig]
             lines << "- **Retries:** #{j[:retry_config].join('; ')}" if j[:retry_config].any?

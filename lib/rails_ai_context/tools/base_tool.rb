@@ -26,6 +26,8 @@ module RailsAiContext
       end
 
       class << self
+        include CountPhrase
+
         attr_reader :descendants, :registry_mutex
 
         # Mark a tool class as abstract (excluded from registration).

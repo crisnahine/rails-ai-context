@@ -151,7 +151,7 @@ module RailsAiContext
         level_label = level == "all" ? "all levels" : "#{level}+"
 
         output = [ "# Log: #{File.basename(path)}" ]
-        output << "Size: #{size_label} | Showing last #{redacted.size} lines | Level: #{level_label}"
+        output << "Size: #{size_label} | Showing last #{count_phrase(redacted.size, "line")} | Level: #{level_label}"
         warnings.each { |w| output << "**Warning:** #{w}" } if warnings.any?
         output << ""
         output << "```"

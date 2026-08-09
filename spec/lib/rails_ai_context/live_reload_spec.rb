@@ -109,9 +109,9 @@ RSpec.describe RailsAiContext::LiveReload do
       expect(result["config"]).to eq(1)
       expect(result["migration"]).to eq(1)
       expect(result["database"]).to eq(1)
-      expect(result["rake_task"]).to eq(1)
+      expect(result["rake task"]).to eq(1)
       expect(result["mailer"]).to eq(1)
-      expect(result["javascript"]).to eq(1)
+      expect(result["JavaScript file"]).to eq(1)
       expect(result["file"]).to eq(1)
     end
   end
@@ -120,13 +120,25 @@ RSpec.describe RailsAiContext::LiveReload do
     it "produces a readable summary" do
       categories = { "model" => 2, "controller" => 1 }
       message = live_reload.format_change_message(categories)
-      expect(message).to eq("Files changed: 2 model(s), 1 controller(s).")
+      expect(message).to eq("Files changed: 2 models, 1 controller.")
     end
 
     it "handles a single category" do
       categories = { "config" => 3 }
       message = live_reload.format_change_message(categories)
-      expect(message).to eq("Files changed: 3 config(s).")
+      expect(message).to eq("Files changed: 3 configs.")
+    end
+
+    # Categories are display nouns, not slugs: pluralizing a slug gives
+    # "3 javascripts" and leaks the underscore in "2 rake_tasks".
+    it "reads as English for the multi-word categories" do
+      paths = [
+        "app/javascript/controllers/a_controller.js",
+        "app/javascript/controllers/b_controller.js",
+        "lib/tasks/import.rake"
+      ]
+      message = live_reload.format_change_message(live_reload.categorize_changes(paths))
+      expect(message).to eq("Files changed: 2 JavaScript files, 1 rake task.")
     end
   end
 

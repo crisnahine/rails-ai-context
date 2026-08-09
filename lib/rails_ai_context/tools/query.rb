@@ -631,7 +631,7 @@ module RailsAiContext
           lines << "| #{row.each_with_index.map { |v, i| v.to_s.ljust(widths[i]) }.join(" | ")} |"
         end
         lines << ""
-        lines << "_#{rows.size} row#{"s" unless rows.size == 1} returned._"
+        lines << "_#{count_phrase(rows.size, "row")} returned._"
 
         lines.join("\n")
       end

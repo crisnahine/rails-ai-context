@@ -103,7 +103,7 @@ module RailsAiContext
             end
             total = sizes.sum { |r| r[:bytes] }
             lines << "| **Total** | **#{format_bytes(total)}** |"
-            lines << "_#{sizes.size - 30} more tables..._" if detail != "summary" && sizes.size > 30
+            lines << "_#{count_phrase(sizes.size - 30, "more table")}..._" if detail != "summary" && sizes.size > 30
           end
 
           # Pending migrations
@@ -129,7 +129,7 @@ module RailsAiContext
               end
               hot = index_usage.sort_by { |i| -(i[:scans] || 0) }.first(5)
               lines << "" << "**Most used indexes:**"
-              hot.each { |i| lines << "- `#{i[:index]}` on `#{i[:table]}` - #{i[:scans]} scans" }
+              hot.each { |i| lines << "- `#{i[:index]}` on `#{i[:table]}` - #{count_phrase(i[:scans], "scan")}" }
             end
           end
 
@@ -234,7 +234,7 @@ module RailsAiContext
               misses = info["keyspace_misses"].to_i
               total = hits + misses
               hit_rate = total > 0 ? ((hits.to_f / total) * 100).round(1) : 0
-              lines << "**Hit rate:** #{hit_rate}% (#{hits} hits, #{misses} misses)"
+              lines << "**Hit rate:** #{hit_rate}% (#{count_phrase(hits, "hit")}, #{count_phrase(misses, "miss")})"
               lines << "**Memory:** #{cache.redis.info("memory")["used_memory_human"]}"
             rescue => e
               lines << "_Redis stats not available: #{e.message}_"

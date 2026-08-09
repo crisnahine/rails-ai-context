@@ -62,7 +62,7 @@ RSpec.describe RailsAiContext::Tools::GetActiveSupport do
     it "renders subscribed on_load hooks" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Subscribed on_load Hooks")
-      expect(text).to include("`active_record` - 3 subscriber(s)")
+      expect(text).to include("`active_record` - 3 subscribers")
     end
 
     it "renders the cache store" do

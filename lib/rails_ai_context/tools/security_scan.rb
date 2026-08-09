@@ -129,7 +129,7 @@ module RailsAiContext
           end
           categories = check_names.first(6).join(", ")
           categories += ", ..." if check_names.size > 6
-          return text_response("No security warnings found#{scope}. (#{checks_run} checks run: #{categories})")
+          return text_response("No security warnings found#{scope}. (#{count_phrase(checks_run, "check")} run: #{categories})")
         end
 
         case detail
@@ -142,12 +142,17 @@ module RailsAiContext
         end
       end
 
+      # Three detail levels open with the same headline.
+      private_class_method def self.scan_headline(warnings, checks_run)
+        "**#{count_phrase(warnings.size, "warning")}** (#{count_phrase(checks_run, "check")} run)"
+      end
+
       private_class_method def self.format_summary(warnings, checks_run)
         by_type = warnings.group_by(&:warning_type)
         by_confidence = warnings.group_by { |w| w.confidence_name }
 
         lines = [ "# Security Scan Summary", "" ]
-        lines << "**#{warnings.size} warnings** (#{checks_run} checks run)"
+        lines << scan_headline(warnings, checks_run)
         lines << ""
         lines << "## By Confidence"
         %w[High Medium Weak].each do |level|
@@ -166,7 +171,7 @@ module RailsAiContext
 
       private_class_method def self.format_standard(warnings, checks_run)
         lines = [ "# Security Scan Results", "" ]
-        lines << "**#{warnings.size} warnings** (#{checks_run} checks run)"
+        lines << scan_headline(warnings, checks_run)
 
         current_type = nil
         warnings.each do |w|
@@ -183,7 +188,7 @@ module RailsAiContext
 
       private_class_method def self.format_full(warnings, checks_run)
         lines = [ "# Security Scan Results (Full)", "" ]
-        lines << "**#{warnings.size} warnings** (#{checks_run} checks run)"
+        lines << scan_headline(warnings, checks_run)
 
         warnings.each do |w|
           lines << ""

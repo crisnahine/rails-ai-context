@@ -5,6 +5,8 @@ module RailsAiContext
     # Shared helper for rendering the tool reference section in context files.
     # Reads config.tool_mode to generate MCP syntax, CLI syntax, or both.
     module ToolGuideHelper
+      include CountPhrase
+
       # Returns the tool invocation example for a given tool call.
       # MCP: rails_analyze_feature(feature:"post")
       # CLI: rails 'ai:tool[analyze_feature]' feature=post
@@ -50,14 +52,14 @@ module RailsAiContext
         case tool_mode
         when :cli
           [
-            "This project has #{tool_count} introspection tools. **MANDATORY - use these instead of reading files.**",
+            "This project has #{count_phrase(tool_count, "introspection tool")}. **MANDATORY - use these instead of reading files.**",
             "They return ground truth from the running app: real schema, real associations, real filters - not guesses.",
             "Read files ONLY when you are about to Edit them.",
             ""
           ]
         else
           [
-            "This project has #{tool_count} MCP tools via `#{serve_cmd}`.",
+            "This project has #{count_phrase(tool_count, "MCP tool")} via `#{serve_cmd}`.",
             "**MANDATORY - use these instead of reading files.** They return ground truth from the running app:",
             "real schema, real associations, real filters - not guesses from file reads.",
             "Read files ONLY when you are about to Edit them.",
@@ -338,7 +340,7 @@ module RailsAiContext
       def tools_name_list
         all_tools = TOOL_ROWS.map { |row| row[0][/^(rails_\w+)/, 1] }
         [
-          "### All #{all_tools.size} tools",
+          "### All #{count_phrase(all_tools.size, "tool")}",
           "`#{all_tools.join('` `')}`",
           ""
         ]

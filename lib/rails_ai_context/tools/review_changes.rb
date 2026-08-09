@@ -59,7 +59,7 @@ module RailsAiContext
         # Summary
         type_counts = classified.group_by { |c| c[:type] }.transform_values(&:size)
         summary_parts = type_counts.map { |type, count| "#{count} #{type}" }
-        lines << "**#{changed.size} files changed** (#{summary_parts.join(', ')})"
+        lines << "**#{count_phrase(changed.size, "file")} changed** (#{summary_parts.join(', ')})"
         lines << ""
 
         if commits
@@ -91,7 +91,7 @@ module RailsAiContext
 
         if classified.size > max_files
           remaining = classified[max_files..].map { |e| e[:file] }
-          lines << "## Remaining #{remaining.size} files (not shown)"
+          lines << "## Remaining #{count_phrase(remaining.size, "file")} (not shown)"
           remaining.each { |f| lines << "- #{f}" }
           lines << ""
         end
@@ -171,7 +171,7 @@ module RailsAiContext
             if content_lines.size > MAX_DIFF_LINES_PER_FILE
               lines << "```diff"
               lines.concat(content_lines.first(MAX_DIFF_LINES_PER_FILE).map(&:rstrip))
-              lines << "# ... #{content_lines.size - MAX_DIFF_LINES_PER_FILE} more lines"
+              lines << "# ... #{count_phrase(content_lines.size - MAX_DIFF_LINES_PER_FILE, "more line")}"
               lines << "```"
             elsif content_lines.any?
               lines << "```diff"

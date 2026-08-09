@@ -47,7 +47,7 @@ module RailsAiContext
 
         lines = [ "# Environments" ]
         lines << ""
-        lines << "_Current: **#{envs[:current]}** - #{envs[:count]} environment file(s) under config/environments/_"
+        lines << "_Current: **#{envs[:current]}** - #{count_phrase(envs[:count], "environment file")} under config/environments/_"
 
         if list.any?
           list.each { |entry| render_environment(lines, entry, offset: offset, limit: limit) }

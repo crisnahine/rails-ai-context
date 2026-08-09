@@ -68,7 +68,7 @@ module RailsAiContext
           end
 
           total = total_component_count(data)
-          parts << "(#{total} components)" if total > 0
+          parts << "(#{count_phrase(total, "component")})" if total > 0
 
           # If no JS framework data, try building a Hotwire summary from cached context
           if parts.empty?
@@ -100,7 +100,7 @@ module RailsAiContext
 
           if stimulus.is_a?(Hash) && !stimulus[:error]
             count = stimulus[:total_controllers] || stimulus[:controllers]&.size || 0
-            parts << "#{count} Stimulus controllers" if count > 0
+            parts << count_phrase(count, "Stimulus controller") if count > 0
           end
 
           parts << "Tailwind CSS" if has_tailwind
@@ -171,7 +171,7 @@ module RailsAiContext
             if roots_with_components.any?
               lines << "" << "## Frontend Roots" << ""
               roots_with_components.each do |root|
-                lines << "- `#{root[:path]}` - #{root[:component_count]} components"
+                lines << "- `#{root[:path]}` - #{count_phrase(root[:component_count], "component")}"
               end
             elsif !has_hotwire
               # Only show "0 components" for non-Hotwire apps where it's meaningful
@@ -211,7 +211,7 @@ module RailsAiContext
           if data[:component_dirs].is_a?(Array) && data[:component_dirs].any?
             lines << "" << "## Component Directories" << ""
             data[:component_dirs].each do |dir|
-              lines << "- `#{dir[:path]}` - #{dir[:count]} components"
+              lines << "- `#{dir[:path]}` - #{count_phrase(dir[:count], "component")}"
             end
           end
 
@@ -288,8 +288,8 @@ module RailsAiContext
             broadcasts = turbo[:model_broadcasts]&.size || 0
             frames = turbo[:turbo_frames]&.size || 0
             parts = []
-            parts << "#{broadcasts} #{broadcasts == 1 ? "broadcast" : "broadcasts"}" if broadcasts > 0
-            parts << "#{frames} #{frames == 1 ? "frame" : "frames"}" if frames > 0
+            parts << count_phrase(broadcasts, "broadcast") if broadcasts > 0
+            parts << count_phrase(frames, "frame") if frames > 0
             lines << "- **Turbo wiring:** #{parts.join(', ')}" if parts.any?
           end
         end

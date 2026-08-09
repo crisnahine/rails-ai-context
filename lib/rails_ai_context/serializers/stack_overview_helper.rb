@@ -5,6 +5,8 @@ module RailsAiContext
     # Shared helper for rendering stack overview lines from full-preset introspectors.
     # Include in any serializer that has a `context` reader and renders a project overview.
     module StackOverviewHelper
+      include CountPhrase
+
       # Returns an array of summary lines for full-preset introspectors.
       # Each line is only added if the introspector returned meaningful data.
       def full_preset_stack_lines(ctx = context)
@@ -23,8 +25,8 @@ module RailsAiContext
         turbo = ctx[:turbo]
         if turbo.is_a?(Hash) && !turbo[:error]
           parts = []
-          parts << "#{(turbo[:frames] || []).size} frames" if turbo[:frames]&.any?
-          parts << "#{(turbo[:streams] || []).size} streams" if turbo[:streams]&.any?
+          parts << count_phrase((turbo[:frames] || []).size, "frame") if turbo[:frames]&.any?
+          parts << count_phrase((turbo[:streams] || []).size, "stream") if turbo[:streams]&.any?
           parts << "broadcasts" if turbo[:broadcasts]&.any?
           lines << "- Hotwire: #{parts.join(', ')}" if parts.any?
         end
@@ -33,7 +35,7 @@ module RailsAiContext
         if api.is_a?(Hash) && !api[:error]
           parts = []
           parts << "API-only" if api[:api_only]
-          parts << "#{(api[:versions] || []).size} versions" if api[:versions]&.any?
+          parts << count_phrase((api[:versions] || []).size, "version") if api[:versions]&.any?
           parts << "GraphQL" if api[:graphql]&.any?
           parts << api[:serializer_library] if api[:serializer_library]
           lines << "- API: #{parts.join(', ')}" if parts.any?
@@ -42,17 +44,17 @@ module RailsAiContext
         i18n_data = ctx[:i18n]
         if i18n_data.is_a?(Hash) && !i18n_data[:error]
           locales = i18n_data[:available_locales] || []
-          lines << "- I18n: #{locales.size} locales (#{locales.first(5).join(', ')})" if locales.size > 1
+          lines << "- I18n: #{count_phrase(locales.size, "locale")} (#{locales.first(5).join(', ')})" if locales.size > 1
         end
 
         storage = ctx[:active_storage]
         if storage.is_a?(Hash) && !storage[:error] && storage[:attachments]&.any?
-          lines << "- Storage: ActiveStorage (#{storage[:attachments].size} models with attachments)"
+          lines << "- Storage: ActiveStorage (#{count_phrase(storage[:attachments].size, "model")} with attachments)"
         end
 
         action_text = ctx[:action_text]
         if action_text.is_a?(Hash) && !action_text[:error] && action_text[:rich_text_fields]&.any?
-          lines << "- RichText: ActionText (#{action_text[:rich_text_fields].size} fields)"
+          lines << "- RichText: ActionText (#{count_phrase(action_text[:rich_text_fields].size, "field")})"
         end
 
         assets = ctx[:assets]
@@ -79,8 +81,8 @@ module RailsAiContext
         components = ctx[:components]
         if components.is_a?(Hash) && !components[:error] && components.dig(:summary, :total).to_i > 0
           summary = components[:summary]
-          parts = [ "#{summary[:total]} components" ]
-          parts << "#{summary[:view_component]} ViewComponent" if summary[:view_component].to_i > 0
+          parts = [ count_phrase(summary[:total], "component") ]
+          parts << count_phrase(summary[:view_component].to_i, "ViewComponent") if summary[:view_component].to_i > 0
           parts << "#{summary[:phlex]} Phlex" if summary[:phlex].to_i > 0
           lines << "- Components: #{parts.join(', ')}"
         end
@@ -88,7 +90,7 @@ module RailsAiContext
         perf = ctx[:performance]
         if perf.is_a?(Hash) && !perf[:error] && perf[:summary]
           total = perf.dig(:summary, :total_issues).to_i
-          lines << "- Performance: #{total} #{total == 1 ? 'issue' : 'issues'} detected" if total > 0
+          lines << "- Performance: #{count_phrase(total, "issue")} detected" if total > 0
         end
 
         fe = ctx[:frontend_frameworks]
@@ -114,7 +116,7 @@ module RailsAiContext
         controllers_hash.keys.sort.first(limit).each do |name|
           info = controllers_hash[name]
           action_count = info[:actions]&.size || 0
-          lines << "- #{name} (#{action_count} actions)"
+          lines << "- #{name} (#{count_phrase(action_count, "action")})"
         end
         lines << "- ...#{controllers_hash.size - limit} more" if controllers_hash.size > limit
         lines

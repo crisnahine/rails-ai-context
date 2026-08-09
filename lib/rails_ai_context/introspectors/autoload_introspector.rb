@@ -133,11 +133,12 @@ module RailsAiContext
         "#{hit[:method]}: #{values.first}"
       end
 
+      # Rails lists a path once per railtie that contributed it.
       def relativize(paths)
-        Array(paths).map do |p|
+        Array(paths).map { |p|
           s = p.to_s
           s.start_with?(root) ? s.sub("#{root}/", "") : s
-        end
+        }.uniq
       end
     end
   end

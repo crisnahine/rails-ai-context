@@ -243,7 +243,7 @@ module RailsAiContext
             source = RailsAiContext::SafeFile.read(path) or next
             line_count = source.lines.size
             methods = source.scan(/^\s*def (?:self\.)?(\w+)/m).flatten.reject { |m| m == "initialize" }
-            lines << "- `#{relative}` (#{line_count} lines)"
+            lines << "- `#{relative}` (#{count_phrase(line_count, "line")})"
             lines << "  Methods: #{methods.first(20).join(', ')}" if methods.any?
           end
           lines << ""
@@ -301,7 +301,7 @@ module RailsAiContext
             # record's partial; surface them alongside string renders.
             partials |= source.scan(/render[( ]\s*@?([a-z_][\w]*)\s*[,)\s%]/).flatten - %w[partial layout json plain text file inline template action status]
             stimulus = source.scan(/data-controller=["']([^"']+)["']/).flat_map { |m| m.first.split }
-            detail = "- `#{relative}` (#{line_count} #{line_count == 1 ? "line" : "lines"})"
+            detail = "- `#{relative}` (#{count_phrase(line_count, "line")})"
             detail += " renders: #{partials.join(', ')}" if partials.any?
             detail += " stimulus: #{stimulus.join(', ')}" if stimulus.any?
             lines << detail
@@ -375,7 +375,7 @@ module RailsAiContext
             test_count = source.each_line.count do |line|
               line.match?(/^\s*(?:test|it|specify)\s+["']/) || line.match?(/^\s*def\s+test_/)
             end
-            lines << "- `#{relative}` (#{test_count} #{test_count == 1 ? 'test' : 'tests'})"
+            lines << "- `#{relative}` (#{count_phrase(test_count, "test")})"
           end
           lines << ""
           found
@@ -505,7 +505,7 @@ module RailsAiContext
           return if concerns.empty?
 
           lines << "## Concerns"
-          concerns.sort.each { |name, count| lines << "- **#{name}** (used by #{count} model#{'s' if count > 1})" }
+          concerns.sort.each { |name, count| lines << "- **#{name}** (used by #{count_phrase(count, 'model')})" }
           lines << ""
         rescue => e
           $stderr.puts "[rails-ai-context] discover_concerns failed: #{e.message}" if ENV["DEBUG"]
@@ -590,7 +590,7 @@ module RailsAiContext
           lines << "## ViewComponents (#{matched.size})"
           matched.first(10).each do |c|
             slots = c[:slots]&.size || 0
-            slot_info = slots > 0 ? " (#{slots} slots)" : ""
+            slot_info = slots > 0 ? " (#{count_phrase(slots, "slot")})" : ""
             used_in = c[:used_in]&.any? ? " - used in: #{c[:used_in].first(5).join(', ')}" : ""
             lines << "- **#{c[:name]}**#{slot_info}#{used_in}"
           end

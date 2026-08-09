@@ -76,12 +76,12 @@ module RailsAiContext
         # Combine PUT/PATCH duplicates (Rails generates both for update routes)
         by_controller = by_controller.transform_values { |actions| dedupe_put_patch_routes(actions) }
         filtered_total = by_controller.values.sum(&:size)
-        count_label = "#{filtered_total} #{filtered_total == 1 ? 'route' : 'routes'}"
+        count_label = count_phrase(filtered_total, "route")
         if excluded_framework_count > 0 && controller.nil?
-          count_label += ", excluding #{excluded_framework_count} framework #{excluded_framework_count == 1 ? 'route' : 'routes'}"
+          count_label += ", excluding #{count_phrase(excluded_framework_count, "framework route")}"
         end
         if unattributed_count > 0 && controller.nil?
-          count_label += " and #{unattributed_count} engine #{unattributed_count == 1 ? 'mount' : 'mounts'}"
+          count_label += " and #{count_phrase(unattributed_count, "engine mount")}"
         end
 
         case detail
@@ -107,12 +107,12 @@ module RailsAiContext
               actions = app_routes[ctrls.first]
               verbs = actions.map { |r| r[:verb] }.tally.map { |v, c| "#{c} #{v}" }.join(", ")
               short_names = ctrls.map { |c| c.split("/").last }
-              lines << "- **#{namespace}/*** (#{short_names.join(', ')}) - #{actions.size} routes each (#{verbs})"
+              lines << "- **#{namespace}/*** (#{short_names.join(', ')}) - #{count_phrase(actions.size, "route")} each (#{verbs})"
             else
               ctrls.each do |ctrl|
                 actions = app_routes[ctrl]
                 verbs = actions.map { |r| r[:verb] }.tally.map { |v, c| "#{c} #{v}" }.join(", ")
-                lines << "- **#{ctrl}** - #{actions.size} routes (#{verbs})"
+                lines << "- **#{ctrl}** - #{count_phrase(actions.size, "route")} (#{verbs})"
               end
             end
           end

@@ -94,7 +94,7 @@ module RailsAiContext
         end
 
         if matches.empty?
-          return text_response("'#{near}' not found in #{file} (#{source_lines.size} lines).\n\nAvailable methods:\n#{extract_methods(source_lines)}")
+          return text_response("'#{near}' not found in #{file} (#{count_phrase(source_lines.size, "line")}).\n\nAvailable methods:\n#{extract_methods(source_lines)}")
         end
 
         # Build context window around first match

@@ -645,7 +645,7 @@ module RailsAiContext
           adapter: "static_parse",
           tables: tables,
           total_tables: tables.size,
-          note: "Reconstructed from #{migration_files.size} migration files (no DB connection, no schema.rb)"
+          note: "Reconstructed from #{CountPhrase.call(migration_files.size, "migration file")} (no DB connection, no schema.rb)"
         }
       end
 

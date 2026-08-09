@@ -215,8 +215,8 @@ module RailsAiContext
         "Introspection" => <<~SECTION,
             # ── Introspection ─────────────────────────────────────────────────
             # Introspector preset:
-            #   :full     - all #{RailsAiContext::Configuration::PRESETS[:full].size} introspectors (default)
-            #   :standard - #{RailsAiContext::Configuration::PRESETS[:standard].size} core introspectors (schema, models, routes, jobs, gems,
+            #   :full     - all #{CountPhrase.call(RailsAiContext::Configuration::PRESETS[:full].size, 'introspector')} (default)
+            #   :standard - #{CountPhrase.call(RailsAiContext::Configuration::PRESETS[:standard].size, 'core introspector')} (schema, models, routes, jobs, gems,
             #               conventions, controllers, tests, migrations, stimulus,
             #               view_templates, config, components)
             # config.preset = :full
@@ -283,7 +283,7 @@ module RailsAiContext
         SECTION
         "Extensibility" => <<~SECTION,
             # ── Extensibility ─────────────────────────────────────────────────
-            # Register additional MCP tool classes alongside the #{RailsAiContext::Server.builtin_tools.size} built-in tools
+            # Register additional MCP tool classes alongside the #{CountPhrase.call(RailsAiContext::Server.builtin_tools.size, 'built-in tool')}
             # config.custom_tools = ["MyApp::CustomTool"]  # class name as string - resolved after boot
 
             # Exclude specific built-in tools by name
@@ -406,7 +406,7 @@ module RailsAiContext
         content, = ensure_initializer_guard(content)
 
         create_file path, content
-        say "Created #{path} with all #{CONFIG_SECTIONS.size} config sections", :green
+        say "Created #{path} with all #{CountPhrase.call(CONFIG_SECTIONS.size, "config section")}", :green
       end
 
       def update_existing_initializer(full_path)
@@ -693,9 +693,9 @@ module RailsAiContext
         say "Commands:", :yellow
         say "  rails ai:context         # Regenerate context files"
         tool_count = RailsAiContext::Server.builtin_tools.size
-        say "  rails 'ai:tool[schema]'    # Run any of the #{tool_count} tools from CLI"
+        say "  rails 'ai:tool[schema]'    # Run any of the #{CountPhrase.call(tool_count, "tool")} from CLI"
         if @tool_mode == :mcp
-          say "  rails ai:serve           # Start MCP server (#{tool_count} live tools)"
+          say "  rails ai:serve           # Start MCP server (#{CountPhrase.call(tool_count, "live tool")})"
         end
         say "  rails ai:facts           # Print concise schema facts summary"
         say "  rails 'ai:preset[arch]'   # Run multi-tool presets (architecture, debugging, migration)"

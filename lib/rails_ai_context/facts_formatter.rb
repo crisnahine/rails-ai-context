@@ -5,6 +5,8 @@ module RailsAiContext
   # the standalone CLI (rails-ai-context facts) so both outputs stay in sync.
   class FactsFormatter
     class << self
+      include CountPhrase
+
       def render(context, inspect_hint: "rails ai:inspect")
         lines = []
         lines << "# #{app_name(context)} - Schema Facts"
@@ -41,9 +43,9 @@ module RailsAiContext
           cols = meta[:columns]&.size || 0
           indexes = meta[:indexes]&.size || 0
           fks = meta[:foreign_keys]&.size || 0
-          lines << "- #{name} (#{cols} #{cols == 1 ? 'col' : 'cols'}, " \
-            "#{indexes} #{indexes == 1 ? 'index' : 'indexes'}, " \
-            "#{fks} #{fks == 1 ? 'FK' : 'FKs'})"
+          lines << "- #{name} (#{count_phrase(cols, "col")}, " \
+            "#{count_phrase(indexes, "index", plural: "indexes")}, " \
+            "#{count_phrase(fks, "FK", plural: "FKs")})"
         end
         lines << ""
         lines

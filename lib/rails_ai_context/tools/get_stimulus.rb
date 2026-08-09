@@ -89,9 +89,9 @@ module RailsAiContext
             values = (ctrl[:values].is_a?(Hash) ? ctrl[:values] : {}).size
             actions = (ctrl[:actions] || []).size
             parts = []
-            parts << "#{targets} targets" if targets > 0
-            parts << "#{values} values" if values > 0
-            parts << "#{actions} actions" if actions > 0
+            parts << count_phrase(targets, "target") if targets > 0
+            parts << count_phrase(values, "value") if values > 0
+            parts << count_phrase(actions, "action") if actions > 0
             lines << "- **#{ctrl[:name]}** - #{parts.join(', ')}"
           end
           if empty.any?
@@ -114,7 +114,7 @@ module RailsAiContext
             if ctrl[:complexity].is_a?(Hash)
               parts = []
               parts << "#{ctrl[:complexity][:loc]} LOC" if ctrl[:complexity][:loc]
-              parts << "#{ctrl[:complexity][:method_count]} methods" if ctrl[:complexity][:method_count]
+              parts << count_phrase(ctrl[:complexity][:method_count], "method") if ctrl[:complexity][:method_count]
               lines << "- Complexity: #{parts.join(', ')}" if parts.any?
             end
             lines << "- Imports: #{ctrl[:import_graph].join(', ')}" if ctrl[:import_graph]&.any?
@@ -172,7 +172,7 @@ module RailsAiContext
         if ctrl[:complexity].is_a?(Hash)
           parts = []
           parts << "#{ctrl[:complexity][:loc]} LOC" if ctrl[:complexity][:loc]
-          parts << "#{ctrl[:complexity][:method_count]} methods" if ctrl[:complexity][:method_count]
+          parts << count_phrase(ctrl[:complexity][:method_count], "method") if ctrl[:complexity][:method_count]
           lines << "- **Complexity:** #{parts.join(', ')}" if parts.any?
         end
 
