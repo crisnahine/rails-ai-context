@@ -164,6 +164,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Install mcp-publisher
         run: |
@@ -173,7 +175,11 @@ jobs:
       - name: Login via GitHub OIDC
         run: mcp-publisher login github-oidc
 
-      - name: Update server.json version, mcpb URL, and fileSha256
+      # The committed manifest carries placeholders for the mcpb URL and its
+      # digest, because neither is knowable until the release exists. This step
+      # fills them in for publishing only; the edit lives in the runner's
+      # checkout and is never committed back.
+      - name: Fill in the manifest for publishing
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -194,3 +200,35 @@ jobs:
 
       - name: Publish to MCP Registry
         run: mcp-publisher publish
+
+      # Only `version` goes back to main. The URL and digest stay placeholders
+      # there, so nobody reads a stale artifact reference as current.
+      - name: Record the released version in the manifest on main
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main
+          git checkout -B main origin/main
+
+          if [ "$(jq -r .version server.json)" = "$VERSION" ]; then
+            echo "server.json already records $VERSION"
+            exit 0
+          fi
+
+          jq --arg v "$VERSION" '.version = $v' server.json > server.tmp && mv server.tmp server.json
+          git add server.json
+          git commit -m "chore: record v${VERSION} in the server manifest"
+
+          # Plain push only. A rejection means someone else pushed, so rebase
+          # this one commit onto the new tip and try again - never force.
+          for attempt in 1 2 3; do
+            if git push origin main; then
+              exit 0
+            fi
+            echo "push rejected, rebasing onto the new tip (attempt $attempt)"
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort; exit 1; }
+          done
+          exit 1
