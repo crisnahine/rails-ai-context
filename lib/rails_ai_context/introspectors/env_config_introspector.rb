@@ -58,9 +58,6 @@ module RailsAiContext
       end
 
       def summarize(path)
-        content = RailsAiContext::SafeFile.read(path)
-        return nil unless content
-
         relative = path.sub("#{root}/", "")
         assignments = config_assignments(path)
         {
@@ -96,8 +93,14 @@ module RailsAiContext
           # Redact BEFORE truncating: a truncation cut landing between the
           # password and its `@host` would leave the regex nothing to match
           # and serve the credential prefix in plaintext.
-          notable[key] = redact_credentials(source.gsub(/\s+/, " ").strip).truncate(60)
+          notable[key] = redact_credentials(one_line(source)).truncate(60)
         end
+      end
+
+      # A node slice spans as many lines as the expression did, and the value
+      # renders inside backticks on one markdown line.
+      def one_line(source)
+        source.gsub(/\s+/, " ").strip
       end
 
       # Values come from real config files and can embed credentials (a

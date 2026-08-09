@@ -210,6 +210,17 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       expect(staging[:config_keys]).to eq(%w[log_level])
     end
 
+    it "keeps the other environments when one file will not parse" do
+      File.write(File.join(env_dir, "staging.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.force_ssl = true
+        # no end
+      RUBY
+
+      expect(result[:environments].map { |e| e[:name] }).to include("development", "production")
+      expect(result).not_to have_key(:error)
+    end
+
     it "reports the current environment" do
       expect(result[:current]).to eq(Rails.env.to_s)
     end
