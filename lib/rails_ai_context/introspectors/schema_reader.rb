@@ -21,27 +21,37 @@ module RailsAiContext
       # Declared defaults for one table, as source text. Callers report these
       # verbatim when the live database returns no default.
       def defaults_for(table)
-        (tables.dig(table, :columns) || []).each_with_object({}) do |column, defaults|
+        columns_for(table).each_with_object({}) do |column, defaults|
           defaults[column[:name]] = column[:default] unless column[:default].nil?
         end
       end
 
       def column?(table, name)
-        (tables.dig(table, :columns) || []).any? { |c| c[:name] == name }
+        columns_for(table).any? { |c| c[:name] == name }
       end
 
       def any_column?(name)
-        tables.any? { |_, table| table[:columns].any? { |c| c[:name] == name } }
+        tables.any? { |table, _| column?(table, name) }
       end
 
       private
 
       attr_reader :path
 
+      def columns_for(table)
+        tables.dig(table, :columns) || []
+      end
+
       def build
         return {} unless path && File.exist?(path)
 
-        events = SourceIntrospector.walk(path, { schema: -> { Listeners::SchemaDslListener.new } })[:schema] || []
+        # Read against the configured schema limit rather than walking the
+        # path directly: AstCache caps parses well below it, and a schema
+        # between the two would silently read as having no tables at all.
+        source = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
+        return {} unless source
+
+        events = SourceIntrospector.walk_source(source, { schema: -> { Listeners::SchemaDslListener.new } })[:schema] || []
         tables = {}
         current = nil
 
@@ -87,7 +97,10 @@ module RailsAiContext
         return nil unless event[:options].key?(:default)
 
         value = event[:options][:default]
+        # A non-literal default (a proc, a constant) parses to the confidence
+        # marker, so fall back to what the column actually declared.
         return event[:default_source] if value == RailsAiContext::Confidence::INFERRED
+        return nil if value.nil?
 
         value.to_s
       end

@@ -140,6 +140,17 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
       expect(reader.defaults_for("events")).to eq({ "occurred_at" => '-> { "CURRENT_TIMESTAMP" }' })
     end
 
+    it "treats an explicit nil default as no default" do
+      reader = reader_for(<<~RUBY)
+        create_table "users" do |t|
+          t.string "nickname", default: nil
+          t.string "role", default: "member"
+        end
+      RUBY
+
+      expect(reader.defaults_for("users")).to eq({ "role" => "member" })
+    end
+
     it "omits columns with no default" do
       reader = reader_for(<<~RUBY)
         create_table "users" do |t|

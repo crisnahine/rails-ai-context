@@ -125,9 +125,14 @@ module RailsAiContext
             has_inheritance_column = true if inheritance_check[:inh].any?
           end
 
-          # A soft-delete column is a schema fact. Matching the word in model
-          # source also fired on comments and unrelated method names.
-          has_deleted_at = schema.any_column?("deleted_at")
+          # A soft-delete column is a schema fact, so prefer the dump. Apps on
+          # structure.sql have no schema.rb to read, and fall back to the
+          # looser source match.
+          has_deleted_at = if schema.tables.any?
+            schema.any_column?("deleted_at")
+          else
+            model_files.first(500).any? { |f| RailsAiContext::SafeFile.read(f)&.match?(/deleted_at/) }
+          end
 
           patterns << "sti" if has_inheritance_column || has_sti_subclass
 

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **schema.rb is read through one AST-backed reader.** `SchemaIntrospector`,
+  `PerformanceIntrospector` and `ConventionIntrospector` each parsed the dump
+  line by line with their own `create_table` regex; they now share
+  `SchemaReader`, built on the existing `SchemaDslListener`. Column defaults
+  split across lines are picked up, a proc default reports its source instead
+  of being dropped, index matching compares whole column names rather than
+  substrings, and a reference column is recorded as its foreign key.
+- **Soft-delete detection prefers the schema.** A `deleted_at` column in the
+  dump now drives the `soft_delete` convention, instead of matching the word
+  anywhere in model source. Apps dumping `structure.sql` keep the old source
+  match, and the `acts_as_paranoid` / `discard` macro check is unchanged.
+
 ## [5.16.2] - 2026-07-17
 
 ### Fixed
