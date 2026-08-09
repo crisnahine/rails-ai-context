@@ -40,7 +40,7 @@
 - [Generated Files](#generated-files)
 - [All Commands](#all-commands)
 - [CLI Tools](#cli-tools)
-- [MCP Tools - Full Reference](#mcp-tools--full-reference)
+- [MCP Tools - Common Reference](#mcp-tools--common-reference)
 - [MCP Resources](#mcp-resources)
 - [MCP Server Setup](#mcp-server-setup)
 - [Configuration - All Options](#configuration--all-options)
@@ -347,9 +347,11 @@ The `tool_mode` is selected during `rails generate rails_ai_context:install`.
 
 ---
 
-## MCP Tools - Full Reference
+## MCP Tools - Common Reference
 
-All 45 tools are **read-only** and **idempotent** - they never modify your application or database.
+The 24 tools below are the ones worth reading about before you start. [Tools Reference](TOOLS.md) carries all 45 with their parameters.
+
+Every tool is **read-only** and **idempotent** - they never modify your application or database.
 
 ### rails_get_schema
 
