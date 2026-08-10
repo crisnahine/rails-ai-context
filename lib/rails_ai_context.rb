@@ -14,6 +14,14 @@ require "active_support/core_ext/string/filters"
 require "active_support/core_ext/object/deep_dup"
 require "active_support/core_ext/object/blank"
 
+# Same reason, for two stdlib constants. `Set` is autoloaded on newer Rubies
+# and not on the oldest one supported here; `Date` is never autoloaded. Both
+# resolved only because booting Rails, or whichever file happened to load
+# first, had already required them - so the standalone CLI died on
+# `SelectionRecord::Date` with no Rails in the process.
+require "set"
+require "date"
+
 # Provide Data.define on Ruby 3.1 (no-op on 3.2+) before any value object is
 # autoloaded. Defines a top-level constant, so it stays outside Zeitwerk.
 require_relative "rails_ai_context/polyfill/data"
