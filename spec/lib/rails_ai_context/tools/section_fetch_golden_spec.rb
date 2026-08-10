@@ -23,7 +23,11 @@ RSpec.describe "Section-fetch migration, byte for byte" do
     { tool: RailsAiContext::Tools::GetTestInfo,      key: :tests,          subject: "Test introspection" },
     { tool: RailsAiContext::Tools::GetConfig,        key: :config,         subject: "Config introspection",
       remedy: "Add :config to introspectors or use `config.preset = :full`." },
-    { tool: RailsAiContext::Tools::GetConventions,   key: :conventions,    subject: "Convention detection" }
+    { tool: RailsAiContext::Tools::GetConventions,   key: :conventions,    subject: "Convention detection" },
+    # The sixteenth. Its failed-case wording was "not available: <error>",
+    # the only one of the sixteen that did not say "failed:"; migrating it
+    # onto the shared seam settles it on the common phrasing.
+    { tool: RailsAiContext::Tools::GetSchema,        key: :schema,         subject: "Schema introspection" }
   ].freeze
 
   def text_of(response)

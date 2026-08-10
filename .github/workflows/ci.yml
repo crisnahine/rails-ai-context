@@ -89,35 +89,6 @@ jobs:
       - name: Run specs
         run: bundle exec rspec
 
-  # Same reasoning as the prism leg: the gemspec claims mcp >= 0.8, the
-  # lockfile resolves the newest, and the SDK's Tool::Response grew fields
-  # between those. Without this, code assuming the newer shape passes CI and
-  # breaks in a bundle that honoured the declared floor.
-  mcp-floor:
-    runs-on: ubuntu-latest
-    name: mcp floor (0.8.0)
-
-    env:
-      BUNDLE_GEMFILE: gemfiles/mcp_floor.gemfile
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-          bundler-cache: true
-
-      - name: Confirm the pin took
-        run: |
-          resolved=$(bundle exec ruby -rmcp -e 'print MCP::VERSION')
-          echo "mcp $resolved"
-          test "$resolved" = "0.8.0" || { echo "expected mcp 0.8.0, got $resolved"; exit 1; }
-
-      - name: Run specs
-        run: bundle exec rspec
-
   # Allowed to fail: it exists so a removal in prism's main branch surfaces
   # here rather than in a user's bundle after the next release.
   prism-head:

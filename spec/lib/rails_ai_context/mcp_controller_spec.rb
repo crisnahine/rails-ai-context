@@ -213,14 +213,14 @@ RSpec.describe RailsAiContext::McpController do
         expect(controller.response.status).to eq(500)
       end
 
-      it "returns a -32603 JSON-RPC frame" do
+      # The frame's contents are McpEdge's, pinned once in mcp_edge_spec.
+      # What the controller owes is emitting that frame rather than letting
+      # the exception become a generic Rails HTML 500.
+      it "returns the shared error frame" do
         controller.handle
         body = controller.response_body.is_a?(Array) ? controller.response_body.join : controller.response_body
-        parsed = JSON.parse(body)
-        expect(parsed["jsonrpc"]).to eq("2.0")
-        expect(parsed["error"]["code"]).to eq(-32603)
-        expect(parsed["error"]["message"]).to include("transport exploded")
-        expect(parsed["id"]).to be_nil
+
+        expect(body).to eq(RailsAiContext::McpEdge.internal_error_frame(RuntimeError.new("transport exploded")))
       end
 
       it "logs the failure" do
@@ -285,10 +285,12 @@ RSpec.describe RailsAiContext::McpController do
         )
       end
 
-      it "still answers with a 500 JSON-RPC frame" do
+      it "still answers with the shared error frame" do
         controller.handle
+
         expect(controller.response.status).to eq(500)
-        expect(JSON.parse(Array(controller.response_body).join)["error"]["code"]).to eq(-32603)
+        expect(Array(controller.response_body).join)
+          .to eq(RailsAiContext::McpEdge.internal_error_frame(RuntimeError.new("body exploded")))
       end
     end
   end

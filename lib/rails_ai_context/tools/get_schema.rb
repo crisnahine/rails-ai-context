@@ -50,12 +50,7 @@ module RailsAiContext
       )
 
       def self.call(table: nil, detail: "standard", limit: nil, offset: 0, format: "markdown", server_context: nil)
-        schema = cached_context[:schema]
-        return text_response("Schema introspection not available. Add :schema to introspectors.") unless schema
-        return text_response("Schema introspection not available: #{schema[:error]}") if schema[:error]
-        note = unavailable_note(schema)
-        return text_response(note) if note
-
+        fetch_section(:schema, subject: "Schema introspection") do |schema|
         tables = schema[:tables] || {}
 
         # Return full JSON if requested (existing behavior)
@@ -210,6 +205,7 @@ module RailsAiContext
         else
           # Fallback to full dump (backward compat)
           text_response(format_schema_markdown(schema))
+        end
         end
       end
 

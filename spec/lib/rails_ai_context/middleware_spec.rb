@@ -24,22 +24,18 @@ RSpec.describe RailsAiContext::Middleware do
       expect(status).not_to eq(200)
     end
 
-    it "returns 500 JSON-RPC error when transport raises" do
-      # Stub the transport to raise
+    # What the frame contains is McpEdge's, pinned once in mcp_edge_spec.
+    # What this transport owes is routing a raise into it rather than letting
+    # the exception reach the rackup.
+    it "answers a raising transport with the shared error frame" do
       transport = instance_double(MCP::Server::Transports::StreamableHTTPTransport)
       allow(transport).to receive(:handle_request).and_raise(RuntimeError, "transport boom")
       middleware.instance_variable_set(:@mcp_transport, transport)
 
       env = Rack::MockRequest.env_for("/mcp", method: "POST", input: "{}")
-      status, headers, body = middleware.call(env)
 
-      expect(status).to eq(500)
-      expect(headers["Content-Type"]).to eq("application/json")
-
-      parsed = JSON.parse(body.first)
-      expect(parsed["jsonrpc"]).to eq("2.0")
-      expect(parsed["error"]["code"]).to eq(-32603)
-      expect(parsed["error"]["message"]).to include("transport boom")
+      expect(middleware.call(env))
+        .to eq(RailsAiContext::McpEdge.internal_error_response(RuntimeError.new("transport boom")))
     end
 
     it "does not crash non-MCP requests when transport is broken" do

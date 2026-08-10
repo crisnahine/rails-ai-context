@@ -204,16 +204,17 @@ RSpec.describe RailsAiContext::Server do
         allow(RailsAiContext).to receive(:log_warn)
       end
 
-      it "answers with a 500 JSON-RPC -32603 body instead of raising" do
+      # The frame's contents are McpEdge's, pinned once in mcp_edge_spec.
+      # What this app owes is answering in that shape rather than letting the
+      # exception kill the request at the rackup level.
+      it "answers with the shared error frame instead of raising" do
         status, headers, body = call_rack_app(transport, mcp_path)
 
-        expect(status).to eq(500)
-        expect(headers["Content-Type"]).to eq("application/json")
-        parsed = JSON.parse(body.join)
-        expect(parsed["jsonrpc"]).to eq("2.0")
-        expect(parsed["error"]["code"]).to eq(-32603)
-        expect(parsed["error"]["message"]).to include("transport exploded")
-        expect(parsed["id"]).to be_nil
+        expected_status, expected_headers, expected_body =
+          RailsAiContext::McpEdge.internal_error_response(RuntimeError.new("transport exploded"))
+
+        expect([ status, headers, body.join ])
+          .to eq([ expected_status, expected_headers, expected_body.join ])
       end
 
       it "logs the failure" do
