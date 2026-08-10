@@ -12,6 +12,14 @@ Overloaded. Always qualify it; never use "environment" bare in a tool name, an i
 
 **Environment** (unqualified, as data) - a single named Rails environment: development, production, staging. This is the only sense in which the bare word is allowed, and only as a value, never as a name. The `:environments` payload key means "the list of these", which is why it kept its name when the introspector was renamed.
 
+## AI tool
+
+The assistant a user points at their app: claude, cursor, copilot, opencode, codex. What the gem generates for one is its **context files** (`CLAUDE.md`, `.cursor/rules/*.mdc`, and so on).
+
+Avoid "format" for either sense - claude is not a file format, and the word collides with real formatting elsewhere in the code. The public config key `ai_tools` already uses the canonical term.
+
+`Install::AiTool` is the one table of what each means: name, context files, MCP config shape, legacy leftovers. `Install::SelectionRecord` owns which ones the user picked - written to YAML always and to the initializer line inside a Rails app, read initializer-first because that is the file a user hand-edits.
+
 ## Static tier
 
 The mode where the app did not boot, or `--no-boot` was passed. What an introspector answers here is what it declared, never what a runtime check happened to detect. Every introspector in `INTROSPECTOR_MAP` extends `StaticTier` and names one of three kinds:
