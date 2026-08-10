@@ -256,7 +256,7 @@ class RailsAiContextCLI < Thor
       ::RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Dir.pwd)
 
       # --- Write .rails-ai-context.yml ---
-      write_yaml_config(ai_tools, tool_mode)
+      record_selection(ai_tools, tool_mode)
 
       # --- Write per-tool MCP config files (MCP mode only) ---
       write_mcp_configs(ai_tools, tool_mode)
@@ -473,7 +473,7 @@ class RailsAiContextCLI < Thor
       $stderr.puts "Updated .gitignore"
     end
 
-    def write_yaml_config(ai_tools, tool_mode)
+    def record_selection(ai_tools, tool_mode)
       result = ::RailsAiContext::Install::SelectionRecord.write(
         ai_tools, root: Dir.pwd, extra_yaml: { "tool_mode" => tool_mode.to_s }
       )

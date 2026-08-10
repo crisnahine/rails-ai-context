@@ -27,9 +27,7 @@ module RailsAiContext
     end
 
     def handle
-      # One process serves every client here, so the session record has to be
-      # told which conversation this request belongs to.
-      Tools::BaseTool.with_session(Tools::BaseTool.session_from(request.env)) do
+      Tools::BaseTool.with_session_for(request.env) do
         serve_transport
       end
     rescue => e

@@ -145,6 +145,29 @@ RSpec.describe "BaseTool shared caches under concurrency" do
       it "treats a blank header as no session" do
         expect(base.session_from("HTTP_MCP_SESSION_ID" => "")).to eq(base::DEFAULT_SESSION)
       end
+
+      # What every HTTP entry point actually wants: run this block scoped to
+      # whoever sent the request. Spelling that as two calls left the pair
+      # duplicated at all three of them.
+      it "scopes a block to the request's session in one call" do
+        seen = nil
+        base.with_session_for("HTTP_MCP_SESSION_ID" => "abc") { seen = base.current_session }
+
+        expect(seen).to eq("abc")
+        expect(base.current_session).to eq(base::DEFAULT_SESSION)
+      end
+
+      it "restores the previous session even when the block raises" do
+        expect {
+          base.with_session_for("HTTP_MCP_SESSION_ID" => "abc") { raise "boom" }
+        }.to raise_error("boom")
+
+        expect(base.current_session).to eq(base::DEFAULT_SESSION)
+      end
+
+      it "returns what the block returned" do
+        expect(base.with_session_for({}) { :answer }).to eq(:answer)
+      end
     end
 
     # The standalone `rails-ai-context serve --transport http` app is the

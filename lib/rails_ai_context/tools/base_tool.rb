@@ -218,6 +218,14 @@ module RailsAiContext
           id.nil? || id.empty? ? DEFAULT_SESSION : id
         end
 
+        # What every HTTP entry point actually wants. One process serves every
+        # client on all three, so each request has to be scoped to whoever
+        # sent it; as two calls, the pair sat duplicated at all three.
+        # See docs/adr/0003-shared-tool-cache-semantics.md.
+        def with_session_for(env, &block)
+          with_session(session_from(env), &block)
+        end
+
         def session_record(tool_name, params, summary = nil)
           SESSION_CONTEXT[:mutex].synchronize do
             bucket = SESSION_CONTEXT[:queries][current_session]

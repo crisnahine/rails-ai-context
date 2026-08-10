@@ -215,9 +215,7 @@ module RailsAiContext
         end
 
         request = Rack::Request.new(env)
-        # One process serves every client here too, so the session record has
-        # to be told which conversation this request belongs to.
-        Tools::BaseTool.with_session(Tools::BaseTool.session_from(env)) do
+        Tools::BaseTool.with_session_for(env) do
           transport.handle_request(request)
         end
       rescue => e
