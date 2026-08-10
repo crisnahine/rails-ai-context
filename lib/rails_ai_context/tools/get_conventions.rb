@@ -13,88 +13,84 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)
-        conventions = cached_context[:conventions]
-        return text_response("Convention detection not available. Add :conventions to introspectors.") unless conventions
-        return text_response("Convention detection failed: #{conventions[:error]}") if conventions[:error]
-        note = unavailable_note(conventions)
-        return text_response(note) if note
+        fetch_section(:conventions, subject: "Convention detection") do |conventions|
+          lines = [ "# App Conventions & Architecture", "" ]
 
-        lines = [ "# App Conventions & Architecture", "" ]
-
-        # Architecture
-        if conventions[:architecture]&.any?
-          lines << "## Architecture"
-          conventions[:architecture].each { |a| lines << "- #{humanize_arch(a)}" }
-        end
-
-        # Patterns
-        if conventions[:patterns]&.any?
-          lines << "" << "## Detected patterns"
-          conventions[:patterns].each { |p| lines << "- #{humanize_pattern(p)}" }
-        end
-
-        # Directory structure
-        if conventions[:directory_structure]&.any?
-          lines << "" << "## Directory structure"
-          conventions[:directory_structure].sort_by { |k, _| k }.each do |dir, count|
-            lines << "- `#{dir}/` → #{count_phrase(count, "file")}"
+          # Architecture
+          if conventions[:architecture]&.any?
+            lines << "## Architecture"
+            conventions[:architecture].each { |a| lines << "- #{humanize_arch(a)}" }
           end
-        end
 
-        # Frontend stack from package.json
-        frontend = detect_frontend_stack
-        if frontend.any?
-          lines << "" << "## Frontend stack"
-          frontend.each { |f| lines << "- #{f}" }
-        end
-
-        # App-specific patterns detected from controller source
-        app_patterns = detect_app_patterns
-        if app_patterns.any?
-          lines << "" << "## App Patterns"
-          app_patterns.each { |section| lines << section }
-        end
-
-        # Custom directories
-        if conventions[:custom_directories]&.any?
-          lines << "" << "## Custom Directories"
-          conventions[:custom_directories].each do |dir, desc|
-            lines << (desc.to_s.strip.empty? ? "- `#{dir}/`" : "- `#{dir}/` - #{desc}")
+          # Patterns
+          if conventions[:patterns]&.any?
+            lines << "" << "## Detected patterns"
+            conventions[:patterns].each { |p| lines << "- #{humanize_pattern(p)}" }
           end
-        end
 
-        # Config files - only show non-obvious ones (skip files every Rails app has)
-        if conventions[:config_files]&.any?
-          obvious = %w[
-            config/application.rb config/puma.rb config/locales/en.yml
-            Gemfile package.json Rakefile
-          ]
-          notable = conventions[:config_files].reject { |f| obvious.include?(f) }
-          if notable.any?
-            lines << "" << "## Notable config files"
-            notable.each { |f| lines << "- `#{f}`" }
+          # Directory structure
+          if conventions[:directory_structure]&.any?
+            lines << "" << "## Directory structure"
+            conventions[:directory_structure].sort_by { |k, _| k }.each do |dir, count|
+              lines << "- `#{dir}/` → #{count_phrase(count, "file")}"
+            end
           end
-        end
 
-        # I18n / Locale info
-        locale_info = detect_locale_info
-        if locale_info.any?
-          lines << "" << "## I18n"
-          locale_info.each { |l| lines << "- #{l}" }
-        end
+          # Frontend stack from package.json
+          frontend = detect_frontend_stack
+          if frontend.any?
+            lines << "" << "## Frontend stack"
+            frontend.each { |f| lines << "- #{f}" }
+          end
 
-        # Convention Fingerprint - one-paragraph summary of the app's detected conventions
-        fingerprint_parts = []
-        fingerprint_parts << conventions[:architecture].map { |a| humanize_arch(a) }.join(", ") if conventions[:architecture]&.any?
-        fingerprint_parts << conventions[:patterns].map { |p| humanize_pattern(p) }.join(", ") if conventions[:patterns]&.any?
-        top_dirs = conventions[:directory_structure]&.sort_by { |_, v| -v }&.first(5)&.map { |k, _| k }
-        fingerprint_parts << "key dirs: #{top_dirs.join(', ')}" if top_dirs&.any?
-        if fingerprint_parts.any?
-          lines << "" << "## Convention Fingerprint"
-          lines << "This app uses #{fingerprint_parts.join('; ')}."
-        end
+          # App-specific patterns detected from controller source
+          app_patterns = detect_app_patterns
+          if app_patterns.any?
+            lines << "" << "## App Patterns"
+            app_patterns.each { |section| lines << section }
+          end
 
-        text_response(lines.join("\n"))
+          # Custom directories
+          if conventions[:custom_directories]&.any?
+            lines << "" << "## Custom Directories"
+            conventions[:custom_directories].each do |dir, desc|
+              lines << (desc.to_s.strip.empty? ? "- `#{dir}/`" : "- `#{dir}/` - #{desc}")
+            end
+          end
+
+          # Config files - only show non-obvious ones (skip files every Rails app has)
+          if conventions[:config_files]&.any?
+            obvious = %w[
+              config/application.rb config/puma.rb config/locales/en.yml
+              Gemfile package.json Rakefile
+            ]
+            notable = conventions[:config_files].reject { |f| obvious.include?(f) }
+            if notable.any?
+              lines << "" << "## Notable config files"
+              notable.each { |f| lines << "- `#{f}`" }
+            end
+          end
+
+          # I18n / Locale info
+          locale_info = detect_locale_info
+          if locale_info.any?
+            lines << "" << "## I18n"
+            locale_info.each { |l| lines << "- #{l}" }
+          end
+
+          # Convention Fingerprint - one-paragraph summary of the app's detected conventions
+          fingerprint_parts = []
+          fingerprint_parts << conventions[:architecture].map { |a| humanize_arch(a) }.join(", ") if conventions[:architecture]&.any?
+          fingerprint_parts << conventions[:patterns].map { |p| humanize_pattern(p) }.join(", ") if conventions[:patterns]&.any?
+          top_dirs = conventions[:directory_structure]&.sort_by { |_, v| -v }&.first(5)&.map { |k, _| k }
+          fingerprint_parts << "key dirs: #{top_dirs.join(', ')}" if top_dirs&.any?
+          if fingerprint_parts.any?
+            lines << "" << "## Convention Fingerprint"
+            lines << "This app uses #{fingerprint_parts.join('; ')}."
+          end
+
+          text_response(lines.join("\n"))
+        end
       end
 
       ARCH_LABELS = {

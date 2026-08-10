@@ -105,6 +105,8 @@ module RailsAiContext
       DEFAULT_SESSION = :default
 
       class << self
+        include SectionFetch
+
         # Convenience: access the Rails app and cached introspection.
         # Routes through RailsAiContext.default_app so this resolves to the
         # booted app in runtime tier and to a StaticApp in static tier -

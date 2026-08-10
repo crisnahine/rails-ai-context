@@ -37,136 +37,132 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(controller: nil, action: nil, detail: "standard", limit: nil, offset: 0, server_context: nil)
-        data = cached_context[:controllers]
-        return text_response("Controller introspection not available. Add :controllers to introspectors.") unless data
-        return text_response("Controller introspection failed: #{data[:error]}") if data[:error]
-        note = unavailable_note(data)
-        return text_response(note) if note
+        fetch_section(:controllers, subject: "Controller introspection") do |data|
+          controllers = data[:controllers] || {}
 
-        controllers = data[:controllers] || {}
+          # Filter out framework-internal controllers for listings/error messages
+          framework_controllers = RailsAiContext.configuration.excluded_controllers
+          app_controller_names = controllers.keys.reject { |name| framework_controllers.include?(name) }.sort
 
-        # Filter out framework-internal controllers for listings/error messages
-        framework_controllers = RailsAiContext.configuration.excluded_controllers
-        app_controller_names = controllers.keys.reject { |name| framework_controllers.include?(name) }.sort
-
-        # Specific controller - always full detail (searches ALL controllers including framework)
-        # Flexible matching: "posts", "PostsController", "postscontroller" all work
-        if controller
-          # Accept multiple formats: "PostsController", "posts", "admin/posts", "Admin::PostsController"
-          # Use underscore for CamelCase→snake_case: "OmniauthCallbacks" → "omniauth_callbacks"
-          # Also match on plain downcase to handle "userscontroller" → "users"
-          input_snake = controller.gsub("/", "::").underscore.delete_suffix("_controller")
-          input_down = controller.downcase.delete_suffix("controller").tr("/", "::")
-          key = controllers.keys.find { |k|
-            key_snake = k.underscore.delete_suffix("_controller")
-            key_down = k.downcase.delete_suffix("controller")
-            key_snake == input_snake || key_down == input_down
-          } || controller
-          info = controllers[key]
-          unless info
-            return not_found_response("Controller", controller, app_controller_names,
-              recovery_tool: "Call rails_get_controllers(detail:\"summary\") to see all controllers")
-          end
-          return text_response("Error inspecting #{key}: #{info[:error]}") if info[:error]
-
-          # Specific action - return source code
-          if action
-            return text_response(format_action_source(key, info, action))
-          end
-
-          return text_response(format_controller(key, info))
-        end
-
-        app_controllers = controllers.reject { |name, _| framework_controllers.include?(name) }
-
-        # Pagination
-        all_names = app_controllers.keys.sort
-        page = paginate(all_names, offset: offset, limit: limit, default_limit: 50)
-        paginated_names = page[:items]
-
-        if paginated_names.empty? && page[:total] > 0
-          return text_response(page[:hint])
-        end
-
-        pagination_hint = page[:hint].empty? ? "" : "\n#{page[:hint]}"
-
-        # Listing mode
-        case detail
-        when "summary"
-          lines = [ "# Controllers (#{page[:total]})", "" ]
-          paginated_names.each do |name|
-            info = app_controllers[name]
-            action_count = info[:actions]&.size || 0
-            lines << "- **#{name}** - #{count_phrase(action_count, "action")}"
-          end
-          lines << "" << "_Use `controller:\"Name\"` for full detail._#{pagination_hint}"
-          text_response(lines.join("\n"))
-
-        when "standard"
-          lines = [ "# Controllers (#{page[:total]})", "" ]
-          paginated_names.each do |name|
-            info = app_controllers[name]
-            actions = info[:actions]&.join(", ") || "none"
-            lines << "- **#{name}** - #{actions}"
-          end
-          lines << "" << "_Use `controller:\"Name\"` for filters and strong params, or `detail:\"full\"` for everything._#{pagination_hint}"
-          text_response(lines.join("\n"))
-
-        when "full"
-          lines = [ "# Controllers (#{page[:total]})", "" ]
-
-          # Group sibling controllers that share the same parent and identical structure
-          paginated_ctrl = app_controllers.select { |k, _| paginated_names.include?(k) }
-          grouped = paginated_ctrl.keys.sort.group_by do |name|
-            info = app_controllers[name]
-            parent = info[:parent_class]
-            # Group by parent + actions + filters + params fingerprint
-            if parent && parent != "ApplicationController"
-              actions_sig = info[:actions]&.sort&.join(",")
-              filters_sig = info[:filters]&.map { |f| "#{f[:kind]}:#{f[:name]}" }&.sort&.join(",")
-              params_sig = info[:strong_params]&.sort&.join(",")
-              "#{parent}|#{actions_sig}|#{filters_sig}|#{params_sig}"
-            else
-              name # unique key = no grouping
+          # Specific controller - always full detail (searches ALL controllers including framework)
+          # Flexible matching: "posts", "PostsController", "postscontroller" all work
+          if controller
+            # Accept multiple formats: "PostsController", "posts", "admin/posts", "Admin::PostsController"
+            # Use underscore for CamelCase→snake_case: "OmniauthCallbacks" → "omniauth_callbacks"
+            # Also match on plain downcase to handle "userscontroller" → "users"
+            input_snake = controller.gsub("/", "::").underscore.delete_suffix("_controller")
+            input_down = controller.downcase.delete_suffix("controller").tr("/", "::")
+            key = controllers.keys.find { |k|
+              key_snake = k.underscore.delete_suffix("_controller")
+              key_down = k.downcase.delete_suffix("controller")
+              key_snake == input_snake || key_down == input_down
+            } || controller
+            info = controllers[key]
+            unless info
+              return not_found_response("Controller", controller, app_controller_names,
+                recovery_tool: "Call rails_get_controllers(detail:\"summary\") to see all controllers")
             end
+            return text_response("Error inspecting #{key}: #{info[:error]}") if info[:error]
+
+            # Specific action - return source code
+            if action
+              return text_response(format_action_source(key, info, action))
+            end
+
+            return text_response(format_controller(key, info))
           end
 
-          grouped.each do |_key, names|
-            if names.size > 2 && app_controllers[names.first][:parent_class] != "ApplicationController"
-              # Compress group: show once with all names
-              info = app_controllers[names.first]
-              short_names = names.map { |n| n.sub(/Controller$/, "").split("::").last }
-              parent = info[:parent_class] || "ApplicationController"
-              lines << "## #{names.first.split('::').first}::* (#{short_names.join(', ')})"
-              lines << "- Inherits: #{parent}"
-              lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-              if info[:filters]&.any?
-                lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
+          app_controllers = controllers.reject { |name, _| framework_controllers.include?(name) }
+
+          # Pagination
+          all_names = app_controllers.keys.sort
+          page = paginate(all_names, offset: offset, limit: limit, default_limit: 50)
+          paginated_names = page[:items]
+
+          if paginated_names.empty? && page[:total] > 0
+            return text_response(page[:hint])
+          end
+
+          pagination_hint = page[:hint].empty? ? "" : "\n#{page[:hint]}"
+
+          # Listing mode
+          case detail
+          when "summary"
+            lines = [ "# Controllers (#{page[:total]})", "" ]
+            paginated_names.each do |name|
+              info = app_controllers[name]
+              action_count = info[:actions]&.size || 0
+              lines << "- **#{name}** - #{count_phrase(action_count, "action")}"
+            end
+            lines << "" << "_Use `controller:\"Name\"` for full detail._#{pagination_hint}"
+            text_response(lines.join("\n"))
+
+          when "standard"
+            lines = [ "# Controllers (#{page[:total]})", "" ]
+            paginated_names.each do |name|
+              info = app_controllers[name]
+              actions = info[:actions]&.join(", ") || "none"
+              lines << "- **#{name}** - #{actions}"
+            end
+            lines << "" << "_Use `controller:\"Name\"` for filters and strong params, or `detail:\"full\"` for everything._#{pagination_hint}"
+            text_response(lines.join("\n"))
+
+          when "full"
+            lines = [ "# Controllers (#{page[:total]})", "" ]
+
+            # Group sibling controllers that share the same parent and identical structure
+            paginated_ctrl = app_controllers.select { |k, _| paginated_names.include?(k) }
+            grouped = paginated_ctrl.keys.sort.group_by do |name|
+              info = app_controllers[name]
+              parent = info[:parent_class]
+              # Group by parent + actions + filters + params fingerprint
+              if parent && parent != "ApplicationController"
+                actions_sig = info[:actions]&.sort&.join(",")
+                filters_sig = info[:filters]&.map { |f| "#{f[:kind]}:#{f[:name]}" }&.sort&.join(",")
+                params_sig = info[:strong_params]&.sort&.join(",")
+                "#{parent}|#{actions_sig}|#{filters_sig}|#{params_sig}"
+              else
+                name # unique key = no grouping
               end
-              lines << "- Strong params: #{info[:strong_params].join(', ')}" if info[:strong_params]&.any?
-              lines << ""
-            else
-              names.each do |name|
-                info = app_controllers[name]
-                lines << "## #{name}"
+            end
+
+            grouped.each do |_key, names|
+              if names.size > 2 && app_controllers[names.first][:parent_class] != "ApplicationController"
+                # Compress group: show once with all names
+                info = app_controllers[names.first]
+                short_names = names.map { |n| n.sub(/Controller$/, "").split("::").last }
+                parent = info[:parent_class] || "ApplicationController"
+                lines << "## #{names.first.split('::').first}::* (#{short_names.join(', ')})"
+                lines << "- Inherits: #{parent}"
                 lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
                 if info[:filters]&.any?
                   lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
                 end
                 lines << "- Strong params: #{info[:strong_params].join(', ')}" if info[:strong_params]&.any?
-                lines << "- Rescue from: #{info[:rescue_from].join(', ')}" if info[:rescue_from]&.any?
-                lines << "- Rate limit: #{info[:rate_limit]}" if info[:rate_limit]
-                lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
                 lines << ""
+              else
+                names.each do |name|
+                  info = app_controllers[name]
+                  lines << "## #{name}"
+                  lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
+                  if info[:filters]&.any?
+                    lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
+                  end
+                  lines << "- Strong params: #{info[:strong_params].join(', ')}" if info[:strong_params]&.any?
+                  lines << "- Rescue from: #{info[:rescue_from].join(', ')}" if info[:rescue_from]&.any?
+                  lines << "- Rate limit: #{info[:rate_limit]}" if info[:rate_limit]
+                  lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
+                  lines << ""
+                end
               end
             end
-          end
-          lines << pagination_hint unless pagination_hint.empty?
-          text_response(lines.join("\n"))
+            lines << pagination_hint unless pagination_hint.empty?
+            text_response(lines.join("\n"))
 
-        else
-          list = paginated_names.map { |c| "- #{c}" }.join("\n")
-          text_response("# Controllers (#{page[:total]})\n\n#{list}#{pagination_hint}")
+          else
+            list = paginated_names.map { |c| "- #{c}" }.join("\n")
+            text_response("# Controllers (#{page[:total]})\n\n#{list}#{pagination_hint}")
+          end
         end
       end
 

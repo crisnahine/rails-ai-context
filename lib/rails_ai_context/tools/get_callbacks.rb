@@ -51,27 +51,23 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, detail: "standard", server_context: nil)
-        models = cached_context[:models]
-        return text_response("Model introspection not available. Add :models to introspectors.") unless models
-        return text_response("Model introspection failed: #{models[:error]}") if models[:error]
-        note = unavailable_note(models)
-        return text_response(note) if note
+        fetch_section(:models, subject: "Model introspection") do |models|
+          # Specific model - show callbacks in execution order
+          if model
+            key = fuzzy_find_key(models.keys, model) || model
+            data = models[key]
+            unless data
+              return not_found_response("Model", model, models.keys.sort,
+                recovery_tool: "Call rails_get_callbacks(detail:\"summary\") to see all models with callbacks")
+            end
+            return text_response("Error inspecting #{key}: #{data[:error]}") if data[:error]
 
-        # Specific model - show callbacks in execution order
-        if model
-          key = fuzzy_find_key(models.keys, model) || model
-          data = models[key]
-          unless data
-            return not_found_response("Model", model, models.keys.sort,
-              recovery_tool: "Call rails_get_callbacks(detail:\"summary\") to see all models with callbacks")
+            return text_response(format_model_callbacks(key, data, detail))
           end
-          return text_response("Error inspecting #{key}: #{data[:error]}") if data[:error]
 
-          return text_response(format_model_callbacks(key, data, detail))
+          # List all models with callbacks
+          list_all_callbacks(models, detail)
         end
-
-        # List all models with callbacks
-        list_all_callbacks(models, detail)
       end
 
       private_class_method def self.format_model_callbacks(name, data, detail)

@@ -22,26 +22,18 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(detail: "standard", server_context: nil)
-        data = cached_context[:frontend_frameworks]
-
-        note = unavailable_note(data)
-        return text_response(note) if note
-
-        unless data.is_a?(Hash) && !data[:error]
-          return text_response(
-            "No frontend framework data available. Ensure the :frontend_frameworks introspector is enabled in your " \
-            "rails_ai_context configuration.\n\n" \
-            "Example:\n```ruby\nRailsAiContext.configure do |config|\n  config.introspectors << :frontend_frameworks\nend\n```"
-          )
-        end
-
-        case detail
-        when "summary"
-          text_response(build_summary(data))
-        when "standard"
-          text_response(build_standard(data))
-        when "full"
-          text_response(build_full(data))
+        fetch_section(:frontend_frameworks, unusable_message:
+          "No frontend framework data available. Ensure the :frontend_frameworks introspector is enabled in your " \
+          "rails_ai_context configuration.\n\n" \
+          "Example:\n```ruby\nRailsAiContext.configure do |config|\n  config.introspectors << :frontend_frameworks\nend\n```") do |data|
+          case detail
+          when "summary"
+            text_response(build_summary(data))
+          when "standard"
+            text_response(build_standard(data))
+          when "full"
+            text_response(build_full(data))
+          end
         end
       end
 

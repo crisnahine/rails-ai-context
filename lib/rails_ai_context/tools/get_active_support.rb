@@ -12,22 +12,18 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)
-        active_support = cached_context[:active_support]
-        return text_response("ActiveSupport introspection not available. Add :active_support to introspectors.") unless active_support
-        return text_response("ActiveSupport introspection failed: #{active_support[:error]}") if active_support[:error]
-        note = unavailable_note(active_support)
-        return text_response(note) if note
+        fetch_section(:active_support, subject: "ActiveSupport introspection") do |active_support|
+          lines = [ "# ActiveSupport" ]
 
-        lines = [ "# ActiveSupport" ]
+          render_concerns(lines, active_support[:concerns])
+          render_simple_list(lines, "Deprecators", active_support[:deprecators])
+          render_verifier_usage(lines, active_support[:message_verifier_usage])
+          render_tagged_logging(lines, active_support[:tagged_logging])
+          render_on_load_hooks(lines, active_support[:on_load_hooks])
+          render_cache(lines, active_support[:cache_usage])
 
-        render_concerns(lines, active_support[:concerns])
-        render_simple_list(lines, "Deprecators", active_support[:deprecators])
-        render_verifier_usage(lines, active_support[:message_verifier_usage])
-        render_tagged_logging(lines, active_support[:tagged_logging])
-        render_on_load_hooks(lines, active_support[:on_load_hooks])
-        render_cache(lines, active_support[:cache_usage])
-
-        text_response(lines.join("\n"))
+          text_response(lines.join("\n"))
+        end
       end
 
       class << self

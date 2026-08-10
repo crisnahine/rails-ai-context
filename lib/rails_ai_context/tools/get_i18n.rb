@@ -28,21 +28,17 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(locale: nil, offset: 0, limit: nil, server_context: nil)
-        i18n = cached_context[:i18n]
-        return text_response("I18n introspection not available. Add :i18n to introspectors.") unless i18n
-        return text_response("I18n introspection failed: #{i18n[:error]}") if i18n[:error]
-        note = unavailable_note(i18n)
-        return text_response(note) if note
+        fetch_section(:i18n, subject: "I18n introspection") do |i18n|
+          available = i18n[:available_locales] || []
+          if locale
+            match = find_closest_match(locale, available)
+            return not_found_response("Locale", locale, available, recovery_tool: "omit `locale` for the full I18n picture") unless match
 
-        available = i18n[:available_locales] || []
-        if locale
-          match = find_closest_match(locale, available)
-          return not_found_response("Locale", locale, available, recovery_tool: "omit `locale` for the full I18n picture") unless match
+            return render_locale(i18n, match, offset: offset, limit: limit)
+          end
 
-          return render_locale(i18n, match, offset: offset, limit: limit)
+          render_overview(i18n, offset: offset, limit: limit)
         end
-
-        render_overview(i18n, offset: offset, limit: limit)
       end
 
       class << self

@@ -13,82 +13,78 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)
-        data = cached_context[:config]
-        return text_response("Config introspection not available. Add :config to introspectors or use `config.preset = :full`.") unless data
-        return text_response("Config introspection failed: #{data[:error]}") if data[:error]
-        note = unavailable_note(data)
-        return text_response(note) if note
+        fetch_section(:config, subject: "Config introspection", remedy: "Add :config to introspectors or use `config.preset = :full`.") do |data|
+          lines = [ "# Application Configuration", "" ]
 
-        lines = [ "# Application Configuration", "" ]
-
-        # Several values below (cache store, queue adapter, Action Cable)
-        # differ per environment; name the one that produced them.
-        if defined?(Rails) && Rails.respond_to?(:env)
-          lines << "- **Environment:** #{Rails.env} (values below reflect this environment)"
-        end
-
-        # Database - critical for query syntax decisions
-        db_config = detect_database
-        lines << "- **Database:** #{db_config}" if db_config
-
-        # Auth framework - affects every controller
-        auth = detect_auth_framework
-        lines << "- **Auth:** #{auth}" if auth
-
-        # Assets/CSS - uses frontend framework introspector data when available
-        assets = detect_assets_stack
-        lines << "- **Assets:** #{assets}" if assets
-
-        # Action Cable - uses Rails config API with YAML fallback
-        cable = detect_action_cable
-        lines << "- **Action Cable:** #{cable}" if cable
-
-        # Active Storage service
-        storage = detect_active_storage
-        lines << "- **Active Storage:** #{storage}" if storage
-
-        # Action Mailer delivery method
-        mailer_delivery = detect_mailer_delivery
-        lines << "- **Mailer delivery:** #{mailer_delivery}" if mailer_delivery
-
-        lines << "- **Cache store:** #{data[:cache_store]}" if data[:cache_store]
-        lines << "- **Session store:** #{data[:session_store]}" if data[:session_store]
-        lines << "- **Timezone:** #{data[:timezone]}" if data[:timezone]
-        lines << "- **Queue adapter:** #{data[:queue_adapter]}" if data[:queue_adapter]
-        if data[:mailer].is_a?(Hash) && data[:mailer].any?
-          lines << "- **Mailer config:** #{data[:mailer].map { |k, v| "#{k}: #{v}" }.join(', ')}"
-        end
-
-        if data[:middleware_stack]&.any?
-          # Filter default Rails middleware AND dev-only middleware
-          dev_middleware = %w[
-            Propshaft::Server WebConsole::Middleware ActionDispatch::Reloader
-            Bullet::Rack ActiveSupport::Cache::Strategy::LocalCache
-          ]
-          excluded_mw = RailsAiContext.configuration.excluded_middleware
-          custom = data[:middleware_stack].reject { |m| excluded_mw.include?(m) || dev_middleware.include?(m) }
-          if custom.any?
-            lines << "" << "## Custom Middleware"
-            custom.each { |m| lines << "- #{m}" }
+          # Several values below (cache store, queue adapter, Action Cable)
+          # differ per environment; name the one that produced them.
+          if defined?(Rails) && Rails.respond_to?(:env)
+            lines << "- **Environment:** #{Rails.env} (values below reflect this environment)"
           end
-        end
 
-        if data[:initializers]&.any?
-          # List every initializer - stock ones often carry active code
-          # (filter_parameter_logging, assets), so hiding them misleads.
-          lines << "" << "## Initializers"
-          data[:initializers].each do |i|
-            note = initializer_note(i)
-            lines << (note ? "- `#{i}` - #{note}" : "- `#{i}`")
+          # Database - critical for query syntax decisions
+          db_config = detect_database
+          lines << "- **Database:** #{db_config}" if db_config
+
+          # Auth framework - affects every controller
+          auth = detect_auth_framework
+          lines << "- **Auth:** #{auth}" if auth
+
+          # Assets/CSS - uses frontend framework introspector data when available
+          assets = detect_assets_stack
+          lines << "- **Assets:** #{assets}" if assets
+
+          # Action Cable - uses Rails config API with YAML fallback
+          cable = detect_action_cable
+          lines << "- **Action Cable:** #{cable}" if cable
+
+          # Active Storage service
+          storage = detect_active_storage
+          lines << "- **Active Storage:** #{storage}" if storage
+
+          # Action Mailer delivery method
+          mailer_delivery = detect_mailer_delivery
+          lines << "- **Mailer delivery:** #{mailer_delivery}" if mailer_delivery
+
+          lines << "- **Cache store:** #{data[:cache_store]}" if data[:cache_store]
+          lines << "- **Session store:** #{data[:session_store]}" if data[:session_store]
+          lines << "- **Timezone:** #{data[:timezone]}" if data[:timezone]
+          lines << "- **Queue adapter:** #{data[:queue_adapter]}" if data[:queue_adapter]
+          if data[:mailer].is_a?(Hash) && data[:mailer].any?
+            lines << "- **Mailer config:** #{data[:mailer].map { |k, v| "#{k}: #{v}" }.join(', ')}"
           end
-        end
 
-        if data[:current_attributes]&.any?
-          lines << "" << "## CurrentAttributes"
-          data[:current_attributes].each { |c| lines << "- `#{c}`" }
-        end
+          if data[:middleware_stack]&.any?
+            # Filter default Rails middleware AND dev-only middleware
+            dev_middleware = %w[
+              Propshaft::Server WebConsole::Middleware ActionDispatch::Reloader
+              Bullet::Rack ActiveSupport::Cache::Strategy::LocalCache
+            ]
+            excluded_mw = RailsAiContext.configuration.excluded_middleware
+            custom = data[:middleware_stack].reject { |m| excluded_mw.include?(m) || dev_middleware.include?(m) }
+            if custom.any?
+              lines << "" << "## Custom Middleware"
+              custom.each { |m| lines << "- #{m}" }
+            end
+          end
 
-        text_response(lines.join("\n"))
+          if data[:initializers]&.any?
+            # List every initializer - stock ones often carry active code
+            # (filter_parameter_logging, assets), so hiding them misleads.
+            lines << "" << "## Initializers"
+            data[:initializers].each do |i|
+              note = initializer_note(i)
+              lines << (note ? "- `#{i}` - #{note}" : "- `#{i}`")
+            end
+          end
+
+          if data[:current_attributes]&.any?
+            lines << "" << "## CurrentAttributes"
+            data[:current_attributes].each { |c| lines << "- `#{c}`" }
+          end
+
+          text_response(lines.join("\n"))
+        end
       end
 
       # One-line descriptions for initializers Rails generates in every app.

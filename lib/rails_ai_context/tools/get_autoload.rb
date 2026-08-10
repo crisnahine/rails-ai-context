@@ -16,39 +16,35 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)
-        autoload = cached_context[:autoload]
-        return text_response("Autoload introspection not available. Add :autoload to introspectors.") unless autoload
-        return text_response("Autoload introspection failed: #{autoload[:error]}") if autoload[:error]
-        note = unavailable_note(autoload)
-        return text_response(note) if note
+        fetch_section(:autoload, subject: "Autoload introspection") do |autoload|
+          lines = [ "# Autoloading" ]
+          lines << ""
+          lines << "- **Mode:** #{autoload[:mode]}"
+          lines << "- **Eager load (this env):** #{autoload[:eager_load]}"
 
-        lines = [ "# Autoloading" ]
-        lines << ""
-        lines << "- **Mode:** #{autoload[:mode]}"
-        lines << "- **Eager load (this env):** #{autoload[:eager_load]}"
-
-        loaders = autoload[:autoloaders] || []
-        if loaders.any?
-          lines << "" << "## Autoloaders"
-          loaders.each do |l|
-            lines << "- **#{l[:name]}**#{l[:tag] ? " (tag: #{l[:tag]})" : ""}"
-            lines << "  - [error: #{l[:error]}]" if l[:error]
-            lines << "  - collapsed: #{l[:collapsed].join(', ')}" if l[:collapsed]&.any?
-            lines << "  - ignored: #{l[:ignored].join(', ')}" if l[:ignored]&.any?
+          loaders = autoload[:autoloaders] || []
+          if loaders.any?
+            lines << "" << "## Autoloaders"
+            loaders.each do |l|
+              lines << "- **#{l[:name]}**#{l[:tag] ? " (tag: #{l[:tag]})" : ""}"
+              lines << "  - [error: #{l[:error]}]" if l[:error]
+              lines << "  - collapsed: #{l[:collapsed].join(', ')}" if l[:collapsed]&.any?
+              lines << "  - ignored: #{l[:ignored].join(', ')}" if l[:ignored]&.any?
+            end
           end
+
+          render_paths(lines, "Autoload paths", autoload[:autoload_paths])
+          render_paths(lines, "Autoload-once paths", autoload[:autoload_once_paths])
+          render_paths(lines, "Eager-load paths", autoload[:eager_load_paths])
+
+          inflections = autoload[:custom_inflections] || []
+          if inflections.any?
+            lines << "" << "## Custom Inflections"
+            inflections.each { |i| lines << "- `#{i[:rule]}` (#{i[:file]})" }
+          end
+
+          text_response(lines.join("\n"))
         end
-
-        render_paths(lines, "Autoload paths", autoload[:autoload_paths])
-        render_paths(lines, "Autoload-once paths", autoload[:autoload_once_paths])
-        render_paths(lines, "Eager-load paths", autoload[:eager_load_paths])
-
-        inflections = autoload[:custom_inflections] || []
-        if inflections.any?
-          lines << "" << "## Custom Inflections"
-          inflections.each { |i| lines << "- `#{i[:rule]}` (#{i[:file]})" }
-        end
-
-        text_response(lines.join("\n"))
       end
 
       class << self

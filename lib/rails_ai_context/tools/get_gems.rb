@@ -53,41 +53,37 @@ module RailsAiContext
       }.freeze
 
       def self.call(category: "all", offset: 0, limit: nil, server_context: nil)
-        gems = cached_context[:gems]
-        return text_response("Gem introspection not available. Add :gems to introspectors.") unless gems
-        return text_response("Gem introspection failed: #{gems[:error]}") if gems[:error]
-        note = unavailable_note(gems)
-        return text_response(note) if note
+        fetch_section(:gems, subject: "Gem introspection") do |gems|
+          notable = gems[:notable_gems] || []
+          notable = notable.select { |g| g[:category] == category } unless category == "all"
+          sorted = notable.sort_by { |g| [ g[:category], g[:name] ] }
 
-        notable = gems[:notable_gems] || []
-        notable = notable.select { |g| g[:category] == category } unless category == "all"
-        sorted = notable.sort_by { |g| [ g[:category], g[:name] ] }
+          page = paginate(sorted, offset: offset, limit: limit, default_limit: 50)
 
-        page = paginate(sorted, offset: offset, limit: limit, default_limit: 50)
+          lines = [ "# Notable Gems" ]
 
-        lines = [ "# Notable Gems" ]
-
-        if page[:items].any?
-          current_cat = nil
-          page[:items].each do |g|
-            if g[:category] != current_cat
-              current_cat = g[:category]
-              lines << "" << "## #{current_cat.capitalize}"
+          if page[:items].any?
+            current_cat = nil
+            page[:items].each do |g|
+              if g[:category] != current_cat
+                current_cat = g[:category]
+                lines << "" << "## #{current_cat.capitalize}"
+              end
+              config_hint = resolve_config_hint(GEM_CONFIG_HINTS[g[:name]])
+              version_str = g[:version] ? " `#{g[:version]}`" : ""
+              line = "- **#{g[:name]}**#{version_str}: #{g[:note]}"
+              line += " _(config: #{config_hint})_" if config_hint
+              lines << line
             end
-            config_hint = resolve_config_hint(GEM_CONFIG_HINTS[g[:name]])
-            version_str = g[:version] ? " `#{g[:version]}`" : ""
-            line = "- **#{g[:name]}**#{version_str}: #{g[:note]}"
-            line += " _(config: #{config_hint})_" if config_hint
-            lines << line
+          else
+            all_cats = (gems[:notable_gems] || []).map { |g| g[:category] }.uniq.sort
+            hint = all_cats.any? ? " Available categories: #{all_cats.join(', ')}" : ""
+            lines << "_No notable gems found#{" in category '#{category}'" unless category == 'all'}.#{hint}_"
           end
-        else
-          all_cats = (gems[:notable_gems] || []).map { |g| g[:category] }.uniq.sort
-          hint = all_cats.any? ? " Available categories: #{all_cats.join(', ')}" : ""
-          lines << "_No notable gems found#{" in category '#{category}'" unless category == 'all'}.#{hint}_"
-        end
 
-        lines << "" << page[:hint] unless page[:hint].empty?
-        text_response(lines.join("\n"))
+          lines << "" << page[:hint] unless page[:hint].empty?
+          text_response(lines.join("\n"))
+        end
       end
 
       # A hint is either a fixed string (shown as-is, no existence check - e.g.

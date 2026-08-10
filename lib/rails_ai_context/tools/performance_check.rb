@@ -32,90 +32,83 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, category: "all", detail: "standard", server_context: nil)
-        data = cached_context[:performance]
+        fetch_section(:performance, unusable_message: "No performance data available. Ensure :performance introspector is enabled.") do |data|
+          model = model.to_s.strip if model
 
-        note = unavailable_note(data)
-        return text_response(note) if note
-
-        unless data.is_a?(Hash) && !data[:error]
-          return text_response("No performance data available. Ensure :performance introspector is enabled.")
-        end
-
-        model = model.to_s.strip if model
-
-        # Validate model exists if specified
-        if model && !model.empty?
-          models_data = cached_context[:models]
-          if models_data.is_a?(Hash) && !models_data[:error]
-            model_names = models_data.keys.map(&:to_s)
-            unless model_names.any? { |m| m.downcase == model.downcase }
-              return not_found_response("Model", model, model_names,
-                recovery_tool: "Call rails_performance_check() without model filter to see all issues")
+          # Validate model exists if specified
+          if model && !model.empty?
+            models_data = cached_context[:models]
+            if models_data.is_a?(Hash) && !models_data[:error]
+              model_names = models_data.keys.map(&:to_s)
+              unless model_names.any? { |m| m.downcase == model.downcase }
+                return not_found_response("Model", model, model_names,
+                  recovery_tool: "Call rails_performance_check() without model filter to see all issues")
+              end
             end
           end
-        end
 
-        lines = [ "# Performance Analysis", "" ]
+          lines = [ "# Performance Analysis", "" ]
 
-        # Collect all items then filter, so the count reflects actual displayed results
-        all_sections = {}
-        all_sections[:n_plus_one] = data[:n_plus_one_risks] || []
-        all_sections[:counter_cache] = data[:missing_counter_cache] || []
-        all_sections[:indexes] = data[:missing_fk_indexes] || []
-        all_sections[:model_all] = data[:model_all_in_controllers] || []
-        all_sections[:eager_load] = data[:eager_load_candidates] || []
+          # Collect all items then filter, so the count reflects actual displayed results
+          all_sections = {}
+          all_sections[:n_plus_one] = data[:n_plus_one_risks] || []
+          all_sections[:counter_cache] = data[:missing_counter_cache] || []
+          all_sections[:indexes] = data[:missing_fk_indexes] || []
+          all_sections[:model_all] = data[:model_all_in_controllers] || []
+          all_sections[:eager_load] = data[:eager_load_candidates] || []
 
-        # Apply model filter to count
-        filtered_count = if model && !model.empty?
-          all_sections.values.sum { |items| filter_items(items, model).size }
-        elsif category != "all"
-          (all_sections[category.to_sym] || []).size
-        else
-          all_sections.values.sum(&:size)
-        end
-
-        lines << "**Total issues found:** #{filtered_count}"
-        lines << ""
-
-        if RailsAiContext::DetailLevel.summary?(detail)
-          n1_items = filter_items(all_sections[:n_plus_one], model)
-          lines << "- N+1 risks: #{n1_items.size}#{risk_summary_counts(n1_items)}"
-          lines << "- Missing counter_cache: #{filter_items(all_sections[:counter_cache], model).size}"
-          lines << "- Missing FK indexes: #{filter_items(all_sections[:indexes], model).size}"
-          lines << "- Model.all in controllers: #{filter_items(all_sections[:model_all], model).size}"
-          lines << "- Eager load candidates: #{filter_items(all_sections[:eager_load], model).size}"
-        else
-          if category == "all" || category == "n_plus_one"
-            lines.concat(render_n_plus_one_section(data[:n_plus_one_risks], model, detail))
-          end
-          if category == "all" || category == "counter_cache"
-            lines.concat(render_section("Missing counter_cache", data[:missing_counter_cache], model, detail))
-          end
-          if category == "all" || category == "indexes"
-            lines.concat(render_section("Missing FK Indexes", data[:missing_fk_indexes], model, detail))
-          end
-          if category == "all" || category == "model_all"
-            lines.concat(render_section("Model.all in Controllers", data[:model_all_in_controllers], model, detail))
-          end
-          if category == "all" || category == "eager_load"
-            lines.concat(render_section("Eager Load Candidates", data[:eager_load_candidates], model, detail))
-          end
-        end
-
-        if filtered_count == 0
-          scoped = []
-          scoped << "for #{model}" if model && !model.empty?
-          scoped << "in category '#{category}'" if category != "all"
-
-          if scoped.empty?
-            lines << "No performance issues detected. Your app looks good!"
+          # Apply model filter to count
+          filtered_count = if model && !model.empty?
+            all_sections.values.sum { |items| filter_items(items, model).size }
+          elsif category != "all"
+            (all_sections[category.to_sym] || []).size
           else
-            lines << "No issues found #{scoped.join(' ')}. Other categories or models may still have issues - " \
-              "call rails_performance_check() without filters for the full report."
+            all_sections.values.sum(&:size)
           end
-        end
 
-        text_response(lines.join("\n"))
+          lines << "**Total issues found:** #{filtered_count}"
+          lines << ""
+
+          if RailsAiContext::DetailLevel.summary?(detail)
+            n1_items = filter_items(all_sections[:n_plus_one], model)
+            lines << "- N+1 risks: #{n1_items.size}#{risk_summary_counts(n1_items)}"
+            lines << "- Missing counter_cache: #{filter_items(all_sections[:counter_cache], model).size}"
+            lines << "- Missing FK indexes: #{filter_items(all_sections[:indexes], model).size}"
+            lines << "- Model.all in controllers: #{filter_items(all_sections[:model_all], model).size}"
+            lines << "- Eager load candidates: #{filter_items(all_sections[:eager_load], model).size}"
+          else
+            if category == "all" || category == "n_plus_one"
+              lines.concat(render_n_plus_one_section(data[:n_plus_one_risks], model, detail))
+            end
+            if category == "all" || category == "counter_cache"
+              lines.concat(render_section("Missing counter_cache", data[:missing_counter_cache], model, detail))
+            end
+            if category == "all" || category == "indexes"
+              lines.concat(render_section("Missing FK Indexes", data[:missing_fk_indexes], model, detail))
+            end
+            if category == "all" || category == "model_all"
+              lines.concat(render_section("Model.all in Controllers", data[:model_all_in_controllers], model, detail))
+            end
+            if category == "all" || category == "eager_load"
+              lines.concat(render_section("Eager Load Candidates", data[:eager_load_candidates], model, detail))
+            end
+          end
+
+          if filtered_count == 0
+            scoped = []
+            scoped << "for #{model}" if model && !model.empty?
+            scoped << "in category '#{category}'" if category != "all"
+
+            if scoped.empty?
+              lines << "No performance issues detected. Your app looks good!"
+            else
+              lines << "No issues found #{scoped.join(' ')}. Other categories or models may still have issues - " \
+                "call rails_performance_check() without filters for the full report."
+            end
+          end
+
+          text_response(lines.join("\n"))
+        end
       end
 
       class << self

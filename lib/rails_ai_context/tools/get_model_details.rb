@@ -33,73 +33,69 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, detail: "standard", limit: nil, offset: 0, server_context: nil)
-        models = cached_context[:models]
-        return text_response("Model introspection not available. Add :models to introspectors.") unless models
-        return text_response("Model introspection failed: #{models[:error]}") if models[:error]
-        note = unavailable_note(models)
-        return text_response(note) if note
-
-        # Specific model - always full detail (strip whitespace for fuzzy input)
-        if model
-          model = model.strip
-          key = fuzzy_find_key(models.keys, model) || model
-          data = models[key]
-          unless data
-            return not_found_response("Model", model, models.keys.sort,
-              recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
+        fetch_section(:models, subject: "Model introspection") do |models|
+          # Specific model - always full detail (strip whitespace for fuzzy input)
+          if model
+            model = model.strip
+            key = fuzzy_find_key(models.keys, model) || model
+            data = models[key]
+            unless data
+              return not_found_response("Model", model, models.keys.sort,
+                recovery_tool: "Call rails_get_model_details(detail:\"summary\") to see all models")
+            end
+            return text_response("Error inspecting #{key}: #{data[:error]}") if data[:error]
+            return text_response(format_model(key, data))
           end
-          return text_response("Error inspecting #{key}: #{data[:error]}") if data[:error]
-          return text_response(format_model(key, data))
-        end
 
-        # Pagination - sort by association count (most connected first)
-        all_names = models.keys.sort_by { |m| -(models[m][:associations]&.size || 0) }
-        page = paginate(all_names, offset: offset, limit: limit, default_limit: 50)
-        paginated = page[:items]
+          # Pagination - sort by association count (most connected first)
+          all_names = models.keys.sort_by { |m| -(models[m][:associations]&.size || 0) }
+          page = paginate(all_names, offset: offset, limit: limit, default_limit: 50)
+          paginated = page[:items]
 
-        if paginated.empty? && page[:total] > 0
-          return text_response(page[:hint])
-        end
-
-        pagination_hint = page[:hint].empty? ? "" : "\n#{page[:hint]}"
-
-        # Listing mode
-        case detail
-        when "summary"
-          model_list = paginated.map { |m| "- #{m}" }.join("\n")
-          text_response("# Available models (#{page[:total]})\n\n#{model_list}\n\n_Use `model:\"Name\"` for full detail._#{pagination_hint}")
-
-        when "standard"
-          lines = [ "# Models (#{page[:total]})", "" ]
-          paginated.each do |name|
-            data = models[name]
-            next if data[:error]
-            assoc_count = (data[:associations] || []).size
-            val_count = (data[:validations] || []).size
-            line = "- **#{name}**"
-            line += " - #{count_phrase(assoc_count, "association")}, #{count_phrase(val_count, "validation")}" if assoc_count > 0 || val_count > 0
-            lines << line
+          if paginated.empty? && page[:total] > 0
+            return text_response(page[:hint])
           end
-          lines << "" << "_Use `model:\"Name\"` for full detail, or `detail:\"full\"` for association lists._#{pagination_hint}"
-          text_response(lines.join("\n"))
 
-        when "full"
-          lines = [ "# Models (#{page[:total]})", "" ]
-          paginated.each do |name|
-            data = models[name]
-            next if data[:error]
-            assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }.join(", ")
-            line = "- **#{name}**"
-            line += " (table: #{data[:table_name]})" if data[:table_name]
-            line += " - #{assocs}" unless assocs.empty?
-            lines << line
+          pagination_hint = page[:hint].empty? ? "" : "\n#{page[:hint]}"
+
+          # Listing mode
+          case detail
+          when "summary"
+            model_list = paginated.map { |m| "- #{m}" }.join("\n")
+            text_response("# Available models (#{page[:total]})\n\n#{model_list}\n\n_Use `model:\"Name\"` for full detail._#{pagination_hint}")
+
+          when "standard"
+            lines = [ "# Models (#{page[:total]})", "" ]
+            paginated.each do |name|
+              data = models[name]
+              next if data[:error]
+              assoc_count = (data[:associations] || []).size
+              val_count = (data[:validations] || []).size
+              line = "- **#{name}**"
+              line += " - #{count_phrase(assoc_count, "association")}, #{count_phrase(val_count, "validation")}" if assoc_count > 0 || val_count > 0
+              lines << line
+            end
+            lines << "" << "_Use `model:\"Name\"` for full detail, or `detail:\"full\"` for association lists._#{pagination_hint}"
+            text_response(lines.join("\n"))
+
+          when "full"
+            lines = [ "# Models (#{page[:total]})", "" ]
+            paginated.each do |name|
+              data = models[name]
+              next if data[:error]
+              assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }.join(", ")
+              line = "- **#{name}**"
+              line += " (table: #{data[:table_name]})" if data[:table_name]
+              line += " - #{assocs}" unless assocs.empty?
+              lines << line
+            end
+            lines << "" << "_Use `model:\"Name\"` for validations, scopes, callbacks, and more._#{pagination_hint}"
+            text_response(lines.join("\n"))
+
+          else
+            model_list = paginated.map { |m| "- #{m}" }.join("\n")
+            text_response("# Available models (#{page[:total]})\n\n#{model_list}#{pagination_hint}")
           end
-          lines << "" << "_Use `model:\"Name\"` for validations, scopes, callbacks, and more._#{pagination_hint}"
-          text_response(lines.join("\n"))
-
-        else
-          model_list = paginated.map { |m| "- #{m}" }.join("\n")
-          text_response("# Available models (#{page[:total]})\n\n#{model_list}#{pagination_hint}")
         end
       end
 

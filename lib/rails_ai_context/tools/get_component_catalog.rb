@@ -34,51 +34,44 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(component: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)
-        data = cached_context[:components]
+        fetch_section(:components, unusable_message: "No component data available. Ensure :components introspector is enabled and app/components/ exists.") do |data|
+          components = data[:components] || []
 
-        note = unavailable_note(data)
-        return text_response(note) if note
+          if component
+            component = component.to_s.strip
 
-        unless data.is_a?(Hash) && !data[:error]
-          return text_response("No component data available. Ensure :components introspector is enabled and app/components/ exists.")
-        end
+            if components.empty?
+              note = api_only_note("app/components")
+              return text_response(note) if note
 
-        components = data[:components] || []
+              return text_response("Component '#{component}' not found - no components exist in app/components/. Create ViewComponent or Phlex components first.")
+            end
 
-        if component
-          component = component.to_s.strip
+            found = components.find { |c|
+              c[:name]&.downcase == component.downcase ||
+              c[:name]&.underscore&.downcase == component.downcase ||
+              c[:name]&.sub(/Component\z/, "")&.downcase == component.downcase
+            }
 
-          if components.empty?
-            note = api_only_note("app/components")
-            return text_response(note) if note
+            return not_found_response("component", component,
+              components.map { |c| c[:name] },
+              recovery_tool: "rails_get_component_catalog") unless found
 
-            return text_response("Component '#{component}' not found - no components exist in app/components/. Create ViewComponent or Phlex components first.")
+            text_response(render_single(found, detail))
+          else
+            if components.empty?
+              note = api_only_note("app/components")
+              return text_response(note) if note
+
+              return text_response(
+                "No components found in app/components/.\n\n" \
+                "This app may use ERB partials instead of ViewComponent/Phlex. Try:\n" \
+                "- `rails_get_partial_interface(partial:\"shared/partial_name\")` - partial locals contract + usage\n" \
+                "- `rails_get_view(controller:\"name\")` - view templates with partial/Stimulus references"
+              )
+            end
+            text_response(render_catalog(components, data[:summary], detail, offset: offset, limit: limit))
           end
-
-          found = components.find { |c|
-            c[:name]&.downcase == component.downcase ||
-            c[:name]&.underscore&.downcase == component.downcase ||
-            c[:name]&.sub(/Component\z/, "")&.downcase == component.downcase
-          }
-
-          return not_found_response("component", component,
-            components.map { |c| c[:name] },
-            recovery_tool: "rails_get_component_catalog") unless found
-
-          text_response(render_single(found, detail))
-        else
-          if components.empty?
-            note = api_only_note("app/components")
-            return text_response(note) if note
-
-            return text_response(
-              "No components found in app/components/.\n\n" \
-              "This app may use ERB partials instead of ViewComponent/Phlex. Try:\n" \
-              "- `rails_get_partial_interface(partial:\"shared/partial_name\")` - partial locals contract + usage\n" \
-              "- `rails_get_view(controller:\"name\")` - view templates with partial/Stimulus references"
-            )
-          end
-          text_response(render_catalog(components, data[:summary], detail, offset: offset, limit: limit))
         end
       end
 

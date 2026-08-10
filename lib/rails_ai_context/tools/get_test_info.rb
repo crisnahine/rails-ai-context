@@ -29,154 +29,150 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, controller: nil, detail: "standard", server_context: nil)
-        data = cached_context[:tests]
-        return text_response("Test introspection not available. Add :tests to introspectors.") unless data
-        return text_response("Test introspection failed: #{data[:error]}") if data[:error]
-        note = unavailable_note(data)
-        return text_response(note) if note
-
-        # Specific model tests
-        if model
-          return text_response(find_test_file(model, :model, detail))
-        end
-
-        # Specific controller tests
-        if controller
-          return text_response(find_test_file(controller, :controller, detail))
-        end
-
-        case detail
-        when "summary"
-          lines = [ "# Test Infrastructure", "" ]
-          lines << "- **Framework:** #{data[:framework]}"
-          lines << "- **Factories:** #{count_phrase(data[:factories][:count], "file")}" if data[:factories]
-          lines << "- **Fixtures:** #{count_phrase(data[:fixtures][:count], "file")}" if data[:fixtures]
-          if data[:test_files]&.any?
-            total = data[:test_files].values.sum { |v| v[:count] }
-            lines << "- **Test files:** #{total} across #{count_phrase(data[:test_files].size, "category")}"
+        fetch_section(:tests, subject: "Test introspection") do |data|
+          # Specific model tests
+          if model
+            return text_response(find_test_file(model, :model, detail))
           end
-          lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
-          text_response(lines.join("\n"))
 
-        when "standard"
-          lines = [ "# Test Infrastructure", "" ]
-          lines << "- **Framework:** #{data[:framework]}"
-          lines << "- **Factories:** #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
-          lines << "- **Fixtures:** #{data[:fixtures][:location]} (#{count_phrase(data[:fixtures][:count], "file")})" if data[:fixtures]
-          lines << "- **System tests:** #{data[:system_tests][:location]}" if data[:system_tests]
-          lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
-          lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
+          # Specific controller tests
+          if controller
+            return text_response(find_test_file(controller, :controller, detail))
+          end
 
-          if data[:test_count_by_category].is_a?(Hash) && data[:test_count_by_category].any?
-            lines << "" << "## Test Counts by Category"
-            data[:test_count_by_category].each do |cat, count|
-              lines << "- #{cat}: #{count}"
+          case detail
+          when "summary"
+            lines = [ "# Test Infrastructure", "" ]
+            lines << "- **Framework:** #{data[:framework]}"
+            lines << "- **Factories:** #{count_phrase(data[:factories][:count], "file")}" if data[:factories]
+            lines << "- **Fixtures:** #{count_phrase(data[:fixtures][:count], "file")}" if data[:fixtures]
+            if data[:test_files]&.any?
+              total = data[:test_files].values.sum { |v| v[:count] }
+              lines << "- **Test files:** #{total} across #{count_phrase(data[:test_files].size, "category")}"
             end
-          end
+            lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
+            text_response(lines.join("\n"))
 
-          if data[:test_files]&.any?
-            lines << "" << "## Test Files"
-            data[:test_files].each do |cat, info|
-              lines << "- #{cat}: #{count_phrase(info[:count], "file")} (#{info[:location]})"
+          when "standard"
+            lines = [ "# Test Infrastructure", "" ]
+            lines << "- **Framework:** #{data[:framework]}"
+            lines << "- **Factories:** #{data[:factories][:location]} (#{count_phrase(data[:factories][:count], "file")})" if data[:factories]
+            lines << "- **Fixtures:** #{data[:fixtures][:location]} (#{count_phrase(data[:fixtures][:count], "file")})" if data[:fixtures]
+            lines << "- **System tests:** #{data[:system_tests][:location]}" if data[:system_tests]
+            lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
+            lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
+
+            if data[:test_count_by_category].is_a?(Hash) && data[:test_count_by_category].any?
+              lines << "" << "## Test Counts by Category"
+              data[:test_count_by_category].each do |cat, count|
+                lines << "- #{cat}: #{count}"
+              end
             end
-          end
 
-          if data[:factory_traits]&.any?
-            lines << "" << "## Factory Traits"
-            data[:factory_traits].first(15).each do |trait|
-              lines << "- #{trait}"
+            if data[:test_files]&.any?
+              lines << "" << "## Test Files"
+              data[:test_files].each do |cat, info|
+                lines << "- #{cat}: #{count_phrase(info[:count], "file")} (#{info[:location]})"
+              end
             end
-          end
 
-          if data[:test_helpers]&.any?
-            lines << "" << "## Test Helpers"
-            data[:test_helpers].each { |h| lines << "- `#{h}`" }
-          end
-
-          # Generate a test template based on app patterns
-          template = generate_test_template(data)
-          lines.concat(template) if template.any?
-
-          text_response(lines.join("\n"))
-
-        when "full"
-          lines = [ "# Test Infrastructure (Full Detail)", "" ]
-          lines << "- **Framework:** #{data[:framework]}"
-          lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
-          lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
-
-          if data[:test_count_by_category].is_a?(Hash) && data[:test_count_by_category].any?
-            lines << "" << "## Test Counts by Category"
-            data[:test_count_by_category].each do |cat, count|
-              lines << "- #{cat}: #{count}"
+            if data[:factory_traits]&.any?
+              lines << "" << "## Factory Traits"
+              data[:factory_traits].first(15).each do |trait|
+                lines << "- #{trait}"
+              end
             end
-          end
 
-          if data[:factory_traits]&.any?
-            lines << "" << "## Factory Traits"
-            data[:factory_traits].first(20).each do |trait|
-              lines << "- #{trait}"
+            if data[:test_helpers]&.any?
+              lines << "" << "## Test Helpers"
+              data[:test_helpers].each { |h| lines << "- `#{h}`" }
             end
-          end
 
-          if data[:fixture_names]&.any?
-            lines << "" << "## Fixtures"
-            parsed_fixtures = parse_all_fixture_contents
-            if parsed_fixtures.any?
-              parsed_fixtures.each do |file, entries|
-                lines << "- **#{file}:**"
-                entries.each do |entry_name, attrs|
-                  attr_str = attrs.map { |k, v| "#{k}: #{v}" }.join(", ")
-                  lines << "  - `#{entry_name}`: #{attr_str}"
+            # Generate a test template based on app patterns
+            template = generate_test_template(data)
+            lines.concat(template) if template.any?
+
+            text_response(lines.join("\n"))
+
+          when "full"
+            lines = [ "# Test Infrastructure (Full Detail)", "" ]
+            lines << "- **Framework:** #{data[:framework]}"
+            lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
+            lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
+
+            if data[:test_count_by_category].is_a?(Hash) && data[:test_count_by_category].any?
+              lines << "" << "## Test Counts by Category"
+              data[:test_count_by_category].each do |cat, count|
+                lines << "- #{cat}: #{count}"
+              end
+            end
+
+            if data[:factory_traits]&.any?
+              lines << "" << "## Factory Traits"
+              data[:factory_traits].first(20).each do |trait|
+                lines << "- #{trait}"
+              end
+            end
+
+            if data[:fixture_names]&.any?
+              lines << "" << "## Fixtures"
+              parsed_fixtures = parse_all_fixture_contents
+              if parsed_fixtures.any?
+                parsed_fixtures.each do |file, entries|
+                  lines << "- **#{file}:**"
+                  entries.each do |entry_name, attrs|
+                    attr_str = attrs.map { |k, v| "#{k}: #{v}" }.join(", ")
+                    lines << "  - `#{entry_name}`: #{attr_str}"
+                  end
                 end
-              end
 
-              # Fixture relationships section
-              relationships = extract_fixture_relationships(parsed_fixtures)
-              if relationships.any?
-                lines << "" << "## Fixture Relationships"
-                relationships.each do |parent, children|
-                  lines << "- **#{parent}** ← #{children.join(', ')}"
+                # Fixture relationships section
+                relationships = extract_fixture_relationships(parsed_fixtures)
+                if relationships.any?
+                  lines << "" << "## Fixture Relationships"
+                  relationships.each do |parent, children|
+                    lines << "- **#{parent}** ← #{children.join(', ')}"
+                  end
                 end
-              end
-            else
-              # Fallback to simple names if parsing fails
-              data[:fixture_names].each do |file, names|
-                lines << "- **#{file}:** #{names.join(', ')}"
-              end
-            end
-          end
-
-          if data[:factory_names]&.any?
-            lines << "" << "## Factories"
-            data[:factory_names].each do |file, names|
-              detail_str = parse_factory_details(file)
-              if detail_str
-                lines << detail_str
               else
-                lines << "- **#{file}:** #{names.join(', ')}"
+                # Fallback to simple names if parsing fails
+                data[:fixture_names].each do |file, names|
+                  lines << "- **#{file}:** #{names.join(', ')}"
+                end
               end
             end
-          end
 
-          if data[:test_helper_setup]&.any?
-            lines << "" << "## Test Helper Setup"
-            data[:test_helper_setup].each { |m| lines << "- `#{m}`" }
-          end
-
-          if data[:test_files]&.any?
-            lines << "" << "## Test Files"
-            data[:test_files].each do |cat, info|
-              lines << "- #{cat}: #{count_phrase(info[:count], "file")} (#{info[:location]})"
+            if data[:factory_names]&.any?
+              lines << "" << "## Factories"
+              data[:factory_names].each do |file, names|
+                detail_str = parse_factory_details(file)
+                if detail_str
+                  lines << detail_str
+                else
+                  lines << "- **#{file}:** #{names.join(', ')}"
+                end
+              end
             end
-          end
 
-          if data[:test_helpers]&.any?
-            lines << "" << "## Test Helper Files"
-            data[:test_helpers].each { |h| lines << "- `#{h}`" }
-          end
-          text_response(lines.join("\n"))
+            if data[:test_helper_setup]&.any?
+              lines << "" << "## Test Helper Setup"
+              data[:test_helper_setup].each { |m| lines << "- `#{m}`" }
+            end
 
+            if data[:test_files]&.any?
+              lines << "" << "## Test Files"
+              data[:test_files].each do |cat, info|
+                lines << "- #{cat}: #{count_phrase(info[:count], "file")} (#{info[:location]})"
+              end
+            end
+
+            if data[:test_helpers]&.any?
+              lines << "" << "## Test Helper Files"
+              data[:test_helpers].each { |h| lines << "- `#{h}`" }
+            end
+            text_response(lines.join("\n"))
+
+          end
         end
       end
 

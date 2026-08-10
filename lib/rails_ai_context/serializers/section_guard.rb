@@ -2,14 +2,13 @@
 
 module RailsAiContext
   module Serializers
-    # One home for "can this introspector section be rendered?". A section
-    # carrying :error (the introspector raised) or :unavailable (the data
-    # source is absent) must be skipped, not rendered as empty-but-real data.
+    # The serializers' name for the same question the tools ask through
+    # Tools::SectionFetch. One definition, two call sites' vocabulary.
     module SectionGuard
       module_function
 
       def usable?(data)
-        data.is_a?(Hash) && !data[:error] && !data[:unavailable]
+        Tools::SectionFetch.usable?(data)
       end
     end
   end
