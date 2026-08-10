@@ -238,6 +238,11 @@ RSpec.describe "BaseTool shared caches under concurrency" do
       expect(base.current_session).to eq(base::DEFAULT_SESSION)
     end
 
+    # The controller memoizes its transport on the class, so building one here
+    # leaves it set for whatever runs next - and the example that asserts the
+    # controller builds one then sees it already built.
+    after { RailsAiContext::McpController.reset_transport! }
+
     it "serves concurrent requests on both transports without corrupting either cache" do
       base.reset_cache!
       base.session_reset!

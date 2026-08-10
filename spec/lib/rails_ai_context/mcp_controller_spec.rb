@@ -11,10 +11,11 @@ RSpec.describe RailsAiContext::McpController do
   # We test the class-level transport memoization, double-checked locking,
   # and the #handle instance method at the unit level (no routing required).
 
-  after do
-    # Clean up any transport state between examples
-    described_class.reset_transport!
-  end
+  # Before as well as after: this file asserts the transport gets built, so it
+  # must not inherit one that another file left memoized on the class.
+  before { described_class.reset_transport! }
+
+  after { described_class.reset_transport! }
 
   describe ".mcp_transport" do
     it "returns an MCP StreamableHTTPTransport" do
