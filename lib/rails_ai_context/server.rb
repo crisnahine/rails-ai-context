@@ -215,7 +215,11 @@ module RailsAiContext
         end
 
         request = Rack::Request.new(env)
-        transport.handle_request(request)
+        # One process serves every client here too, so the session record has
+        # to be told which conversation this request belongs to.
+        Tools::BaseTool.with_session(env["HTTP_MCP_SESSION_ID"] || Tools::BaseTool::DEFAULT_SESSION) do
+          transport.handle_request(request)
+        end
       rescue => e
         McpEdge.internal_error_response(e)
       end

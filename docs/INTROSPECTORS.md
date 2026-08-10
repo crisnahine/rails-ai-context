@@ -214,7 +214,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 
 1. Subclass `BaseListener` in `lib/rails_ai_context/introspectors/listeners/`. Use its helpers rather than re-reading nodes: `extract_symbol_args`, `extract_keyword_options`, `extract_arg_values` (source-slice fallback for expressions like `2.hours`), `extract_keyword_sources`, `extract_keyword_nodes`, `keyword_hash`, `constant_path_string`.
 2. Implement the `on_*_node_enter` hooks you need and push plain hashes onto `@results`. Never return Prism nodes as the result itself; `option_nodes` is the one deliberate exception, for callers that must inspect an expression's shape.
-3. Register the event in `SourceIntrospector.register_listener` if it is not already in the list (call, def, class, module, block, singleton class, case, constant write).
+3. Nothing to register. `ListenerRegistration` reads the events off the `on_*` methods you defined, inherited ones included, and raises if one names an event prism never dispatches.
 4. Add a spec of the same name under `spec/lib/rails_ai_context/introspectors/listeners/`.
 5. Add a row to the table above.
 

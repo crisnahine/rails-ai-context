@@ -45,6 +45,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `[dotenv] Set [ENV VARS REDACTED]` | `[dotenv] Set [FILTERED]` |
   | `[EMAIL]` | `[EMAIL]` (unchanged) |
 
+- **An invalid `detail` reads as `standard` instead of an error.** Eleven
+  tools answered `Unknown detail level: x`; `detail` is now normalized once,
+  before any tool runs, so junk and omission both land on the default. Tools
+  that spell their own levels (`rails_onboard`: quick/standard/full) are
+  untouched.
+- **Listener registration is derived from the listener.** Defining an `on_*`
+  handler is now its registration, validated against the events the running
+  prism dispatches, so a typo'd handler raises instead of never firing. The
+  hand-typed event allowlist that shipped the 5.19.1 fabricated-routes bug is
+  gone, along with the hydrator's private copy of it.
+- **MCP view resources resolve through the current app root** rather than
+  `Rails.root`, so `rails-ai-context://views/...` works in the static tier.
+- **One error frame for the MCP edge.** The middleware and the engine
+  controller each built their own JSON-RPC internal-error body; both now read
+  it from one place, so a failure looks the same whichever transport served
+  it. Transport construction moves behind one factory; memoization stays with
+  each caller, which holds a different scope (per instance, per class, per
+  process).
+
 ### Added
 
 - **Twenty-seven sections now answer with the app not booted.** Gems, i18n,
@@ -64,8 +83,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selection.** The Rails generator read it from the initializer, the
   standalone CLI read it from `.rails-ai-context.yml`, and the rake task
   kept a third copy of the logic. Switching between them silently dropped
-  the previous choice and re-prompted from scratch. All three read the same
-  record now, initializer first because that is the file you hand-edit.
+  the previous choice and re-prompted from scratch. All three read and write
+  the same record now, initializer first on read because that is the file you
+  hand-edit. Recording the selection also reaches both files together, so an
+  entry can no longer leave a stale initializer that outranks the YAML it
+  just wrote. An initializer with a `configure` block but no selection line
+  now gets one from any entry, not just the rake task.
+- **The standalone HTTP server scopes its session record per client.** The
+  Rack middleware and the engine controller got this; `rails-ai-context serve
+  --transport http` serves many clients from one process too and was still
+  pooling their `rails_session_context` history.
 - **The generated guide advertised a CLI command that does not exist.** Its
   row for `rails_get_env_config` printed `ai:tool[environments]`, which the
   CLI cannot resolve; the CLI name is now derived from the tool name rather
@@ -77,21 +104,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Mcp-Session-Id`. A caller's snapshot of the record also stopped changing
   under it: `session_queries` returned live entries that later calls kept
   mutating.
-
-### Changed
-
-- **An invalid `detail` reads as `standard` instead of an error.** Eleven
-  tools answered `Unknown detail level: x`; `detail` is now normalized once,
-  before any tool runs, so junk and omission both land on the default. Tools
-  that spell their own levels (`rails_onboard`: quick/standard/full) are
-  untouched.
-- **Listener registration is derived from the listener.** Defining an `on_*`
-  handler is now its registration, validated against the events the running
-  prism dispatches, so a typo'd handler raises instead of never firing. The
-  hand-typed event allowlist that shipped the 5.19.1 fabricated-routes bug is
-  gone, along with the hydrator's private copy of it.
-- **MCP view resources resolve through the current app root** rather than
-  `Rails.root`, so `rails-ai-context://views/...` works in the static tier.
 
 ## [5.19.1] - 2026-08-10
 

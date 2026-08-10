@@ -436,33 +436,19 @@ class RailsAiContextCLI < Thor
 
       return if to_remove.empty?
 
-      require "fileutils"
-      # Collect paths still needed by remaining tools to avoid deleting shared files
-      kept_paths = current.map(&:to_sym).flat_map { |f| ::RailsAiContext::Install::AiTool.find(f)&.context_paths || [] }.to_set
-
       to_remove.each do |fmt|
-        tool = ai_tool_options.values.find { |t| t[:key] == fmt }
+        tool = ::RailsAiContext::Install::AiTool.find(fmt)
 
-        # Remove context files (skip if another selected tool still needs them)
-        paths = ::RailsAiContext::Install::AiTool.find(fmt)&.context_paths || []
-        paths.each do |rel_path|
-          next if kept_paths.include?(rel_path)
-
-          full = File.join(Dir.pwd, rel_path)
-          if File.directory?(full)
-            FileUtils.rm_rf(full)
-            $stderr.puts "  Removed #{rel_path}/"
-          elsif File.exist?(full)
-            FileUtils.rm_f(full)
-            $stderr.puts "  Removed #{rel_path}"
-          end
-        end
+        removed = ::RailsAiContext::Install::Cleanup.remove(
+          tools: [ fmt ], keeping: current.map(&:to_sym), root: Dir.pwd
+        )
+        removed.each { |path| $stderr.puts "  Removed #{path}" }
 
         # Merge-safe MCP config cleanup — removes only the rails-ai-context entry
-        cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Dir.pwd)
+        cleaned = ::RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Dir.pwd)
         cleaned.each { |f| $stderr.puts "  Removed MCP entry from #{File.basename(f)}" }
 
-        $stderr.puts "  #{tool[:name]} files removed" if tool
+        $stderr.puts "  #{tool.name} files removed" if tool
       end
     end
 
@@ -489,20 +475,19 @@ class RailsAiContextCLI < Thor
     end
 
     def write_yaml_config(ai_tools, tool_mode)
-      yaml_path = File.join(Dir.pwd, ".rails-ai-context.yml")
-      content = {
-        "ai_tools" => ai_tools.map(&:to_s),
-        "tool_mode" => tool_mode.to_s
-      }
-      new_content = YAML.dump(content)
-      existed = File.exist?(yaml_path)
+      result = ::RailsAiContext::Install::SelectionRecord.write(
+        ai_tools, root: Dir.pwd, extra_yaml: { "tool_mode" => tool_mode.to_s }
+      )
 
-      if existed && File.read(yaml_path) == new_content
-        $stderr.puts ".rails-ai-context.yml (unchanged)"
-      else
-        File.write(yaml_path, new_content)
-        $stderr.puts "#{existed ? 'Updated' : 'Created'} .rails-ai-context.yml"
+      case result[:yaml]
+      when :unchanged then $stderr.puts ".rails-ai-context.yml (unchanged)"
+      when :created   then $stderr.puts "Created .rails-ai-context.yml"
+      when :updated   then $stderr.puts "Updated .rails-ai-context.yml"
       end
+
+      # The initializer wins on read, so leaving a stale one behind would hand
+      # back the old selection on the next run.
+      $stderr.puts "Updated config/initializers/rails_ai_context.rb" if result[:initializer] == :updated
     end
 
     def write_mcp_configs(ai_tools, tool_mode)

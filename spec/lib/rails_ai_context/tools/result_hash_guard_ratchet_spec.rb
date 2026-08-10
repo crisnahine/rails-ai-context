@@ -8,7 +8,7 @@ require "spec_helper"
 # Until then this count only goes down: adding another hand-rolled guard is
 # a red build, and the number drops as tools move onto the shared seam.
 RSpec.describe "Hand-rolled result-hash guards" do
-  CEILING = 68
+  CEILING = 67
 
   GUARD = /\.is_a\?\(Hash\)\s*&&\s*!\s*\w+\[:error\]|unless\s+\w+\.is_a\?\(Hash\)\s*&&\s*!/
 

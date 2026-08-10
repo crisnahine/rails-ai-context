@@ -40,11 +40,14 @@ module RailsAiContext
     DOTENV_LINE = /\[dotenv\]\s+Set\s+.*/i
     ENV_VAR_LINE = /\b[A-Z][A-Z0-9_]*(SECRET|KEY|TOKEN|PASSWORD|API|CREDENTIAL)[A-Z0-9_]*=\S+/
 
+    # Each entry is [pattern, replacement]. The replacement is spelled beside
+    # the pattern rather than worked out later by grepping the pattern's own
+    # source for a distinguishing substring.
     LOG_PATTERNS = [
       /(?<=password=)\S+/i,
       /(?<=password:\s)\S+/i,
-      /("password":\s*")[^"]+(")/i,
-      /("password"=>")[^"]+(")/i,
+      [ /("password":\s*")[^"]+(")/i, "\\1#{FILTERED}\\2" ],
+      [ /("password"=>")[^"]+(")/i, "\\1#{FILTERED}\\2" ],
       /(?<=token=)\S+/i,
       /(?<=token:\s)\S+/i,
       /(?<=secret=)\S+/i,
@@ -52,7 +55,8 @@ module RailsAiContext
       /(?<=api_key=)\S+/i,
       /(?<=api_key:\s)\S+/i,
       /(?<=authorization:\s)(Bearer\s)?\S+/i,
-      /(SECRET|PRIVATE|SIGNING|ENCRYPTION)[_A-Z]*=\S+/i,
+      # Keeps the variable's name, filters only what it was set to.
+      [ /((?:SECRET|PRIVATE|SIGNING|ENCRYPTION)[_A-Z]*=)\S+/i, "\\1#{FILTERED}" ],
       /(?<=cookie:\s)\S+/i,
       /(?<=session_id=)\S+/i,
       /(?<=_session=)\S+/i,
@@ -118,14 +122,9 @@ module RailsAiContext
         result.gsub!(ENV_VAR_LINE, FILTERED)
         result.gsub!(EMAIL_PATTERN, EMAIL)
 
-        LOG_PATTERNS.each do |pattern|
-          if pattern.source.include?("password\":") || pattern.source.include?("password\"=>")
-            result.gsub!(pattern, "\\1#{FILTERED}\\2")
-          elsif pattern.source.include?("SECRET|PRIVATE")
-            result.gsub!(pattern) { |m| "#{m.split('=', 2)[0]}=#{FILTERED}" }
-          else
-            result.gsub!(pattern, FILTERED)
-          end
+        LOG_PATTERNS.each do |entry|
+          pattern, replacement = entry.is_a?(Array) ? entry : [ entry, FILTERED ]
+          result.gsub!(pattern, replacement)
         end
 
         result

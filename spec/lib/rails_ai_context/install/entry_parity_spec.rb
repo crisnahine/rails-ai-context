@@ -50,6 +50,27 @@ RSpec.describe "Install entry parity" do
     expect(generator_read).to eq(cli_read)
   end
 
+  # The write half. Whichever entry recorded the selection, the record has to
+  # be complete enough that the next entry - reading initializer-first - finds
+  # the same answer rather than the stale one.
+  it "records into both files, so a later read cannot find a stale initializer" do
+    write_initializer(%i[claude])
+
+    RailsAiContext::Install::SelectionRecord.write(%i[codex], root: root)
+
+    expect(File.read(File.join(root, "config", "initializers", "rails_ai_context.rb")))
+      .to include("config.ai_tools = %i[codex]")
+    expect(YAML.safe_load_file(File.join(root, ".rails-ai-context.yml"))["ai_tools"]).to eq(%w[codex])
+    expect(generator_read).to eq([ :codex ])
+    expect(cli_read).to eq([ :codex ])
+  end
+
+  it "leaves no entry able to write a record another entry would misread" do
+    RailsAiContext::Install::SelectionRecord.write(%i[cursor], root: root)
+
+    expect(generator_read).to eq(cli_read)
+  end
+
   it "keeps a hand-edited initializer authoritative for both entries" do
     RailsAiContext::Install::SelectionRecord.write(%i[claude cursor], root: root)
     write_initializer(%i[copilot])

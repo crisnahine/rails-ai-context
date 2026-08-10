@@ -130,6 +130,24 @@ RSpec.describe "BaseTool shared caches under concurrency" do
       ))
     end
 
+    # The standalone `rails-ai-context serve --transport http` app is the
+    # third HTTP entry point and serves many clients from one process too, so
+    # it needs the same session scoping the other two got.
+    it "scopes the standalone rack app's requests to the client's session" do
+      seen = nil
+      transport = instance_double(MCP::Server::Transports::StreamableHTTPTransport)
+      allow(transport).to receive(:handle_request) do
+        seen = base.current_session
+        [ 200, {}, [ "{}" ] ]
+      end
+
+      app = RailsAiContext::Server.new(RailsAiContext.default_app).send(:build_rack_app, transport, "/mcp")
+      app.call(rack_request("standalone-7").env.merge("PATH_INFO" => "/mcp"))
+
+      expect(seen).to eq("standalone-7")
+      expect(base.current_session).to eq(base::DEFAULT_SESSION)
+    end
+
     it "serves concurrent requests on both transports without corrupting either cache" do
       base.reset_cache!
       base.session_reset!

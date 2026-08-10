@@ -112,32 +112,19 @@ module RailsAiContext
 
         return if to_remove.empty?
 
-        # Collect paths still needed by remaining tools to avoid deleting shared files
-        kept_paths = @selected_formats.flat_map { |f| RailsAiContext::Install::AiTool.find(f)&.context_paths || [] }.to_set
-
         to_remove.each do |fmt|
-          tool = AI_TOOLS.values.find { |t| t[:format] == fmt }
+          tool = RailsAiContext::Install::AiTool.find(fmt)
 
-          # Remove context files (skip if another selected tool still needs them)
-          paths = RailsAiContext::Install::AiTool.find(fmt)&.context_paths || []
-          paths.each do |rel_path|
-            next if kept_paths.include?(rel_path)
-
-            full = Rails.root.join(rel_path)
-            if File.directory?(full)
-              FileUtils.rm_rf(full)
-              say "  Removed #{rel_path}/", :red
-            elsif File.exist?(full)
-              FileUtils.rm_f(full)
-              say "  Removed #{rel_path}", :red
-            end
-          end
+          removed = RailsAiContext::Install::Cleanup.remove(
+            tools: [ fmt ], keeping: @selected_formats, root: Rails.root
+          )
+          removed.each { |path| say "  Removed #{path}", :red }
 
           # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
           cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Rails.root.to_s)
           cleaned.each { |f| say "  Removed MCP entry from #{Pathname.new(f).relative_path_from(Rails.root)}", :red }
 
-          say "  ✓ #{tool[:name]} files removed", :green if tool
+          say "  ✓ #{tool.name} files removed", :green if tool
         end
       end
 
@@ -358,7 +345,7 @@ module RailsAiContext
 
       def create_new_initializer(path)
         # Always write uncommented so re-install can detect previous selection
-        tools_line = "  config.ai_tools = %i[#{@selected_formats.join(' ')}]"
+        tools_line = RailsAiContext::Install::SelectionRecord.initializer_line(@selected_formats)
 
         tool_mode_line = if @tool_mode == :cli
           "  config.tool_mode = :cli    # CLI only (no MCP server needed)"
@@ -511,7 +498,7 @@ module RailsAiContext
 
       def build_ai_tools_line
         # Always write uncommented so re-install can detect previous selection
-        "  config.ai_tools = %i[#{@selected_formats.join(' ')}]"
+        RailsAiContext::Install::SelectionRecord.initializer_line(@selected_formats)
       end
 
       def build_tool_mode_line
@@ -528,21 +515,14 @@ module RailsAiContext
       end # no_tasks
 
       def create_yaml_config
-        yaml_path = Rails.root.join(".rails-ai-context.yml")
-        content = {
-          "ai_tools" => @selected_formats.map(&:to_s),
-          "tool_mode" => @tool_mode.to_s
-        }
+        result = RailsAiContext::Install::SelectionRecord.write(
+          @selected_formats, root: Rails.root, extra_yaml: { "tool_mode" => @tool_mode.to_s }
+        )
 
-        require "yaml"
-        new_content = YAML.dump(content)
-        existed = File.exist?(yaml_path)
-
-        if existed && File.read(yaml_path) == new_content
-          say ".rails-ai-context.yml (unchanged)", :yellow
-        else
-          File.write(yaml_path, new_content)
-          say "#{existed ? 'Updated' : 'Created'} .rails-ai-context.yml", :green
+        case result[:yaml]
+        when :unchanged then say ".rails-ai-context.yml (unchanged)", :yellow
+        when :created   then say "Created .rails-ai-context.yml", :green
+        when :updated   then say "Updated .rails-ai-context.yml", :green
         end
       end
 

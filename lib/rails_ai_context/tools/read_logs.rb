@@ -105,7 +105,7 @@ module RailsAiContext
         end
 
         # Redact sensitive data
-        redacted = filtered.map { |line| redact(line) }
+        redacted = filtered.map { |line| RailsAiContext::Redaction.redact_log_line(line) }
 
         # Format output
         file_size = File.size(path)
@@ -230,12 +230,6 @@ module RailsAiContext
         end
 
         result
-      end
-
-      # ── Redaction ───────────────────────────────────────────────────
-
-      private_class_method def self.redact(text)
-        RailsAiContext::Redaction.redact_log_line(text)
       end
 
       # ── Available log files ─────────────────────────────────────────

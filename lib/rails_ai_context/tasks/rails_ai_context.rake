@@ -119,50 +119,24 @@ rescue => e
   false
 end unless defined?(tool_mode_configured?)
 
-def save_ai_tools_to_initializer(tools)
-  init_path = Rails.root.join("config/initializers/rails_ai_context.rb")
-  return unless File.exist?(init_path)
+def save_selection(ai_tools, tool_mode)
+  result = RailsAiContext::Install::SelectionRecord.write(
+    ai_tools, root: Rails.root, extra_yaml: { "tool_mode" => tool_mode.to_s }
+  )
 
-  content = File.read(init_path)
-  tools_line = "  config.ai_tools = %i[#{tools.join(' ')}]"
-
-  if content.include?("config.ai_tools")
-    # Replace existing ai_tools line
-    content.sub!(/^.*config\.ai_tools.*$/, tools_line)
-  elsif content.include?("RailsAiContext.configure")
-    # Insert after configure block opening
-    content.sub!(/RailsAiContext\.configure do \|config\|\n/, "RailsAiContext.configure do |config|\n#{tools_line}\n")
-  else
-    return
+  case result[:yaml]
+  when :unchanged then puts "💾 .rails-ai-context.yml (unchanged)"
+  when :created   then puts "💾 Saved .rails-ai-context.yml"
+  when :updated   then puts "💾 Updated .rails-ai-context.yml"
   end
 
-  File.write(init_path, content)
-  puts "💾 Saved to config/initializers/rails_ai_context.rb"
-rescue => e
-  $stderr.puts "[rails-ai-context] save_ai_tools_to_initializer failed: #{e.message}" if ENV["DEBUG"]
-  nil
-end unless defined?(save_ai_tools_to_initializer)
-
-def save_yaml_config(ai_tools, tool_mode)
-  require "yaml"
-  yaml_path = Rails.root.join(".rails-ai-context.yml")
-  content = {
-    "ai_tools" => Array(ai_tools).map(&:to_s),
-    "tool_mode" => tool_mode.to_s
-  }
-  new_content = YAML.dump(content)
-  existed = File.exist?(yaml_path)
-
-  if existed && File.read(yaml_path) == new_content
-    puts "💾 .rails-ai-context.yml (unchanged)"
-  else
-    File.write(yaml_path, new_content)
-    puts "💾 #{existed ? 'Updated' : 'Saved'} .rails-ai-context.yml"
+  case result[:initializer]
+  when :updated, :inserted then puts "💾 Saved to config/initializers/rails_ai_context.rb"
   end
 rescue => e
-  $stderr.puts "[rails-ai-context] save_yaml_config failed: #{e.message}" if ENV["DEBUG"]
+  $stderr.puts "[rails-ai-context] save_selection failed: #{e.message}" if ENV["DEBUG"]
   nil
-end unless defined?(save_yaml_config)
+end unless defined?(save_selection)
 
 
 def read_previous_ai_tools_from_config
@@ -198,33 +172,19 @@ def cleanup_removed_ai_tools(previous, current)
 
   return if to_remove.empty?
 
-  require "fileutils"
-  # Collect paths still needed by remaining tools to avoid deleting shared files
-  kept_paths = current.map(&:to_sym).flat_map { |f| RailsAiContext::Install::AiTool.find(f)&.context_paths || [] }.to_set
-
   to_remove.each do |fmt|
-    tool = AI_TOOL_OPTIONS.values.find { |t| t[:key] == fmt }
+    tool = RailsAiContext::Install::AiTool.find(fmt)
 
-    # Remove context files (skip if another selected tool still needs them)
-    paths = RailsAiContext::Install::AiTool.find(fmt)&.context_paths || []
-    paths.each do |rel_path|
-      next if kept_paths.include?(rel_path)
-
-      full = Rails.root.join(rel_path)
-      if File.directory?(full)
-        FileUtils.rm_rf(full)
-        puts "  Removed #{rel_path}/"
-      elsif File.exist?(full)
-        FileUtils.rm_f(full)
-        puts "  Removed #{rel_path}"
-      end
-    end
+    removed = RailsAiContext::Install::Cleanup.remove(
+      tools: [ fmt ], keeping: current.map(&:to_sym), root: Rails.root
+    )
+    removed.each { |path| puts "  Removed #{path}" }
 
     # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
     cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Rails.root.to_s)
     cleaned.each { |f| puts "  Removed MCP entry from #{Pathname.new(f).relative_path_from(Rails.root)}" }
 
-    puts "  ✅ #{tool[:name]} files removed" if tool
+    puts "  ✅ #{tool.name} files removed" if tool
   end
 end unless defined?(cleanup_removed_ai_tools)
 
@@ -333,11 +293,9 @@ namespace :ai do
     ai_tools = RailsAiContext.configuration.ai_tools
     previous_tools = read_previous_ai_tools_from_config
 
-    # First time - no tools configured, ask the user
-    if ai_tools.nil?
-      ai_tools = prompt_ai_tools
-      save_ai_tools_to_initializer(ai_tools) if ai_tools
-    end
+    # First time - no tools configured, ask the user. The record is written
+    # once below, so the selection reaches both files together.
+    ai_tools = prompt_ai_tools if ai_tools.nil?
 
     # Prompt for tool_mode if not yet configured in initializer
     unless tool_mode_configured?
@@ -352,9 +310,9 @@ namespace :ai do
     # One-time v5.0.0 legacy cleanup prompt for removed UI pattern files
     RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Rails.root)
 
-    # Write .rails-ai-context.yml alongside initializer (enables standalone mode)
-    save_yaml_config(ai_tools || RailsAiContext.configuration.ai_tools,
-                     RailsAiContext.configuration.tool_mode)
+    # Record the selection in both files (the YAML enables standalone mode)
+    save_selection(ai_tools || RailsAiContext.configuration.ai_tools,
+                   RailsAiContext.configuration.tool_mode)
 
     # Auto-create/update per-tool MCP config files when tool_mode is :mcp
     ensure_mcp_configs(ai_tools) if RailsAiContext.configuration.tool_mode == :mcp

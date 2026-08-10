@@ -135,6 +135,95 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
       expect(File.exist?(File.join(root, "config", "initializers", "rails_ai_context.rb"))).to be(false)
     end
+
+    # Without this the entries diverge again: only one of them could put a
+    # selection into an initializer that has a configure block but no line,
+    # so which entry you ran decided whether the record was complete.
+    it "inserts the selection into a configure block that has no line yet" do
+      write_initializer(<<~RUBY)
+        RailsAiContext.configure do |config|
+          config.preset = :full
+        end
+      RUBY
+
+      described_class.write(%i[codex], root: root)
+
+      content = File.read(File.join(root, "config", "initializers", "rails_ai_context.rb"))
+      expect(content).to include("config.ai_tools = %i[codex]")
+      expect(content).to include("config.preset = :full")
+      expect(described_class.read(root: root)).to eq([ :codex ])
+    end
+
+    it "does not invent a configure block that is not there" do
+      write_initializer("# just a comment\n")
+
+      described_class.write([ :codex ], root: root)
+
+      expect(File.read(File.join(root, "config", "initializers", "rails_ai_context.rb")))
+        .to eq("# just a comment\n")
+    end
+
+    # Each entry prints its own "Created/Updated/unchanged" line, so the one
+    # writer has to say what it did or the entries keep their own copies of
+    # the writing just to know what to print.
+    describe "what it reports" do
+      it "reports the YAML as created the first time" do
+        expect(described_class.write([ :claude ], root: root)).to include(yaml: :created)
+      end
+
+      it "reports the YAML as updated when the selection changes" do
+        described_class.write([ :claude ], root: root)
+
+        expect(described_class.write([ :codex ], root: root)).to include(yaml: :updated)
+      end
+
+      it "reports the YAML as unchanged when nothing moved" do
+        described_class.write([ :claude ], root: root)
+
+        expect(described_class.write([ :claude ], root: root)).to include(yaml: :unchanged)
+      end
+
+      it "reports no initializer when the project has none" do
+        expect(described_class.write([ :claude ], root: root)).to include(initializer: :absent)
+      end
+
+      it "reports the initializer as inserted when it had no selection line" do
+        write_initializer("RailsAiContext.configure do |config|\n  config.preset = :full\nend\n")
+
+        expect(described_class.write([ :codex ], root: root)).to include(initializer: :inserted)
+      end
+
+      it "reports the initializer as updated when it carried a selection" do
+        write_initializer("RailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\nend\n")
+
+        expect(described_class.write([ :codex ], root: root)).to include(initializer: :updated)
+      end
+
+      it "reports the initializer as unchanged when it already said this" do
+        write_initializer("RailsAiContext.configure do |config|\n  config.ai_tools = %i[codex]\nend\n")
+
+        expect(described_class.write([ :codex ], root: root)).to include(initializer: :unchanged)
+      end
+
+      it "reports the tools it actually recorded" do
+        expect(described_class.write(%i[codex emacs], root: root)).to include(tools: [ :codex ])
+      end
+    end
+
+    # A pattern loose enough to match the commented-out default would write the
+    # selection onto the comment, where the next read cannot see it.
+    it "does not write the selection onto a commented-out default" do
+      write_initializer(<<~RUBY)
+        RailsAiContext.configure do |config|
+          # config.ai_tools = %i[claude cursor codex]
+        end
+      RUBY
+
+      described_class.write([ :codex ], root: root)
+
+      content = File.read(File.join(root, "config", "initializers", "rails_ai_context.rb"))
+      expect(content).to include("# config.ai_tools = %i[claude cursor codex]")
+    end
   end
 
   # The bug: re-running install through a different entry point dropped the

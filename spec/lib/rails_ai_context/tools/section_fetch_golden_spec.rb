@@ -56,4 +56,46 @@ RSpec.describe "Section-fetch migration, byte for byte" do
       end
     end
   end
+
+  # The other migrated tools pass `unusable_message:`, one answer covering both
+  # "never introspected" and "the introspector raised". Same guard, different
+  # shape: the opening is pinned and the two cases must stay indistinguishable.
+  FLAT = [
+    { tool: RailsAiContext::Tools::GetApi, key: :api,
+      opening: "No API layer data available." },
+    { tool: RailsAiContext::Tools::GetComponentCatalog, key: :components,
+      opening: "No component data available." },
+    { tool: RailsAiContext::Tools::GetFrontendStack, key: :frontend_frameworks,
+      opening: "No frontend framework data available." },
+    { tool: RailsAiContext::Tools::PerformanceCheck, key: :performance,
+      opening: "No performance data available." }
+  ].freeze
+
+  FLAT.each do |row|
+    describe row[:tool].tool_name do
+      it "says the section was never introspected, unchanged" do
+        allow(row[:tool]).to receive(:cached_context).and_return({})
+
+        expect(text_of(row[:tool].call)).to start_with(row[:opening])
+      end
+
+      it "gives the raised case the same answer" do
+        allow(row[:tool]).to receive(:cached_context).and_return({})
+        never_introspected = text_of(row[:tool].call)
+
+        allow(row[:tool]).to receive(:cached_context)
+          .and_return({ row[:key] => { error: "disk on fire" } })
+
+        expect(text_of(row[:tool].call)).to eq(never_introspected)
+      end
+
+      it "says the data source was absent, unchanged" do
+        allow(row[:tool]).to receive(:cached_context)
+          .and_return({ row[:key] => { unavailable: "requires a booted Rails app" } })
+
+        expect(text_of(row[:tool].call))
+          .to start_with("[UNAVAILABLE: requires a booted Rails app]")
+      end
+    end
+  end
 end

@@ -33,16 +33,18 @@ lib/rails_ai_context/
 1. Create `lib/rails_ai_context/introspectors/your_introspector.rb` (auto-loaded by Zeitwerk)
 2. Implement `#initialize(app)` and `#call` → returns a Hash (never raises)
 3. Register it in `lib/rails_ai_context/introspector.rb` (the `INTROSPECTOR_MAP`)
-4. Add the key to the appropriate preset(s) in `Configuration::PRESETS` (`:full` is the default, `:standard` for core-only)
-5. Write specs in `spec/lib/rails_ai_context/your_introspector_spec.rb`
+4. `extend StaticTier` and declare one: `static_tier :files_only` if `#call` runs unchanged with nothing booted, `:runtime_only` if it needs live reflection, or `:alternate_source` plus a `static_call` reading elsewhere. A mapped introspector that declares nothing fails the suite
+5. Add the key to the appropriate preset(s) in `Configuration::PRESETS` (`:full` is the default, `:standard` for core-only)
+6. Write specs in `spec/lib/rails_ai_context/your_introspector_spec.rb`
 
 ## Adding a New MCP Tool
 
 1. Create `lib/rails_ai_context/tools/your_tool.rb` inheriting from `BaseTool` (auto-loaded by Zeitwerk)
 2. Define `tool_name`, `description`, `input_schema`, and `annotations`
 3. Implement `def self.call(...)` returning `text_response(string)`
-4. Auto-registered - no manual list to update (BaseTool.inherited tracks it)
-5. Write specs in `spec/lib/rails_ai_context/tools/your_tool_spec.rb`
+4. Declare `guide_row(order:, mcp:, cli_args:, summary:)` - the generated guide is derived from it. A tool without one fails the inventory spec, and `order` must be unique and leave no gap in the sequence
+5. Auto-registered - no manual list to update (BaseTool.inherited tracks it)
+6. Write specs in `spec/lib/rails_ai_context/tools/your_tool_spec.rb`
 
 ## Adding a Prism Listener
 
@@ -52,7 +54,7 @@ Listeners extract specific concerns (associations, validations, etc.) from the A
 2. Implement `on_call_node_enter(node)` and/or `on_def_node_enter(node)` - only the events your concern needs
 3. Use `confidence_for(node)` from `BaseListener` to tag results `[VERIFIED]` or `[INFERRED]`
 4. Store results in `@results` (accessed via `#results`) as plain hashes, never Prism nodes
-5. If your listener needs an event `SourceIntrospector.register_listener` doesn't already wire up, add it there
+5. Nothing to register - `ListenerRegistration` derives the events from the `on_*` methods you defined, and raises if one names an event prism never dispatches
 6. Register the key/class pair in `SourceIntrospector::LISTENER_MAP` only if the listener should run on every model walk; listeners used by one introspector are passed to `SourceIntrospector.walk(path, key => Listener)` at the call site instead
 7. Write specs in `spec/lib/rails_ai_context/introspectors/listeners/your_listener_spec.rb`
 8. Add a row to the listener catalogue in `docs/INTROSPECTORS.md`
