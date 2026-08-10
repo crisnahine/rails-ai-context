@@ -236,6 +236,10 @@ class RailsAiContextCLI < Thor
         exit 1
       end
 
+      # The gem, not the app: the identity table and the selection record
+      # live in it, and the prompts below read both. Still no Rails boot.
+      require_gem_without_app!
+
       # --- Read previous selection (before prompts) ---
       previous_tools = read_previous_ai_tools
 
@@ -350,36 +354,34 @@ class RailsAiContextCLI < Thor
 
     private
 
-    AI_TOOL_OPTIONS = {
-      "1" => { key: :claude,   name: "Claude Code",    files: "CLAUDE.md + .claude/rules/" },
-      "2" => { key: :cursor,   name: "Cursor",         files: ".cursor/rules/ + .cursorrules (legacy fallback)" },
-      "3" => { key: :copilot,  name: "GitHub Copilot", files: ".github/copilot-instructions.md + .github/instructions/" },
-      "4" => { key: :opencode, name: "OpenCode",       files: "AGENTS.md" },
-      "5" => { key: :codex,   name: "Codex CLI",      files: "AGENTS.md + .codex/config.toml" }
-    }.freeze
+    # A method, not a constant: this class body is evaluated before the gem
+    # is required, so the table has to be asked for after that.
+    def ai_tool_options
+      ::RailsAiContext::Install::AiTool.all.to_h { |t| [ t.number, { key: t.key, name: t.name, files: t.files } ] }
+    end
 
     def prompt_ai_tools
       $stderr.puts ""
       $stderr.puts "Which AI tools do you use? (select all that apply)"
       $stderr.puts ""
-      AI_TOOL_OPTIONS.each { |num, info| $stderr.puts "  #{num}. #{info[:name].ljust(16)} -> #{info[:files]}" }
+      ai_tool_options.each { |num, info| $stderr.puts "  #{num}. #{info[:name].ljust(16)} -> #{info[:files]}" }
       $stderr.puts "  a. All of the above"
       $stderr.puts ""
       $stderr.print "Enter numbers separated by commas (e.g. 1,2) or 'a' for all: "
       input = $stdin.gets&.strip&.downcase || "a"
 
       selected = if input == "a" || input == "all" || input.empty?
-        AI_TOOL_OPTIONS.values.map { |t| t[:key] }
+        ai_tool_options.values.map { |t| t[:key] }
       else
-        input.split(/[\s,]+/).filter_map { |n| AI_TOOL_OPTIONS[n]&.dig(:key) }
+        input.split(/[\s,]+/).filter_map { |n| ai_tool_options[n]&.dig(:key) }
       end
 
       if selected.empty?
         $stderr.puts "No tools selected — using all."
-        selected = AI_TOOL_OPTIONS.values.map { |t| t[:key] }
+        selected = ai_tool_options.values.map { |t| t[:key] }
       end
 
-      names = AI_TOOL_OPTIONS.values.select { |t| selected.include?(t[:key]) }.map { |t| t[:name] }
+      names = ai_tool_options.values.select { |t| selected.include?(t[:key]) }.map { |t| t[:name] }
       $stderr.puts "Selected: #{names.join(', ')}"
       selected
     end
@@ -400,29 +402,9 @@ class RailsAiContextCLI < Thor
       mode
     end
 
-    # Files/dirs generated per AI tool format — used for cleanup on tool removal.
-    # MCP config files are NOT listed here — they use merge-safe removal via
-    # McpConfigGenerator.remove to preserve other servers' entries.
-    FORMAT_PATHS = {
-      claude:   %w[CLAUDE.md .claude/rules],
-      cursor:   %w[.cursor/rules .cursorrules],
-      copilot:  %w[.github/copilot-instructions.md .github/instructions],
-      opencode: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
-      codex:    %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md]
-    }.freeze
 
     def read_previous_ai_tools
-      yaml_path = File.join(Dir.pwd, ".rails-ai-context.yml")
-      return nil unless File.exist?(yaml_path)
-
-      data = YAML.safe_load_file(yaml_path, permitted_classes: [ Symbol ]) || {}
-      tools = data["ai_tools"]
-      return nil unless tools.is_a?(Array) && tools.any?
-
-      tools.map(&:to_sym)
-    rescue => e
-      $stderr.puts "[rails-ai-context] Could not read previous config: #{e.message}" if ENV["DEBUG"]
-      nil
+      ::RailsAiContext::Install::SelectionRecord.read(root: Dir.pwd)
     end
 
     def cleanup_removed_tools(previous, current)
@@ -432,7 +414,7 @@ class RailsAiContextCLI < Thor
       $stderr.puts ""
       $stderr.puts "These AI tools were removed from your selection:"
       removed.each_with_index do |fmt, idx|
-        tool = AI_TOOL_OPTIONS.values.find { |t| t[:key] == fmt }
+        tool = ai_tool_options.values.find { |t| t[:key] == fmt }
         $stderr.puts "  #{idx + 1}. #{tool[:name]} (#{tool[:files]})" if tool
       end
       $stderr.puts ""
@@ -456,13 +438,13 @@ class RailsAiContextCLI < Thor
 
       require "fileutils"
       # Collect paths still needed by remaining tools to avoid deleting shared files
-      kept_paths = current.map(&:to_sym).flat_map { |f| FORMAT_PATHS[f] || [] }.to_set
+      kept_paths = current.map(&:to_sym).flat_map { |f| ::RailsAiContext::Install::AiTool.find(f)&.context_paths || [] }.to_set
 
       to_remove.each do |fmt|
-        tool = AI_TOOL_OPTIONS.values.find { |t| t[:key] == fmt }
+        tool = ai_tool_options.values.find { |t| t[:key] == fmt }
 
         # Remove context files (skip if another selected tool still needs them)
-        paths = FORMAT_PATHS[fmt] || []
+        paths = ::RailsAiContext::Install::AiTool.find(fmt)&.context_paths || []
         paths.each do |rel_path|
           next if kept_paths.include?(rel_path)
 
@@ -545,7 +527,7 @@ class RailsAiContextCLI < Thor
       $stderr.puts "=" * 50
       $stderr.puts ""
       $stderr.puts "Your setup:"
-      AI_TOOL_OPTIONS.each_value do |info|
+      ai_tool_options.each_value do |info|
         next unless ai_tools.include?(info[:key])
         $stderr.puts "  #{info[:name].ljust(16)} -> #{info[:files]}"
       end

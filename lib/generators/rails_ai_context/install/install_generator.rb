@@ -38,24 +38,10 @@ module RailsAiContext
       class_option :defaults, type: :boolean, default: false,
         desc: "Skip all interactive prompts and use each prompt's documented default (for CI/non-interactive use)"
 
-      AI_TOOLS = {
-        "1" => { key: :claude,   name: "Claude Code",     files: "CLAUDE.md + .claude/rules/",                        format: :claude },
-        "2" => { key: :cursor,   name: "Cursor",          files: ".cursor/rules/ + .cursorrules (legacy fallback)",    format: :cursor },
-        "3" => { key: :copilot,  name: "GitHub Copilot",  files: ".github/copilot-instructions.md + .github/instructions/", format: :copilot },
-        "4" => { key: :opencode, name: "OpenCode",        files: "AGENTS.md",                                          format: :opencode },
-        "5" => { key: :codex,   name: "Codex CLI",       files: "AGENTS.md + .codex/config.toml",                     format: :codex }
+      AI_TOOLS = RailsAiContext::Install::AiTool.all.to_h { |t|
+        [ t.number, { key: t.key, name: t.name, files: t.files, format: t.key } ]
       }.freeze
 
-      # Files/dirs generated per AI tool format - used for cleanup on tool removal.
-      # MCP config files are NOT listed here - they use merge-safe removal via
-      # McpConfigGenerator.remove to preserve other servers' entries.
-      FORMAT_PATHS = {
-        claude:   %w[CLAUDE.md .claude/rules],
-        cursor:   %w[.cursor/rules .cursorrules],
-        copilot:  %w[.github/copilot-instructions.md .github/instructions],
-        opencode: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
-        codex:    %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md]
-      }.freeze
 
       # The initializer guard written before this gem checked respond_to?(:configure).
       # A path:/git: gemspec is evaluated in-process by Bundler in every environment,
@@ -127,13 +113,13 @@ module RailsAiContext
         return if to_remove.empty?
 
         # Collect paths still needed by remaining tools to avoid deleting shared files
-        kept_paths = @selected_formats.flat_map { |f| FORMAT_PATHS[f] || [] }.to_set
+        kept_paths = @selected_formats.flat_map { |f| RailsAiContext::Install::AiTool.find(f)&.context_paths || [] }.to_set
 
         to_remove.each do |fmt|
           tool = AI_TOOLS.values.find { |t| t[:format] == fmt }
 
           # Remove context files (skip if another selected tool still needs them)
-          paths = FORMAT_PATHS[fmt] || []
+          paths = RailsAiContext::Install::AiTool.find(fmt)&.context_paths || []
           paths.each do |rel_path|
             next if kept_paths.include?(rel_path)
 
@@ -537,17 +523,7 @@ module RailsAiContext
       end
 
       def read_previous_ai_tools
-        init_path = Rails.root.join("config/initializers/rails_ai_context.rb")
-        return nil unless File.exist?(init_path)
-
-        content = File.read(init_path)
-        match = content.match(/^\s*config\.ai_tools\s*=\s*%i\[([^\]]*)\]/)
-        return nil unless match
-
-        match[1].split.map(&:to_sym)
-      rescue => e
-        $stderr.puts "[rails-ai-context] read_previous_ai_tools failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext::Install::SelectionRecord.read(root: Rails.root)
       end
       end # no_tasks
 

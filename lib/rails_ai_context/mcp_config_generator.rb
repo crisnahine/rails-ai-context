@@ -15,13 +15,7 @@ module RailsAiContext
   #   OpenCode     → opencode.json      (mcp key, type: "local", command as array)
   #   Codex CLI    → .codex/config.toml (TOML, [mcp_servers.NAME] section)
   class McpConfigGenerator
-    TOOL_CONFIGS = {
-      claude:   { path: ".mcp.json",          root_key: "mcpServers", format: :mcp_json },
-      cursor:   { path: ".cursor/mcp.json",   root_key: "mcpServers", format: :mcp_json },
-      copilot:  { path: ".vscode/mcp.json",   root_key: "servers",    format: :vscode_json },
-      opencode: { path: "opencode.json",      root_key: "mcp",        format: :opencode_json },
-      codex:    { path: ".codex/config.toml",  root_key: nil,          format: :codex_toml }
-    }.freeze
+    TOOL_CONFIGS = Install::AiTool.mcp_configs_by_key.freeze
 
     SERVER_NAME = "rails-ai-context"
 

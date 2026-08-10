@@ -107,30 +107,22 @@ RSpec.describe RailsAiContext::Install::AiTool do
     end
   end
 
-  describe "the tables it replaces" do
-    it "matches the generator's prompt table" do
-      table = described_class.all.to_h { |t|
-        [ t.number, { key: t.key, name: t.name, files: t.files, format: t.key } ]
-      }
-
-      expect(table).to eq(RailsAiContext::Generators::InstallGenerator::AI_TOOLS)
+  # The tables that used to live in four places are now views onto this one.
+  # The golden values above are the pin; these only prove the wiring.
+  describe "the views its consumers read" do
+    it "feeds the generator's prompt table" do
+      expect(RailsAiContext::Generators::InstallGenerator::AI_TOOLS.keys).to eq(%w[1 2 3 4 5])
+      expect(RailsAiContext::Generators::InstallGenerator::AI_TOOLS["2"])
+        .to eq(key: :cursor, name: "Cursor", files: ".cursor/rules/ + .cursorrules (legacy fallback)", format: :cursor)
     end
 
-    it "matches the context-file cleanup table" do
-      expect(described_class.context_paths_by_key)
-        .to eq(RailsAiContext::Generators::InstallGenerator::FORMAT_PATHS)
+    it "feeds the MCP config table" do
+      expect(RailsAiContext::McpConfigGenerator::TOOL_CONFIGS)
+        .to eq(described_class.mcp_configs_by_key)
     end
 
-    it "matches the MCP config table" do
-      expect(described_class.mcp_configs_by_key)
-        .to eq(RailsAiContext::McpConfigGenerator::TOOL_CONFIGS)
-    end
-
-    it "accounts for every legacy file" do
-      from_tools = described_class.all.flat_map { |t| t.legacy_paths.map { |p| { path: p, ai_tool: t.key } } }
-
-      expect(from_tools.sort_by { |e| e[:path] })
-        .to eq(RailsAiContext::LegacyCleanup::LEGACY_FILES.sort_by { |e| e[:path] })
+    it "feeds the legacy cleanup list" do
+      expect(RailsAiContext::LegacyCleanup::LEGACY_FILES).to eq(described_class.legacy_files)
     end
   end
 end

@@ -7,12 +7,7 @@ module RailsAiContext
   # in non-TTY environments prints a warning instead of prompting.
   module LegacyCleanup
     # Each entry: { path: relative_path, ai_tool: :claude|:cursor|:copilot }
-    LEGACY_FILES = [
-      { path: ".claude/rules/rails-ui-patterns.md",                          ai_tool: :claude  },
-      { path: ".cursor/rules/rails-ui-patterns.mdc",                         ai_tool: :cursor  },
-      { path: ".github/instructions/rails-ui-patterns.instructions.md",      ai_tool: :copilot },
-      { path: ".claude/rules/rails-accessibility.md",                        ai_tool: :claude  }
-    ].freeze
+    LEGACY_FILES = Install::AiTool.legacy_files.freeze
 
     module_function
 

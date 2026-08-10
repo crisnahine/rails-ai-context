@@ -51,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Re-running install through a different entry keeps your AI-tool
+  selection.** The Rails generator read it from the initializer, the
+  standalone CLI read it from `.rails-ai-context.yml`, and the rake task
+  kept a third copy of the logic. Switching between them silently dropped
+  the previous choice and re-prompted from scratch. All three read the same
+  record now, initializer first because that is the file you hand-edit.
 - **The generated guide advertised a CLI command that does not exist.** Its
   row for `rails_get_env_config` printed `ai:tool[environments]`, which the
   CLI cannot resolve; the CLI name is now derived from the tool name rather

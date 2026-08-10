@@ -24,13 +24,7 @@ def apply_context_mode_override
   end
 end unless defined?(apply_context_mode_override)
 
-AI_TOOL_OPTIONS = {
-  "1" => { key: :claude,   name: "Claude Code" },
-  "2" => { key: :cursor,   name: "Cursor" },
-  "3" => { key: :copilot,  name: "GitHub Copilot" },
-  "4" => { key: :opencode, name: "OpenCode" },
-  "5" => { key: :codex,   name: "Codex CLI" }
-}.freeze unless defined?(AI_TOOL_OPTIONS)
+AI_TOOL_OPTIONS = RailsAiContext::Install::AiTool.all.to_h { |t| [ t.number, { key: t.key, name: t.name } ] }.freeze unless defined?(AI_TOOL_OPTIONS)
 
 def prompt_ai_tools
   puts ""
@@ -170,39 +164,9 @@ rescue => e
   nil
 end unless defined?(save_yaml_config)
 
-# Files/dirs generated per AI tool format - used for cleanup on tool removal.
-# MCP config files are NOT listed here - they use merge-safe removal via
-# McpConfigGenerator.remove to preserve other servers' entries.
-FORMAT_PATHS = {
-  claude:   %w[CLAUDE.md .claude/rules],
-  cursor:   %w[.cursor/rules .cursorrules],
-  copilot:  %w[.github/copilot-instructions.md .github/instructions],
-  opencode: %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md],
-  codex:    %w[AGENTS.md app/models/AGENTS.md app/controllers/AGENTS.md]
-}.freeze unless defined?(FORMAT_PATHS)
 
 def read_previous_ai_tools_from_config
-  # Try initializer first
-  init_path = Rails.root.join("config/initializers/rails_ai_context.rb")
-  if File.exist?(init_path)
-    content = File.read(init_path)
-    match = content.match(/^\s*config\.ai_tools\s*=\s*%i\[([^\]]*)\]/)
-    return match[1].split.map(&:to_sym) if match
-  end
-
-  # Fall back to YAML
-  yaml_path = Rails.root.join(".rails-ai-context.yml")
-  if File.exist?(yaml_path)
-    require "yaml"
-    data = YAML.safe_load_file(yaml_path, permitted_classes: [ Symbol ]) || {}
-    tools = data["ai_tools"]
-    return tools.map(&:to_sym) if tools.is_a?(Array) && tools.any?
-  end
-
-  nil
-rescue => e
-  $stderr.puts "[rails-ai-context] read_previous_ai_tools_from_config failed: #{e.message}" if ENV["DEBUG"]
-  nil
+  RailsAiContext::Install::SelectionRecord.read(root: Rails.root)
 end unless defined?(read_previous_ai_tools_from_config)
 
 def cleanup_removed_ai_tools(previous, current)
@@ -236,13 +200,13 @@ def cleanup_removed_ai_tools(previous, current)
 
   require "fileutils"
   # Collect paths still needed by remaining tools to avoid deleting shared files
-  kept_paths = current.map(&:to_sym).flat_map { |f| FORMAT_PATHS[f] || [] }.to_set
+  kept_paths = current.map(&:to_sym).flat_map { |f| RailsAiContext::Install::AiTool.find(f)&.context_paths || [] }.to_set
 
   to_remove.each do |fmt|
     tool = AI_TOOL_OPTIONS.values.find { |t| t[:key] == fmt }
 
     # Remove context files (skip if another selected tool still needs them)
-    paths = FORMAT_PATHS[fmt] || []
+    paths = RailsAiContext::Install::AiTool.find(fmt)&.context_paths || []
     paths.each do |rel_path|
       next if kept_paths.include?(rel_path)
 
