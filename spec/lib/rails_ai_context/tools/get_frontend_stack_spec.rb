@@ -282,11 +282,12 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
       end
     end
 
-    context "with unknown detail level" do
-      it "reads it as the default level" do
-        result = described_class.call(detail: "verbose")
+    context "with unknown detail level" do      it "reads an invalid detail level as the default, and says so" do
+        text = described_class.call(detail: "verbose").content.first[:text]
 
-        expect(result.content.first[:text]).to eq(described_class.call(detail: "standard").content.first[:text])
+        expect(text).to start_with(described_class.call(detail: "standard").content.first[:text])
+        expect(text).to include("verbose")
+        expect(text).to include("not a valid `detail`")
       end
     end
 

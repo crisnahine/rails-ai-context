@@ -45,11 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `[dotenv] Set [ENV VARS REDACTED]` | `[dotenv] Set [FILTERED]` |
   | `[EMAIL]` | `[EMAIL]` (unchanged) |
 
-- **An invalid `detail` reads as `standard` instead of an error.** Eleven
-  tools answered `Unknown detail level: x`; `detail` is now normalized once,
-  before any tool runs, so junk and omission both land on the default. Tools
-  that spell their own levels (`rails_onboard`: quick/standard/full) are
-  untouched.
+- **An invalid `detail` answers at the default level and says it did.**
+  Eleven tools each answered `Unknown detail level: x` and nothing else;
+  `detail` is normalized once now, before any tool runs, so junk and omission
+  both land on the default. You still get told: the response carries a note
+  naming the value that was discarded and the levels that exist, so a typo is
+  visible without eleven copies of the check. Tools that spell their own
+  levels (`rails_onboard`: quick/standard/full) are untouched.
 - **Listener registration is derived from the listener.** Defining an `on_*`
   handler is now its registration, validated against the events the running
   prism dispatches, so a typo'd handler raises instead of never firing. The

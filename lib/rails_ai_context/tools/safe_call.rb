@@ -14,6 +14,9 @@ module RailsAiContext
     # the failure.
     module SafeCall
       def call(**kwargs)
+        # A tool that returns without calling text_response would otherwise
+        # leave this set for whoever runs next on this thread.
+        Thread.current[:rails_ai_context_invalid_detail] = nil
         kwargs = normalize_detail(kwargs)
         Thread.current[:rails_ai_context_call_params] = session_params(kwargs)
         super(**kwargs)

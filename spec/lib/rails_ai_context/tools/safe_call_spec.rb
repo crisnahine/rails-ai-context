@@ -141,6 +141,51 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(seen).to eq("full")
     end
 
+    # The eleven per-tool "Unknown detail level" branches are gone, but the
+    # signal they carried is not: a caller who mistypes still has to be told,
+    # or the tool answers a question they did not ask and says nothing.
+    it "tells the caller when it discarded an invalid detail" do
+      tool = build_tool do
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
+      end
+
+      text = tool.call(detail: "bogus").content.first[:text]
+
+      expect(text).to start_with("body")
+      expect(text).to include("bogus")
+      expect(text).to include("summary, standard, full")
+    end
+
+    it "says nothing when the detail was valid" do
+      tool = build_tool do
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
+      end
+
+      expect(tool.call(detail: "full").content.first[:text]).to eq("body")
+    end
+
+    it "says nothing when detail was simply omitted" do
+      tool = build_tool do
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
+      end
+
+      expect(tool.call.content.first[:text]).to eq("body")
+    end
+
+    it "does not carry one call's bad detail into the next" do
+      tool = build_tool do
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
+      end
+
+      tool.call(detail: "bogus")
+
+      expect(tool.call(detail: "full").content.first[:text]).to eq("body")
+    end
+
     it "leaves a detail that spells its own levels alone" do
       seen = nil
       tool = build_tool do

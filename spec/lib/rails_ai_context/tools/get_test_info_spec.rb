@@ -104,10 +104,12 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
     end
   end
 
-  describe ".call with unknown detail level" do
-    it "reads an invalid detail level as the default" do
-      result = described_class.call(detail: "invalid")
-      expect(result.content.first[:text]).to eq(described_class.call(detail: "standard").content.first[:text])
+  describe ".call with unknown detail level" do    it "reads an invalid detail level as the default, and says so" do
+      text = described_class.call(detail: "invalid").content.first[:text]
+
+      expect(text).to start_with(described_class.call(detail: "standard").content.first[:text])
+      expect(text).to include("invalid")
+      expect(text).to include("not a valid `detail`")
     end
   end
 
