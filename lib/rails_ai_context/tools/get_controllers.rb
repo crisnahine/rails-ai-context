@@ -20,7 +20,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level for controller listing. summary: names + action counts. standard: names + action list (default). full: everything. Ignored when specific controller is given."
           },
           limit: {

@@ -330,11 +330,10 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
 
     context "with unknown detail level" do
-      it "returns an error message" do
+      it "reads it as the default level" do
         result = described_class.call(detail: "verbose")
-        text = result.content.first[:text]
 
-        expect(text).to include("Unknown detail level: verbose")
+        expect(result.content.first[:text]).to eq(described_class.call(detail: "standard").content.first[:text])
       end
     end
   end

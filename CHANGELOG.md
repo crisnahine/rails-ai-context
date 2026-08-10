@@ -20,8 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conventions, autoload, security, observability, database stats, connection
   pool, initializers - still refuse honestly.
 
+### Fixed
+
+- **One MCP client's session record no longer shows up in another's.**
+  `rails_session_context` kept one process-global list of calls, which is
+  right over stdio but wrong for the two HTTP transports, where a single
+  process serves every client. The record is now bucketed by
+  `Mcp-Session-Id`. A caller's snapshot of the record also stopped changing
+  under it: `session_queries` returned live entries that later calls kept
+  mutating.
+
 ### Changed
 
+- **An invalid `detail` reads as `standard` instead of an error.** Eleven
+  tools answered `Unknown detail level: x`; `detail` is now normalized once,
+  before any tool runs, so junk and omission both land on the default. Tools
+  that spell their own levels (`rails_onboard`: quick/standard/full) are
+  untouched.
 - **Listener registration is derived from the listener.** Defining an `on_*`
   handler is now its registration, validated against the events the running
   prism dispatches, so a typo'd handler raises instead of never firing. The

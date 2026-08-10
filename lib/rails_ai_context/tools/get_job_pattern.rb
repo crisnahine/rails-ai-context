@@ -16,7 +16,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: names + queues. standard: names + queues + retries + what they call (default). full: everything including guards, broadcasts, schedules, and enqueuers."
           }
         }

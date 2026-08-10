@@ -17,7 +17,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Level of detail: summary (names + types), standard (+ props + slots), full (+ sidecar assets + usage)"
           },
           offset: {

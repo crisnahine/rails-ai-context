@@ -1,0 +1,158 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+require "rack"
+
+# The audit of the two process-global caches BaseTool keeps: the introspection
+# cache and the session record. Each property below is either a defect this
+# spec pins and the code fixes, or a semantic worth stating so the next reader
+# does not have to re-derive it from the mutex.
+RSpec.describe "BaseTool shared caches under concurrency" do
+  let(:base) { RailsAiContext::Tools::BaseTool }
+
+  describe "the introspection cache" do
+    before { base.reset_cache! }
+
+    # Intended semantics, not a defect: every read is a deep copy, so a tool
+    # that mutates what it got cannot corrupt the next tool's view. The cost
+    # is that the copy happens while the mutex is held.
+    it "hands every caller its own copy" do
+      first  = base.send(:cached_context)
+      second = base.send(:cached_context)
+
+      expect(first).to eq(second)
+      expect(first).not_to equal(second)
+
+      first[:models] = { poisoned: true }
+      expect(base.send(:cached_context)[:models]).not_to eq(poisoned: true)
+    end
+
+    # Intended semantics: the TTL check, the fingerprint walk and the
+    # re-introspection all happen under one mutex, so concurrent callers
+    # serialize rather than racing. Twenty threads see one introspection.
+    it "introspects once no matter how many threads arrive together" do
+      allow(RailsAiContext).to receive(:introspect).and_call_original
+
+      results = 20.times.map { Thread.new { base.send(:cached_context) } }.map(&:value)
+
+      expect(RailsAiContext).to have_received(:introspect).once
+      expect(results.map { |r| r[:app_name] }.uniq.size).to eq(1)
+    end
+
+    it "survives a reset racing against readers" do
+      errors = []
+      threads = 10.times.map do |i|
+        Thread.new do
+          i.even? ? base.reset_cache! : base.send(:cached_context)
+        rescue => e
+          errors << e
+        end
+      end
+      threads.each(&:join)
+
+      expect(errors).to be_empty
+    end
+  end
+
+  describe "the session record" do
+    before { base.session_reset! }
+    after { base.session_reset! }
+
+    it "counts repeat calls rather than duplicating them" do
+      10.times.map { Thread.new { base.session_record("rails_get_schema", { table: "users" }) } }.each(&:join)
+
+      entries = base.session_queries
+      expect(entries.size).to eq(1)
+      expect(entries.first[:call_count]).to eq(10)
+    end
+
+    it "does not hand out the live entry for a caller to mutate" do
+      base.session_record("rails_get_schema", { table: "users" })
+      base.session_queries.first[:call_count] = 999
+
+      expect(base.session_queries.first[:call_count]).to eq(1)
+    end
+
+    # The defect. The record is process-global, so under a shared HTTP
+    # process one client's rails_session_context listed another client's
+    # calls - the transports serve many conversations from one process,
+    # which the stdio-era "one process, one conversation" comment assumed
+    # away.
+    it "keeps one client's calls out of another client's record" do
+      base.with_session("session-a") { base.session_record("rails_get_schema", { table: "a_only" }) }
+      base.with_session("session-b") { base.session_record("rails_get_routes", {}) }
+
+      a_tools = base.with_session("session-a") { base.session_queries }.map { |q| q[:tool] }
+      b_tools = base.with_session("session-b") { base.session_queries }.map { |q| q[:tool] }
+
+      expect(a_tools).to eq([ "rails_get_schema" ])
+      expect(b_tools).to eq([ "rails_get_routes" ])
+    end
+
+    it "keeps concurrent sessions separate" do
+      threads = 8.times.map do |i|
+        Thread.new do
+          base.with_session("session-#{i}") do
+            base.session_record("rails_get_schema", { table: "t#{i}" })
+            base.session_queries
+          end
+        end
+      end
+
+      threads.map(&:value).each_with_index do |entries, i|
+        expect(entries.map { |e| e[:params] }).to eq([ { table: "t#{i}" } ])
+      end
+    end
+
+    it "falls back to one shared record when no session is named" do
+      base.session_record("rails_get_schema", { table: "users" })
+
+      expect(base.session_queries.map { |q| q[:tool] }).to eq([ "rails_get_schema" ])
+    end
+  end
+
+  # Both HTTP transports run in one process against these caches, so drive
+  # them together rather than trusting that the mutex covers it.
+  describe "driven through both HTTP transports at once" do
+    let(:body) do
+      { jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "rails_get_schema", arguments: { detail: "summary" } } }.to_json
+    end
+
+    def rack_request(session_id)
+      Rack::Request.new(Rack::MockRequest.env_for(
+        RailsAiContext.configuration.http_path,
+        method: "POST",
+        input: body,
+        "CONTENT_TYPE" => "application/json",
+        "HTTP_ACCEPT" => "application/json, text/event-stream",
+        "HTTP_MCP_SESSION_ID" => session_id
+      ))
+    end
+
+    it "serves concurrent requests on both transports without corrupting either cache" do
+      base.reset_cache!
+      base.session_reset!
+
+      middleware = RailsAiContext::Middleware.new(->(_env) { [ 404, {}, [] ] })
+      errors = []
+
+      threads = 12.times.map do |i|
+        Thread.new do
+          if i.even?
+            middleware.call(rack_request("mw-#{i}").env)
+          else
+            RailsAiContext::McpController.mcp_transport
+            base.with_session("sse-#{i}") { base.send(:cached_context) }
+          end
+        rescue => e
+          errors << e
+        end
+      end
+      threads.each(&:join)
+
+      expect(errors).to be_empty
+      expect(base.send(:cached_context)).to include(:app_name)
+    end
+  end
+end

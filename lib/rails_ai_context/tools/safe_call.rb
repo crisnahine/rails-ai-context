@@ -14,7 +14,9 @@ module RailsAiContext
     # the failure.
     module SafeCall
       def call(**kwargs)
-        super
+        kwargs = normalize_detail(kwargs)
+        Thread.current[:rails_ai_context_call_params] = session_params(kwargs)
+        super(**kwargs)
       rescue StandardError => e
         # A failed call must not leak its recorded params into the next
         # call's session entry.

@@ -20,7 +20,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: file list with line counts. standard: file list with partials/stimulus refs (default). full: template content."
           }
         }
@@ -218,8 +218,6 @@ module RailsAiContext
             lines << "" << "_Or use `path:\"controller/action.html.erb\"` for a specific file._"
             text_response(lines.join("\n"))
           end
-        else
-          text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
       end
 

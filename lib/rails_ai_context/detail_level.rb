@@ -15,6 +15,15 @@ module RailsAiContext
 
     ORDER = { SUMMARY => 0, STANDARD => 1, FULL => 2 }.freeze
 
+    # The schema fragment tools declare, so the published enum and the
+    # normalizer cannot drift apart. Spelling the values in a tool instead
+    # fails the enum-ownership spec.
+    SCHEMA_ENUM = ALL
+
+    def self.schema_property(description)
+      { type: "string", enum: SCHEMA_ENUM, description: description }
+    end
+
     def self.valid?(detail)
       ALL.include?(detail.to_s)
     end

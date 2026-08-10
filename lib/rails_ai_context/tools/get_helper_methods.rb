@@ -31,7 +31,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: names + method counts. standard: names + method signatures (default). full: method signatures + view cross-references + framework helpers."
           },
           offset: {
@@ -228,8 +228,6 @@ module RailsAiContext
 
           lines << "_Use `helper:\"Name\"` with `detail:\"full\"` for view cross-references._"
 
-        else
-          return text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
 
         lines << "" << page[:hint] unless page[:hint].empty?

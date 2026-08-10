@@ -59,10 +59,9 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       expect(text).to include("ApplicationHelper")
     end
 
-    it "returns error for invalid detail level" do
+    it "reads an invalid detail level as the default" do
       result = described_class.call(detail: "bogus")
-      text = result.content.first[:text]
-      expect(text).to include("Unknown detail level")
+      expect(result.content.first[:text]).to eq(described_class.call(detail: "standard").content.first[:text])
     end
 
     it "shows view cross-references at detail:full for a specific helper" do

@@ -37,7 +37,6 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(controller: nil, action: nil, model: nil, feature: nil, include: nil, server_context: nil)
-        set_call_params(controller: controller, action: action, model: model, feature: feature)
         base_text = if controller && action
           controller_action_context(controller, action)
         elsif controller

@@ -12,7 +12,7 @@ module RailsAiContext
         properties: {
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: env var names only. standard: env vars grouped by source + external services (default). full: everything including per-file locations, Dockerfile vars, and credentials keys."
           }
         }
@@ -47,8 +47,6 @@ module RailsAiContext
           format_standard(env_vars, env_example, external_services, credentials_keys, encrypted_columns)
         when "full"
           format_full(env_vars, env_example, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
-        else
-          text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
       end
 

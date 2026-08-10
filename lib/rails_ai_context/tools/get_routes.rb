@@ -16,7 +16,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: route counts per controller. standard: paths and actions (default). full: everything including names and constraints."
           },
           limit: {
@@ -194,8 +194,6 @@ module RailsAiContext
           end
           lines << "" << page[:hint] unless page[:hint].empty?
           text_response(lines.join("\n"))
-        else
-          text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
       end
     end

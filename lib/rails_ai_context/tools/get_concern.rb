@@ -21,7 +21,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: concern names only. standard: names + method signatures (default). full: method signatures with source code."
           }
         }

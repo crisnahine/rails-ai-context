@@ -28,7 +28,7 @@ module RailsAiContext
         properties: {
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: count of streams, frames, model broadcasts. standard: each stream with source → target (default). full: everything including inline template refs and DOM IDs."
           },
           stream: {
@@ -100,8 +100,6 @@ module RailsAiContext
           format_standard(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: filter_label)
         when "full"
           format_full(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: filter_label)
-        else
-          text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
       end
 

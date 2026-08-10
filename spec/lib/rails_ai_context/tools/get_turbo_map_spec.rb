@@ -45,10 +45,9 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
   end
 
   describe ".call with unknown detail level" do
-    it "returns an error message" do
+    it "reads an invalid detail level as the default" do
       result = described_class.call(detail: "invalid")
-      text = result.content.first[:text]
-      expect(text).to include("Unknown detail level")
+      expect(result.content.first[:text]).to eq(described_class.call(detail: "standard").content.first[:text])
     end
   end
 

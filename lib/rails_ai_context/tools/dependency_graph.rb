@@ -52,8 +52,6 @@ module RailsAiContext
         model = model.to_s.strip if model
         depth = [ [ depth.to_i, 1 ].max, 3 ].min
 
-        set_call_params(model: model, depth: depth, format: format, show_cycles: show_cycles, show_sti: show_sti)
-
         # Build adjacency list from model associations
         graph = build_graph(models_data)
 

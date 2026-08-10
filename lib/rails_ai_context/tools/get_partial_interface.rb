@@ -16,7 +16,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: locals list + usage count. standard: locals + usage examples from codebase (default). full: locals + usage + full partial source."
           }
         },
@@ -105,8 +105,6 @@ module RailsAiContext
           format_standard(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls)
         when "full"
           format_full(partial_name, relative_path, source, all_locals, magic_locals, render_sites, method_calls)
-        else
-          text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
       end
 

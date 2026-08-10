@@ -16,7 +16,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: table names + column counts. standard: table names + column names/types (default). full: everything including indexes, FKs, comments."
           },
           limit: {
@@ -43,7 +43,6 @@ module RailsAiContext
       )
 
       def self.call(table: nil, detail: "standard", limit: nil, offset: 0, format: "markdown", server_context: nil)
-        set_call_params(table: table, detail: detail)
         schema = cached_context[:schema]
         return text_response("Schema introspection not available. Add :schema to introspectors.") unless schema
         return text_response("Schema introspection not available: #{schema[:error]}") if schema[:error]

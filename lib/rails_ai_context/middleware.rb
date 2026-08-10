@@ -20,7 +20,11 @@ module RailsAiContext
 
       if env["PATH_INFO"] == path || env["PATH_INFO"] == "#{path}/"
         request = Rack::Request.new(env)
-        transport.handle_request(request)
+        # One process serves every client here, so the session record has to
+        # be told which conversation this request belongs to.
+        Tools::BaseTool.with_session(env["HTTP_MCP_SESSION_ID"] || Tools::BaseTool::DEFAULT_SESSION) do
+          transport.handle_request(request)
+        end
       else
         @app.call(env)
       end

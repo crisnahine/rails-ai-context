@@ -27,7 +27,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: counts only. standard: warnings with file/line (default). full: warnings with code snippets and remediation links."
           }
         }

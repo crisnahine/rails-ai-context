@@ -42,7 +42,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: model names + callback counts. standard: callbacks in execution order (default). full: callbacks with method source code."
           }
         }
@@ -200,8 +200,6 @@ module RailsAiContext
             end
             lines << ""
           end
-        else
-          return text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
 
         text_response(lines.join("\n"))

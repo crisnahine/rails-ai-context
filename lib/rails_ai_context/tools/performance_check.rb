@@ -23,7 +23,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Level of detail: summary (counts), standard (issues + suggestions), full (+ code context)"
           }
         }

@@ -16,7 +16,7 @@ module RailsAiContext
         properties: {
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Level of detail: summary (one-liner), standard (per-area breakdown), " \
               "full (+ OpenAPI spec files, API client codegen, GraphQL resolvers/subscriptions/dataloaders)"
           }
@@ -46,8 +46,6 @@ module RailsAiContext
           text_response(build_standard(data))
         when "full"
           text_response(build_full(data))
-        else
-          text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
       end
 

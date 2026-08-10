@@ -93,8 +93,16 @@ module RailsAiContext
 
       # Session-level context tracking. Lets AI avoid redundant queries
       # by recording what tools have been called with what params.
-      # In-memory only - resets on server restart (matches conversation lifecycle).
-      SESSION_CONTEXT = { mutex: Mutex.new, queries: {} }
+      # In-memory only - resets on server restart.
+      #
+      # Bucketed per conversation. Over stdio one process serves one
+      # conversation and everything lands in DEFAULT_SESSION; the HTTP
+      # transports serve many from one process, so each request's
+      # Mcp-Session-Id gets its own bucket and one client's history stays out
+      # of another's.
+      SESSION_CONTEXT = { mutex: Mutex.new, queries: Hash.new { |h, k| h[k] = {} } }
+
+      DEFAULT_SESSION = :default
 
       class << self
         # Convenience: access the Rails app and cached introspection.
@@ -175,16 +183,31 @@ module RailsAiContext
 
         # ── Session context helpers ──────────────────────────────────────
 
+        # Run a block against one conversation's session record. The HTTP
+        # transports wrap each request in this; stdio never calls it.
+        def with_session(session_id)
+          previous = Thread.current[:rails_ai_context_session]
+          Thread.current[:rails_ai_context_session] = session_id
+          yield
+        ensure
+          Thread.current[:rails_ai_context_session] = previous
+        end
+
+        def current_session
+          Thread.current[:rails_ai_context_session] || DEFAULT_SESSION
+        end
+
         def session_record(tool_name, params, summary = nil)
           SESSION_CONTEXT[:mutex].synchronize do
+            bucket = SESSION_CONTEXT[:queries][current_session]
             key = session_key(tool_name, params)
-            existing = SESSION_CONTEXT[:queries][key]
+            existing = bucket[key]
             if existing
               existing[:call_count] = (existing[:call_count] || 1) + 1
               existing[:last_timestamp] = Time.now.iso8601
               existing[:summary] = summary if summary
             else
-              SESSION_CONTEXT[:queries][key] = {
+              bucket[key] = {
                 tool: tool_name.to_s,
                 params: params,
                 call_count: 1,
@@ -195,9 +218,12 @@ module RailsAiContext
           end
         end
 
+        # Deep copies: the entries stay live inside the record and keep being
+        # mutated by later calls, so handing the originals out would let a
+        # caller's snapshot change under it.
         def session_queries
           SESSION_CONTEXT[:mutex].synchronize do
-            SESSION_CONTEXT[:queries].values.dup
+            SESSION_CONTEXT[:queries][current_session].values.map(&:dup)
           end
         end
 
@@ -404,9 +430,36 @@ module RailsAiContext
           extract_method_source_from_string(source, method_name)
         end
 
-        # Store call params for the current tool invocation (thread-safe)
-        def set_call_params(**params)
-          Thread.current[:rails_ai_context_call_params] = params.reject { |_, v| v.nil? || (v.respond_to?(:empty?) && v.empty?) }
+        # What the session record should remember about this call. SafeCall
+        # asks every tool, so no tool has to remember to record anything;
+        # override to reshape a value that should not be kept verbatim.
+        def session_params(kwargs)
+          kwargs
+            .except(:server_context)
+            .reject { |_, v| v.nil? || (v.respond_to?(:empty?) && v.empty?) }
+        end
+
+        # Whether this tool's `detail` is DetailLevel's, read off the schema it
+        # already publishes rather than a second list someone has to keep in
+        # step. `rails_onboard` spells its own levels (quick/standard/full) and
+        # is deliberately not covered.
+        def detail_param?
+          return @detail_param if defined?(@detail_param)
+
+          properties = (respond_to?(:input_schema) ? input_schema&.to_h : nil)&.dig(:properties)
+          declared = properties.is_a?(Hash) ? (properties[:detail] || properties["detail"]) : nil
+          enum = declared.is_a?(Hash) ? (declared[:enum] || declared["enum"]) : nil
+
+          @detail_param = Array(enum).map(&:to_s) == RailsAiContext::DetailLevel::ALL
+        end
+
+        # Junk and missing values both become the default here, so the
+        # nineteen `case detail` branches downstream only ever see one of
+        # three strings.
+        def normalize_detail(kwargs)
+          return kwargs unless detail_param?
+
+          kwargs.merge(detail: RailsAiContext::DetailLevel.normalize(kwargs[:detail]))
         end
 
         # Helper: wrap text in an MCP::Tool::Response with safety-net truncation.

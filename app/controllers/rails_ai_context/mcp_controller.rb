@@ -27,6 +27,38 @@ module RailsAiContext
     end
 
     def handle
+      # One process serves every client here, so the session record has to be
+      # told which conversation this request belongs to.
+      Tools::BaseTool.with_session(request.headers["Mcp-Session-Id"] || Tools::BaseTool::DEFAULT_SESSION) do
+        serve_transport
+      end
+    rescue => e
+      # Once the response is committed the status and headers are already on
+      # the wire, so a JSON-RPC frame written here cannot reach the client.
+      # Worse, assigning a body swaps the stream out from under the thread
+      # still draining the old one, turning a truncated SSE stream into a
+      # garbled one. The streaming branch's ensure always closes the stream,
+      # and closing commits, so every streaming failure lands here committed.
+      # Hand those to Live, which logs them with a backtrace and tears the
+      # connection down.
+      raise if response.committed?
+
+      # Mirror Middleware#json_rpc_error_response: a transport failure must
+      # still answer in JSON-RPC shape. Without this the exception escapes
+      # into a generic Rails 500 (HTML), breaking the client's JSON-RPC loop.
+      RailsAiContext.log_warn "[rails-ai-context] MCP request failed: #{e.class}: #{e.message}"
+      self.status = 500
+      response.headers["Content-Type"] = "application/json"
+      self.response_body = {
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Internal error: #{e.message}" },
+        id: nil
+      }.to_json
+    end
+
+    private
+
+    def serve_transport
       status_code, rack_headers, body = self.class.mcp_transport.handle_request(request)
       self.status = status_code
       apply_transport_headers(rack_headers)
@@ -67,31 +99,7 @@ module RailsAiContext
       else
         self.response_body = body
       end
-    rescue => e
-      # Once the response is committed the status and headers are already on
-      # the wire, so a JSON-RPC frame written here cannot reach the client.
-      # Worse, assigning a body swaps the stream out from under the thread
-      # still draining the old one, turning a truncated SSE stream into a
-      # garbled one. The streaming branch's ensure always closes the stream,
-      # and closing commits, so every streaming failure lands here committed.
-      # Hand those to Live, which logs them with a backtrace and tears the
-      # connection down.
-      raise if response.committed?
-
-      # Mirror Middleware#json_rpc_error_response: a transport failure must
-      # still answer in JSON-RPC shape. Without this the exception escapes
-      # into a generic Rails 500 (HTML), breaking the client's JSON-RPC loop.
-      RailsAiContext.log_warn "[rails-ai-context] MCP request failed: #{e.class}: #{e.message}"
-      self.status = 500
-      response.headers["Content-Type"] = "application/json"
-      self.response_body = {
-        jsonrpc: "2.0",
-        error: { code: -32603, message: "Internal error: #{e.message}" },
-        id: nil
-      }.to_json
     end
-
-    private
 
     # Rack 3 transports name their headers in lowercase, and the MCP SDK
     # switched to that in 1.0. Rails 7.0 keeps response headers in a

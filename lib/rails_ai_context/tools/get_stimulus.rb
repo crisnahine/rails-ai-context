@@ -16,7 +16,7 @@ module RailsAiContext
           },
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: names + counts. standard: targets + values + actions (default). full: everything including outlets, classes, HTML usage."
           },
           limit: {
@@ -155,8 +155,6 @@ module RailsAiContext
 
           text_response(lines.join("\n"))
 
-        else
-          text_response("Unknown detail level: #{detail}. Use summary, standard, or full.")
         end
       end
 

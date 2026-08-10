@@ -12,7 +12,7 @@ module RailsAiContext
         properties: {
           detail: {
             type: "string",
-            enum: %w[summary standard full],
+            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
             description: "Detail level. summary: one-line per section. standard: tables with sizes (default). full: index usage + cache details."
           },
           section: {

@@ -36,8 +36,6 @@ module RailsAiContext
       def self.call(feature:, server_context: nil)
         feature = feature.to_s.strip
         return text_response("Please provide a feature keyword (e.g. 'post', 'payment', 'authentication').") if feature.empty?
-        set_call_params(feature: feature)
-
         ctx = cached_context
         pattern = feature.downcase
         root = rails_app.root.to_s

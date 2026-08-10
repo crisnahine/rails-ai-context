@@ -127,8 +127,15 @@ module RailsAiContext
       #      sets, so it would otherwise be redacted into uselessness.
       SCHEMA_METADATA_PREFIX = /\A\s*(SHOW|DESCRIBE|DESC|EXPLAIN)\b/i
 
+      # The session record is echoed back to the model; a full query body can
+      # carry literals from the app's own data, so keep only enough to
+      # recognise the call.
+      def self.session_params(kwargs)
+        params = super
+        params.key?(:sql) ? params.merge(sql: params[:sql].to_s.truncate(60)) : params
+      end
+
       def self.call(sql: nil, limit: nil, format: "table", explain: false, server_context: nil, **_extra)
-        set_call_params(sql: sql&.truncate(60))
         if (refusal = static_tier_refusal("Running SQL queries"))
           return refusal
         end
