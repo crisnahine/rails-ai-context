@@ -63,11 +63,13 @@ module RailsAiContext
       #
       # Postgres: pg_read_file / pg_read_binary_file / pg_ls_dir / pg_stat_file
       #           (file read), lo_import / lo_export (large-object I/O),
-      #           dblink* (cross-db exfiltration), COPY ... FROM/TO PROGRAM
-      #           (arbitrary command execution when COPY permissions permit).
+      #           dblink* (cross-db exfiltration).
       # MySQL:    LOAD_FILE (scalar file read outside SELECT INTO contexts).
       # SQLite:   load_extension (shared-library load - disabled by default
       #           but harden in defense).
+      #
+      # COPY ... TO PROGRAM is not one of these: COPY is not a SELECT, so the
+      # statement keyword blocker rejects it before this runs.
       BLOCKED_FUNCTIONS = /\b(
         pg_read_binary_file | pg_read_file |
         pg_ls_dir | pg_ls_logdir | pg_ls_tmpdir | pg_ls_waldir | pg_ls_archive_statusdir |

