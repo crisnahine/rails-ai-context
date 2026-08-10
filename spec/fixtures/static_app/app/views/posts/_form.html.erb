@@ -1,0 +1,23 @@
+<%# locals: (post:, url: posts_path) %>
+<%= form_with model: post, url: url, class: "space-y-6", data: { controller: "form-validation", action: "submit->form-validation#validate" } do |f| %>
+  <div class="form-group">
+    <%= f.label :title, class: "block text-sm font-medium text-gray-700" %>
+    <%= f.text_field :title, class: "mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm", required: true, aria: { describedby: "title-help" } %>
+    <p id="title-help" class="mt-1 text-sm text-gray-500">Enter a descriptive title for your post.</p>
+  </div>
+
+  <div class="form-group">
+    <%= f.label :body, class: "block text-sm font-medium text-gray-700" %>
+    <%= f.text_area :body, rows: 8, class: "mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm", aria: { label: "Post body content" } %>
+  </div>
+
+  <div class="form-group">
+    <%= f.label :user_id, "Author", class: "block text-sm font-medium text-gray-700" %>
+    <%= f.collection_select :user_id, User.all, :id, :name, { prompt: "Select an author" }, { class: "mt-1 block w-full rounded-md border-gray-300 shadow-sm", aria: { required: true } } %>
+  </div>
+
+  <div class="flex items-center justify-end gap-3">
+    <%= link_to "Cancel", posts_path, class: "text-sm text-gray-600 hover:text-gray-900" %>
+    <%= f.submit class: "inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-50" %>
+  </div>
+<% end %>

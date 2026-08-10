@@ -1,0 +1,21 @@
+<%= turbo_frame_tag :post do %>
+  <article data-turbo-permanent id="post-<%= @post.id %>">
+    <header>
+      <h1 class="text-3xl font-bold text-gray-900"><%= @post.title %></h1>
+      <div class="mt-2 flex items-center gap-2 text-sm text-gray-500">
+        <span>By <%= @post.user&.name %></span>
+        <time datetime="<%= @post.created_at&.iso8601 %>"><%= @post.created_at&.strftime("%B %d, %Y") %></time>
+      </div>
+    </header>
+
+    <div class="prose mt-6" role="article" aria-label="Post content">
+      <p><%= @post.body %></p>
+    </div>
+
+    <nav aria-label="Post actions" class="mt-6 flex items-center gap-3">
+      <%= link_to "Edit", edit_post_path(@post), class: "text-blue-600 hover:text-blue-500", data: { turbo_action: "advance" } %>
+      <%= link_to "Back to posts", posts_path, class: "text-gray-600 hover:text-gray-900" %>
+      <%= button_to "Delete", post_path(@post), method: :delete, class: "text-red-600 hover:text-red-500", form: { data: { turbo_confirm: "Are you sure?" } } %>
+    </nav>
+  </article>
+<% end %>

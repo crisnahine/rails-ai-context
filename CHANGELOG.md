@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Twenty-seven sections now answer with the app not booted.** Gems, i18n,
+  views, view templates, tests, jobs, turbo, stimulus, assets, devops, seeds,
+  middleware, engines, components, performance, credentials, env and the rest
+  read files the static tier already had on disk; they refused only because
+  nothing had said they could answer. Each introspector now declares its
+  static tier (files-only, alternate-source, or runtime-only), an undeclared
+  one fails the suite, and every files-only declaration is proven against a
+  fixture app with nothing booted. Runtime-only sections - config, api,
+  conventions, autoload, security, observability, database stats, connection
+  pool, initializers - still refuse honestly.
+
+### Changed
+
+- **Listener registration is derived from the listener.** Defining an `on_*`
+  handler is now its registration, validated against the events the running
+  prism dispatches, so a typo'd handler raises instead of never firing. The
+  hand-typed event allowlist that shipped the 5.19.1 fabricated-routes bug is
+  gone, along with the hydrator's private copy of it.
+- **MCP view resources resolve through the current app root** rather than
+  `Rails.root`, so `rails-ai-context://views/...` works in the static tier.
+
 ## [5.19.1] - 2026-08-10
 
 ### Fixed

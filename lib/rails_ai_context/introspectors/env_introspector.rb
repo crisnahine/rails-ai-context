@@ -8,6 +8,9 @@ module RailsAiContext
     # (boolean). Safe, non-sensitive vars report their value.
     # Covers RAILS_NERVOUS_SYSTEM.md §36 (ENV vars Rails reads).
     class EnvIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

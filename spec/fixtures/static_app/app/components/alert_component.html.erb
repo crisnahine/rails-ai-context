@@ -1,0 +1,20 @@
+<div role="alert" aria-live="polite" class="rounded-lg border p-4 <%= type_classes %>">
+  <div class="flex items-center gap-2">
+    <% if icon? %>
+      <span class="flex-shrink-0" aria-hidden="true"><%= icon %></span>
+    <% end %>
+    <div class="flex-1"><%= content %></div>
+    <% if @dismissible %>
+      <button type="button" aria-label="Dismiss" class="text-current opacity-50 hover:opacity-100">
+        <span class="sr-only">Close</span>
+      </button>
+    <% end %>
+  </div>
+  <% if actions? %>
+    <div class="mt-3 flex gap-2">
+      <% actions.each do |action| %>
+        <%= action %>
+      <% end %>
+    </div>
+  <% end %>
+</div>

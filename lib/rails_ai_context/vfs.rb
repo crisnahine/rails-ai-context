@@ -134,7 +134,7 @@ module RailsAiContext
           raise RailsAiContext::Error, "Path not allowed: #{path} (sensitive file)"
         end
 
-        views_dir = Rails.root.join("app", "views")
+        views_dir = RailsAiContext.default_app.root.join("app", "views")
         full_path = views_dir.join(path)
 
         # Extension-less lookup: "posts/index" resolves to the template file

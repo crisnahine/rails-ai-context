@@ -79,6 +79,12 @@ module E2E
         "RAILS_ENV" => "test",
         "DISABLE_SPRING" => "true",
         "BUNDLE_GEMFILE" => File.join(app_path, "Gemfile"),
+        # Bundler 4 honours BUNDLE_LOCKFILE, and the outer `bundle exec`
+        # exports it pointing at the gem's own lock. Left set, every test
+        # app's `bundle install` writes its resolution there instead of
+        # beside its own Gemfile, so the app ends up with no lockfile at all
+        # and the gem ends up with a wrong one.
+        "BUNDLE_LOCKFILE" => nil,
         "BUNDLE_BIN_PATH" => nil,
         "BUNDLER_SETUP" => nil,
         "RUBYOPT" => nil,

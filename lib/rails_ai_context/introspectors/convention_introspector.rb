@@ -5,6 +5,9 @@ module RailsAiContext
     # Detects high-level Rails conventions and patterns in use,
     # giving AI assistants critical context about the app's architecture.
     class ConventionIntrospector
+      extend StaticTier
+      static_tier :runtime_only
+
       attr_reader :app
 
       def initialize(app)

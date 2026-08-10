@@ -246,9 +246,10 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
     end
   end
 
-  describe "#static_call" do
-    it "serves the same file-based data without a booted app" do
-      expect(introspector.static_call[:count]).to eq(2)
+  describe "static tier" do
+    it "is declared files-only, so call serves the same data unbooted" do
+      expect(described_class.static_tier).to eq(:files_only)
+      expect(introspector.call[:count]).to eq(2)
     end
   end
 end

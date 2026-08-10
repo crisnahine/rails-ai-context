@@ -15,6 +15,9 @@ module RailsAiContext
     # - Master-key contents are NEVER read. Only presence (file exists vs
     #   RAILS_MASTER_KEY set) is reported.
     class CredentialsIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

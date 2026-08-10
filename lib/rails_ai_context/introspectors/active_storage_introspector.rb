@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers Active Storage usage: attachments, storage service config,
     # direct upload detection.
     class ActiveStorageIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

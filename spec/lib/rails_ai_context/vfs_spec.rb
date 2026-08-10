@@ -240,6 +240,26 @@ RSpec.describe RailsAiContext::VFS do
         }.to raise_error(RailsAiContext::Error, /not allowed/)
       end
 
+      it "reads the static tier's app root, not the booted app's" do
+        Dir.mktmpdir do |static_root|
+          FileUtils.mkdir_p(File.join(static_root, "app", "views", "greetings"))
+          File.write(File.join(static_root, "app", "views", "greetings", "show.html.erb"), "<h1>Static</h1>")
+
+          previous_tier = RailsAiContext.tier
+          previous_root = RailsAiContext.configuration.app_root
+          begin
+            RailsAiContext.tier = :static
+            RailsAiContext.configuration.app_root = static_root
+
+            result = described_class.resolve("rails-ai-context://views/greetings/show.html.erb")
+            expect(result.first[:text]).to include("<h1>Static</h1>")
+          ensure
+            RailsAiContext.tier = previous_tier
+            RailsAiContext.configuration.app_root = previous_root
+          end
+        end
+      end
+
       it "returns error for missing view" do
         result = described_class.resolve("rails-ai-context://views/vfs_nonexistent_#{Process.pid}/file.erb")
         data = JSON.parse(result.first[:text])

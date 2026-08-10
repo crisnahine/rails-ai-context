@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers background jobs (ActiveJob/Sidekiq), mailers,
     # and Action Cable channels.
     class JobIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       CHANNEL_MACROS = %i[identified_by stream_from stream_for periodically].freeze
 
       attr_reader :app

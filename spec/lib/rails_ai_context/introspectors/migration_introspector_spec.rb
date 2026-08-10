@@ -84,7 +84,11 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
     end
   end
 
-  describe "#static_call" do
+  describe "static tier" do
+    it "is declared files-only" do
+      expect(described_class.static_tier).to eq(:files_only)
+    end
+
     it "reports migrations from a bare directory with no booted app" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "db", "migrate"))
@@ -96,7 +100,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
           end
         RUBY
         app = RailsAiContext::StaticApp.new(dir)
-        result = described_class.new(app).static_call
+        result = described_class.new(app).call
         expect(result[:total]).to eq(1)
         expect(result[:recent].first[:name]).to eq("Create widgets")
       end

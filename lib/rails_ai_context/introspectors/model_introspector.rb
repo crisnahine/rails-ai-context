@@ -9,6 +9,9 @@ module RailsAiContext
     # The AST layer replaces all regex/scan/match? source parsing with
     # Prism::Dispatcher-based single-pass extraction via SourceIntrospector.
     class ModelIntrospector
+      extend StaticTier
+      static_tier :alternate_source
+
       attr_reader :app, :config
 
       EXCLUDED_CALLBACKS = %w[autosave_associated_records_for].freeze

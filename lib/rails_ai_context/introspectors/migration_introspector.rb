@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers migration files, pending migrations, and recent migration history.
     # Works without a database connection by parsing db/migrate/ filenames.
     class MigrationIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)
@@ -23,10 +26,6 @@ module RailsAiContext
       rescue => e
         { error: e.message }
       end
-
-      # The file-parsing paths in call already degrade cleanly when the
-      # database is unreachable, so the static tier runs the same code.
-      alias_method :static_call, :call
 
       private
 

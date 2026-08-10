@@ -65,12 +65,26 @@ RSpec.describe "E2E: static tier", type: :e2e do
       end
     end
 
-    it "marks gems unavailable honestly instead of claiming none exist" do
+    # Gems is declared files-only: Gemfile.lock is right there on disk, so
+    # refusing was never honest, it was just undeclared.
+    it "answers gems from Gemfile.lock" do
       with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING"\n)) do
         result = @cli.cli_tool("gems")
         expect(result.exit_status).to eq(0), result.to_s
-        expect(result.stdout).to include("UNAVAILABLE")
-        expect(result.stdout).not_to include("No notable gems")
+        expect(result.stdout).to include("rails")
+        expect(result.stdout).not_to include("Gem introspection failed")
+        expect(result.stdout).not_to include("requires a booted Rails app")
+      end
+    end
+
+    it "answers the other file-only sections rather than refusing" do
+      with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING"\n)) do
+        %w[i18n test_info stimulus turbo_map env_config].each do |tool|
+          result = @cli.cli_tool(tool)
+          expect(result.exit_status).to eq(0), result.to_s
+          expect(result.stdout).not_to include("requires a booted Rails app"),
+            "#{tool} still refuses in the static tier:\n#{result.stdout}"
+        end
       end
     end
   end

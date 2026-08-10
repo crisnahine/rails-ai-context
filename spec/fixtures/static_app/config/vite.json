@@ -1,0 +1,10 @@
+{
+  "all": {
+    "sourceCodeDir": "app/frontend",
+    "entrypointsDir": "entrypoints"
+  },
+  "development": {
+    "autoBuild": true,
+    "port": 3036
+  }
+}

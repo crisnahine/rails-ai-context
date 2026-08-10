@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers mounted Rails engines and Rack apps from config/routes.rb.
     # Identifies well-known engines and provides context about what each does.
     class EngineIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       KNOWN_ENGINES = {

@@ -5,6 +5,9 @@ module RailsAiContext
     # Scans view layer: layouts, templates, partials, helpers,
     # view components, and template engine detection.
     class ViewIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

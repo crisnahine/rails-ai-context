@@ -7,6 +7,9 @@ module RailsAiContext
     # advisory_locks, read-replica flag. Covers RAILS_NERVOUS_SYSTEM.md
     # §10 (ActiveRecord - Connections & Adapters).
     class ConnectionPoolIntrospector
+      extend StaticTier
+      static_tier :runtime_only
+
       attr_reader :app
 
       def initialize(app)

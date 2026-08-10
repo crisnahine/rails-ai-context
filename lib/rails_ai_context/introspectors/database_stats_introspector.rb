@@ -5,6 +5,9 @@ module RailsAiContext
     # Collects approximate row counts from PostgreSQL's pg_stat_user_tables.
     # Only activates for PostgreSQL adapter; returns { skipped: true } otherwise.
     class DatabaseStatsIntrospector
+      extend StaticTier
+      static_tier :runtime_only
+
       attr_reader :app
 
       # Trilogy is Rails 8's default MySQL adapter (`adapter_name` reports

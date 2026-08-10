@@ -8,6 +8,9 @@ module RailsAiContext
     # ContentSecurityPolicy directives, cookie config, browser-version gates.
     # Covers RAILS_NERVOUS_SYSTEM.md §32 (Security layer).
     class SecurityIntrospector
+      extend StaticTier
+      static_tier :runtime_only
+
       attr_reader :app
 
       def initialize(app)

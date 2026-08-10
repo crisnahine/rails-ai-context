@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers custom Rack middleware in app/middleware/ and detects
     # middleware inserted via initializers.
     class MiddlewareIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

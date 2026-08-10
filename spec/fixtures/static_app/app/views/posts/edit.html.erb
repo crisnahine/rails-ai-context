@@ -1,0 +1,13 @@
+<%= turbo_frame_tag dom_id(@post, :edit) do %>
+  <div class="mx-auto max-w-2xl" data-turbo-action="advance">
+    <nav aria-label="Breadcrumb" class="mb-4">
+      <ol role="list" class="flex items-center space-x-2 text-sm text-gray-500">
+        <li><%= link_to "Posts", posts_path %></li>
+        <li aria-current="page"><%= @post.title %></li>
+      </ol>
+    </nav>
+
+    <h1 class="text-2xl font-bold text-gray-900">Edit Post</h1>
+    <%= render "form", post: @post, url: post_path(@post) %>
+  </div>
+<% end %>

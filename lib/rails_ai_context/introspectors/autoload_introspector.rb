@@ -6,6 +6,9 @@ module RailsAiContext
     # inflections, autoload/eager-load paths, collapsed dirs, and ignored
     # paths. Covers RAILS_NERVOUS_SYSTEM.md §3 (Autoloading - Zeitwerk).
     class AutoloadIntrospector
+      extend StaticTier
+      static_tier :runtime_only
+
       INFLECTION_DIRECTIVES = %i[acronym plural singular irregular uncountable human].freeze
 
       attr_reader :app

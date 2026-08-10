@@ -1,0 +1,30 @@
+<section aria-labelledby="posts-heading">
+  <h1 id="posts-heading" class="text-2xl font-bold text-gray-900">Posts</h1>
+
+  <div data-controller="search tabs" data-search-url-value="/posts/search" class="mt-4">
+    <div class="mb-4 flex items-center gap-2">
+      <label for="search-input" class="sr-only">Search posts</label>
+      <input id="search-input" type="search" data-search-target="input" data-action="input->search#search" placeholder="Search posts..." class="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" aria-label="Search posts">
+      <div data-search-target="spinner" class="hidden" role="status" aria-label="Loading">
+        <span class="sr-only">Loading...</span>
+      </div>
+    </div>
+
+    <div role="tablist" aria-label="Post filters">
+      <button role="tab" aria-selected="true" data-tabs-target="tab" data-action="click->tabs#select" data-index="0" class="px-4 py-2 text-sm font-medium">All</button>
+      <button role="tab" aria-selected="false" data-tabs-target="tab" data-action="click->tabs#select" data-index="1" class="px-4 py-2 text-sm font-medium">Published</button>
+    </div>
+
+    <div data-tabs-target="panel" role="tabpanel" aria-label="All posts">
+      <div id="posts" data-search-target="results">
+        <%= render @posts %>
+      </div>
+    </div>
+
+    <div data-tabs-target="panel" role="tabpanel" aria-label="Published posts" hidden aria-hidden="true">
+      <p>Published posts only</p>
+    </div>
+  </div>
+
+  <%= link_to "New Post", new_post_path, class: "inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" %>
+</section>

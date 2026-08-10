@@ -12,6 +12,9 @@ module RailsAiContext
     # has no Ruby AST to walk. Matching both sides as text keeps them
     # comparable, and every finding here is a heuristic, not a fact.
     class PerformanceIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

@@ -1,0 +1,20 @@
+<%# locals: (status:, size: :md) %>
+<%
+  colors = {
+    "active" => "bg-green-100 text-green-800",
+    "inactive" => "bg-gray-100 text-gray-800",
+    "pending" => "bg-yellow-100 text-yellow-800",
+    "error" => "bg-red-100 text-red-800"
+  }
+  sizes = { sm: "px-2 py-0.5 text-xs", md: "px-2.5 py-1 text-sm", lg: "px-3 py-1.5 text-base" }
+%>
+<span
+  role="status"
+  aria-label="Status: <%= status %>"
+  class="inline-flex items-center rounded-full font-medium <%= colors[status.to_s] || colors['inactive'] %> <%= sizes[size] %>"
+>
+  <svg class="mr-1.5 h-2 w-2" fill="currentColor" viewBox="0 0 8 8" aria-hidden="true">
+    <circle cx="4" cy="4" r="3" />
+  </svg>
+  <%= status.to_s.humanize %>
+</span>

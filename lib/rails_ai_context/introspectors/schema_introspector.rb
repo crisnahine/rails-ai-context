@@ -5,6 +5,9 @@ module RailsAiContext
     # Extracts database schema information including tables, columns,
     # indexes, and foreign keys from the Rails application.
     class SchemaIntrospector
+      extend StaticTier
+      static_tier :alternate_source
+
       attr_reader :app
 
       def initialize(app)

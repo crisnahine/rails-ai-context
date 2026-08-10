@@ -11,9 +11,10 @@ module RailsAiContext
     # Not EnvIntrospector, which reads environment variables and ENV[] usage.
     # This one reads the environment config files; that one reads the process
     # environment.
-    #
-    # File-based only: works in the static tier, so static_call aliases call.
     class EnvConfigIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       # Assignments whose values are lifted into the per-env `notable` hash.
@@ -44,11 +45,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] EnvConfigIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
         { error: e.message }
-      end
-
-      # File-based only - the static tier serves the same data.
-      def static_call
-        call
       end
 
       private

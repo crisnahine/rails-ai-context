@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers asset pipeline configuration: Propshaft/Sprockets,
     # importmap pins, CSS framework, JS bundler.
     class AssetPipelineIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

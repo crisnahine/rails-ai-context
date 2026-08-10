@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers ViewComponent and Phlex components: class definitions,
     # slots, props, previews, and sidecar assets.
     class ComponentIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

@@ -9,6 +9,9 @@ module RailsAiContext
     # layout, and component file counts from package.json, lockfiles, and
     # bundler configs (Vite, Shakapacker, Webpacker).
     class FrontendFrameworkIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       MAX_PACKAGE_JSON_SIZE = 256 * 1024 # 256 KB

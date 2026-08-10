@@ -4,6 +4,9 @@ module RailsAiContext
   module Introspectors
     # Discovers custom rake tasks from lib/tasks/.
     class RakeTaskIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

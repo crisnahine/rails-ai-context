@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers database seed configuration: db/seeds.rb structure,
     # seed files in db/seeds/ directory, and what models they populate.
     class SeedsIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

@@ -109,14 +109,16 @@ module RailsAiContext
       end
     end
 
-    # Static tier: only introspectors that declare a static_call can produce
-    # data without a booted app; everything else is honestly unavailable
-    # rather than crashing into a misleading per-section error.
+    # Static tier: what an introspector answers is what it declared, so a
+    # section is either real data or an honest refusal, never a guess.
     def run_introspector(introspector)
       return introspector.call unless RailsAiContext.static_tier?
-      return introspector.static_call if introspector.respond_to?(:static_call)
 
-      { unavailable: unavailable_reason }
+      case introspector.class.static_tier
+      when Introspectors::StaticTier::FILES_ONLY       then introspector.call
+      when Introspectors::StaticTier::ALTERNATE_SOURCE then introspector.static_call
+      else { unavailable: unavailable_reason }
+      end
     end
 
     def unavailable_reason

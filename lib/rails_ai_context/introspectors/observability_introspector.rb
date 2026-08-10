@@ -8,6 +8,9 @@ module RailsAiContext
     # event-name catalog. Covers RAILS_NERVOUS_SYSTEM.md §34 (Observability)
     # and §38 (AS::Notifications event catalog).
     class ObservabilityIntrospector
+      extend StaticTier
+      static_tier :runtime_only
+
       attr_reader :app
 
       def initialize(app)

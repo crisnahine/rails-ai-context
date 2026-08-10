@@ -113,6 +113,9 @@ RSpec.describe RailsAiContext::Introspector do
 
     it "routes sections through static_call when the introspector provides one" do
       static_capable = Class.new do
+        extend RailsAiContext::Introspectors::StaticTier
+        static_tier :alternate_source
+
         def initialize(app); end
 
         def call
@@ -132,6 +135,9 @@ RSpec.describe RailsAiContext::Introspector do
 
     it "isolates a raising static_call to its own section" do
       exploding = Class.new do
+        extend RailsAiContext::Introspectors::StaticTier
+        static_tier :alternate_source
+
         def initialize(app); end
 
         def static_call
@@ -145,11 +151,16 @@ RSpec.describe RailsAiContext::Introspector do
       expect(result[:schema]).to eq(error: "static boom")
     end
 
-    it "marks sections without a static path unavailable, with the boot reason" do
+    it "marks runtime-only sections unavailable, with the boot reason" do
       result = RailsAiContext::Introspector.new(static_app).call
-      expect(result[:jobs]).to eq(
+      expect(result[:config]).to eq(
         unavailable: "requires a booted Rails app (RuntimeError: FATAL_ENV_MISSING)"
       )
+    end
+
+    it "runs a files-only section's own call rather than refusing" do
+      result = RailsAiContext::Introspector.new(static_app).call
+      expect(result[:gems]).to include(:total_gems)
     end
 
     it "does not count unavailable sections as warnings" do

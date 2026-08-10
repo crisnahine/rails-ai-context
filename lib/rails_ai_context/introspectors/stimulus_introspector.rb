@@ -4,6 +4,9 @@ module RailsAiContext
   module Introspectors
     # Scans Stimulus controllers and extracts targets, values, and actions.
     class StimulusIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

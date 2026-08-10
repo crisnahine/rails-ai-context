@@ -5,6 +5,9 @@ module RailsAiContext
     # Analyzes Gemfile.lock to identify installed gems and
     # map them to known patterns/frameworks the AI should know about.
     class GemIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       # Known gems that significantly affect how the app works.

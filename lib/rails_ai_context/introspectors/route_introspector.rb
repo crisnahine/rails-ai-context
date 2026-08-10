@@ -5,6 +5,9 @@ module RailsAiContext
     # Extracts route information from the Rails router including
     # HTTP verb, path, controller#action, and route constraints.
     class RouteIntrospector
+      extend StaticTier
+      static_tier :alternate_source
+
       attr_reader :app
 
       def initialize(app)

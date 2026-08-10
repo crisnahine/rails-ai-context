@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers API layer setup: api_only mode, serializers, GraphQL,
     # versioning patterns, rate limiting.
     class ApiIntrospector
+      extend StaticTier
+      static_tier :runtime_only
+
       attr_reader :app
 
       def initialize(app)

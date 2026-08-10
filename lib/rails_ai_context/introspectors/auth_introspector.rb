@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers authentication and authorization setup: Devise, Rails 8 auth,
     # Pundit, CanCanCan, CORS, CSP.
     class AuthIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       # Settings reported as a bare word rather than as their literal value,
       # matching how Devise's own docs name the strategies.
       SYMBOL_DEVISE_SETTINGS = %i[lock_strategy unlock_strategy].freeze

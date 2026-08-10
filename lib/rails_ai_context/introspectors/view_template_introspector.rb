@@ -11,6 +11,9 @@ module RailsAiContext
     # AST. Splitting the Phlex path onto listeners would mean two definitions
     # of "what a partial reference is" that could drift apart.
     class ViewTemplateIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

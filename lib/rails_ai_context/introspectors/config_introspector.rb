@@ -5,6 +5,9 @@ module RailsAiContext
     # Extracts application configuration: cache store, session store,
     # timezone, middleware stack, initializers, credentials status.
     class ConfigIntrospector
+      extend StaticTier
+      static_tier :runtime_only
+
       attr_reader :app
 
       def initialize(app)

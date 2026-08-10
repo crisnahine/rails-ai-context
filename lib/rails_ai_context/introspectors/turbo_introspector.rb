@@ -4,6 +4,9 @@ module RailsAiContext
   module Introspectors
     # Scans for Hotwire/Turbo usage: frames, streams, model broadcasts.
     class TurboIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

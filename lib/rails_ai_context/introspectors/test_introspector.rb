@@ -5,6 +5,9 @@ module RailsAiContext
     # Discovers test infrastructure: framework, factories/fixtures,
     # system tests, helpers, CI config, coverage.
     class TestIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

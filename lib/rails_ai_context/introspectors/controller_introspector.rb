@@ -7,6 +7,9 @@ module RailsAiContext
     # Uses source-file parsing (not just Ruby reflection) so that
     # changes made mid-session are always visible.
     class ControllerIntrospector
+      extend StaticTier
+      static_tier :alternate_source
+
       attr_reader :app
 
       def excluded_filters

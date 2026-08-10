@@ -4,6 +4,9 @@ module RailsAiContext
   module Introspectors
     # Discovers Action Text usage: rich text fields per model.
     class ActionTextIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)

@@ -1,0 +1,7 @@
+en:
+  hello: "Hello world"
+  posts:
+    index:
+      title: "All Posts"
+    show:
+      title: "Post Details"

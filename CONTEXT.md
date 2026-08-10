@@ -14,7 +14,15 @@ Overloaded. Always qualify it; never use "environment" bare in a tool name, an i
 
 ## Static tier
 
-The mode where the app did not boot, or `--no-boot` was passed. An introspector answers in this tier only if it defines `static_call`. Two shapes count as defining it: reading a different source (parsing `db/schema.rb` instead of querying the connection), and reading the same source a booted app would (a file-based introspector, where `static_call` is the same work under another name).
+The mode where the app did not boot, or `--no-boot` was passed. What an introspector answers here is what it declared, never what a runtime check happened to detect. Every introspector in `INTROSPECTOR_MAP` extends `StaticTier` and names one of three kinds:
+
+**files-only** - `call` runs unchanged against the static app handle, because it only ever read files. Most of the map.
+
+**alternate-source** - `static_call` answers from a different source than `call` does: `db/schema.rb` instead of the connection, `config/routes.rb` instead of the route set.
+
+**runtime-only** - needs `app.config`, `app.routes` or a live database, and refuses honestly.
+
+An undeclared introspector fails the suite, and every files-only declaration is proven against `spec/fixtures/static_app` with nothing booted. Declaring files-only while defining `static_call` (or the reverse) is also a spec failure.
 
 ## AI tool
 

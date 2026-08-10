@@ -8,6 +8,9 @@ module RailsAiContext
     #
     # Covers RAILS_NERVOUS_SYSTEM.md §2 (Initializer graph).
     class InitializerIntrospector
+      extend StaticTier
+      static_tier :runtime_only
+
       attr_reader :app
 
       def initialize(app)

@@ -7,6 +7,9 @@ module RailsAiContext
     # MessageEncryptor/MessageVerifier usage, and TaggedLogging tags.
     # Covers RAILS_NERVOUS_SYSTEM.md §17 (ActiveSupport).
     class ActiveSupportIntrospector
+      extend StaticTier
+      static_tier :files_only
+
       attr_reader :app
 
       def initialize(app)
