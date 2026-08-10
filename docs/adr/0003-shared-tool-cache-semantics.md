@@ -2,11 +2,11 @@
 
 Status: accepted
 
-`Tools::BaseTool` keeps two process-global structures - `SHARED_CACHE` (one introspection result for every tool) and `SESSION_CONTEXT` (what has been called with what). Both are read by three transports, two of which serve many clients from one process. This records what the audit found, so the next reader does not re-derive it from the mutex.
+`Tools::BaseTool` keeps two process-global structures - `SHARED_CACHE` (one introspection result for every tool) and `SESSION_CONTEXT` (what has been called with what). Both are read by four entry points - stdio, the Rack middleware, the engine controller and the standalone HTTP server - three of which serve many clients from one process. This records what the audit found, so the next reader does not re-derive it from the mutex.
 
 ## Defects, fixed
 
-**One client's session record was served to another.** `SESSION_CONTEXT[:queries]` was a single flat hash. Over stdio that is right - one process is one conversation - but the middleware and the engine controller serve every client from one process, so `rails_session_context` listed calls the asking client never made. The record is now bucketed per conversation: both HTTP entry points wrap each request in `BaseTool.with_session(<Mcp-Session-Id>)`, and stdio falls through to a single default bucket, unchanged.
+**One client's session record was served to another.** `SESSION_CONTEXT[:queries]` was a single flat hash. Over stdio that is right - one process is one conversation - but the middleware, the engine controller and the standalone HTTP server each serve every client from one process, so `rails_session_context` listed calls the asking client never made. The record is now bucketed per conversation: all three HTTP entry points wrap each request in `BaseTool.with_session(<Mcp-Session-Id>)`, and stdio falls through to a single default bucket, unchanged.
 
 **`session_queries` handed out live entries.** It returned `values.dup`, a shallow copy, so the entry hashes stayed live inside the record and kept being mutated by later calls - a caller's snapshot changed under it. It now copies each entry.
 

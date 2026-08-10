@@ -372,6 +372,26 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
       expect(described_class.read(root: root)).to eq([ :claude ])
     end
+
+    # `json` is a real context format and a real rake task, but not an AI
+    # tool. Seeding a selection first hid this: with nothing recorded, the
+    # union was empty and an empty selection went into the user's files.
+    it "writes nothing at all when the only name given is not an AI tool" do
+      write_initializer("RailsAiContext.configure do |config|\n  config.preset = :full\nend\n")
+
+      result = described_class.add(:json, root: root)
+
+      expect(File.exist?(File.join(root, ".rails-ai-context.yml"))).to be(false)
+      expect(File.read(File.join(root, "config", "initializers", "rails_ai_context.rb")))
+        .not_to include("config.ai_tools")
+      expect(result[:tools]).to eq([])
+    end
+
+    it "says nothing happened when it wrote nothing" do
+      result = described_class.add(:json, root: root)
+
+      expect(described_class.messages(result)).to be_empty
+    end
   end
 
   # The bug: re-running install through a different entry point dropped the

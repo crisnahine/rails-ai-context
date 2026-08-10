@@ -1,15 +1,23 @@
 # frozen_string_literal: true
 
-ASSISTANT_TABLE = <<~TABLE unless defined?(ASSISTANT_TABLE)
-  AI Assistant       Context File                          Command
-  --                 --                                    --
-  Claude Code        CLAUDE.md + .claude/rules/            rails ai:context:claude
-  OpenCode           AGENTS.md                             rails ai:context:opencode
-  Cursor             .cursor/rules/ + .cursorrules         rails ai:context:cursor
-  GitHub Copilot     .github/copilot-instructions.md       rails ai:context:copilot
-  Codex CLI          AGENTS.md + .codex/config.toml        rails ai:context:codex
-  JSON (generic)     .ai-context.json                      rails ai:context:json
-TABLE
+# Built from Install::AiTool rather than typed out: the hand-written copy had
+# already drifted, printing a Copilot row that omitted .github/instructions/.
+ASSISTANT_TABLE = begin
+  rows = RailsAiContext::Install::AiTool.all.map { |tool|
+    [ tool.name, tool.files, "rails ai:context:#{tool.key}" ]
+  }
+  rows << [ "JSON (generic)", ".ai-context.json", "rails ai:context:json" ]
+
+  name_width = rows.map { |r| r[0].length }.max
+  file_width = rows.map { |r| r[1].length }.max
+
+  header = [ "AI Assistant".ljust(name_width), "Context File".ljust(file_width), "Command" ]
+  divider = [ "--".ljust(name_width), "--".ljust(file_width), "--" ]
+
+  ([ header, divider ] + rows)
+    .map { |name, files, command| "  #{name.ljust(name_width)}  #{files.ljust(file_width)}  #{command}".rstrip }
+    .join("\n") + "\n"
+end unless defined?(ASSISTANT_TABLE)
 
 def print_result(result)
   result[:written].each { |f| puts "  ✅ #{f}" }
@@ -355,9 +363,8 @@ namespace :ai do
   end
 
   namespace :context do
-    { claude: "CLAUDE.md", opencode: "AGENTS.md", codex: "AGENTS.md",
-      cursor: ".cursor/rules/ + .cursorrules", copilot: ".github/copilot-instructions.md",
-      json: ".ai-context.json" }.each do |fmt, file|
+    per_tool = RailsAiContext::Install::AiTool.all.to_h { |tool| [ tool.key, tool.files ] }
+    per_tool.merge(json: ".ai-context.json").each do |fmt, file|
       desc "Generate #{file} context file"
       task fmt => :environment do
         require "rails_ai_context"

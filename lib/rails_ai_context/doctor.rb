@@ -168,13 +168,17 @@ module RailsAiContext
     # atomically by the same serializer). For Cursor, `.cursor/rules/` is
     # the sentinel; `.cursorrules` (v5.9.0 legacy fallback) is generated
     # atomically next to it, so checking either proves both are fresh.
-    CONTEXT_FILES = {
-      claude:   "CLAUDE.md",
-      cursor:   ".cursor/rules",
-      opencode: "AGENTS.md",
-      codex:    "AGENTS.md",
-      copilot:  ".github/copilot-instructions.md"
-    }.freeze
+    # The first context path is each tool's sentinel: the rest are written
+    # atomically beside it, so its freshness proves theirs.
+    CONTEXT_FILES = Install::AiTool.all.to_h { |tool| [ tool.key, tool.context_paths.first ] }.freeze
+
+    # Where each tool's MCP config lives, and how to name it in a report.
+    def self.mcp_config_checks
+      Install::AiTool.all.to_h { |tool|
+        path = tool.mcp_config[:path]
+        [ tool.key, { path: path, label: "#{path} (#{tool.name})" } ]
+      }
+    end
 
     def check_context_freshness
       ai_tools = configured_ai_tools
@@ -251,13 +255,7 @@ module RailsAiContext
       end
 
       ai_tools = configured_ai_tools
-      configs = {
-        claude:   { path: ".mcp.json",         label: ".mcp.json (Claude Code)" },
-        cursor:   { path: ".cursor/mcp.json",  label: ".cursor/mcp.json (Cursor)" },
-        copilot:  { path: ".vscode/mcp.json",  label: ".vscode/mcp.json (VS Code/Copilot)" },
-        opencode: { path: "opencode.json",     label: "opencode.json (OpenCode)" },
-        codex:    { path: ".codex/config.toml", label: ".codex/config.toml (Codex CLI)" }
-      }
+      configs = self.class.mcp_config_checks
 
       # Check at least the Claude Code config (always expected)
       tools_to_check = ai_tools & configs.keys

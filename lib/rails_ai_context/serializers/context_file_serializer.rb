@@ -16,16 +16,17 @@ module RailsAiContext
     class ContextFileSerializer
       attr_reader :context, :format
 
-      FORMAT_MAP = {
-        claude:    "CLAUDE.md",
-        opencode:  "AGENTS.md",
-        codex:     "AGENTS.md",
-        copilot:   ".github/copilot-instructions.md",
-        json:      ".ai-context.json"
-      }.freeze
-
       # Formats that produce only split rules (no root file).
       SPLIT_ONLY_FORMATS = %i[cursor].freeze
+
+      # The root file each format writes: an AI tool's first context path,
+      # plus the toolless JSON dump. Derived so a tool's files are declared
+      # once, in Install::AiTool.
+      FORMAT_MAP = Install::AiTool.all
+        .reject { |tool| SPLIT_ONLY_FORMATS.include?(tool.key) }
+        .to_h { |tool| [ tool.key, tool.context_paths.first ] }
+        .merge(json: ".ai-context.json")
+        .freeze
 
       ALL_FORMATS = (FORMAT_MAP.keys + SPLIT_ONLY_FORMATS).freeze
 

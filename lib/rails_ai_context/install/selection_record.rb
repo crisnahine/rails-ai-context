@@ -50,7 +50,7 @@ module RailsAiContext
       #   untouched, for callers refreshing this gem's own YAML on a run the
       #   user did not ask to change their selection in.
       # @return [Hash] { tools:, yaml: :created|:updated|:unchanged|:failed,
-      #   initializer: :updated|:inserted|:unchanged|:absent|:skipped }
+      #   initializer: :updated|:inserted|:unchanged|:conflict|:absent|:skipped }
       def write(tools, root:, extra_yaml: {}, initializer: true)
         tools = normalize(tools)
 
@@ -77,7 +77,14 @@ module RailsAiContext
       # together rather than only in whichever one the caller happened to
       # know about.
       def add(tool, root:)
-        write((read(root: root) || []) | normalize([ tool ]), root: root)
+        addition = normalize([ tool ])
+        # `json` is a real context format and a real rake task but not an AI
+        # tool. Recording the empty union would put `config.ai_tools = %i[]`
+        # into the user's initializer and, worse, make the record look set,
+        # so the first-run prompt never fires again.
+        return { tools: [], yaml: :skipped, initializer: :skipped } if addition.empty?
+
+        write((read(root: root) || []) | addition, root: root)
       end
 
       def initializer_line(tools)
@@ -138,7 +145,7 @@ module RailsAiContext
         tools.empty? ? nil : tools
       end
 
-      # @return [Symbol] :created, :updated or :unchanged
+      # @return [Symbol] :created, :updated, :unchanged or :failed
       private_class_method def self.write_yaml(tools, root, extra = {})
         path = File.join(root.to_s, YAML_FILE)
         existed = File.exist?(path)
@@ -162,7 +169,7 @@ module RailsAiContext
       # none. Creating the initializer itself is the generator's job: a
       # project without one is not a Rails app this gem installed into.
       #
-      # @return [Symbol] :updated, :inserted, :unchanged or :absent
+      # @return [Symbol] :updated, :inserted, :unchanged, :conflict or :absent
       private_class_method def self.write_initializer(tools, root)
         path = File.join(root.to_s, INITIALIZER)
         return :absent unless File.exist?(path)
