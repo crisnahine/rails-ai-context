@@ -85,6 +85,33 @@ RSpec.describe RailsAiContext::Redaction do
     it "handles a setting with no value" do
       expect(described_class.redact_setting(:jwt, nil)).to be_nil
     end
+
+    # An evaluated value is not always a String: the AST extractor returns
+    # arrays, hashes, symbols and numbers. Letting those past because they
+    # are not Strings leaves the credential in the one field that skipped
+    # the check.
+    it "filters a secret-named setting holding an array" do
+      expect(described_class.redact_setting(:secret_keys, [ "abc123", "def456" ])).to eq("[FILTERED]")
+    end
+
+    it "filters a secret-named setting holding a hash" do
+      expect(described_class.redact_setting(:credentials, { token: "tok_live_xyz" })).to eq("[FILTERED]")
+    end
+
+    it "filters a secret-named setting holding a symbol" do
+      expect(described_class.redact_setting(:api_key, :some_constant)).to eq("[FILTERED]")
+    end
+
+    it "leaves a non-string value of an ordinary setting alone" do
+      expect(described_class.redact_setting(:timeout_in, 30)).to eq(30)
+      expect(described_class.redact_setting(:eager_load, true)).to be(true)
+      expect(described_class.redact_setting(:queue_adapter, :sidekiq)).to eq(:sidekiq)
+    end
+
+    # A descriptor still describes, whatever type it holds.
+    it "leaves a descriptor's non-string value alone" do
+      expect(described_class.redact_setting(:password_length, 6..128)).to eq(6..128)
+    end
   end
 
   describe ".redact_log_line" do

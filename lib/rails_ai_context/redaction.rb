@@ -89,11 +89,21 @@ module RailsAiContext
       # whether it is a secret: `config.secret_key = "s3cr3t"` reaches a
       # listener as the bare string `"s3cr3t"`, which looks like any other.
       def redact_setting(name, source)
-        return source unless source.is_a?(String)
-        return call(source) unless secret_name?(name)
+        # nil is the absence of a value, not a secret.
+        return source if source.nil?
 
-        quote = source.start_with?('"', "'") ? source[0] : nil
-        quote ? "#{quote}#{FILTERED}#{quote}" : FILTERED
+        # The name decides first. An evaluated value is often not a String -
+        # the AST extractor returns arrays, hashes, symbols and numbers - and
+        # skipping those for being the wrong type is how a credential stays
+        # in the one field that never got checked.
+        if secret_name?(name)
+          return FILTERED unless source.is_a?(String)
+
+          quote = source.start_with?('"', "'") ? source[0] : nil
+          return quote ? "#{quote}#{FILTERED}#{quote}" : FILTERED
+        end
+
+        source.is_a?(String) ? call(source) : source
       end
 
       def secret_name?(name)
