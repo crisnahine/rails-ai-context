@@ -60,30 +60,31 @@ RSpec.describe RailsAiContext::Redaction do
   end
 
   # The config listener sees the assigned value on its own; the setting's
-  # name is the only thing that says whether it is a secret.
-  describe ".redact_setting" do
+  # name is the only thing that says whether it is a secret. These exercise
+  # the value half of the one entry point.
+  describe ".redact_assignment, on the value" do
     it "filters a value assigned to a secret-named setting" do
-      expect(described_class.redact_setting(:secret_key, '"s3cr3t"')).to eq('"[FILTERED]"')
-      expect(described_class.redact_setting("api_key", '"abc123"')).to eq('"[FILTERED]"')
+      expect(described_class.redact_assignment(:secret_key, value: '"s3cr3t"', source: nil)[:value]).to eq('"[FILTERED]"')
+      expect(described_class.redact_assignment("api_key", value: '"abc123"', source: nil)[:value]).to eq('"[FILTERED]"')
     end
 
     it "keeps the quoting style it was given" do
-      expect(described_class.redact_setting(:password, "'hunter2'")).to eq("'[FILTERED]'")
-      expect(described_class.redact_setting(:password, "ENV['PW']")).to eq("[FILTERED]")
+      expect(described_class.redact_assignment(:password, value: "'hunter2'", source: nil)[:value]).to eq("'[FILTERED]'")
+      expect(described_class.redact_assignment(:password, value: "ENV['PW']", source: nil)[:value]).to eq("[FILTERED]")
     end
 
     it "leaves an ordinary setting's value alone" do
-      expect(described_class.redact_setting(:eager_load, "true")).to eq("true")
-      expect(described_class.redact_setting(:timeout_in, "30.minutes")).to eq("30.minutes")
+      expect(described_class.redact_assignment(:eager_load, value: "true", source: nil)[:value]).to eq("true")
+      expect(described_class.redact_assignment(:timeout_in, value: "30.minutes", source: nil)[:value]).to eq("30.minutes")
     end
 
     it "still scrubs a credential embedded in an ordinary setting's value" do
-      expect(described_class.redact_setting(:cache_store, '"redis://app:pw@cache:6379"'))
+      expect(described_class.redact_assignment(:cache_store, value: '"redis://app:pw@cache:6379"', source: nil)[:value])
         .to eq('"redis://[FILTERED]@cache:6379"')
     end
 
     it "handles a setting with no value" do
-      expect(described_class.redact_setting(:jwt, nil)).to be_nil
+      expect(described_class.redact_assignment(:jwt, value: nil, source: nil)[:value]).to be_nil
     end
 
     # An evaluated value is not always a String: the AST extractor returns
@@ -93,37 +94,37 @@ RSpec.describe RailsAiContext::Redaction do
     # Element-wise, not wholesale: the reader still learns the shape - that
     # there are two keys, that a hash has a `token` - while the values go.
     it "filters a secret-named setting holding an array" do
-      expect(described_class.redact_setting(:secret_keys, [ "abc123", "def456" ]))
+      expect(described_class.redact_assignment(:secret_keys, value: [ "abc123", "def456" ], source: nil)[:value])
         .to eq([ "[FILTERED]", "[FILTERED]" ])
     end
 
     it "filters a secret-named setting holding a hash" do
-      expect(described_class.redact_setting(:credentials, { token: "tok_live_xyz" }))
+      expect(described_class.redact_assignment(:credentials, value: { token: "tok_live_xyz" }, source: nil)[:value])
         .to eq(token: "[FILTERED]")
     end
 
     it "leaves a non-string value of an ordinary setting alone" do
-      expect(described_class.redact_setting(:timeout_in, 30)).to eq(30)
-      expect(described_class.redact_setting(:eager_load, true)).to be(true)
-      expect(described_class.redact_setting(:queue_adapter, :sidekiq)).to eq(:sidekiq)
+      expect(described_class.redact_assignment(:timeout_in, value: 30, source: nil)[:value]).to eq(30)
+      expect(described_class.redact_assignment(:eager_load, value: true, source: nil)[:value]).to be(true)
+      expect(described_class.redact_assignment(:queue_adapter, value: :sidekiq, source: nil)[:value]).to eq(:sidekiq)
     end
 
     # A descriptor still describes, whatever type it holds.
     it "leaves a descriptor's non-string value alone" do
-      expect(described_class.redact_setting(:password_length, 6..128)).to eq(6..128)
+      expect(described_class.redact_assignment(:password_length, value: 6..128, source: nil)[:value]).to eq(6..128)
     end
 
     # A Symbol is an identifier, a boolean is a policy, a number is a size.
     # None of them is credential material, and filtering them hides the
     # config a reader came for.
     it "keeps a secret-named setting's symbol and boolean values" do
-      expect(described_class.redact_setting(:reset_password_keys, [ :email ])).to eq([ :email ])
-      expect(described_class.redact_setting(:send_password_change_notification, false)).to be(false)
-      expect(described_class.redact_setting(:api_key, :from_env)).to eq(:from_env)
+      expect(described_class.redact_assignment(:reset_password_keys, value: [ :email ], source: nil)[:value]).to eq([ :email ])
+      expect(described_class.redact_assignment(:send_password_change_notification, value: false, source: nil)[:value]).to be(false)
+      expect(described_class.redact_assignment(:api_key, value: :from_env, source: nil)[:value]).to eq(:from_env)
     end
 
     it "filters the strings inside a secret-named collection" do
-      expect(described_class.redact_setting(:secret_keys, [ "abc123", "def456" ]))
+      expect(described_class.redact_assignment(:secret_keys, value: [ "abc123", "def456" ], source: nil)[:value])
         .to eq([ "[FILTERED]", "[FILTERED]" ])
     end
 
@@ -132,19 +133,19 @@ RSpec.describe RailsAiContext::Redaction do
     it "filters a credential nested under an ordinary setting" do
       settings = { user_name: "app", password: "hunter2", address: "smtp.example.com" }
 
-      expect(described_class.redact_setting(:smtp_settings, settings))
+      expect(described_class.redact_assignment(:smtp_settings, value: settings, source: nil)[:value])
         .to eq(user_name: "app", password: "[FILTERED]", address: "smtp.example.com")
     end
 
     it "filters a credential nested two levels down" do
       value = { cache: { url: "redis://u:pw@host:6379", token: "tok_live_xyz" } }
 
-      expect(described_class.redact_setting(:stores, value))
+      expect(described_class.redact_assignment(:stores, value: value, source: nil)[:value])
         .to eq(cache: { url: "redis://[FILTERED]@host:6379", token: "[FILTERED]" })
     end
 
     it "still scrubs a URI credential inside an ordinary collection" do
-      expect(described_class.redact_setting(:cache_store, [ :redis_cache_store, { url: "redis://u:pw@h:6379" } ]))
+      expect(described_class.redact_assignment(:cache_store, value: [ :redis_cache_store, { url: "redis://u:pw@h:6379" } ], source: nil)[:value])
         .to eq([ :redis_cache_store, { url: "redis://[FILTERED]@h:6379" } ])
     end
   end
@@ -154,7 +155,7 @@ RSpec.describe RailsAiContext::Redaction do
   describe "secret vocabulary" do
     it "recognises the names people actually put credentials under" do
       %i[pepper salt master_key signing_key encryption_key deterministic_key key_derivation_salt].each do |name|
-        expect(described_class.redact_setting(name, '"abc123deadbeef"'))
+        expect(described_class.redact_assignment(name, value: '"abc123deadbeef"', source: nil)[:value])
           .to eq('"[FILTERED]"'), "#{name} was not treated as a secret"
       end
     end
@@ -162,8 +163,8 @@ RSpec.describe RailsAiContext::Redaction do
     # `primary_key` is ordinary ActiveRecord vocabulary; only the encryption
     # one is a credential, and the path is what tells them apart.
     it "leaves a bare primary_key alone but filters the encryption one" do
-      expect(described_class.redact_setting(:primary_key, ":id")).to eq(":id")
-      expect(described_class.redact_setting(%i[active_record encryption primary_key], '"deadbeef"'))
+      expect(described_class.redact_assignment(:primary_key, value: ":id", source: nil)[:value]).to eq(":id")
+      expect(described_class.redact_assignment(%i[active_record encryption primary_key], value: '"deadbeef"', source: nil)[:value])
         .to eq('"[FILTERED]"')
     end
   end

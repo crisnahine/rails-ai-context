@@ -39,7 +39,15 @@ module RailsAiContext
 
     URI_USERINFO = %r{([a-z][a-z0-9+.-]*://)[^\s/]*:[^@\s]+@}i
     QUOTED_SECRET = /#{SECRET_NAME}#{ASSIGN}["'][^"']*["']/
-    BARE_SECRET = /#{SECRET_NAME}#{ASSIGN}(?!["'])[^\s,;)\]}]+/
+    # Stops before a collection: the value pattern ends at the first comma or
+    # bracket, so matching `token: ["a", "b"]` would cut mid-literal and
+    # leave the tail of the credential in place. Collections are handled by
+    # filtering the whole slice instead. Symbols are skipped for the reason
+    # policy_value? skips them - `password: :from_env` names where the value
+    # comes from, it is not the value.
+    BARE_SECRET = /#{SECRET_NAME}#{ASSIGN}(?!["'\[{:])[^\s,;)\]}]+/
+
+    COLLECTION_LITERAL = /\A\s*[\[{]/
 
     # A value actually shaped like a credential: a long hex blob or a vendor
     # prefix. For callers reading a bare value with no key beside it to match
@@ -107,41 +115,22 @@ module RailsAiContext
       # credential is as often under a key inside it (`smtp_settings` holding
       # a `password`) as it is under the setting itself.
       #
-      # @param name [Symbol, String, Array] the setting, or its full path
-      def redact_setting(name, source)
-        walk(source, secret_name?(name))
-      end
-
-      # One assignment, both of the fields a listener emits for it. Deciding
-      # separately let them disagree: the source slice is always a String, so
-      # any rule about the value's type never reached it.
+      # Both of the fields a listener emits for one assignment are decided
+      # together. Deciding separately let them disagree: the source slice is
+      # always a String, so any rule about the value's type never reached it.
       #
+      # @param name [Symbol, String, Array] the setting, or its full path
       # @return [Hash] { value:, source: }
       def redact_assignment(name, value:, source:)
-        return { value: walk(value, false), source: walk(source, false) } unless secret_assignment?(name, value)
-
-        { value: FILTERED, source: source.nil? ? nil : filtered_like(source) }
-      end
-
-      # Credential shape beats the descriptor list: `api_key_params` is
-      # excused by its suffix, but a value reading `sk_live_...` is a
-      # credential whatever the setting is called.
-      def secret_assignment?(name, value)
-        return true if value.is_a?(String) && credential_shaped?(value)
-        return false unless secret_name?(name)
-
-        !policy_value?(value)
-      end
-
-      # Identifiers and switches, never credential material. Filtering them
-      # hides the config a reader came for - `reset_password_keys = [:email]`
-      # says which field the reset uses, not what the secret is.
-      def policy_value?(value)
-        case value
-        when Symbol, TrueClass, FalseClass, NilClass then true
-        when Array then value.all? { |element| policy_value?(element) }
-        else false
+        if secret_assignment?(name, value)
+          # Walked, not collapsed: the reader still learns the shape - that
+          # there are two keys, that a hash has a `token` - while the values
+          # go. The slice cannot be scrubbed that precisely, so it goes whole.
+          return { value: walk(value, true), source: source.nil? ? nil : filtered_like(source) }
         end
+
+        walked = walk(value, false)
+        { value: walked, source: scrub_slice(source, changed: walked != value) }
       end
 
       def secret_value?(value)
@@ -188,18 +177,53 @@ module RailsAiContext
 
       private
 
+      # Credential shape beats the descriptor list: `api_key_params` is
+      # excused by its suffix, but a value reading `sk_live_...` is a
+      # credential whatever the setting is called.
+      def secret_assignment?(name, value)
+        return true if value.is_a?(String) && credential_shaped?(value)
+        return false unless secret_name?(name)
+
+        !policy_value?(value)
+      end
+
+      # Identifiers and switches, never credential material. Filtering them
+      # hides the config a reader came for - `reset_password_keys = [:email]`
+      # says which field the reset uses, not what the secret is.
+      def policy_value?(value)
+        case value
+        when Symbol, TrueClass, FalseClass, NilClass then true
+        when Array then value.all? { |element| policy_value?(element) }
+        else false
+        end
+      end
+
+
       # `secret` says the enclosing name already marks this as credential
-      # material. Symbols, numbers and booleans are identifiers and policy,
-      # never secrets, so they survive either way - filtering them would hide
-      # the config the reader came for (`reset_password_keys = [:email]`).
+      # material. What survives it is decided by policy_value?, the same rule
+      # the top level uses - otherwise a number under a secret key is kept
+      # while the same number under a secret setting is filtered.
       def walk(value, secret)
         case value
         when nil    then nil
         when String then secret ? filtered_like(value) : call(value)
         when Array  then value.map { |element| walk(element, secret) }
         when Hash   then value.to_h { |key, inner| [ key, walk(inner, secret || secret_name?(key)) ] }
-        else value
+        else secret && !policy_value?(value) ? FILTERED : value
         end
+      end
+
+      # The slice is Ruby text, so the patterns can scrub a quoted value in
+      # place. They cannot scrub inside a collection literal without cutting
+      # it mid-value, so when walking the evaluated value found a secret that
+      # the patterns did not reach, the whole slice goes.
+      def scrub_slice(source, changed:)
+        return source unless source.is_a?(String)
+
+        scrubbed = call(source)
+        return scrubbed unless changed && scrubbed == source && source.match?(COLLECTION_LITERAL)
+
+        FILTERED
       end
 
       # Keeps the quoting of a source slice so the result still reads as the
