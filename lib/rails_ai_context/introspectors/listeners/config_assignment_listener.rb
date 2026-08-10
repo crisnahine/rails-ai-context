@@ -42,10 +42,14 @@ module RailsAiContext
           # Redacted here rather than by each consumer: an initializer's
           # `config.secret_key = "..."` is a real credential, and a new reader
           # of this listener is safe without remembering anything.
+          value = value_node ? extract_value(value_node) : nil
+
           @results << {
             path:       prefix + [ setting ],
             assignment: true,
-            value:      value_node ? extract_value(value_node) : nil,
+            # Both fields, or the property holds for one of them and the next
+            # reader of this listener picks the wrong one.
+            value:      RailsAiContext::Redaction.redact_setting(setting, value),
             source:     RailsAiContext::Redaction.redact_setting(setting, value_node&.slice),
             location:   node.location.start_line
           }

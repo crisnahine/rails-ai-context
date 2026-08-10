@@ -51,161 +51,161 @@ module RailsAiContext
 
       def self.call(table: nil, detail: "standard", limit: nil, offset: 0, format: "markdown", server_context: nil)
         fetch_section(:schema, subject: "Schema introspection") do |schema|
-        tables = schema[:tables] || {}
+          tables = schema[:tables] || {}
 
-        # Return full JSON if requested (existing behavior)
-        return text_response(schema.to_json) if format == "json" && RailsAiContext::DetailLevel.full?(detail)
+          # Return full JSON if requested (existing behavior)
+          return text_response(schema.to_json) if format == "json" && RailsAiContext::DetailLevel.full?(detail)
 
-        total = tables.size
-        offset = [ offset.to_i, 0 ].max
-        limit = [ limit.to_i, 0 ].max if limit && limit.to_i < 0
+          total = tables.size
+          offset = [ offset.to_i, 0 ].max
+          limit = [ limit.to_i, 0 ].max if limit && limit.to_i < 0
 
-        # Single table - case-insensitive lookup with model name normalization
-        # Accepts: "users", "Users", "User" (model name → pluralized+underscored table)
-        if table
-          table_down = table.downcase
-          table_as_table = table.underscore.pluralize # Post → posts, UserProfile → user_profiles
-          table_key = tables.keys.find { |k|
-            k.downcase == table_down || k == table_as_table || k == table.underscore
-          } || table
-          table_data = tables[table_key]
-          unless table_data
-            return not_found_response("Table", table, tables.keys.sort,
-              recovery_tool: "Call rails_get_schema(detail:\"summary\") to see all tables")
-          end
-          if format == "json"
-            return text_response(table_data.to_json)
-          end
-
-          output = format_table_markdown(table_key, table_data)
-          # Cross-reference hint for AI: suggest next tool call
-          model_refs = models_for_table(table_key)
-          if model_refs.any?
-            output += "\n\n_Next: `rails_get_model_details(model:\"#{model_refs.first}\")` for associations, validations, scopes._"
-          end
-          return text_response(output)
-        end
-
-        case detail
-        when "summary"
-          limit ||= 50
-          limit = 50 if limit.to_i < 1
-          paginated = tables.keys.sort.drop(offset).first(limit)
-          if paginated.empty? && total > 0
-            return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
-          end
-          lines = [ "# Schema Summary (#{count_phrase(total, "table")})", "" ]
-          lines << "**Adapter:** #{schema[:adapter]}" if schema[:adapter]
-          lines.concat(static_source_lines(schema))
-          paginated.each do |name|
-            data = tables[name]
-            col_count = data[:columns]&.size || 0
-            idx_count = data[:indexes]&.size || 0
-            lines << "- **#{name}** - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
-          end
-          lines.concat(secondary_databases_lines(schema))
-          if offset + limit < total
-            lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more, or `table:\"name\"` for full detail._"
-            lines << "_cache_key: #{cache_key}_"
-          end
-          text_response(lines.join("\n"))
-
-        when "standard"
-          limit ||= 25
-          limit = 25 if limit.to_i < 1
-          # Sort by column count (most complex first) - AI agents care about big tables first
-          sorted = tables.keys.sort_by { |name| -(tables[name][:columns]&.size || 0) }
-          paginated = sorted.drop(offset).first(limit)
-          if paginated.empty?
-            return text_response("No tables at offset #{offset}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
-          end
-          lines = [ "# Schema (#{count_phrase(total, "table")}, showing #{paginated.size})", "" ]
-          lines.concat(static_source_lines(schema))
-          paginated.each do |name|
-            data = tables[name]
-            timestamp_cols = %w[id created_at updated_at]
-
-            # Build indexed/unique column sets for inline hints
-            indexed_cols = Set.new
-            unique_cols = Set.new
-            (data[:indexes] || []).each do |idx|
-              Array(idx[:columns]).each do |col|
-                idx[:unique] ? unique_cols.add(col) : indexed_cols.add(col)
-              end
+          # Single table - case-insensitive lookup with model name normalization
+          # Accepts: "users", "Users", "User" (model name → pluralized+underscored table)
+          if table
+            table_down = table.downcase
+            table_as_table = table.underscore.pluralize # Post → posts, UserProfile → user_profiles
+            table_key = tables.keys.find { |k|
+              k.downcase == table_down || k == table_as_table || k == table.underscore
+            } || table
+            table_data = tables[table_key]
+            unless table_data
+              return not_found_response("Table", table, tables.keys.sort,
+                recovery_tool: "Call rails_get_schema(detail:\"summary\") to see all tables")
+            end
+            if format == "json"
+              return text_response(table_data.to_json)
             end
 
-            # Detect encrypted columns from model data
-            encrypted_cols = Set.new
-            model_refs = models_for_table(name)
-            models_data = cached_context[:models] || {}
-            model_refs.each do |model_name|
-              (models_data.dig(model_name, :encrypts) || []).each { |f| encrypted_cols.add(f) }
-            end
-
-            cols = (data[:columns] || [])
-              .reject { |c| timestamp_cols.include?(c[:name]) }
-              .map do |c|
-                hints = []
-                hints << "unique" if unique_cols.include?(c[:name])
-                hints << "indexed" if indexed_cols.include?(c[:name]) && !unique_cols.include?(c[:name])
-                hints << "encrypted" if encrypted_cols.include?(c[:name])
-                # Show default value if present
-                if c.key?(:default) && !c[:default].nil? && c[:default] != ""
-                  hints << "default: #{c[:default]}"
-                end
-                hint_str = hints.any? ? " [#{hints.join(', ')}]" : ""
-                "#{c[:name]}:#{c[:type]}#{hint_str}"
-              end.join(", ")
-            # Inline model info so AI doesn't need a separate get_model_details call
-            model_info = ""
+            output = format_table_markdown(table_key, table_data)
+            # Cross-reference hint for AI: suggest next tool call
+            model_refs = models_for_table(table_key)
             if model_refs.any?
-              model_refs.each do |mname|
-                md = models_data[mname]
-                next unless md.is_a?(Hash) && !md[:error]
-                assoc_count = md[:associations]&.size || 0
-                val_count = md[:validations]&.size || 0
-                model_info = " → **#{mname}** (#{assoc_count} assoc, #{val_count} val)"
-                break
-              end
+              output += "\n\n_Next: `rails_get_model_details(model:\"#{model_refs.first}\")` for associations, validations, scopes._"
             end
-            lines << "### #{name}#{model_info}"
-            lines << cols
-            lines << ""
+            return text_response(output)
           end
 
-          # Detect orphaned tables (no ActiveRecord model maps to them)
-          orphaned = paginated.select { |name| models_for_table(name).empty? }
-          if orphaned.any?
-            lines << "\u26A0 **Orphaned tables** (no ActiveRecord model): #{orphaned.join(', ')}"
-            lines << ""
-          end
+          case detail
+          when "summary"
+            limit ||= 50
+            limit = 50 if limit.to_i < 1
+            paginated = tables.keys.sort.drop(offset).first(limit)
+            if paginated.empty? && total > 0
+              return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
+            end
+            lines = [ "# Schema Summary (#{count_phrase(total, "table")})", "" ]
+            lines << "**Adapter:** #{schema[:adapter]}" if schema[:adapter]
+            lines.concat(static_source_lines(schema))
+            paginated.each do |name|
+              data = tables[name]
+              col_count = data[:columns]&.size || 0
+              idx_count = data[:indexes]&.size || 0
+              lines << "- **#{name}** - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
+            end
+            lines.concat(secondary_databases_lines(schema))
+            if offset + limit < total
+              lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more, or `table:\"name\"` for full detail._"
+              lines << "_cache_key: #{cache_key}_"
+            end
+            text_response(lines.join("\n"))
 
-          lines.concat(secondary_databases_lines(schema))
-          lines << "_Use `detail:\"summary\"` for all #{count_phrase(total, "table")}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > limit
-          text_response(lines.join("\n"))
+          when "standard"
+            limit ||= 25
+            limit = 25 if limit.to_i < 1
+            # Sort by column count (most complex first) - AI agents care about big tables first
+            sorted = tables.keys.sort_by { |name| -(tables[name][:columns]&.size || 0) }
+            paginated = sorted.drop(offset).first(limit)
+            if paginated.empty?
+              return text_response("No tables at offset #{offset}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
+            end
+            lines = [ "# Schema (#{count_phrase(total, "table")}, showing #{paginated.size})", "" ]
+            lines.concat(static_source_lines(schema))
+            paginated.each do |name|
+              data = tables[name]
+              timestamp_cols = %w[id created_at updated_at]
 
-        when "full"
-          limit ||= 10
-          limit = 10 if limit.to_i < 1
-          paginated = tables.keys.sort.drop(offset).first(limit)
-          if paginated.empty? && total > 0
-            return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
+              # Build indexed/unique column sets for inline hints
+              indexed_cols = Set.new
+              unique_cols = Set.new
+              (data[:indexes] || []).each do |idx|
+                Array(idx[:columns]).each do |col|
+                  idx[:unique] ? unique_cols.add(col) : indexed_cols.add(col)
+                end
+              end
+
+              # Detect encrypted columns from model data
+              encrypted_cols = Set.new
+              model_refs = models_for_table(name)
+              models_data = cached_context[:models] || {}
+              model_refs.each do |model_name|
+                (models_data.dig(model_name, :encrypts) || []).each { |f| encrypted_cols.add(f) }
+              end
+
+              cols = (data[:columns] || [])
+                .reject { |c| timestamp_cols.include?(c[:name]) }
+                .map do |c|
+                  hints = []
+                  hints << "unique" if unique_cols.include?(c[:name])
+                  hints << "indexed" if indexed_cols.include?(c[:name]) && !unique_cols.include?(c[:name])
+                  hints << "encrypted" if encrypted_cols.include?(c[:name])
+                  # Show default value if present
+                  if c.key?(:default) && !c[:default].nil? && c[:default] != ""
+                    hints << "default: #{c[:default]}"
+                  end
+                  hint_str = hints.any? ? " [#{hints.join(', ')}]" : ""
+                  "#{c[:name]}:#{c[:type]}#{hint_str}"
+                end.join(", ")
+              # Inline model info so AI doesn't need a separate get_model_details call
+              model_info = ""
+              if model_refs.any?
+                model_refs.each do |mname|
+                  md = models_data[mname]
+                  next unless md.is_a?(Hash) && !md[:error]
+                  assoc_count = md[:associations]&.size || 0
+                  val_count = md[:validations]&.size || 0
+                  model_info = " → **#{mname}** (#{assoc_count} assoc, #{val_count} val)"
+                  break
+                end
+              end
+              lines << "### #{name}#{model_info}"
+              lines << cols
+              lines << ""
+            end
+
+            # Detect orphaned tables (no ActiveRecord model maps to them)
+            orphaned = paginated.select { |name| models_for_table(name).empty? }
+            if orphaned.any?
+              lines << "\u26A0 **Orphaned tables** (no ActiveRecord model): #{orphaned.join(', ')}"
+              lines << ""
+            end
+
+            lines.concat(secondary_databases_lines(schema))
+            lines << "_Use `detail:\"summary\"` for all #{count_phrase(total, "table")}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > limit
+            text_response(lines.join("\n"))
+
+          when "full"
+            limit ||= 10
+            limit = 10 if limit.to_i < 1
+            paginated = tables.keys.sort.drop(offset).first(limit)
+            if paginated.empty? && total > 0
+              return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
+            end
+            lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
+            paginated.each do |name|
+              lines << format_table_markdown(name, tables[name])
+              lines << ""
+            end
+            lines.concat(secondary_databases_lines(schema))
+            if offset + limit < total
+              lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more._"
+              lines << "_cache_key: #{cache_key}_"
+            end
+            text_response(lines.join("\n"))
+          else
+            # Fallback to full dump (backward compat)
+            text_response(format_schema_markdown(schema))
           end
-          lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
-          paginated.each do |name|
-            lines << format_table_markdown(name, tables[name])
-            lines << ""
-          end
-          lines.concat(secondary_databases_lines(schema))
-          if offset + limit < total
-            lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more._"
-            lines << "_cache_key: #{cache_key}_"
-          end
-          text_response(lines.join("\n"))
-        else
-          # Fallback to full dump (backward compat)
-          text_response(format_schema_markdown(schema))
-        end
         end
       end
 

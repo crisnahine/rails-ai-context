@@ -46,6 +46,26 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     ])
   end
 
+  # `source` is redacted at emission; `value` sat beside it unredacted, so the
+  # property the comment claims - a new reader of this listener is safe
+  # without remembering anything - held for one of the two fields.
+  it "redacts the evaluated value of a secret-named setting too" do
+    results = parse_and_dispatch(<<~RUBY)
+      config.secret_key = "s3cr3t"
+    RUBY
+
+    expect(results.first[:value]).to eq("[FILTERED]")
+    expect(results.first[:source]).to eq('"[FILTERED]"')
+  end
+
+  it "leaves an ordinary setting's evaluated value alone" do
+    results = parse_and_dispatch(<<~RUBY)
+      config.eager_load = true
+    RUBY
+
+    expect(results.first[:value]).to be(true)
+  end
+
   it "keeps the raw source for values it cannot evaluate" do
     results = assignments("config.password_length = 6..128")
 
