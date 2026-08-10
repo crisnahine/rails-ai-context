@@ -15,3 +15,9 @@ Overloaded. Always qualify it; never use "environment" bare in a tool name, an i
 ## Static tier
 
 The mode where the app did not boot, or `--no-boot` was passed. An introspector answers in this tier only if it defines `static_call`. Two shapes count as defining it: reading a different source (parsing `db/schema.rb` instead of querying the connection), and reading the same source a booted app would (a file-based introspector, where `static_call` is the same work under another name).
+
+## AI tool
+
+The assistant a user points at their app: claude, cursor, copilot, opencode, codex. What the gem generates for one is its **context files** (`CLAUDE.md`, `.cursor/rules/*.mdc`, and so on).
+
+Avoid "format" for either sense - claude is not a file format, and the word collides with real formatting elsewhere in the code. The public config key `ai_tools` already uses the canonical term.
