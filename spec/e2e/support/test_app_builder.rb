@@ -144,9 +144,17 @@ module E2E
       configure_postgres_yml! if database == :postgresql
     end
 
+    # Rails quotes a database name containing a dot as `"schema"."table"`, so
+    # `db:drop` on `..._3.1-7.0` dies with a PG syntax error. Keep the suffix
+    # to characters that survive identifier quoting.
+    def db_suffix
+      ENV.fetch("E2E_DB_SUFFIX") { "0" }.gsub(/[^A-Za-z0-9_]/, "_")
+    end
+
     def configure_postgres_yml!
       yml_path = File.join(app_path, "config", "database.yml")
       return unless File.exist?(yml_path)
+      suffix = db_suffix
       File.write(yml_path, <<~YAML)
         default: &default
           adapter: postgresql
@@ -159,11 +167,11 @@ module E2E
 
         development:
           <<: *default
-          database: rails_ai_context_e2e_dev_<%= ENV.fetch("E2E_DB_SUFFIX") { "0" } %>
+          database: rails_ai_context_e2e_dev_#{suffix}
 
         test:
           <<: *default
-          database: rails_ai_context_e2e_test_<%= ENV.fetch("E2E_DB_SUFFIX") { "0" } %>
+          database: rails_ai_context_e2e_test_#{suffix}
       YAML
     end
 

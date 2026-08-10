@@ -109,13 +109,15 @@ jobs:
           E2E_DB_SUFFIX: ${{ matrix.ruby }}-${{ matrix.rails }}
         run: |
           sudo apt-get update && sudo apt-get install -y postgresql-client
+          # A dot in the database name makes Rails quote it as "schema"."table",
+          # which PG rejects on db:drop. Keep the suffix to identifier-safe chars.
+          SAFE_SUFFIX="${E2E_DB_SUFFIX//[^A-Za-z0-9_]/_}"
+          echo "E2E_DB_SUFFIX=${SAFE_SUFFIX}" >> "$GITHUB_ENV"
           # Create the dev + test databases referenced by config/database.yml
-          PGPASSWORD="$PGPASSWORD" createdb -h "$PGHOST" -U "$PGUSER" "rails_ai_context_e2e_dev_${E2E_DB_SUFFIX}"
-          PGPASSWORD="$PGPASSWORD" createdb -h "$PGHOST" -U "$PGUSER" "rails_ai_context_e2e_test_${E2E_DB_SUFFIX}"
+          PGPASSWORD="$PGPASSWORD" createdb -h "$PGHOST" -U "$PGUSER" "rails_ai_context_e2e_dev_${SAFE_SUFFIX}"
+          PGPASSWORD="$PGPASSWORD" createdb -h "$PGHOST" -U "$PGUSER" "rails_ai_context_e2e_test_${SAFE_SUFFIX}"
 
       - name: Run E2E harness
-        env:
-          E2E_DB_SUFFIX: ${{ matrix.ruby }}-${{ matrix.rails }}
         run: bundle exec rspec spec/e2e --format documentation --format json --out tmp/e2e-report.json
         timeout-minutes: 25
 
