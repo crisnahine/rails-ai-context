@@ -57,7 +57,12 @@ module RailsAiContext
         return response unless first.is_a?(Hash) && first[:type] == "text"
 
         noted = [ first.merge(text: "#{first[:text]}#{note}") ] + content[1..].to_a
-        MCP::Tool::Response.new(noted, error: response.error?)
+        MCP::Tool::Response.new(
+          noted,
+          error: response.error?,
+          structured_content: response.structured_content,
+          meta: response.meta
+        )
       end
     end
   end

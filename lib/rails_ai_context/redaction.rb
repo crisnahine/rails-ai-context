@@ -44,34 +44,34 @@ module RailsAiContext
     # the pattern rather than worked out later by grepping the pattern's own
     # source for a distinguishing substring.
     LOG_PATTERNS = [
-      /(?<=password=)\S+/i,
-      /(?<=password:\s)\S+/i,
+      [ /(?<=password=)\S+/i, FILTERED ],
+      [ /(?<=password:\s)\S+/i, FILTERED ],
       [ /("password":\s*")[^"]+(")/i, "\\1#{FILTERED}\\2" ],
       [ /("password"=>")[^"]+(")/i, "\\1#{FILTERED}\\2" ],
-      /(?<=token=)\S+/i,
-      /(?<=token:\s)\S+/i,
-      /(?<=secret=)\S+/i,
-      /(?<=secret:\s)\S+/i,
-      /(?<=api_key=)\S+/i,
-      /(?<=api_key:\s)\S+/i,
-      /(?<=authorization:\s)(Bearer\s)?\S+/i,
+      [ /(?<=token=)\S+/i, FILTERED ],
+      [ /(?<=token:\s)\S+/i, FILTERED ],
+      [ /(?<=secret=)\S+/i, FILTERED ],
+      [ /(?<=secret:\s)\S+/i, FILTERED ],
+      [ /(?<=api_key=)\S+/i, FILTERED ],
+      [ /(?<=api_key:\s)\S+/i, FILTERED ],
+      [ /(?<=authorization:\s)(Bearer\s)?\S+/i, FILTERED ],
       # Keeps the variable's name, filters only what it was set to.
       [ /((?:SECRET|PRIVATE|SIGNING|ENCRYPTION)[_A-Z]*=)\S+/i, "\\1#{FILTERED}" ],
-      /(?<=cookie:\s)\S+/i,
-      /(?<=session_id=)\S+/i,
-      /(?<=_session=)\S+/i,
-      /\bAKIA[0-9A-Z]{16}\b/,
-      /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
-      /-----BEGIN\s+(RSA|DSA|EC|OPENSSH)?\s*PRIVATE KEY-----/,
-      /\bsk_(?:live|test)_[A-Za-z0-9]{10,}\b/,
-      /\brk_(?:live|test)_[A-Za-z0-9]{10,}\b/,
-      /\bSG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{10,}\b/,
-      /\bxox[bpras]-[A-Za-z0-9-]{10,}\b/,
-      /\bghp_[A-Za-z0-9]{36,}\b/,
-      /\bghu_[A-Za-z0-9]{36,}\b/,
-      /\bghs_[A-Za-z0-9]{36,}\b/,
-      /\bglpat-[A-Za-z0-9_-]{20,}\b/,
-      /\bnpm_[A-Za-z0-9]{36,}\b/
+      [ /(?<=cookie:\s)\S+/i, FILTERED ],
+      [ /(?<=session_id=)\S+/i, FILTERED ],
+      [ /(?<=_session=)\S+/i, FILTERED ],
+      [ /\bAKIA[0-9A-Z]{16}\b/, FILTERED ],
+      [ /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/, FILTERED ],
+      [ /-----BEGIN\s+(RSA|DSA|EC|OPENSSH)?\s*PRIVATE KEY-----/, FILTERED ],
+      [ /\bsk_(?:live|test)_[A-Za-z0-9]{10,}\b/, FILTERED ],
+      [ /\brk_(?:live|test)_[A-Za-z0-9]{10,}\b/, FILTERED ],
+      [ /\bSG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{10,}\b/, FILTERED ],
+      [ /\bxox[bpras]-[A-Za-z0-9-]{10,}\b/, FILTERED ],
+      [ /\bghp_[A-Za-z0-9]{36,}\b/, FILTERED ],
+      [ /\bghu_[A-Za-z0-9]{36,}\b/, FILTERED ],
+      [ /\bghs_[A-Za-z0-9]{36,}\b/, FILTERED ],
+      [ /\bglpat-[A-Za-z0-9_-]{20,}\b/, FILTERED ],
+      [ /\bnpm_[A-Za-z0-9]{36,}\b/, FILTERED ]
     ].freeze
 
     class << self
@@ -122,10 +122,7 @@ module RailsAiContext
         result.gsub!(ENV_VAR_LINE, FILTERED)
         result.gsub!(EMAIL_PATTERN, EMAIL)
 
-        LOG_PATTERNS.each do |entry|
-          pattern, replacement = entry.is_a?(Array) ? entry : [ entry, FILTERED ]
-          result.gsub!(pattern, replacement)
-        end
+        LOG_PATTERNS.each { |pattern, replacement| result.gsub!(pattern, replacement) }
 
         result
       end

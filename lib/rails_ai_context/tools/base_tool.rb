@@ -210,6 +210,14 @@ module RailsAiContext
           Thread.current[:rails_ai_context_session] || DEFAULT_SESSION
         end
 
+        # Which conversation a request belongs to, read from the Rack env all
+        # three HTTP entry points already hold. The engine controller reaches
+        # it through `request.env` rather than naming the header a third time.
+        def session_from(env)
+          id = env["HTTP_MCP_SESSION_ID"]
+          id.nil? || id.empty? ? DEFAULT_SESSION : id
+        end
+
         def session_record(tool_name, params, summary = nil)
           SESSION_CONTEXT[:mutex].synchronize do
             bucket = SESSION_CONTEXT[:queries][current_session]

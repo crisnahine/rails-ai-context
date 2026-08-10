@@ -244,6 +244,27 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(text.length).to be < 500
     end
 
+    # append_note rebuilds the response, so anything it forgets to carry over
+    # is silently dropped. No tool sets these today; nothing says one won't.
+    it "keeps the rest of the response it rebuilds" do
+      tool = build_tool do
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        define_singleton_method(:call) do |detail: nil, server_context: nil|
+          MCP::Tool::Response.new(
+            [ { type: "text", text: "body" } ],
+            structured_content: { rows: 2 },
+            meta: { source: "spec" }
+          )
+        end
+      end
+
+      response = tool.call(detail: "bogus")
+
+      expect(response.content.first[:text]).to include("not a valid `detail`")
+      expect(response.structured_content).to eq(rows: 2)
+      expect(response.meta).to eq(source: "spec")
+    end
+
     it "leaves a detail that spells its own levels alone" do
       seen = nil
       tool = build_tool do

@@ -29,7 +29,7 @@ module RailsAiContext
     def handle
       # One process serves every client here, so the session record has to be
       # told which conversation this request belongs to.
-      Tools::BaseTool.with_session(request.headers["Mcp-Session-Id"] || Tools::BaseTool::DEFAULT_SESSION) do
+      Tools::BaseTool.with_session(Tools::BaseTool.session_from(request.env)) do
         serve_transport
       end
     rescue => e

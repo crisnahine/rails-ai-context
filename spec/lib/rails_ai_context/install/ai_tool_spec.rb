@@ -29,16 +29,6 @@ RSpec.describe RailsAiContext::Install::AiTool do
     end
   end
 
-  describe ".find_by_number" do
-    it "finds the tool a prompt answer names" do
-      expect(described_class.find_by_number("3").key).to eq(:copilot)
-    end
-
-    it "returns nil for a number outside the menu" do
-      expect(described_class.find_by_number("9")).to be_nil
-    end
-  end
-
   # Golden: these are what the generator and the exe printed and cleaned up
   # before the tables moved here. Byte for byte, or the swap is not safe.
   describe "identity, against what the tables held" do

@@ -130,6 +130,23 @@ RSpec.describe "BaseTool shared caches under concurrency" do
       ))
     end
 
+    # All three HTTP entry points read the same header out of the same Rack
+    # env; the engine controller reaches it through request.env rather than
+    # spelling the Rails header name a third time.
+    describe "reading the session from a request" do
+      it "takes the client's session id" do
+        expect(base.session_from("HTTP_MCP_SESSION_ID" => "abc")).to eq("abc")
+      end
+
+      it "falls back to the shared bucket when the client sent none" do
+        expect(base.session_from({})).to eq(base::DEFAULT_SESSION)
+      end
+
+      it "treats a blank header as no session" do
+        expect(base.session_from("HTTP_MCP_SESSION_ID" => "")).to eq(base::DEFAULT_SESSION)
+      end
+    end
+
     # The standalone `rails-ai-context serve --transport http` app is the
     # third HTTP entry point and serves many clients from one process too, so
     # it needs the same session scoping the other two got.

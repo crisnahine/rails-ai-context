@@ -515,8 +515,14 @@ module RailsAiContext
       end # no_tasks
 
       def create_yaml_config
+        # `initializer: false` because this generator writes that file itself,
+        # a few steps earlier and better: it replaces the commented-out
+        # default in place, where the module would insert a line and leave the
+        # comment behind. One writer per file, and it is not this call.
         result = RailsAiContext::Install::SelectionRecord.write(
-          @selected_formats, root: Rails.root, extra_yaml: { "tool_mode" => @tool_mode.to_s }
+          @selected_formats, root: Rails.root,
+          extra_yaml: { "tool_mode" => @tool_mode.to_s },
+          initializer: false
         )
 
         RailsAiContext::Install::SelectionRecord.messages(result).each do |level, text|

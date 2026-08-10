@@ -57,22 +57,9 @@ module RailsAiContext
           ALL
         end
 
-        def keys
-          ALL.map(&:key)
-        end
-
         def find(key)
           key = key.to_sym if key.respond_to?(:to_sym)
           ALL.find { |tool| tool.key == key }
-        end
-
-        # A prompt answer ("1", "3") rather than a key.
-        def find_by_number(number)
-          ALL.find { |tool| tool.number == number.to_s }
-        end
-
-        def context_paths_by_key
-          ALL.to_h { |tool| [ tool.key, tool.context_paths ] }
         end
 
         def mcp_configs_by_key
