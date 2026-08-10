@@ -186,6 +186,64 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(tool.call(detail: "full").content.first[:text]).to eq("body")
     end
 
+    # These are the paths the note used to miss: it was appended inside
+    # text_response, so any other way out of a tool dropped it, and a tool
+    # that called another tool had its note consumed by the inner one.
+    it "still says so when the tool answers through error_response" do
+      tool = build_tool do
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        define_singleton_method(:call) { |detail: nil, server_context: nil| error_response("nope") }
+      end
+
+      text = tool.call(detail: "bogus").content.first[:text]
+
+      expect(text).to include("nope")
+      expect(text).to include("not a valid `detail`")
+    end
+
+    it "keeps the outer tool's note when it calls another tool" do
+      inner = build_tool do
+        tool_name "rails_spec_inner"
+        input_schema(properties: {}, required: [])
+        define_singleton_method(:call) { |server_context: nil| text_response("inner") }
+      end
+
+      outer = build_tool do
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        define_singleton_method(:call) do |detail: nil, server_context: nil|
+          inner.call
+          text_response("outer")
+        end
+      end
+
+      text = outer.call(detail: "bogus").content.first[:text]
+
+      expect(text).to start_with("outer")
+      expect(text).to include("not a valid `detail`")
+    end
+
+    it "does not report a note for the inner call that had no bad detail" do
+      inner = build_tool do
+        tool_name "rails_spec_inner"
+        input_schema(properties: {}, required: [])
+        define_singleton_method(:call) { |server_context: nil| text_response("inner") }
+      end
+
+      expect(inner.call.content.first[:text]).to eq("inner")
+    end
+
+    it "shortens an absurd detail rather than echoing it past the truncation cap" do
+      tool = build_tool do
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
+      end
+
+      text = tool.call(detail: "z" * 5_000).content.first[:text]
+
+      expect(text).to include("not a valid `detail`")
+      expect(text.length).to be < 500
+    end
+
     it "leaves a detail that spells its own levels alone" do
       seen = nil
       tool = build_tool do

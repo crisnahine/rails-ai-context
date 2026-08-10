@@ -329,7 +329,8 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       end
     end
 
-    context "with unknown detail level" do      it "reads an invalid detail level as the default, and says so" do
+    context "with unknown detail level" do
+      it "reads an invalid detail level as the default, and says so" do
         text = described_class.call(detail: "verbose").content.first[:text]
 
         expect(text).to start_with(described_class.call(detail: "standard").content.first[:text])

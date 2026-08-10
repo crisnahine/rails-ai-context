@@ -14,12 +14,16 @@ module RailsAiContext
     # the failure.
     module SafeCall
       def call(**kwargs)
-        # A tool that returns without calling text_response would otherwise
-        # leave this set for whoever runs next on this thread.
-        Thread.current[:rails_ai_context_invalid_detail] = nil
+        # Held as a local, not a thread-local: the wrapper sees both the value
+        # it discarded and the response that came back, so the note needs no
+        # state outliving the call. It also lands on every way out of a tool,
+        # not just text_response, and a tool that calls another tool cannot
+        # have its note consumed by the inner one.
+        discarded = discarded_detail(kwargs)
         kwargs = normalize_detail(kwargs)
         Thread.current[:rails_ai_context_call_params] = session_params(kwargs)
-        super(**kwargs)
+
+        append_note(super(**kwargs), invalid_detail_note(discarded))
       rescue StandardError => e
         # A failed call must not leak its recorded params into the next
         # call's session entry.
@@ -32,6 +36,28 @@ module RailsAiContext
         text << "Recovery: retry with a narrower query (a single table, model, or " \
                 "controller), or run `rails-ai-context doctor` to check app health."
         MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
+      end
+
+      private
+
+      # The value the caller sent, when this tool takes a DetailLevel detail
+      # and that value is not one of its levels.
+      def discarded_detail(kwargs)
+        return nil unless detail_param?
+
+        given = kwargs[:detail]
+        given unless given.nil? || RailsAiContext::DetailLevel.valid?(given)
+      end
+
+      def append_note(response, note)
+        return response unless note && response.respond_to?(:content)
+
+        content = response.content
+        first = content.first
+        return response unless first.is_a?(Hash) && first[:type] == "text"
+
+        noted = [ first.merge(text: "#{first[:text]}#{note}") ] + content[1..].to_a
+        MCP::Tool::Response.new(noted, error: response.error?)
       end
     end
   end

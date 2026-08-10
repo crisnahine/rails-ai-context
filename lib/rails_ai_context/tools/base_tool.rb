@@ -472,25 +472,20 @@ module RailsAiContext
         def normalize_detail(kwargs)
           return kwargs unless detail_param?
 
-          given = kwargs[:detail]
-          # Remembered so text_response can say so. Normalizing silently would
-          # answer a question the caller did not ask and give them no way to
-          # notice - the honesty the per-tool branches used to carry, in the
-          # one place that now knows the value was junk.
-          unless given.nil? || RailsAiContext::DetailLevel.valid?(given)
-            Thread.current[:rails_ai_context_invalid_detail] = given
-          end
-
-          kwargs.merge(detail: RailsAiContext::DetailLevel.normalize(given))
+          kwargs.merge(detail: RailsAiContext::DetailLevel.normalize(kwargs[:detail]))
         end
 
-        # Rides the suffix mechanism, so it survives truncation the way the
+        # Normalizing silently would answer a question the caller did not ask
+        # and give them no way to notice. SafeCall appends this after the
+        # response is built, so it lands past truncation the way the
         # static-tier banner does.
-        def invalid_detail_note
-          given = Thread.current[:rails_ai_context_invalid_detail]
+        #
+        # The echoed value is shortened: it is caller input, and the response
+        # it rides on has just promised a length cap.
+        def invalid_detail_note(given)
           return nil unless given
 
-          "\n\n---\n_#{given.inspect} is not a valid `detail`; showing " \
+          "\n\n---\n_#{given.to_s.truncate(40).inspect} is not a valid `detail`; showing " \
             "#{RailsAiContext::DetailLevel::DEFAULT}. Valid: #{RailsAiContext::DetailLevel::ALL.join(', ')}._"
         end
 
@@ -502,9 +497,8 @@ module RailsAiContext
         # In static tier, the tier banner rides along on the same mechanism so
         # every response - caller-suffixed or not - ends with it.
         def text_response(text, suffix: nil)
-          suffix = [ suffix, invalid_detail_note, static_tier_banner ].compact.join
+          suffix = [ suffix, static_tier_banner ].compact.join
           suffix = nil if suffix.empty?
-          Thread.current[:rails_ai_context_invalid_detail] = nil
 
           # Auto-track: record this tool call in session context (skip SessionContext itself to avoid recursion)
           if respond_to?(:tool_name) && tool_name != "rails_session_context"
