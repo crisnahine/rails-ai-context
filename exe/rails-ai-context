@@ -478,17 +478,8 @@ class RailsAiContextCLI < Thor
         ai_tools, root: Dir.pwd, extra_yaml: { "tool_mode" => tool_mode.to_s }
       )
 
-      case result[:yaml]
-      when :unchanged then $stderr.puts ".rails-ai-context.yml (unchanged)"
-      when :created   then $stderr.puts "Created .rails-ai-context.yml"
-      when :updated   then $stderr.puts "Updated .rails-ai-context.yml"
-      when :failed    then $stderr.puts "Could not write .rails-ai-context.yml - your selection was not saved"
-      end
-
-      # The initializer wins on read, so leaving a stale one behind would hand
-      # back the old selection on the next run.
-      case result[:initializer]
-      when :updated, :inserted then $stderr.puts "Updated config/initializers/rails_ai_context.rb"
+      ::RailsAiContext::Install::SelectionRecord.messages(result).each do |level, text|
+        $stderr.puts(level == :warn ? "Warning: #{text}" : text)
       end
     end
 

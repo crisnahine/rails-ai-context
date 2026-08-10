@@ -519,15 +519,8 @@ module RailsAiContext
           @selected_formats, root: Rails.root, extra_yaml: { "tool_mode" => @tool_mode.to_s }
         )
 
-        case result[:yaml]
-        when :unchanged then say ".rails-ai-context.yml (unchanged)", :yellow
-        when :created   then say "Created .rails-ai-context.yml", :green
-        when :updated   then say "Updated .rails-ai-context.yml", :green
-        when :failed    then say "Could not write .rails-ai-context.yml - your selection was not saved", :red
-        end
-
-        case result[:initializer]
-        when :updated, :inserted then say "Updated config/initializers/rails_ai_context.rb", :green
+        RailsAiContext::Install::SelectionRecord.messages(result).each do |level, text|
+          say text, { ok: :green, muted: :yellow, warn: :red }.fetch(level)
         end
       end
 

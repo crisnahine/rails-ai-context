@@ -130,15 +130,8 @@ def save_selection(ai_tools, tool_mode, record_initializer: false)
     initializer: record_initializer
   )
 
-  case result[:yaml]
-  when :unchanged then puts "💾 .rails-ai-context.yml (unchanged)"
-  when :created   then puts "💾 Saved .rails-ai-context.yml"
-  when :updated   then puts "💾 Updated .rails-ai-context.yml"
-  when :failed    then puts "⚠️  Could not write .rails-ai-context.yml - your selection was not saved"
-  end
-
-  case result[:initializer]
-  when :updated, :inserted then puts "💾 Saved to config/initializers/rails_ai_context.rb"
+  RailsAiContext::Install::SelectionRecord.messages(result).each do |level, text|
+    puts "#{level == :warn ? '⚠️ ' : '💾'} #{text}"
   end
 rescue => e
   $stderr.puts "[rails-ai-context] save_selection failed: #{e.message}" if ENV["DEBUG"]
@@ -217,30 +210,14 @@ def add_ai_context_to_gitignore
   puts "✅ Updated .gitignore"
 end unless defined?(add_ai_context_to_gitignore)
 
+# Writing only the initializer here was the last hand-rolled record left: it
+# left the YAML behind, and the initializer wins on read, so a per-tool
+# context run could put the two files into exactly the disagreement
+# SelectionRecord exists to prevent.
 def add_ai_tool_to_initializer(format)
-  init_path = Rails.root.join("config/initializers/rails_ai_context.rb")
-  return unless File.exist?(init_path)
-
-  content = File.read(init_path)
-  format_sym = format.to_s
-
-  # Find the ai_tools line (commented or uncommented)
-  if content.match?(/^\s*config\.ai_tools\s*=\s*%i\[([^\]]*)\]/)
-    # Uncommented line - add format if not present
-    match = content.match(/^\s*config\.ai_tools\s*=\s*%i\[([^\]]*)\]/)
-    current_tools = match[1].split.map(&:strip)
-    unless current_tools.include?(format_sym)
-      current_tools << format_sym
-      new_line = "  config.ai_tools = %i[#{current_tools.join(' ')}]"
-      content.sub!(/^\s*config\.ai_tools\s*=\s*%i\[[^\]]*\]/, new_line)
-      File.write(init_path, content)
-      puts "💾 Added :#{format_sym} to config.ai_tools"
-    end
-  elsif content.match?(/^\s*#\s*config\.ai_tools\s*=/)
-    # Commented line - uncomment and set to just this format
-    content.sub!(/^\s*#\s*config\.ai_tools\s*=.*$/, "  config.ai_tools = %i[#{format_sym}]")
-    File.write(init_path, content)
-    puts "💾 Set config.ai_tools = %i[#{format_sym}]"
+  result = RailsAiContext::Install::SelectionRecord.add(format, root: Rails.root)
+  RailsAiContext::Install::SelectionRecord.messages(result).each do |level, text|
+    puts "#{level == :warn ? '⚠️ ' : '💾'} #{text}"
   end
 rescue => e
   $stderr.puts "[rails-ai-context] add_ai_tool_to_initializer failed: #{e.message}" if ENV["DEBUG"]

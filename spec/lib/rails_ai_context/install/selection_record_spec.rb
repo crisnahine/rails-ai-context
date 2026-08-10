@@ -172,9 +172,16 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
       expect(content).to include("config.ai_tools = [:claude, :cursor]")
     end
 
-    it "reports the initializer as absent when it assigns in a shape it cannot rewrite" do
+    # Distinct from :absent. The initializer wins on read, so a selection this
+    # module cannot rewrite leaves the user's new pick inert - they have to be
+    # told, not just handed a cheerful "Updated .rails-ai-context.yml".
+    it "reports a conflict when the initializer assigns in a shape it cannot rewrite" do
       write_initializer("RailsAiContext.configure do |config|\n  config.ai_tools = SOME_CONSTANT\nend\n")
 
+      expect(described_class.write([ :codex ], root: root)).to include(initializer: :conflict)
+    end
+
+    it "still reports plain absence when there is no initializer at all" do
       expect(described_class.write([ :codex ], root: root)).to include(initializer: :absent)
     end
 
@@ -275,6 +282,95 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
       content = File.read(File.join(root, "config", "initializers", "rails_ai_context.rb"))
       expect(content).to include("# config.ai_tools = %i[claude cursor codex]")
+    end
+  end
+
+  # Each entry prints in its own voice - Thor `say` with a colour, plain
+  # `puts` with an emoji, `$stderr.puts`. What there is to say is the same,
+  # and keeping three copies of that meant every new outcome had to be added
+  # in three places at once.
+  describe ".messages" do
+    def messages_for(result)
+      described_class.messages(result)
+    end
+
+    it "says nothing changed when nothing changed" do
+      expect(messages_for(yaml: :unchanged, initializer: :unchanged))
+        .to eq([ [ :muted, ".rails-ai-context.yml (unchanged)" ] ])
+    end
+
+    it "reports each file it wrote" do
+      expect(messages_for(yaml: :created, initializer: :updated)).to eq([
+        [ :ok, "Created .rails-ai-context.yml" ],
+        [ :ok, "Updated config/initializers/rails_ai_context.rb" ]
+      ])
+    end
+
+    it "treats an inserted initializer line as an update to report" do
+      expect(messages_for(yaml: :unchanged, initializer: :inserted).last)
+        .to eq([ :ok, "Updated config/initializers/rails_ai_context.rb" ])
+    end
+
+    it "warns loudly when the record could not be written" do
+      level, text = messages_for(yaml: :failed, initializer: :absent).first
+
+      expect(level).to eq(:warn)
+      expect(text).to include("not saved")
+    end
+
+    it "warns when the initializer holds a selection it cannot rewrite" do
+      level, text = messages_for(yaml: :updated, initializer: :conflict).last
+
+      expect(level).to eq(:warn)
+      expect(text).to include("config/initializers/rails_ai_context.rb")
+      expect(text).to include("takes precedence")
+    end
+
+    it "says nothing about an initializer that is simply not there" do
+      expect(messages_for(yaml: :updated, initializer: :absent))
+        .to eq([ [ :ok, "Updated .rails-ai-context.yml" ] ])
+    end
+
+    it "says nothing about an initializer it was told to skip" do
+      expect(messages_for(yaml: :updated, initializer: :skipped))
+        .to eq([ [ :ok, "Updated .rails-ai-context.yml" ] ])
+    end
+  end
+
+  # `rails ai:context:cursor` adds one tool to whatever is already recorded.
+  # Doing that by hand against the initializer alone is what left the two
+  # files disagreeing.
+  describe ".add" do
+    it "adds a tool to an existing selection in both files" do
+      described_class.write(%i[claude], root: root)
+      write_initializer("RailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\nend\n")
+
+      described_class.add(:cursor, root: root)
+
+      expect(described_class.read(root: root)).to eq(%i[claude cursor])
+      expect(YAML.safe_load_file(File.join(root, ".rails-ai-context.yml"))["ai_tools"])
+        .to eq(%w[claude cursor])
+    end
+
+    it "is a no-op when the tool is already recorded" do
+      described_class.write(%i[claude cursor], root: root)
+
+      expect(described_class.add(:cursor, root: root)).to include(tools: %i[claude cursor])
+      expect(described_class.read(root: root)).to eq(%i[claude cursor])
+    end
+
+    it "records the first tool when nothing has been recorded yet" do
+      described_class.add(:codex, root: root)
+
+      expect(described_class.read(root: root)).to eq([ :codex ])
+    end
+
+    it "ignores a name that is not an AI tool" do
+      described_class.write(%i[claude], root: root)
+
+      described_class.add(:emacs, root: root)
+
+      expect(described_class.read(root: root)).to eq([ :claude ])
     end
   end
 
