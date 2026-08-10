@@ -51,11 +51,18 @@ RSpec.describe "Tool inventory drift" do
   # nearby "below" or "other".
   TOTAL_PHRASE = /(?<!other )\b(\d+)\s+(?:MCP\s+)?tools\b(?!\s+below)/
 
+  # Only what the repo ships. `docs/superpowers/` is gitignored scratch that
+  # exists in some working copies and not others, so scanning it makes the
+  # spec pass or fail on which machine it runs.
+  def shipped_docs
+    (Dir.glob(File.join(repo_root, "docs", "**", "*.md")) + [ File.join(repo_root, "README.md") ])
+      .reject { |f| f.start_with?(File.join(repo_root, "docs", "superpowers")) }
+      .select { |f| File.exist?(f) }
+  end
+
   it "quotes the registry's count wherever docs state the total" do
     count = names.size
-    offenders = Dir.glob(File.join(repo_root, "docs", "**", "*.md"))
-      .concat([ File.join(repo_root, "README.md") ])
-      .select { |f| File.exist?(f) }
+    offenders = shipped_docs
       .flat_map { |f|
         File.readlines(f).each_with_index.flat_map { |line, i|
           line.scan(TOTAL_PHRASE).flatten.reject { |n| n.to_i == count }.map {
