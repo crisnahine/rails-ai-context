@@ -100,9 +100,18 @@ module RailsAiContext
       # transports serve many from one process, so each request's
       # Mcp-Session-Id gets its own bucket and one client's history stays out
       # of another's.
-      SESSION_CONTEXT = { mutex: Mutex.new, queries: Hash.new { |h, k| h[k] = {} } }
+      # A plain Hash, not one with a default block: a default block writes on
+      # lookup, so merely reading a session's history created it.
+      SESSION_CONTEXT = { mutex: Mutex.new, queries: {} }
 
       DEFAULT_SESSION = :default
+
+      # The session id comes from a client-controlled header in a process
+      # that stays up, so both its length and the number of them are capped.
+      # Oldest-first eviction: a conversation nobody has touched in the last
+      # MAX_SESSIONS is the one least likely to ask about its own history.
+      MAX_SESSIONS = 100
+      MAX_SESSION_ID_LENGTH = 200
 
       # One row of the generated tool guide, declared beside the tool's own
       # description so adding a tool touches one file. `order` fixes where the
@@ -215,7 +224,7 @@ module RailsAiContext
         # it through `request.env` rather than naming the header a third time.
         def session_from(env)
           id = env["HTTP_MCP_SESSION_ID"]
-          id.nil? || id.empty? ? DEFAULT_SESSION : id
+          id.nil? || id.empty? ? DEFAULT_SESSION : id[0, MAX_SESSION_ID_LENGTH]
         end
 
         # One process serves every client on all three HTTP entry points, so
@@ -228,7 +237,8 @@ module RailsAiContext
 
         def session_record(tool_name, params, summary = nil)
           SESSION_CONTEXT[:mutex].synchronize do
-            bucket = SESSION_CONTEXT[:queries][current_session]
+            bucket = (SESSION_CONTEXT[:queries][current_session] ||= {})
+            evict_oldest_sessions
             key = session_key(tool_name, params)
             existing = bucket[key]
             if existing
@@ -252,8 +262,12 @@ module RailsAiContext
         # caller's snapshot change under it.
         def session_queries
           SESSION_CONTEXT[:mutex].synchronize do
-            SESSION_CONTEXT[:queries][current_session].values.map(&:dup)
+            (SESSION_CONTEXT[:queries][current_session] || {}).values.map(&:dup)
           end
+        end
+
+        def session_bucket_count
+          SESSION_CONTEXT[:mutex].synchronize { SESSION_CONTEXT[:queries].size }
         end
 
         def session_reset!
@@ -261,6 +275,14 @@ module RailsAiContext
             SESSION_CONTEXT[:queries].clear
           end
         end
+
+        # Ruby hashes keep insertion order, so the front of the hash is the
+        # least recently created session. Called with the mutex held.
+        def evict_oldest_sessions
+          queries = SESSION_CONTEXT[:queries]
+          queries.shift while queries.size > MAX_SESSIONS
+        end
+        private :evict_oldest_sessions
 
         # Standardized pagination: slice items with offset/limit and produce a consistent hint.
         # Returns { items:, hint:, total:, offset:, limit: }

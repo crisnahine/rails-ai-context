@@ -165,6 +165,43 @@ RSpec.describe "BaseTool shared caches under concurrency" do
       it "returns what the block returned" do
         expect(base.with_session_for({}) { :answer }).to eq(:answer)
       end
+
+      # The header is client-controlled and its value becomes a hash key that
+      # nothing evicts, in a process that stays up. Reading alone used to
+      # grow the record, because the default block writes on lookup.
+      it "does not grow a bucket for a session that only read" do
+        base.session_reset!
+
+        50.times { |i| base.with_session("reader-#{i}") { base.session_queries } }
+
+        expect(base.session_bucket_count).to eq(0)
+      end
+
+      it "keeps the number of remembered sessions bounded" do
+        base.session_reset!
+
+        (base::MAX_SESSIONS + 25).times do |i|
+          base.with_session("client-#{i}") { base.session_record("rails_get_schema", { n: i }) }
+        end
+
+        expect(base.session_bucket_count).to be <= base::MAX_SESSIONS
+      end
+
+      it "keeps the most recent sessions when it evicts" do
+        base.session_reset!
+
+        (base::MAX_SESSIONS + 5).times do |i|
+          base.with_session("client-#{i}") { base.session_record("rails_get_schema", { n: i }) }
+        end
+
+        newest = "client-#{base::MAX_SESSIONS + 4}"
+        expect(base.with_session(newest) { base.session_queries }).not_to be_empty
+        expect(base.with_session("client-0") { base.session_queries }).to be_empty
+      end
+
+      it "caps a session id long enough to be a payload" do
+        expect(base.session_from("HTTP_MCP_SESSION_ID" => "z" * 5_000).length).to be <= 200
+      end
     end
 
     # The standalone `rails-ai-context serve --transport http` app is the

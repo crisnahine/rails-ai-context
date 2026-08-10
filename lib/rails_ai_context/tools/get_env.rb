@@ -616,8 +616,10 @@ module RailsAiContext
       private_class_method def self.sanitize_default(value)
         return nil unless value
         stripped = value.strip.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
-        # Don't expose values that look like actual secrets
-        if stripped.length > 30 || stripped.match?(/[a-f0-9]{16,}|sk_|pk_|key_|secret/i)
+        # Over the length a config value plausibly has, or shaped like a
+        # credential. The shape test is the module's, so a new prefix lands
+        # once rather than in each of these two nearly-identical checks.
+        if stripped.length > 30 || RailsAiContext::Redaction.secret_value?(stripped)
           RailsAiContext::Redaction::FILTERED
         else
           stripped
@@ -630,7 +632,7 @@ module RailsAiContext
         # Show placeholder/example values, redact anything that looks real
         if stripped.match?(/\Ayour_|\Aexample_|xxx|changeme|TODO|REPLACE/i) || stripped.empty?
           stripped
-        elsif stripped.length > 40 || stripped.match?(/[a-f0-9]{16,}|sk_|pk_/)
+        elsif stripped.length > 40 || RailsAiContext::Redaction.secret_value?(stripped)
           RailsAiContext::Redaction::FILTERED
         else
           stripped

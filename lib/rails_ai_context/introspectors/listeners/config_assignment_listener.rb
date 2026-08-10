@@ -43,14 +43,18 @@ module RailsAiContext
           # `config.secret_key = "..."` is a real credential, and a new reader
           # of this listener is safe without remembering anything.
           value = value_node ? extract_value(value_node) : nil
+          # The whole path, not the leaf: `primary_key` is ordinary
+          # ActiveRecord vocabulary, and only `active_record.encryption`
+          # around it says the value is a credential.
+          path = prefix + [ setting ]
 
           @results << {
-            path:       prefix + [ setting ],
+            path:       path,
             assignment: true,
             # Both fields, or the property holds for one of them and the next
             # reader of this listener picks the wrong one.
-            value:      RailsAiContext::Redaction.redact_setting(setting, value),
-            source:     RailsAiContext::Redaction.redact_setting(setting, value_node&.slice),
+            value:      RailsAiContext::Redaction.redact_setting(path, value),
+            source:     RailsAiContext::Redaction.redact_setting(path, value_node&.slice),
             location:   node.location.start_line
           }
         end

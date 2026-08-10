@@ -16,7 +16,13 @@ module RailsAiContext
     # the AST or a log file rather than parsing structure. A credential can
     # sit in an interpolation, a heredoc or a bare string, and no node type
     # marks one - the words are the signal.
-    SECRET_WORD = /password|passwd|secret|token|api_key|apikey|access_key|private_key|credentials/
+    SECRET_WORD = /password|passwd|secret|token|api_key|apikey|access_key|private_key|credentials|
+                   pepper|salt|master_key|signing_key|encryption_key|deterministic_key/x
+
+    # `primary_key` is ordinary ActiveRecord vocabulary; under
+    # `active_record.encryption` it is a credential. Only the path tells them
+    # apart, so these are matched against the whole path, not the leaf.
+    SECRET_PATH = /encryption\.(?:primary_key|deterministic_key|key_derivation_salt)\z/i
 
     # The secret word has to be a whole underscore-delimited part of the name,
     # so `secret_key` and `api_key` match while `passwordless_login` does not.
@@ -34,6 +40,12 @@ module RailsAiContext
     URI_USERINFO = %r{([a-z][a-z0-9+.-]*://)[^\s/]*:[^@\s]+@}i
     QUOTED_SECRET = /#{SECRET_NAME}#{ASSIGN}["'][^"']*["']/
     BARE_SECRET = /#{SECRET_NAME}#{ASSIGN}(?!["'])[^\s,;)\]}]+/
+
+    # What a credential looks like with no key beside it: a long hex blob, a
+    # vendor prefix, or a value that names itself. For callers reading a bare
+    # value out of `.env` or `.env.example`, where there is no assignment to
+    # match on.
+    SECRET_VALUE = /[a-f0-9]{16,}|sk_|pk_|key_|secret/i
 
     ANSI_ESCAPE = /\e\[[0-9;]*[mGKHF]/
     EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/i
@@ -88,27 +100,27 @@ module RailsAiContext
       # A config value arrives on its own, so only the setting's name says
       # whether it is a secret: `config.secret_key = "s3cr3t"` reaches a
       # listener as the bare string `"s3cr3t"`, which looks like any other.
+      # A config value arrives without its context, so the setting's name is
+      # what says whether it holds a secret. Values are walked rather than
+      # type-checked: an evaluated value is often a hash or an array, and the
+      # credential is as often under a key inside it (`smtp_settings` holding
+      # a `password`) as it is under the setting itself.
+      #
+      # @param name [Symbol, String, Array] the setting, or its full path
       def redact_setting(name, source)
-        # nil is the absence of a value, not a secret.
-        return source if source.nil?
+        walk(source, secret_name?(name))
+      end
 
-        # The name decides first. An evaluated value is often not a String -
-        # the AST extractor returns arrays, hashes, symbols and numbers - and
-        # skipping those for being the wrong type is how a credential stays
-        # in the one field that never got checked.
-        if secret_name?(name)
-          return FILTERED unless source.is_a?(String)
-
-          quote = source.start_with?('"', "'") ? source[0] : nil
-          return quote ? "#{quote}#{FILTERED}#{quote}" : FILTERED
-        end
-
-        source.is_a?(String) ? call(source) : source
+      def secret_value?(value)
+        value.to_s.match?(SECRET_VALUE)
       end
 
       def secret_name?(name)
-        name = name.to_s
-        name.match?(/\A#{SECRET_NAME}\z/) && !name.match?(DESCRIPTOR_SUFFIX)
+        path = Array(name).join(".")
+        return true if path.match?(SECRET_PATH)
+
+        leaf = path.split(".").last.to_s
+        leaf.match?(/\A#{SECRET_NAME}\z/) && !leaf.match?(DESCRIPTOR_SUFFIX)
       end
 
       # Redaction and shortening are one operation because their order is the
@@ -138,6 +150,27 @@ module RailsAiContext
       end
 
       private
+
+      # `secret` says the enclosing name already marks this as credential
+      # material. Symbols, numbers and booleans are identifiers and policy,
+      # never secrets, so they survive either way - filtering them would hide
+      # the config the reader came for (`reset_password_keys = [:email]`).
+      def walk(value, secret)
+        case value
+        when nil    then nil
+        when String then secret ? filtered_like(value) : call(value)
+        when Array  then value.map { |element| walk(element, secret) }
+        when Hash   then value.to_h { |key, inner| [ key, walk(inner, secret || secret_name?(key)) ] }
+        else value
+        end
+      end
+
+      # Keeps the quoting of a source slice so the result still reads as the
+      # assignment it replaced.
+      def filtered_like(value)
+        quote = value.start_with?('"', "'") ? value[0] : nil
+        quote ? "#{quote}#{FILTERED}#{quote}" : FILTERED
+      end
 
       # The setting name at the head of a matched assignment.
       def descriptor?(match)

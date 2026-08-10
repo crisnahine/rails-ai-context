@@ -90,16 +90,16 @@ RSpec.describe RailsAiContext::Redaction do
     # arrays, hashes, symbols and numbers. Letting those past because they
     # are not Strings leaves the credential in the one field that skipped
     # the check.
+    # Element-wise, not wholesale: the reader still learns the shape - that
+    # there are two keys, that a hash has a `token` - while the values go.
     it "filters a secret-named setting holding an array" do
-      expect(described_class.redact_setting(:secret_keys, [ "abc123", "def456" ])).to eq("[FILTERED]")
+      expect(described_class.redact_setting(:secret_keys, [ "abc123", "def456" ]))
+        .to eq([ "[FILTERED]", "[FILTERED]" ])
     end
 
     it "filters a secret-named setting holding a hash" do
-      expect(described_class.redact_setting(:credentials, { token: "tok_live_xyz" })).to eq("[FILTERED]")
-    end
-
-    it "filters a secret-named setting holding a symbol" do
-      expect(described_class.redact_setting(:api_key, :some_constant)).to eq("[FILTERED]")
+      expect(described_class.redact_setting(:credentials, { token: "tok_live_xyz" }))
+        .to eq(token: "[FILTERED]")
     end
 
     it "leaves a non-string value of an ordinary setting alone" do
@@ -111,6 +111,85 @@ RSpec.describe RailsAiContext::Redaction do
     # A descriptor still describes, whatever type it holds.
     it "leaves a descriptor's non-string value alone" do
       expect(described_class.redact_setting(:password_length, 6..128)).to eq(6..128)
+    end
+
+    # A Symbol is an identifier, a boolean is a policy, a number is a size.
+    # None of them is credential material, and filtering them hides the
+    # config a reader came for.
+    it "keeps a secret-named setting's symbol and boolean values" do
+      expect(described_class.redact_setting(:reset_password_keys, [ :email ])).to eq([ :email ])
+      expect(described_class.redact_setting(:send_password_change_notification, false)).to be(false)
+      expect(described_class.redact_setting(:api_key, :from_env)).to eq(:from_env)
+    end
+
+    it "filters the strings inside a secret-named collection" do
+      expect(described_class.redact_setting(:secret_keys, [ "abc123", "def456" ]))
+        .to eq([ "[FILTERED]", "[FILTERED]" ])
+    end
+
+    # The classic stock Rails line: the setting is not secret-named, the key
+    # inside it is.
+    it "filters a credential nested under an ordinary setting" do
+      settings = { user_name: "app", password: "hunter2", address: "smtp.example.com" }
+
+      expect(described_class.redact_setting(:smtp_settings, settings))
+        .to eq(user_name: "app", password: "[FILTERED]", address: "smtp.example.com")
+    end
+
+    it "filters a credential nested two levels down" do
+      value = { cache: { url: "redis://u:pw@host:6379", token: "tok_live_xyz" } }
+
+      expect(described_class.redact_setting(:stores, value))
+        .to eq(cache: { url: "redis://[FILTERED]@host:6379", token: "[FILTERED]" })
+    end
+
+    it "still scrubs a URI credential inside an ordinary collection" do
+      expect(described_class.redact_setting(:cache_store, [ :redis_cache_store, { url: "redis://u:pw@h:6379" } ]))
+        .to eq([ :redis_cache_store, { url: "redis://[FILTERED]@h:6379" } ])
+    end
+  end
+
+  # Devise's pepper and ActiveRecord encryption's keys are the two most
+  # common hand-written secrets in config/initializers.
+  describe "secret vocabulary" do
+    it "recognises the names people actually put credentials under" do
+      %i[pepper salt master_key signing_key encryption_key deterministic_key key_derivation_salt].each do |name|
+        expect(described_class.redact_setting(name, '"abc123deadbeef"'))
+          .to eq('"[FILTERED]"'), "#{name} was not treated as a secret"
+      end
+    end
+
+    # `primary_key` is ordinary ActiveRecord vocabulary; only the encryption
+    # one is a credential, and the path is what tells them apart.
+    it "leaves a bare primary_key alone but filters the encryption one" do
+      expect(described_class.redact_setting(:primary_key, ":id")).to eq(":id")
+      expect(described_class.redact_setting(%i[active_record encryption primary_key], '"deadbeef"'))
+        .to eq('"[FILTERED]"')
+    end
+  end
+
+  # The env tool cannot redact a `.env.example` default the way a log line is
+  # scrubbed - there is no surrounding key to match on, only the value. What
+  # it needs from the module is the judgement, not the marker.
+  describe ".secret_value?" do
+    it "recognises a long hex blob" do
+      expect(described_class.secret_value?("a1b2c3d4e5f60718")).to be(true)
+    end
+
+    it "recognises vendor key prefixes" do
+      expect(described_class.secret_value?("sk_live_abc")).to be(true)
+      expect(described_class.secret_value?("pk_test_abc")).to be(true)
+    end
+
+    it "recognises a value that names itself a secret" do
+      expect(described_class.secret_value?("my_secret_thing")).to be(true)
+      expect(described_class.secret_value?("key_abc")).to be(true)
+    end
+
+    it "leaves an ordinary value alone" do
+      expect(described_class.secret_value?("development")).to be(false)
+      expect(described_class.secret_value?("localhost:3000")).to be(false)
+      expect(described_class.secret_value?("")).to be(false)
     end
   end
 

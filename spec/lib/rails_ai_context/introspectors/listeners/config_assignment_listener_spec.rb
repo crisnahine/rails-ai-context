@@ -58,6 +58,23 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(results.first[:source]).to eq('"[FILTERED]"')
   end
 
+  it "filters an encryption key that only its path marks as a secret" do
+    results = parse_and_dispatch(<<~RUBY)
+      config.active_record.encryption.primary_key = "deadbeef01234567"
+    RUBY
+
+    expect(results.first[:value]).to eq("[FILTERED]")
+    expect(results.first[:source]).to eq('"[FILTERED]"')
+  end
+
+  it "filters a credential nested under an ordinary setting" do
+    results = parse_and_dispatch(<<~RUBY)
+      config.action_mailer.smtp_settings = { user_name: "app", password: "hunter2" }
+    RUBY
+
+    expect(results.first[:value]).to eq(user_name: "app", password: "[FILTERED]")
+  end
+
   it "leaves an ordinary setting's evaluated value alone" do
     results = parse_and_dispatch(<<~RUBY)
       config.eager_load = true
