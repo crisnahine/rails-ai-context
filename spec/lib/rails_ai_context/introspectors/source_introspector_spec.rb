@@ -251,6 +251,29 @@ RSpec.describe RailsAiContext::Introspectors::SourceIntrospector do
       expect(gems.find { |g| g[:name] == "debug" }[:groups]).to eq([ :development, :test ])
       expect(gems.find { |g| g[:name] == "puma" }[:groups]).to eq([])
     end
+
+    it "fires an instance-variable handler, not only the events the walk happens to know" do
+      listener = RailsAiContext::Introspectors::Listeners::ModelReferenceListener.new
+      described_class.walk_source("@post = Post.find(1)", { models: -> { listener } })
+
+      expect(listener.ivar_models).to eq({ "@post" => "Post" })
+    end
+
+    it "lets a bad handler name out rather than degrading to empty results" do
+      broken = Class.new(RailsAiContext::Introspectors::Listeners::BaseListener) do
+        def on_call_node_entr(node); end
+      end
+
+      expect { described_class.walk_source("foo(1)", { broken: broken }) }
+        .to raise_error(RailsAiContext::Introspectors::ListenerRegistration::UnknownEventError)
+    end
+
+    it "fires a handler a listener only inherits" do
+      listener = RailsAiContext::Introspectors::Listeners::VariantCallListener.new
+      described_class.walk_source("image.variant(:thumb)", { variants: -> { listener } })
+
+      expect(listener.results.map { |r| r[:method] }).to eq([ "variant" ])
+    end
   end
 
   describe ".from_source" do

@@ -46,42 +46,22 @@ module RailsAiContext
       end
 
       def self.walk_dispatch(parse_result, listener_map)
-        dispatcher = Prism::Dispatcher.new
-        listeners  = listener_map.transform_values { |spec|
-          listener = spec.is_a?(Proc) ? spec.call : spec.new
-          register_listener(dispatcher, listener)
-          listener
-        }
+        listeners  = listener_map.transform_values { |spec| spec.is_a?(Proc) ? spec.call : spec.new }
+        dispatcher = ListenerRegistration.dispatcher_for(*listeners.values)
 
         dispatcher.dispatch(parse_result.value)
 
         listeners.transform_values(&:results)
+      # A bad handler name is a programming error in a listener, not a parse
+      # failure to shrug off; degrading it to empty results is the silence
+      # this whole seam exists to end.
+      rescue ListenerRegistration::UnknownEventError
+        raise
       rescue => e
         $stderr.puts "[rails-ai-context] SourceIntrospector walk_dispatch failed: #{e.message}" if ENV["DEBUG"]
         listener_map.keys.each_with_object({}) { |key, h| h[key] = [] }
       end
       private_class_method :walk_dispatch
-
-      # Register a listener for all events it responds to.
-      def self.register_listener(dispatcher, listener)
-        events = []
-        events << :on_call_node_enter  if listener.respond_to?(:on_call_node_enter)
-        events << :on_call_node_leave  if listener.respond_to?(:on_call_node_leave)
-        events << :on_def_node_enter   if listener.respond_to?(:on_def_node_enter)
-        events << :on_singleton_class_node_enter if listener.respond_to?(:on_singleton_class_node_enter)
-        events << :on_singleton_class_node_leave if listener.respond_to?(:on_singleton_class_node_leave)
-        events << :on_class_node_enter  if listener.respond_to?(:on_class_node_enter)
-        events << :on_class_node_leave  if listener.respond_to?(:on_class_node_leave)
-        events << :on_module_node_enter if listener.respond_to?(:on_module_node_enter)
-        events << :on_module_node_leave if listener.respond_to?(:on_module_node_leave)
-        events << :on_block_node_enter  if listener.respond_to?(:on_block_node_enter)
-        events << :on_block_node_leave  if listener.respond_to?(:on_block_node_leave)
-        events << :on_case_node_enter   if listener.respond_to?(:on_case_node_enter)
-        events << :on_constant_write_node_enter if listener.respond_to?(:on_constant_write_node_enter)
-
-        dispatcher.register(listener, *events) if events.any?
-      end
-      private_class_method :register_listener
     end
   end
 end

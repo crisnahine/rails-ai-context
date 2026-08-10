@@ -9,10 +9,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
     def parse_and_dispatch(source, *methods)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new(*methods)
-      dispatcher.register(listener, :on_call_node_enter)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 
@@ -28,10 +26,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::ChainedCallListener do
     def parse_and_dispatch(source, *methods)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new(*methods)
-      dispatcher.register(listener, :on_call_node_enter)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 
@@ -48,10 +44,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::EnvAccessListener do
     def parse_and_dispatch(source)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new
-      dispatcher.register(listener, :on_call_node_enter)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 
@@ -67,10 +61,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::MountListener do
     def parse_and_dispatch(source)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new
-      dispatcher.register(listener, :on_call_node_enter)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 
@@ -86,13 +78,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::GemfileDslListener do
     def parse_and_dispatch(source)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new
-      events = []
-      events << :on_call_node_enter if listener.respond_to?(:on_call_node_enter)
-      events << :on_call_node_leave if listener.respond_to?(:on_call_node_leave)
-      dispatcher.register(listener, *events)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 
@@ -114,10 +101,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::SchemaDslListener do
     def parse_and_dispatch(source)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new
-      dispatcher.register(listener, :on_call_node_enter)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 
@@ -138,10 +123,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::MigrationDslListener do
     def parse_and_dispatch(source)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new
-      dispatcher.register(listener, :on_call_node_enter)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 
@@ -163,10 +146,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::RakeTaskDslListener do
     def parse_and_dispatch(source)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new
-      dispatcher.register(listener, :on_call_node_enter)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 
@@ -186,10 +167,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::MailboxRoutingListener do
     def parse_and_dispatch(source)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new
-      dispatcher.register(listener, :on_call_node_enter)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 
@@ -208,10 +187,8 @@ RSpec.describe "Listener edge cases" do
   describe RailsAiContext::Introspectors::Listeners::MiddlewareConfigListener do
     def parse_and_dispatch(source)
       result     = Prism.parse(source)
-      dispatcher = Prism::Dispatcher.new
       listener   = described_class.new
-      dispatcher.register(listener, :on_call_node_enter)
-      dispatcher.dispatch(result.value)
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
       listener.results
     end
 

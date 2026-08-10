@@ -5,13 +5,8 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Introspectors::Listeners::GemfileDslListener do
   def parse_and_dispatch(source)
     result     = Prism.parse(source)
-    dispatcher = Prism::Dispatcher.new
     listener   = described_class.new
-    events = []
-    events << :on_call_node_enter if listener.respond_to?(:on_call_node_enter)
-    events << :on_call_node_leave if listener.respond_to?(:on_call_node_leave)
-    dispatcher.register(listener, *events)
-    dispatcher.dispatch(result.value)
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
     listener.results
   end
 

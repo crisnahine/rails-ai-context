@@ -31,15 +31,9 @@ module RailsAiContext
       # Detect model names referenced in a controller source file using Prism AST.
       def self.detect_model_references(source_path)
         parse_result = AstCache.parse(source_path)
-        dispatcher = Prism::Dispatcher.new
         listener = Introspectors::Listeners::ModelReferenceListener.new
 
-        events = []
-        events << :on_call_node_enter if listener.respond_to?(:on_call_node_enter)
-        events << :on_instance_variable_write_node_enter if listener.respond_to?(:on_instance_variable_write_node_enter)
-        dispatcher.register(listener, *events)
-
-        dispatcher.dispatch(parse_result.value)
+        Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(parse_result.value)
         listener.results
       rescue => e
         $stderr.puts "[rails-ai-context] detect_model_references failed: #{e.message}" if ENV["DEBUG"]

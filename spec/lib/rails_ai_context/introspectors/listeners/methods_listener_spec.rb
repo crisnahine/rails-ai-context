@@ -5,13 +5,8 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
   def parse_and_dispatch(source)
     result     = Prism.parse(source)
-    dispatcher = Prism::Dispatcher.new
     listener   = described_class.new
-    dispatcher.register(listener, :on_call_node_enter, :on_def_node_enter,
-                        :on_singleton_class_node_enter, :on_singleton_class_node_leave,
-                        :on_class_node_enter, :on_class_node_leave,
-                        :on_module_node_enter, :on_module_node_leave)
-    dispatcher.dispatch(result.value)
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
     listener.results
   end
 

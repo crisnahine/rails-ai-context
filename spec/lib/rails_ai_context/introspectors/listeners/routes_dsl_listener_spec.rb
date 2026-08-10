@@ -5,9 +5,7 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
   def routes_for(source)
     listener = described_class.new
-    dispatcher = Prism::Dispatcher.new
-    dispatcher.register(listener, :on_call_node_enter, :on_call_node_leave)
-    dispatcher.dispatch(Prism.parse(source).value)
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
     listener.results
   end
 

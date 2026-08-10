@@ -6,10 +6,8 @@ require "prism"
 RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener do
   def parse_and_dispatch(source, *roots)
     result     = Prism.parse(source)
-    dispatcher = Prism::Dispatcher.new
     listener   = described_class.new(*roots)
-    dispatcher.register(listener, :on_call_node_enter)
-    dispatcher.dispatch(result.value)
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
     listener.results
   end
 
