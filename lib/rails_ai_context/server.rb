@@ -217,17 +217,7 @@ module RailsAiContext
         request = Rack::Request.new(env)
         transport.handle_request(request)
       rescue => e
-        # Mirror Middleware#json_rpc_error_response: the standalone HTTP
-        # server has no Rails exception middleware above it, so a transport
-        # failure must still answer in JSON-RPC shape instead of letting the
-        # exception kill the request at the rackup level.
-        RailsAiContext.log_warn "[rails-ai-context] MCP request failed: #{e.class}: #{e.message}"
-        body = {
-          jsonrpc: "2.0",
-          error: { code: -32603, message: "Internal error: #{e.message}" },
-          id: nil
-        }.to_json
-        [ 500, { "Content-Type" => "application/json" }, [ body ] ]
+        McpEdge.internal_error_response(e)
       end
     end
   end

@@ -43,17 +43,13 @@ module RailsAiContext
       # connection down.
       raise if response.committed?
 
-      # Mirror Middleware#json_rpc_error_response: a transport failure must
-      # still answer in JSON-RPC shape. Without this the exception escapes
-      # into a generic Rails 500 (HTML), breaking the client's JSON-RPC loop.
+      # A transport failure must still answer in JSON-RPC shape. Without this
+      # the exception escapes into a generic Rails 500 (HTML), breaking the
+      # client's JSON-RPC loop.
       RailsAiContext.log_warn "[rails-ai-context] MCP request failed: #{e.class}: #{e.message}"
       self.status = 500
       response.headers["Content-Type"] = "application/json"
-      self.response_body = {
-        jsonrpc: "2.0",
-        error: { code: -32603, message: "Internal error: #{e.message}" },
-        id: nil
-      }.to_json
+      self.response_body = McpEdge.internal_error_frame(e)
     end
 
     private
@@ -139,12 +135,7 @@ module RailsAiContext
       # Class-level memoization - transport persists across requests.
       # Thread-safe: MCP::Server and transport are stateless for reads.
       def mcp_transport
-        @transport_mutex.synchronize do
-          @mcp_transport ||= begin
-            server = RailsAiContext::Server.new(Rails.application, transport: :http).build
-            MCP::Server::Transports::StreamableHTTPTransport.new(server)
-          end
-        end
+        @transport_mutex.synchronize { @mcp_transport ||= McpEdge.build_transport }
       end
 
       def reset_transport!
