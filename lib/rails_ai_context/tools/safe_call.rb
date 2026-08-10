@@ -57,12 +57,15 @@ module RailsAiContext
         return response unless first.is_a?(Hash) && first[:type] == "text"
 
         noted = [ first.merge(text: "#{first[:text]}#{note}") ] + content[1..].to_a
-        MCP::Tool::Response.new(
-          noted,
-          error: response.error?,
-          structured_content: response.structured_content,
-          meta: response.meta
-        )
+
+        # `meta` arrived in mcp 1.0 and the gemspec supports >= 0.8, so both
+        # the reader and the keyword have to be asked for rather than assumed.
+        # Getting this wrong turns a good answer into a NoMethodError that
+        # SafeCall's own rescue then reports as a tool failure.
+        extra = { structured_content: response.structured_content }
+        extra[:meta] = response.meta if response.respond_to?(:meta)
+
+        MCP::Tool::Response.new(noted, error: response.error?, **extra)
       end
     end
   end

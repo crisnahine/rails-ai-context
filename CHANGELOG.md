@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The mcp floor is tested rather than asserted.** The gemspec claims
+  `mcp >= 0.8` and the lockfile resolves the newest, so nothing checked the
+  claim. A CI leg now pins mcp at exactly 0.8.0 and runs the suite against
+  it. The range is unchanged; it is now true.
 - **The prism floor rises from 0.28 to 1.4.** The old range was a claim
   nothing tested. A CI leg now pins prism at exactly 1.4.0 on Ruby 3.2, where
   prism is a real gem rather than stdlib, with a trimmed gemfile so a dev

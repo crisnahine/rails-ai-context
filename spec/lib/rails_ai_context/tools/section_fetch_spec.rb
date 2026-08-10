@@ -7,7 +7,7 @@ RSpec.describe RailsAiContext::Tools::SectionFetch do
     Class.new(RailsAiContext::Tools::BaseTool) do
       tool_name "rails_spec_section"
       description "probe"
-      input_schema(properties: {}, required: [])
+      input_schema(properties: {})
     end
   end
 

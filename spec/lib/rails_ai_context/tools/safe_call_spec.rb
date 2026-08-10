@@ -25,7 +25,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
   describe "call parameter recording" do
     it "records a tool's own arguments with no per-tool code" do
       tool = build_tool do
-        input_schema(properties: { table: { type: "string" } }, required: [])
+        input_schema(properties: { table: { type: "string" } })
         def self.call(table: nil, server_context: nil)
           text_response("ok")
         end
@@ -39,7 +39,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
     it "drops nil and empty arguments rather than recording noise" do
       tool = build_tool do
-        input_schema(properties: { table: { type: "string" }, scope: { type: "string" } }, required: [])
+        input_schema(properties: { table: { type: "string" }, scope: { type: "string" } })
         def self.call(table: nil, scope: nil, server_context: nil)
           text_response("ok")
         end
@@ -52,7 +52,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
     it "never records the MCP server context object" do
       tool = build_tool do
-        input_schema(properties: {}, required: [])
+        input_schema(properties: {})
         def self.call(server_context: nil)
           text_response("ok")
         end
@@ -65,7 +65,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
     it "lets a tool reshape what gets recorded" do
       tool = build_tool do
-        input_schema(properties: { sql: { type: "string" } }, required: [])
+        input_schema(properties: { sql: { type: "string" } })
 
         def self.session_params(kwargs)
           super.merge(sql: "REDACTED")
@@ -83,7 +83,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
     it "does not leak a failed call's params into the next call" do
       tool = build_tool do
-        input_schema(properties: { table: { type: "string" } }, required: [])
+        input_schema(properties: { table: { type: "string" } })
         def self.call(table: nil, server_context: nil)
           raise "boom" if table == "explode"
           text_response("ok")
@@ -102,7 +102,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     it "hands the tool a normalized detail" do
       seen = nil
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) do |detail: nil, server_context: nil|
           seen = detail
           text_response("ok")
@@ -116,7 +116,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     it "fills in the default when detail is omitted but declared" do
       seen = :untouched
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) do |detail: nil, server_context: nil|
           seen = detail
           text_response("ok")
@@ -130,7 +130,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     it "passes a valid detail through untouched" do
       seen = nil
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) do |detail: nil, server_context: nil|
           seen = detail
           text_response("ok")
@@ -146,7 +146,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     # or the tool answers a question they did not ask and says nothing.
     it "tells the caller when it discarded an invalid detail" do
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
       end
 
@@ -159,7 +159,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
     it "says nothing when the detail was valid" do
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
       end
 
@@ -168,7 +168,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
     it "says nothing when detail was simply omitted" do
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
       end
 
@@ -177,7 +177,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
     it "does not carry one call's bad detail into the next" do
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
       end
 
@@ -191,7 +191,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     # that called another tool had its note consumed by the inner one.
     it "still says so when the tool answers through error_response" do
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) { |detail: nil, server_context: nil| error_response("nope") }
       end
 
@@ -204,12 +204,12 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     it "keeps the outer tool's note when it calls another tool" do
       inner = build_tool do
         tool_name "rails_spec_inner"
-        input_schema(properties: {}, required: [])
+        input_schema(properties: {})
         define_singleton_method(:call) { |server_context: nil| text_response("inner") }
       end
 
       outer = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) do |detail: nil, server_context: nil|
           inner.call
           text_response("outer")
@@ -225,7 +225,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     it "does not report a note for the inner call that had no bad detail" do
       inner = build_tool do
         tool_name "rails_spec_inner"
-        input_schema(properties: {}, required: [])
+        input_schema(properties: {})
         define_singleton_method(:call) { |server_context: nil| text_response("inner") }
       end
 
@@ -234,7 +234,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
     it "shortens an absurd detail rather than echoing it past the truncation cap" do
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) { |detail: nil, server_context: nil| text_response("body") }
       end
 
@@ -247,13 +247,17 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     # append_note rebuilds the response, so anything it forgets to carry over
     # is silently dropped. No tool sets these today; nothing says one won't.
     it "keeps the rest of the response it rebuilds" do
+      # `meta` only exists on mcp 1.0+, and the gemspec supports >= 0.8.
+      supports_meta = MCP::Tool::Response.instance_methods.include?(:meta)
+      extra = supports_meta ? { meta: { source: "spec" } } : {}
+
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
         define_singleton_method(:call) do |detail: nil, server_context: nil|
           MCP::Tool::Response.new(
             [ { type: "text", text: "body" } ],
             structured_content: { rows: 2 },
-            meta: { source: "spec" }
+            **extra
           )
         end
       end
@@ -262,13 +266,38 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
       expect(response.content.first[:text]).to include("not a valid `detail`")
       expect(response.structured_content).to eq(rows: 2)
-      expect(response.meta).to eq(source: "spec")
+      expect(response.meta).to eq(source: "spec") if supports_meta
+    end
+
+    # `meta` arrived in mcp 1.0; the gemspec supports >= 0.8. Reading or
+    # passing it unconditionally turns a good answer into "Tool X failed:
+    # NoMethodError" on the versions that lack it, and the lockfile resolves
+    # a version that has it, so nothing else would notice.
+    it "still appends the note on an SDK whose response has no meta" do
+      metaless = Class.new do
+        attr_reader :content, :structured_content
+
+        def initialize(content) = (@content = content)
+        def error? = false
+      end
+
+      tool = build_tool do
+        input_schema(properties: { detail: { type: "string", enum: RailsAiContext::DetailLevel::ALL } })
+        define_singleton_method(:call) do |detail: nil, server_context: nil|
+          metaless.new([ { type: "text", text: "body" } ])
+        end
+      end
+
+      text = tool.call(detail: "bogus").content.first[:text]
+
+      expect(text).to start_with("body")
+      expect(text).to include("not a valid `detail`")
     end
 
     it "leaves a detail that spells its own levels alone" do
       seen = nil
       tool = build_tool do
-        input_schema(properties: { detail: { type: "string", enum: %w[quick standard full] } }, required: [])
+        input_schema(properties: { detail: { type: "string", enum: %w[quick standard full] } })
         define_singleton_method(:call) do |detail: nil, server_context: nil|
           seen = detail
           text_response("ok")
@@ -282,7 +311,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
     it "leaves a tool with no detail parameter alone" do
       received = nil
       tool = build_tool do
-        input_schema(properties: { table: { type: "string" } }, required: [])
+        input_schema(properties: { table: { type: "string" } })
         define_singleton_method(:call) do |**kwargs|
           received = kwargs
           text_response("ok")
@@ -297,7 +326,7 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
   describe "failure wrapping" do
     it "still turns an exception into an error response" do
       tool = build_tool do
-        input_schema(properties: {}, required: [])
+        input_schema(properties: {})
         def self.call(server_context: nil)
           raise "boom"
         end
