@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.20.0] - 2026-08-11
 
 ### Security
 
@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be cut apart before the pattern that would have caught it ever ran. The
   module exposes `redact_and_shorten`, so the order is not a caller's to get
   wrong.
+- **The secret vocabulary widens, and nesting no longer hides a value.**
+  `pepper`, `salt`, `master_key`, `signing_key`, `encryption_key`,
+  `deterministic_key` and `encryption.primary_key` now read as secret names,
+  and a value under a secret-named setting is filtered however deeply it
+  nests. `config.secret = { primary: [ "..." ] }` emitted the credential in
+  full.
 
 ### Changed
 
@@ -70,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. Transport construction moves behind one factory; memoization stays with
   each caller, which holds a different scope (per instance, per class, per
   process).
+- **A setting's name decides whether it is redacted, not its value's type.**
+  `config.secret_key = 12345` was filtered in one emitted field and left plain
+  in the other, because one path saw an Integer and the other saw the source
+  text. One decision drives both now.
 
 ### Added
 
@@ -111,6 +121,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Mcp-Session-Id`. A caller's snapshot of the record also stopped changing
   under it: `session_queries` returned live entries that later calls kept
   mutating.
+- **`.env.example` placeholders are shown, not filtered.** A
+  `<your-secret-here>` came back as `[FILTERED]`, hiding the one thing an
+  example file exists to show. A credential's shape and a placeholder's are
+  told apart now.
+- **The HTTP session record evicts the least recently used client, and is
+  bounded.** It dropped the oldest-created session, which is usually the
+  busiest one still in use, and it grew for as long as the process lived.
+- **Tools no longer report themselves as failing on mcp 0.8.** The note
+  naming a discarded `detail` value read `meta` off the response, which the
+  0.8 SDK has no reader for, so building the note raised and the tool
+  answered `Tool ... failed:`.
 
 ## [5.19.1] - 2026-08-10
 
