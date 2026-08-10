@@ -250,8 +250,28 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
 
       # Reporting :unchanged here would have every entry print
       # "(unchanged)" while the user's new selection was quietly dropped.
-      it "reports a failure rather than calling a lost write unchanged" do
+      # This gem owns the file. Refusing to write because its previous
+      # contents will not parse leaves the selection unrecordable for good:
+      # one typo and install can never remember anything again. It is
+      # replaced, and the caller is told it was replaced rather than updated.
+      it "replaces a record it cannot parse, rather than refusing forever" do
         File.write(File.join(root, ".rails-ai-context.yml"), "ai_tools: [unclosed\n")
+
+        expect(described_class.write([ :cursor ], root: root)).to include(yaml: :replaced)
+        expect(described_class.read(root: root)).to eq([ :cursor ])
+      end
+
+      it "says out loud that it replaced an unreadable record" do
+        File.write(File.join(root, ".rails-ai-context.yml"), "ai_tools: [unclosed\n")
+        result = described_class.write([ :cursor ], root: root)
+
+        level, text = described_class.messages(result).first
+        expect(level).to eq(:warn)
+        expect(text).to include("could not be read")
+      end
+
+      it "still reports a failure when the file cannot be written at all" do
+        allow(File).to receive(:write).and_raise(Errno::EACCES)
 
         expect(described_class.write([ :cursor ], root: root)).to include(yaml: :failed)
       end

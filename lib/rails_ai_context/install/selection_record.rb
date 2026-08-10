@@ -49,7 +49,7 @@ module RailsAiContext
       # @param initializer [Boolean] false leaves the user's Rails config
       #   untouched, for callers refreshing this gem's own YAML on a run the
       #   user did not ask to change their selection in.
-      # @return [Hash] { tools:, yaml: :created|:updated|:unchanged|:failed,
+      # @return [Hash] { tools:, yaml: :created|:updated|:unchanged|:replaced|:failed,
       #   initializer: :updated|:inserted|:unchanged|:conflict|:absent|:skipped }
       def write(tools, root:, extra_yaml: {}, initializer: true)
         tools = normalize(tools)
@@ -96,6 +96,7 @@ module RailsAiContext
         when :unchanged then [ :muted, "#{YAML_FILE} (unchanged)" ]
         when :created   then [ :ok, "Created #{YAML_FILE}" ]
         when :updated   then [ :ok, "Updated #{YAML_FILE}" ]
+        when :replaced  then [ :warn, "#{YAML_FILE} could not be read, so it was replaced" ]
         when :failed    then [ :warn, "Could not write #{YAML_FILE} - your selection was not saved" ]
         end
       end
@@ -145,11 +146,25 @@ module RailsAiContext
         tools.empty? ? nil : tools
       end
 
-      # @return [Symbol] :created, :updated, :unchanged or :failed
+      # @return [Hash, nil] the parsed record, or nil when it will not parse
+      private_class_method def self.readable_yaml(path)
+        YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
+      rescue StandardError
+        nil
+      end
+
+      # @return [Symbol] :created, :updated, :unchanged, :replaced or :failed
       private_class_method def self.write_yaml(tools, root, extra = {})
         path = File.join(root.to_s, YAML_FILE)
         existed = File.exist?(path)
-        data = existed ? (YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}) : {}
+
+        # An unreadable record is replaced, not treated as a reason to give
+        # up: this gem owns the file, and refusing would leave the selection
+        # unrecordable for good after a single typo. Reported separately so
+        # the caller can say the old contents went.
+        data = existed ? readable_yaml(path) : {}
+        replaced = existed && data.nil?
+        data ||= {}
 
         before = existed ? File.read(path) : nil
         data[YAML_KEY] = tools.map(&:to_s)
@@ -159,6 +174,8 @@ module RailsAiContext
         return :unchanged if before == after
 
         File.write(path, after)
+        return :replaced if replaced
+
         existed ? :updated : :created
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write #{YAML_FILE}: #{e.message}"

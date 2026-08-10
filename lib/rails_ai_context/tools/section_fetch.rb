@@ -33,7 +33,14 @@ module RailsAiContext
           end
 
           return text_response(unusable_message) if unusable_message
-          return text_response("#{subject} not available. #{remedy || "Add :#{key} to introspectors."}") unless data
+
+          # Anything that is not a hash is not a section this tool can read,
+          # and asking it for `[:error]` raises - which SafeCall would then
+          # report as the tool failing, the dishonest answer this seam exists
+          # to prevent.
+          unless data.is_a?(Hash)
+            return text_response("#{subject} not available. #{remedy || "Add :#{key} to introspectors."}")
+          end
 
           return text_response("#{subject} failed: #{data[:error]}")
         end
