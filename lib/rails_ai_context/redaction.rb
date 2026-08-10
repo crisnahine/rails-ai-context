@@ -206,7 +206,11 @@ module RailsAiContext
       def walk(value, secret)
         case value
         when nil    then nil
-        when String then secret ? filtered_like(value) : call(value)
+        # A credential-shaped string is filtered wherever it sits, with or
+        # without a secret name around it: inside a collection there is no
+        # `key: value` for the patterns to match on, so the shape is the only
+        # signal left.
+        when String then secret || credential_shaped?(value) ? filtered_like(value) : call(value)
         when Array  then value.map { |element| walk(element, secret) }
         when Hash   then value.to_h { |key, inner| [ key, walk(inner, secret || secret_name?(key)) ] }
         else secret && !policy_value?(value) ? FILTERED : value
