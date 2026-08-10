@@ -102,6 +102,16 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
+    # AGENTS.md is claimed by whichever of opencode/codex comes first in
+    # ALL_FORMATS, and that order now comes from Install::AiTool. Reordering
+    # that table - alphabetising it, say - would silently hand the file to the
+    # other serializer, and the count assertion above would still pass.
+    it "gives AGENTS.md to opencode rather than codex" do
+      all = described_class::ALL_FORMATS
+
+      expect(all.index(:opencode)).to be < all.index(:codex)
+    end
+
     it "raises for unknown format" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
