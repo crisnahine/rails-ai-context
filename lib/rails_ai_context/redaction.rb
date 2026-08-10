@@ -112,6 +112,38 @@ module RailsAiContext
         walk(source, secret_name?(name))
       end
 
+      # One assignment, both of the fields a listener emits for it. Deciding
+      # separately let them disagree: the source slice is always a String, so
+      # any rule about the value's type never reached it.
+      #
+      # @return [Hash] { value:, source: }
+      def redact_assignment(name, value:, source:)
+        return { value: walk(value, false), source: walk(source, false) } unless secret_assignment?(name, value)
+
+        { value: FILTERED, source: source.nil? ? nil : filtered_like(source) }
+      end
+
+      # Credential shape beats the descriptor list: `api_key_params` is
+      # excused by its suffix, but a value reading `sk_live_...` is a
+      # credential whatever the setting is called.
+      def secret_assignment?(name, value)
+        return true if value.is_a?(String) && credential_shaped?(value)
+        return false unless secret_name?(name)
+
+        !policy_value?(value)
+      end
+
+      # Identifiers and switches, never credential material. Filtering them
+      # hides the config a reader came for - `reset_password_keys = [:email]`
+      # says which field the reset uses, not what the secret is.
+      def policy_value?(value)
+        case value
+        when Symbol, TrueClass, FalseClass, NilClass then true
+        when Array then value.all? { |element| policy_value?(element) }
+        else false
+        end
+      end
+
       def secret_value?(value)
         value.to_s.match?(SECRET_VALUE)
       end

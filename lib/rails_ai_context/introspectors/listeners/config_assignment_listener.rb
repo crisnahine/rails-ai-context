@@ -48,13 +48,17 @@ module RailsAiContext
           # around it says the value is a credential.
           path = prefix + [ setting ]
 
+          # One decision for both fields, or a reader pattern-matching the
+          # marker finds it on one and the datum on the other.
+          redacted = RailsAiContext::Redaction.redact_assignment(
+            path, value: value, source: value_node&.slice
+          )
+
           @results << {
             path:       path,
             assignment: true,
-            # Both fields, or the property holds for one of them and the next
-            # reader of this listener picks the wrong one.
-            value:      RailsAiContext::Redaction.redact_setting(path, value),
-            source:     RailsAiContext::Redaction.redact_setting(path, value_node&.slice),
+            value:      redacted[:value],
+            source:     redacted[:source],
             location:   node.location.start_line
           }
         end

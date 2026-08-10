@@ -168,6 +168,58 @@ RSpec.describe RailsAiContext::Redaction do
     end
   end
 
+  # The listener emits an evaluated value and the raw source slice for the
+  # same assignment. Deciding separately let them disagree: `source` is
+  # always a String, so a rule about the value's type never reached it, and
+  # `secret_key = 12345` came out filtered in one field and plain in the
+  # other. One decision, both fields.
+  describe ".redact_assignment" do
+    def redact(name, value, source)
+      described_class.redact_assignment(name, value: value, source: source)
+    end
+
+    it "filters both fields for a numeric secret" do
+      expect(redact(:secret_key, 12345, "12345"))
+        .to eq(value: "[FILTERED]", source: "[FILTERED]")
+    end
+
+    it "keeps both fields for a policy switch" do
+      expect(redact(:send_password_change_notification, false, "false"))
+        .to eq(value: false, source: "false")
+    end
+
+    it "keeps both fields for a list of field names" do
+      expect(redact(:reset_password_keys, [ :email ], "[:email]"))
+        .to eq(value: [ :email ], source: "[:email]")
+    end
+
+    it "keeps both fields for a descriptor" do
+      expect(redact(:password_length, "[INFERRED]", "6..128"))
+        .to eq(value: "[INFERRED]", source: "6..128")
+    end
+
+    # A descriptor suffix suppresses a name, and that suppression used to win
+    # even when the value was plainly a credential.
+    it "filters a credential-shaped value a descriptor suffix would have excused" do
+      expect(redact(:api_key_params, "sk_live_abcdefghijkl", '"sk_live_abcdefghijkl"'))
+        .to eq(value: "[FILTERED]", source: '"[FILTERED]"')
+    end
+
+    it "still reaches a credential nested under an ordinary setting" do
+      result = redact(:smtp_settings,
+                      { user_name: "app", password: "hunter2" },
+                      '{ user_name: "app", password: "hunter2" }')
+
+      expect(result[:value]).to eq(user_name: "app", password: "[FILTERED]")
+      expect(result[:source]).to include("[FILTERED]")
+      expect(result[:source]).to include("app")
+    end
+
+    it "handles an assignment with no value" do
+      expect(redact(:jwt, nil, nil)).to eq(value: nil, source: nil)
+    end
+  end
+
   # The env tool cannot redact a `.env.example` default the way a log line is
   # scrubbed - there is no surrounding key to match on, only the value. What
   # it needs from the module is the judgement, not the marker.
