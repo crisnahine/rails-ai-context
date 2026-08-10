@@ -158,8 +158,13 @@ RSpec.describe RailsAiContext::Introspector do
       )
     end
 
+    # Against the gem's own directory this passed only because bundler had
+    # written a Gemfile.lock there, and that file is gitignored: point
+    # BUNDLE_GEMFILE elsewhere and the section answers "No Gemfile.lock
+    # found". The fixture ships one, so what this asserts is the tier.
     it "runs a files-only section's own call rather than refusing" do
-      result = RailsAiContext::Introspector.new(static_app).call
+      files_app = RailsAiContext::StaticApp.new(File.expand_path("../../fixtures/static_app", __dir__))
+      result = RailsAiContext::Introspector.new(files_app).call
       expect(result[:gems]).to include(:total_gems)
     end
 
