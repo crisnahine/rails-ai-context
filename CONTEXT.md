@@ -31,9 +31,3 @@ The mode where the app did not boot, or `--no-boot` was passed. What an introspe
 **runtime-only** - needs `app.config`, `app.routes` or a live database, and refuses honestly.
 
 An undeclared introspector fails the suite, and every files-only declaration is proven against `spec/fixtures/static_app` with nothing booted. Declaring files-only while defining `static_call` (or the reverse) is also a spec failure.
-
-## AI tool
-
-The assistant a user points at their app: claude, cursor, copilot, opencode, codex. What the gem generates for one is its **context files** (`CLAUDE.md`, `.cursor/rules/*.mdc`, and so on).
-
-Avoid "format" for either sense - claude is not a file format, and the word collides with real formatting elsewhere in the code. The public config key `ai_tools` already uses the canonical term.
