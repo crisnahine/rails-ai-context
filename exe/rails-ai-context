@@ -42,7 +42,6 @@ end
 STRIPPED_FRAMEWORK_SPECS = stripped_framework_specs.freeze
 
 require "thor"
-require "yaml"
 
 # Top-level class to avoid conflict with RailsAiContext::CLI module (which contains ToolRunner).
 # The library uses RailsAiContext::CLI as a module namespace; this exe needs a class for Thor.
@@ -439,10 +438,10 @@ class RailsAiContextCLI < Thor
       to_remove.each do |fmt|
         tool = ::RailsAiContext::Install::AiTool.find(fmt)
 
-        removed = ::RailsAiContext::Install::Cleanup.remove(
+        removed_paths = ::RailsAiContext::Install::Cleanup.remove(
           tools: [ fmt ], keeping: current.map(&:to_sym), root: Dir.pwd
         )
-        removed.each { |path| $stderr.puts "  Removed #{path}" }
+        removed_paths.each { |path| $stderr.puts "  Removed #{path}" }
 
         # Merge-safe MCP config cleanup — removes only the rails-ai-context entry
         cleaned = ::RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Dir.pwd)
@@ -483,11 +482,14 @@ class RailsAiContextCLI < Thor
       when :unchanged then $stderr.puts ".rails-ai-context.yml (unchanged)"
       when :created   then $stderr.puts "Created .rails-ai-context.yml"
       when :updated   then $stderr.puts "Updated .rails-ai-context.yml"
+      when :failed    then $stderr.puts "Could not write .rails-ai-context.yml - your selection was not saved"
       end
 
       # The initializer wins on read, so leaving a stale one behind would hand
       # back the old selection on the next run.
-      $stderr.puts "Updated config/initializers/rails_ai_context.rb" if result[:initializer] == :updated
+      case result[:initializer]
+      when :updated, :inserted then $stderr.puts "Updated config/initializers/rails_ai_context.rb"
+      end
     end
 
     def write_mcp_configs(ai_tools, tool_mode)

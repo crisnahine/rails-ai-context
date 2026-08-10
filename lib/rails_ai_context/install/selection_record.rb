@@ -17,10 +17,20 @@ module RailsAiContext
       INITIALIZER = "config/initializers/rails_ai_context.rb"
       YAML_KEY = "ai_tools"
 
+      # Dates and times because a hand-added `generated_at:` is ordinary in a
+      # config file, and refusing to load one used to cost the user the write.
+      PERMITTED_YAML = [ Symbol, Date, Time ].freeze
+
       # Matches the line the installer writes, and nothing else. Anchored past
       # any leading whitespace but not past a `#`, so the commented-out
       # default in the generated initializer is not mistaken for a selection.
       SELECTION_LINE = /^[ \t]*config\.ai_tools\s*=\s*%i\[([^\]]*)\]/
+
+      # Any assignment to the key, in any shape. A hand-written
+      # `config.ai_tools = [:claude]` is not one this module rewrites, but
+      # inserting beside it would leave two assignments: the stale one wins at
+      # boot while `read` returns the fresh one.
+      ANY_ASSIGNMENT = /^[ \t]*config\.ai_tools\s*=/
 
       # Where a selection line goes when the initializer has none yet.
       CONFIGURE_BLOCK = /RailsAiContext\.configure do \|config\|\n/
@@ -36,15 +46,18 @@ module RailsAiContext
       # every entry prints its own "Created / Updated / unchanged" line and
       # would otherwise keep its own copy of the writing just to know which.
       #
-      # @return [Hash] { tools:, yaml: :created|:updated|:unchanged,
-      #   initializer: :updated|:unchanged|:absent }
-      def write(tools, root:, extra_yaml: {})
+      # @param initializer [Boolean] false leaves the user's Rails config
+      #   untouched, for callers refreshing this gem's own YAML on a run the
+      #   user did not ask to change their selection in.
+      # @return [Hash] { tools:, yaml: :created|:updated|:unchanged|:failed,
+      #   initializer: :updated|:inserted|:unchanged|:absent|:skipped }
+      def write(tools, root:, extra_yaml: {}, initializer: true)
         tools = normalize(tools)
 
         {
           tools: tools,
           yaml: write_yaml(tools, root, extra_yaml),
-          initializer: write_initializer(tools, root)
+          initializer: initializer ? write_initializer(tools, root) : :skipped
         }
       end
 
@@ -71,7 +84,7 @@ module RailsAiContext
         path = File.join(root.to_s, YAML_FILE)
         return nil unless File.exist?(path)
 
-        data = YAML.safe_load_file(path, permitted_classes: [ Symbol ]) || {}
+        data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
         presence(normalize(data[YAML_KEY]))
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
@@ -92,7 +105,7 @@ module RailsAiContext
       private_class_method def self.write_yaml(tools, root, extra = {})
         path = File.join(root.to_s, YAML_FILE)
         existed = File.exist?(path)
-        data = existed ? (YAML.safe_load_file(path, permitted_classes: [ Symbol ]) || {}) : {}
+        data = existed ? (YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}) : {}
 
         before = existed ? File.read(path) : nil
         data[YAML_KEY] = tools.map(&:to_s)
@@ -105,7 +118,7 @@ module RailsAiContext
         existed ? :updated : :created
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write #{YAML_FILE}: #{e.message}"
-        :unchanged
+        :failed
       end
 
       # Rewrites the selection line, or adds one to a configure block that has
@@ -126,6 +139,8 @@ module RailsAiContext
 
           File.write(path, updated)
           :updated
+        elsif content.match?(ANY_ASSIGNMENT)
+          :absent
         elsif content.match?(CONFIGURE_BLOCK)
           File.write(path, content.sub(CONFIGURE_BLOCK) { "#{Regexp.last_match(0)}#{line}\n" })
           :inserted

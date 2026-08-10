@@ -119,15 +119,22 @@ rescue => e
   false
 end unless defined?(tool_mode_configured?)
 
-def save_selection(ai_tools, tool_mode)
+# `record_initializer:` is false on an ordinary `ai:context` run. The YAML is
+# this gem's own file and is refreshed every time, but the initializer is the
+# user's Rails config: rewriting it unasked would renormalize their line and
+# drop any key this version does not recognise.
+def save_selection(ai_tools, tool_mode, record_initializer: false)
   result = RailsAiContext::Install::SelectionRecord.write(
-    ai_tools, root: Rails.root, extra_yaml: { "tool_mode" => tool_mode.to_s }
+    ai_tools, root: Rails.root,
+    extra_yaml: { "tool_mode" => tool_mode.to_s },
+    initializer: record_initializer
   )
 
   case result[:yaml]
   when :unchanged then puts "💾 .rails-ai-context.yml (unchanged)"
   when :created   then puts "💾 Saved .rails-ai-context.yml"
   when :updated   then puts "💾 Updated .rails-ai-context.yml"
+  when :failed    then puts "⚠️  Could not write .rails-ai-context.yml - your selection was not saved"
   end
 
   case result[:initializer]
@@ -175,10 +182,10 @@ def cleanup_removed_ai_tools(previous, current)
   to_remove.each do |fmt|
     tool = RailsAiContext::Install::AiTool.find(fmt)
 
-    removed = RailsAiContext::Install::Cleanup.remove(
+    removed_paths = RailsAiContext::Install::Cleanup.remove(
       tools: [ fmt ], keeping: current.map(&:to_sym), root: Rails.root
     )
-    removed.each { |path| puts "  Removed #{path}" }
+    removed_paths.each { |path| puts "  Removed #{path}" }
 
     # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
     cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Rails.root.to_s)
@@ -295,7 +302,8 @@ namespace :ai do
 
     # First time - no tools configured, ask the user. The record is written
     # once below, so the selection reaches both files together.
-    ai_tools = prompt_ai_tools if ai_tools.nil?
+    prompted = ai_tools.nil?
+    ai_tools = prompt_ai_tools if prompted
 
     # Prompt for tool_mode if not yet configured in initializer
     unless tool_mode_configured?
@@ -310,9 +318,11 @@ namespace :ai do
     # One-time v5.0.0 legacy cleanup prompt for removed UI pattern files
     RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Rails.root)
 
-    # Record the selection in both files (the YAML enables standalone mode)
+    # Record the selection (the YAML enables standalone mode). The initializer
+    # is only touched on the run that actually asked the user.
     save_selection(ai_tools || RailsAiContext.configuration.ai_tools,
-                   RailsAiContext.configuration.tool_mode)
+                   RailsAiContext.configuration.tool_mode,
+                   record_initializer: prompted)
 
     # Auto-create/update per-tool MCP config files when tool_mode is :mcp
     ensure_mcp_configs(ai_tools) if RailsAiContext.configuration.tool_mode == :mcp

@@ -154,6 +154,42 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
       expect(described_class.read(root: root)).to eq([ :codex ])
     end
 
+    # A second assignment would win at boot while `read` returned the first,
+    # which is the divergence this module exists to close. The selection line
+    # is only rewritten in the shape the installer writes, so any other shape
+    # must be left for the user rather than shadowed.
+    it "does not add a second assignment beside a hand-written one" do
+      write_initializer(<<~RUBY)
+        RailsAiContext.configure do |config|
+          config.ai_tools = [:claude, :cursor]
+        end
+      RUBY
+
+      described_class.write([ :codex ], root: root)
+
+      content = File.read(File.join(root, "config", "initializers", "rails_ai_context.rb"))
+      expect(content.scan(/config\.ai_tools\s*=/).size).to eq(1)
+      expect(content).to include("config.ai_tools = [:claude, :cursor]")
+    end
+
+    it "reports the initializer as absent when it assigns in a shape it cannot rewrite" do
+      write_initializer("RailsAiContext.configure do |config|\n  config.ai_tools = SOME_CONSTANT\nend\n")
+
+      expect(described_class.write([ :codex ], root: root)).to include(initializer: :absent)
+    end
+
+    # An ordinary context run refreshes this gem's own YAML but must leave the
+    # user's Rails config alone.
+    it "can be told to leave the initializer alone" do
+      write_initializer("RailsAiContext.configure do |config|\n  config.ai_tools = %i[claude]\nend\n")
+
+      result = described_class.write([ :codex ], root: root, initializer: false)
+
+      expect(result).to include(initializer: :skipped)
+      expect(File.read(File.join(root, "config", "initializers", "rails_ai_context.rb")))
+        .to include("config.ai_tools = %i[claude]")
+    end
+
     it "does not invent a configure block that is not there" do
       write_initializer("# just a comment\n")
 
@@ -203,6 +239,22 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
         write_initializer("RailsAiContext.configure do |config|\n  config.ai_tools = %i[codex]\nend\n")
 
         expect(described_class.write([ :codex ], root: root)).to include(initializer: :unchanged)
+      end
+
+      # Reporting :unchanged here would have every entry print
+      # "(unchanged)" while the user's new selection was quietly dropped.
+      it "reports a failure rather than calling a lost write unchanged" do
+        File.write(File.join(root, ".rails-ai-context.yml"), "ai_tools: [unclosed\n")
+
+        expect(described_class.write([ :cursor ], root: root)).to include(yaml: :failed)
+      end
+
+      it "keeps a record carrying a date, rather than failing to load it" do
+        File.write(File.join(root, ".rails-ai-context.yml"),
+                   "ai_tools:\n  - claude\ngenerated_at: 2026-01-01\n")
+
+        expect(described_class.write([ :cursor ], root: root)).to include(yaml: :updated)
+        expect(described_class.read(root: root)).to eq([ :cursor ])
       end
 
       it "reports the tools it actually recorded" do

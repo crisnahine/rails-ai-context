@@ -115,10 +115,10 @@ module RailsAiContext
         to_remove.each do |fmt|
           tool = RailsAiContext::Install::AiTool.find(fmt)
 
-          removed = RailsAiContext::Install::Cleanup.remove(
+          removed_paths = RailsAiContext::Install::Cleanup.remove(
             tools: [ fmt ], keeping: @selected_formats, root: Rails.root
           )
-          removed.each { |path| say "  Removed #{path}", :red }
+          removed_paths.each { |path| say "  Removed #{path}", :red }
 
           # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
           cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Rails.root.to_s)
@@ -523,6 +523,11 @@ module RailsAiContext
         when :unchanged then say ".rails-ai-context.yml (unchanged)", :yellow
         when :created   then say "Created .rails-ai-context.yml", :green
         when :updated   then say "Updated .rails-ai-context.yml", :green
+        when :failed    then say "Could not write .rails-ai-context.yml - your selection was not saved", :red
+        end
+
+        case result[:initializer]
+        when :updated, :inserted then say "Updated config/initializers/rails_ai_context.rb", :green
         end
       end
 
