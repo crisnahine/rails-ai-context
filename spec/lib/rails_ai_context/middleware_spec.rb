@@ -33,9 +33,15 @@ RSpec.describe RailsAiContext::Middleware do
       middleware.instance_variable_set(:@mcp_transport, transport)
 
       env = Rack::MockRequest.env_for("/mcp", method: "POST", input: "{}")
+      status, headers, body = middleware.call(env)
 
-      expect(middleware.call(env))
-        .to eq(RailsAiContext::McpEdge.internal_error_response(RuntimeError.new("transport boom")))
+      # Compared against the frame builder rather than the response builder:
+      # the latter logs, and an expected value should not do work.
+      expect([ status, headers, body.join ]).to eq([
+        500,
+        { "Content-Type" => "application/json" },
+        RailsAiContext::McpEdge.internal_error_frame(RuntimeError.new("transport boom"))
+      ])
     end
 
     it "does not crash non-MCP requests when transport is broken" do

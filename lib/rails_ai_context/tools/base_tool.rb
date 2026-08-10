@@ -218,9 +218,9 @@ module RailsAiContext
           id.nil? || id.empty? ? DEFAULT_SESSION : id
         end
 
-        # What every HTTP entry point actually wants. One process serves every
-        # client on all three, so each request has to be scoped to whoever
-        # sent it; as two calls, the pair sat duplicated at all three.
+        # One process serves every client on all three HTTP entry points, so
+        # a request must run scoped to whoever sent it or the session record
+        # pools conversations together.
         # See docs/adr/0003-shared-tool-cache-semantics.md.
         def with_session_for(env, &block)
           with_session(session_from(env), &block)

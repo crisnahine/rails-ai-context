@@ -146,9 +146,6 @@ RSpec.describe "BaseTool shared caches under concurrency" do
         expect(base.session_from("HTTP_MCP_SESSION_ID" => "")).to eq(base::DEFAULT_SESSION)
       end
 
-      # What every HTTP entry point actually wants: run this block scoped to
-      # whoever sent the request. Spelling that as two calls left the pair
-      # duplicated at all three of them.
       it "scopes a block to the request's session in one call" do
         seen = nil
         base.with_session_for("HTTP_MCP_SESSION_ID" => "abc") { seen = base.current_session }
