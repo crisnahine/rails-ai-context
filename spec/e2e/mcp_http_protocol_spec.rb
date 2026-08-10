@@ -42,4 +42,34 @@ RSpec.describe "E2E: MCP HTTP protocol", type: :e2e do
     expect(content).to be_a(Array)
     expect(content.first["text"]).to match(/posts|Post/)
   end
+
+  # The same sweep the stdio spec does, over the other transport. A tool
+  # that answers on stdio and not here would ship unnoticed, and this is
+  # the transport shared/team deployments actually use.
+  it "answers every registered tool over HTTP" do
+    failures = []
+
+    RailsAiContext::Server.builtin_tools.each do |tool_class|
+      name = tool_class.tool_name
+      response = @http.jsonrpc("tools/call", { name: name, arguments: {} })
+
+      if response["error"]
+        failures << "#{name}: JSON-RPC error #{response['error'].inspect}"
+        next
+      end
+
+      content = response.dig("result", "content")
+      text = content.is_a?(Array) ? content.first&.dig("text") : nil
+
+      if text.nil? || text.strip.empty?
+        failures << "#{name}: no text content (#{response.inspect[0, 160]})"
+        next
+      end
+
+      failures << "#{name}: #{text.lines.first.strip}" if text.start_with?("Tool #{name} failed:")
+    end
+
+    expect(failures).to be_empty,
+      "#{failures.size} of #{RailsAiContext::Server.builtin_tools.size} tools failed over HTTP:\n#{failures.join("\n")}"
+  end
 end

@@ -75,6 +75,47 @@ RSpec.describe "E2E: MCP stdio protocol", type: :e2e do
     expect(content.first["text"]).to match(/posts|Post/)
   end
 
+  # The CLI sweeps every tool, but the CLI is not the protocol most users
+  # reach these through. This drives all of them over the real JSON-RPC
+  # transport against a real booted app: a tool that answers on the command
+  # line and not over MCP would otherwise ship unnoticed.
+  it "answers every registered tool over the protocol" do
+    failures = []
+
+    RailsAiContext::Server.builtin_tools.each do |tool_class|
+      name = tool_class.tool_name
+      response = @mcp.call_tool(name)
+
+      if response["error"]
+        failures << "#{name}: JSON-RPC error #{response['error'].inspect}"
+        next
+      end
+
+      content = response.dig("result", "content")
+      text = content.is_a?(Array) ? content.first&.dig("text") : nil
+
+      if text.nil? || text.strip.empty?
+        failures << "#{name}: no text content (#{response.inspect[0, 160]})"
+        next
+      end
+
+      # isError is the SDK's in-band failure flag. A tool refusing honestly
+      # ("requires a booted Rails app", "no X found") is fine; a tool
+      # reporting its own crash is not.
+      failures << "#{name}: #{text.lines.first.strip}" if text.start_with?("Tool #{name} failed:")
+    end
+
+    expect(failures).to be_empty,
+      "#{failures.size} of #{RailsAiContext::Server.builtin_tools.size} tools failed over MCP:\n#{failures.join("\n")}"
+  end
+
+  it "reports every tool's own schema to the client" do
+    listed = @mcp.list_tools.dig("result", "tools") || []
+    missing_schema = listed.reject { |tool| tool["inputSchema"].is_a?(Hash) }.map { |tool| tool["name"] }
+
+    expect(missing_schema).to be_empty, "tools advertised with no input schema: #{missing_schema.join(', ')}"
+  end
+
   it "tools/call with unknown tool returns a JSON-RPC error and logs quietly" do
     expect {
       @mcp.call_tool("rails_nonexistent_tool_xyz")
