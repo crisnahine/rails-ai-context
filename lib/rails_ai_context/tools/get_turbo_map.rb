@@ -42,6 +42,12 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 19,
+        mcp: "rails_get_turbo_map",
+        summary: "Turbo Stream/Frame wiring + mismatch warnings"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(detail: "standard", stream: nil, controller: nil, server_context: nil)

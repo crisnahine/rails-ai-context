@@ -26,6 +26,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 45,
+        mcp: "rails_get_env_config(environment:\"production\")",
+        cli_args: "environment=production",
+        summary: "Per-environment config: notable toggles + config keys each env sets"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(environment: nil, offset: 0, limit: nil, server_context: nil)

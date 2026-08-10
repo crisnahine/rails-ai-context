@@ -66,6 +66,13 @@ module RailsAiContext
         required: [ "pattern" ]
       )
 
+      guide_row(
+        order: 3,
+        mcp: "rails_search_code(pattern:\"X\", match_type:\"trace\")",
+        cli_args: "pattern=X match_type=trace",
+        summary: "Search + trace: definition, source, callers, test coverage. Also: `match_type:\"any\"` for regex search"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(pattern:, path: nil, file_type: nil, match_type: "any", exact_match: false, exclude_tests: false, group_by_file: false, offset: 0, limit: nil, context_lines: 2, server_context: nil)

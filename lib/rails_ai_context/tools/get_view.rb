@@ -26,6 +26,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 9,
+        mcp: "rails_get_view(controller:\"X\")",
+        cli_args: "controller=X",
+        summary: "Templates with ivars, Turbo wiring, Stimulus refs, partial locals"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(controller: nil, path: nil, detail: "standard", server_context: nil)

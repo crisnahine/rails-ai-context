@@ -23,6 +23,13 @@ module RailsAiContext
         required: [ "partial" ]
       )
 
+      guide_row(
+        order: 18,
+        mcp: "rails_get_partial_interface(partial:\"X\")",
+        cli_args: "partial=X",
+        summary: "Partial locals contract: what to pass + usage examples"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(partial:, detail: "standard", server_context: nil)

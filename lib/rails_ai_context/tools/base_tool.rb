@@ -104,8 +104,19 @@ module RailsAiContext
 
       DEFAULT_SESSION = :default
 
+      # One row of the generated tool guide, declared beside the tool's own
+      # description so adding a tool touches one file. `order` fixes where the
+      # row lands; the CLI command is derived from tool_name, never spelled.
+      GuideRow = Struct.new(:order, :mcp, :cli_args, :summary, keyword_init: true)
+
       class << self
         include SectionFetch
+
+        def guide_row(order: nil, mcp: nil, cli_args: nil, summary: nil)
+          return @guide_row if order.nil?
+
+          @guide_row = GuideRow.new(order: order, mcp: mcp, cli_args: cli_args, summary: summary)
+        end
 
         # Convenience: access the Rails app and cached introspection.
         # Routes through RailsAiContext.default_app so this resolves to the

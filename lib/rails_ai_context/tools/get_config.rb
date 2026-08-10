@@ -10,6 +10,12 @@ module RailsAiContext
 
       input_schema(properties: {})
 
+      guide_row(
+        order: 21,
+        mcp: "rails_get_config",
+        summary: "Database adapter, auth, assets, cache, queue, Action Cable"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)

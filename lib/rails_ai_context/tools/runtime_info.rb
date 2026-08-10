@@ -23,6 +23,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 38,
+        mcp: "rails_runtime_info(detail:\"standard\")",
+        cli_args: "detail=standard",
+        summary: "Live runtime: DB pool, table sizes, cache stats, job queues, pending migrations"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: false)
 
       def self.call(detail: "standard", section: nil, server_context: nil)

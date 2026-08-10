@@ -13,6 +13,12 @@ module RailsAiContext
 
       input_schema(properties: {})
 
+      guide_row(
+        order: 43,
+        mcp: "rails_get_autoload",
+        summary: "Zeitwerk mode, autoload/eager-load paths, collapsed dirs, custom inflections"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(server_context: nil)

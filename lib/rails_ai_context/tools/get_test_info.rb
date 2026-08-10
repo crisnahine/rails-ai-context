@@ -26,6 +26,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 11,
+        mcp: "rails_get_test_info(model:\"X\")",
+        cli_args: "model=X",
+        summary: "Tests + fixture contents + test template"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, controller: nil, detail: "standard", server_context: nil)

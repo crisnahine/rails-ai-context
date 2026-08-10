@@ -33,6 +33,13 @@ module RailsAiContext
         required: %w[error]
       )
 
+      guide_row(
+        order: 35,
+        mcp: "rails_diagnose(error:\"X\")",
+        cli_args: "error=\"X\"",
+        summary: "One-call error diagnosis: context + git changes + logs + fix suggestions"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: true)
 
       # ── Error classification ──────────────────────────────────────────

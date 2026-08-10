@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The generated guide advertised a CLI command that does not exist.** Its
+  row for `rails_get_env_config` printed `ai:tool[environments]`, which the
+  CLI cannot resolve; the CLI name is now derived from the tool name rather
+  than typed beside it.
 - **One MCP client's session record no longer shows up in another's.**
   `rails_session_context` kept one process-global list of calls, which is
   right over stdio but wrong for the two HTTP transports, where a single

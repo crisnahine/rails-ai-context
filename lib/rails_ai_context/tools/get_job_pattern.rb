@@ -22,6 +22,12 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 16,
+        mcp: "rails_get_job_pattern",
+        summary: "Jobs: queue, retries, guard clauses, broadcasts, schedules"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(job: nil, detail: "standard", server_context: nil)

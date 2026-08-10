@@ -30,6 +30,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 33,
+        mcp: "rails_read_logs(level:\"X\")",
+        cli_args: "level=X",
+        summary: "Reverse file tail with level filtering and sensitive data redaction"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: false)
 
       MAX_READ_BYTES = 1_048_576  # 1MB

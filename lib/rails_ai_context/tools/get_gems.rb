@@ -26,6 +26,12 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 22,
+        mcp: "rails_get_gems",
+        summary: "Notable gems with versions, categories, config file locations"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       GEM_CONFIG_HINTS = {

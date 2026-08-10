@@ -34,6 +34,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 4,
+        mcp: "rails_get_controllers(controller:\"X\", action:\"Y\")",
+        cli_args: "controller=X action=Y",
+        summary: "Action source + inherited filters + render map + private methods"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(controller: nil, action: nil, detail: "standard", limit: nil, offset: 0, server_context: nil)

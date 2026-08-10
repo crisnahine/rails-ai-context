@@ -19,6 +19,13 @@ module RailsAiContext
         required: [ "feature" ]
       )
 
+      guide_row(
+        order: 2,
+        mcp: "rails_analyze_feature(feature:\"X\")",
+        cli_args: "feature=X",
+        summary: "Full-stack: models + controllers + routes + services + jobs + views + tests"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       # Map well-known feature keywords to gem-based patterns

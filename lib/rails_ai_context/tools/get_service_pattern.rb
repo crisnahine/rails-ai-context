@@ -22,6 +22,12 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 15,
+        mcp: "rails_get_service_pattern",
+        summary: "Service objects: interface, dependencies, side effects, callers"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(service: nil, detail: "standard", server_context: nil)

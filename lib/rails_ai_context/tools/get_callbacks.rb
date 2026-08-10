@@ -48,6 +48,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 13,
+        mcp: "rails_get_callbacks(model:\"X\")",
+        cli_args: "model=X",
+        summary: "Callbacks in Rails execution order with source"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, detail: "standard", server_context: nil)

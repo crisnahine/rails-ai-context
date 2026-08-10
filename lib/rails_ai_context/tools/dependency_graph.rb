@@ -35,6 +35,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 27,
+        mcp: "rails_dependency_graph(model:\"X\")",
+        cli_args: "model=X",
+        summary: "Model association graph as Mermaid diagram"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       MAX_NODES = 50

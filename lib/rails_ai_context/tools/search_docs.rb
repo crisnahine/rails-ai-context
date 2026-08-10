@@ -36,6 +36,13 @@ module RailsAiContext
         required: [ "query" ]
       )
 
+      guide_row(
+        order: 31,
+        mcp: "rails_search_docs(query:\"X\")",
+        cli_args: "query=X",
+        summary: "Bundled topic index with weighted keyword search, on-demand GitHub fetch"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: true)
 
       VALID_SOURCES = %w[all guides api stimulus turbo hotwire].freeze

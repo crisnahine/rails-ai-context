@@ -19,6 +19,12 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 29,
+        mcp: "rails_get_frontend_stack",
+        summary: "React/Vue/Svelte/Angular, Inertia, TypeScript, package manager"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(detail: "standard", server_context: nil)

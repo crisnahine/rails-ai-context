@@ -31,6 +31,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 25,
+        mcp: "rails_get_component_catalog(component:\"X\")",
+        cli_args: "component=X",
+        summary: "ViewComponent/Phlex: props, slots, previews, usage"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(component: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)

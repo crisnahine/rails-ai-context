@@ -30,6 +30,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 10,
+        mcp: "rails_get_stimulus(controller:\"X\")",
+        cli_args: "controller=X",
+        summary: "Targets, values, actions + HTML data-attributes + view lookup"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(controller: nil, detail: "standard", limit: nil, offset: 0, server_context: nil)

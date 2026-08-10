@@ -23,6 +23,12 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 30,
+        mcp: "rails_get_api",
+        summary: "API layer: api_only mode, serializers, GraphQL, versioning, rate limiting, CORS, pagination"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(detail: "standard", server_context: nil)

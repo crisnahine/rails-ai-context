@@ -33,6 +33,12 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 24,
+        mcp: "rails_security_scan",
+        summary: "Brakeman static analysis: SQL injection, XSS, mass assignment"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       CONFIDENCE_MAP = { "high" => 0, "medium" => 1, "weak" => 2 }.freeze

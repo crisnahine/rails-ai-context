@@ -38,6 +38,13 @@ module RailsAiContext
         RailsAiContext.configuration.excluded_route_prefixes
       end
 
+      guide_row(
+        order: 8,
+        mcp: "rails_get_routes(controller:\"X\")",
+        cli_args: "controller=X",
+        summary: "Routes with code-ready helpers and controller filters inline"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(controller: nil, detail: "standard", limit: nil, offset: 0, app_only: true, server_context: nil)

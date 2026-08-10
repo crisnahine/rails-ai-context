@@ -26,6 +26,13 @@ module RailsAiContext
         required: %w[file near]
       )
 
+      guide_row(
+        order: 14,
+        mcp: "rails_get_edit_context(file:\"X\", near:\"Y\")",
+        cli_args: "file=X near=Y",
+        summary: "Code around a match with class/method context"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(file:, near:, context_lines: 5, server_context: nil)

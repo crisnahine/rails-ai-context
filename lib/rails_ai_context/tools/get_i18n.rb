@@ -25,6 +25,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 40,
+        mcp: "rails_get_i18n(locale:\"fr\")",
+        cli_args: "locale=fr",
+        summary: "Locales, locale files with key counts, per-locale coverage, fallbacks"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(locale: nil, offset: 0, limit: nil, server_context: nil)

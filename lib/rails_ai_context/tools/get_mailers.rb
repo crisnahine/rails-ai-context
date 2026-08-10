@@ -25,6 +25,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 41,
+        mcp: "rails_get_mailers(mailer:\"UserMailer\")",
+        cli_args: "mailer=UserMailer",
+        summary: "Mailer classes with delivery actions and delivery method"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(mailer: nil, offset: 0, limit: nil, server_context: nil)

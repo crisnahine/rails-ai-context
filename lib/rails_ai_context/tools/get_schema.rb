@@ -35,6 +35,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 6,
+        mcp: "rails_get_schema(table:\"X\")",
+        cli_args: "table=X",
+        summary: "Columns with [indexed]/[unique]/[encrypted]/[default] hints"
+      )
+
       annotations(
         read_only_hint: true,
         destructive_hint: false,

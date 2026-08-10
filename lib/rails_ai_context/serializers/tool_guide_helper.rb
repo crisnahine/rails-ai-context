@@ -239,65 +239,22 @@ module RailsAiContext
         lines
       end
 
-      # Single source of truth for the tools table.
-      # Each row is [mcp_call, cli_name, cli_args, description].
-      # Set include_mcp: false for CLI-only 2-column table.
-      TOOL_ROWS = [
-        [ 'rails_get_context(model:"X")', "context", "model=X", "**START HERE** - schema + model + controller + routes + views in one call" ],
-        [ 'rails_analyze_feature(feature:"X")', "analyze_feature", "feature=X", "Full-stack: models + controllers + routes + services + jobs + views + tests" ],
-        [ 'rails_search_code(pattern:"X", match_type:"trace")', "search_code", "pattern=X match_type=trace", 'Search + trace: definition, source, callers, test coverage. Also: `match_type:"any"` for regex search' ],
-        [ 'rails_get_controllers(controller:"X", action:"Y")', "controllers", "controller=X action=Y", "Action source + inherited filters + render map + private methods" ],
-        [ 'rails_validate(files:[...], level:"rails")', "validate", "files=a.rb,b.rb level=rails", "Syntax + semantic validation (run after EVERY edit)" ],
-        [ 'rails_get_schema(table:"X")', "schema", "table=X", "Columns with [indexed]/[unique]/[encrypted]/[default] hints" ],
-        [ 'rails_get_model_details(model:"X")', "model_details", "model=X", "Associations, validations, scopes, enums, macros, delegations" ],
-        [ 'rails_get_routes(controller:"X")', "routes", "controller=X", "Routes with code-ready helpers and controller filters inline" ],
-        [ 'rails_get_view(controller:"X")', "view", "controller=X", "Templates with ivars, Turbo wiring, Stimulus refs, partial locals" ],
-        [ 'rails_get_stimulus(controller:"X")', "stimulus", "controller=X", "Targets, values, actions + HTML data-attributes + view lookup" ],
-        [ 'rails_get_test_info(model:"X")', "test_info", "model=X", "Tests + fixture contents + test template" ],
-        [ 'rails_get_concern(name:"X", detail:"full")', "concern", "name=X detail=full", "Concern methods with source + which models include it" ],
-        [ 'rails_get_callbacks(model:"X")', "callbacks", "model=X", "Callbacks in Rails execution order with source" ],
-        [ 'rails_get_edit_context(file:"X", near:"Y")', "edit_context", "file=X near=Y", "Code around a match with class/method context" ],
-        [ "rails_get_service_pattern", "service_pattern", nil, "Service objects: interface, dependencies, side effects, callers" ],
-        [ "rails_get_job_pattern", "job_pattern", nil, "Jobs: queue, retries, guard clauses, broadcasts, schedules" ],
-        [ "rails_get_env", "env", nil, "Environment variables + credentials keys (not values)" ],
-        [ 'rails_get_partial_interface(partial:"X")', "partial_interface", "partial=X", "Partial locals contract: what to pass + usage examples" ],
-        [ "rails_get_turbo_map", "turbo_map", nil, "Turbo Stream/Frame wiring + mismatch warnings" ],
-        [ "rails_get_helper_methods", "helper_methods", nil, "App + framework helpers with view cross-references" ],
-        [ "rails_get_config", "config", nil, "Database adapter, auth, assets, cache, queue, Action Cable" ],
-        [ "rails_get_gems", "gems", nil, "Notable gems with versions, categories, config file locations" ],
-        [ "rails_get_conventions", "conventions", nil, "App patterns: auth checks, flash messages, test patterns" ],
-        [ "rails_security_scan", "security_scan", nil, "Brakeman static analysis: SQL injection, XSS, mass assignment" ],
-        [ 'rails_get_component_catalog(component:"X")', "component_catalog", "component=X", "ViewComponent/Phlex: props, slots, previews, usage" ],
-        [ 'rails_performance_check(model:"X")', "performance_check", "model=X", "N+1 risks, missing indexes, Model.all anti-patterns" ],
-        [ 'rails_dependency_graph(model:"X")', "dependency_graph", "model=X", "Model association graph as Mermaid diagram" ],
-        [ 'rails_migration_advisor(action:"X", table:"Y")', "migration_advisor", "action=X table=Y", "Generate migration code, flag irreversible ops" ],
-        [ "rails_get_frontend_stack", "frontend_stack", nil, "React/Vue/Svelte/Angular, Inertia, TypeScript, package manager" ],
-        [ "rails_get_api", "api", nil, "API layer: api_only mode, serializers, GraphQL, versioning, rate limiting, CORS, pagination" ],
-        [ 'rails_search_docs(query:"X")', "search_docs", "query=X", "Bundled topic index with weighted keyword search, on-demand GitHub fetch" ],
-        [ 'rails_query(sql:"X")', "query", "sql=X", "Safe read-only SQL queries with timeout, row limit, column redaction" ],
-        [ 'rails_read_logs(level:"X")', "read_logs", "level=X", "Reverse file tail with level filtering and sensitive data redaction" ],
-        [ 'rails_generate_test(model:"X")', "generate_test", "model=X", "Generate test scaffolding matching project patterns (framework, factories, style)" ],
-        [ 'rails_diagnose(error:"X")', "diagnose", 'error="X"', "One-call error diagnosis: context + git changes + logs + fix suggestions" ],
-        [ 'rails_review_changes(ref:"main")', "review_changes", "ref=main", "PR/commit review: file context + warnings (missing indexes, removed validations)" ],
-        [ 'rails_onboard(detail:"standard")', "onboard", "detail=standard", "Narrative app walkthrough for new developers or AI agents" ],
-        [ 'rails_runtime_info(detail:"standard")', "runtime_info", "detail=standard", "Live runtime: DB pool, table sizes, cache stats, job queues, pending migrations" ],
-        [ 'rails_session_context(action:"status")', "session_context", "action=status", "Track what you've already queried, avoid redundant calls" ],
-        [ 'rails_get_i18n(locale:"fr")', "i18n", "locale=fr", "Locales, locale files with key counts, per-locale coverage, fallbacks" ],
-        [ 'rails_get_mailers(mailer:"UserMailer")', "mailers", "mailer=UserMailer", "Mailer classes with delivery actions and delivery method" ],
-        [ "rails_get_engines", "engines", nil, "Mounted engines + loaded engine classes with route/model counts" ],
-        [ "rails_get_autoload", "autoload", nil, "Zeitwerk mode, autoload/eager-load paths, collapsed dirs, custom inflections" ],
-        [ "rails_get_active_support", "active_support", nil, "Concerns registry, deprecators, MessageVerifier usage, on_load hooks, cache store" ],
-        [ 'rails_get_env_config(environment:"production")', "environments", "environment=production", "Per-environment config: notable toggles + config keys each env sets" ]
-      ].freeze
+      # Every registered tool declares its own row, so the guide lists what
+      # the registry holds and nothing else.
+      def tool_rows
+        RailsAiContext::Tools::BaseTool.registered_tools
+          .filter_map { |tool| [ tool, tool.guide_row ] if tool.guide_row }
+          .sort_by { |_tool, row| row.order }
+      end
 
       def build_tools_table(include_mcp:)
         # For CLI-only tables, `match_type=any` uses `=` (not `:`), so we tweak description.
-        rows = TOOL_ROWS.map do |mcp_call, cli_name, cli_args, desc|
-          cli = cli_cmd(cli_name, cli_args)
+        rows = tool_rows.map do |tool, row|
+          cli = cli_cmd(RailsAiContext::CLI::ToolRunner.short_name(tool.tool_name), row.cli_args)
           if include_mcp
-            "| `#{mcp_call}` | `#{cli}` | #{desc} |"
+            "| `#{row.mcp}` | `#{cli}` | #{row.summary} |"
           else
-            "| `#{cli}` | #{desc.gsub('match_type:"any"', "match_type=any")} |"
+            "| `#{cli}` | #{row.summary.gsub('match_type:"any"', "match_type=any")} |"
           end
         end
         header = include_mcp ? [ "| MCP | CLI | What it does |", "|-----|-----|-------------|" ] : [ "| CLI | What it does |", "|-----|-------------|" ]
@@ -336,9 +293,9 @@ module RailsAiContext
         lines
       end
 
-      # Dense one-line-per-tool listing - derived from TOOL_ROWS (single source of truth)
+      # Dense one-line-per-tool listing, from the same registry the table uses.
       def tools_name_list
-        all_tools = TOOL_ROWS.map { |row| row[0][/^(rails_\w+)/, 1] }
+        all_tools = tool_rows.map { |tool, _row| tool.tool_name }
         [
           "### All #{count_phrase(all_tools.size, "tool")}",
           "`#{all_tools.join('` `')}`",

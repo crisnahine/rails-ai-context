@@ -23,6 +23,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 39,
+        mcp: "rails_session_context(action:\"status\")",
+        cli_args: "action=status",
+        summary: "Track what you've already queried, avoid redundant calls"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: false)
 
       def self.call(action: nil, mark: nil, server_context: nil)

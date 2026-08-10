@@ -45,6 +45,12 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 20,
+        mcp: "rails_get_helper_methods",
+        summary: "App + framework helpers with view cross-references"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(helper: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)

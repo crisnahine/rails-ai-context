@@ -25,6 +25,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 36,
+        mcp: "rails_review_changes(ref:\"main\")",
+        cli_args: "ref=main",
+        summary: "PR/commit review: file context + warnings (missing indexes, removed validations)"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: false, open_world_hint: true)
 
       MAX_DIFF_LINES_PER_FILE = 30

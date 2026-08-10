@@ -572,9 +572,7 @@ class RailsAiContextCLI < Thor
     end
 
     def builtin_tool_count
-      return ::RailsAiContext::Server.builtin_tools.size if defined?(::RailsAiContext::Server)
-
-      45
+      ::RailsAiContext::Server.builtin_tools.size
     end
 
     def print_context_result(result)

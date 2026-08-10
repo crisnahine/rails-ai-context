@@ -30,6 +30,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 7,
+        mcp: "rails_get_model_details(model:\"X\")",
+        cli_args: "model=X",
+        summary: "Associations, validations, scopes, enums, macros, delegations"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, detail: "standard", limit: nil, offset: 0, server_context: nil)

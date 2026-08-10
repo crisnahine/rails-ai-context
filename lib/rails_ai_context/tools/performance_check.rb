@@ -29,6 +29,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 26,
+        mcp: "rails_performance_check(model:\"X\")",
+        cli_args: "model=X",
+        summary: "N+1 risks, missing indexes, Model.all anti-patterns"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, category: "all", detail: "standard", server_context: nil)

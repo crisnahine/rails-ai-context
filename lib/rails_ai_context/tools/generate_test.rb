@@ -30,6 +30,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 34,
+        mcp: "rails_generate_test(model:\"X\")",
+        cli_args: "model=X",
+        summary: "Generate test scaffolding matching project patterns (framework, factories, style)"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, controller: nil, file: nil, type: "unit", server_context: nil)

@@ -41,6 +41,13 @@ module RailsAiContext
         required: %w[action table]
       )
 
+      guide_row(
+        order: 28,
+        mcp: "rails_migration_advisor(action:\"X\", table:\"Y\")",
+        cli_args: "action=X table=Y",
+        summary: "Generate migration code, flag irreversible ops"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       VALID_ACTIONS = %w[add_column remove_column rename_column add_index add_association change_type create_table].freeze

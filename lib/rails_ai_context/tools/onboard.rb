@@ -19,6 +19,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 37,
+        mcp: "rails_onboard(detail:\"standard\")",
+        cli_args: "detail=standard",
+        summary: "Narrative app walkthrough for new developers or AI agents"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(detail: "standard", server_context: nil)

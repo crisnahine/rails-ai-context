@@ -27,6 +27,13 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 12,
+        mcp: "rails_get_concern(name:\"X\", detail:\"full\")",
+        cli_args: "name=X detail=full",
+        summary: "Concern methods with source + which models include it"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(name: nil, type: "all", detail: "standard", server_context: nil)

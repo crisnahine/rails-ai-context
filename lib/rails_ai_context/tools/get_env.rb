@@ -18,6 +18,12 @@ module RailsAiContext
         }
       )
 
+      guide_row(
+        order: 17,
+        mcp: "rails_get_env",
+        summary: "Environment variables + credentials keys (not values)"
+      )
+
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(detail: "standard", server_context: nil)

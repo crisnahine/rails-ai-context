@@ -250,30 +250,14 @@ RSpec.describe "Cursor MDC compliance" do
       expect(file[:content]).to include("PostsController")
     end
 
-    it "MCP tools rule includes all 45 tools" do
-      file = generated_files["rails-mcp-tools.mdc"]
-      content = file[:content]
-      %w[
-        rails_get_schema rails_get_model_details rails_get_routes
-        rails_get_controllers rails_search_code rails_validate
-        rails_analyze_feature rails_get_context rails_get_view
-        rails_get_stimulus rails_get_test_info
-        rails_get_conventions rails_get_concern rails_get_callbacks
-        rails_get_edit_context rails_get_service_pattern rails_get_job_pattern
-        rails_get_env rails_get_partial_interface rails_get_turbo_map
-        rails_get_helper_methods rails_get_config rails_get_gems
-        rails_security_scan rails_get_component_catalog rails_performance_check
-        rails_dependency_graph rails_migration_advisor rails_get_frontend_stack
-        rails_get_api
-        rails_search_docs rails_query rails_read_logs rails_generate_test
-        rails_diagnose rails_review_changes rails_onboard rails_runtime_info
-        rails_session_context
-        rails_get_i18n rails_get_mailers rails_get_engines
-        rails_get_autoload rails_get_active_support rails_get_env_config
-      ].each do |tool|
-        expect(content).to include(tool),
-          "MCP tools rule missing tool: #{tool}"
-      end
+    it "lists every registered tool" do
+      content = generated_files["rails-mcp-tools.mdc"][:content]
+
+      missing = RailsAiContext::Tools::BaseTool.registered_tools
+        .map(&:tool_name)
+        .reject { |name| content.include?(name) }
+
+      expect(missing).to be_empty, "MCP tools rule is missing: #{missing.join(%q(, ))}"
     end
 
     it "MCP tools rule has task-based workflow" do
