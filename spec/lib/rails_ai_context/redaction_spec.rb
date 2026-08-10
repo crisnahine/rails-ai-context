@@ -193,6 +193,22 @@ RSpec.describe RailsAiContext::Redaction do
     end
   end
 
+  # A `.env.example` exists to be read: its values are placeholders, and the
+  # word "secret" in one is a label, not a credential. Only a value actually
+  # shaped like a credential is worth hiding there.
+  describe ".credential_shaped?" do
+    it "recognises a hex blob or a vendor prefix" do
+      expect(described_class.credential_shaped?("a1b2c3d4e5f60718")).to be(true)
+      expect(described_class.credential_shaped?("sk_live_abc")).to be(true)
+    end
+
+    it "leaves a value that merely says 'secret' alone" do
+      expect(described_class.credential_shaped?("<your-secret-here>")).to be(false)
+      expect(described_class.credential_shaped?("generate_with_rails_secret")).to be(false)
+      expect(described_class.credential_shaped?("some_key_name")).to be(false)
+    end
+  end
+
   describe ".redact_log_line" do
     it "uses the email marker for addresses" do
       expect(described_class.redact_log_line("Sent to ada@example.com"))

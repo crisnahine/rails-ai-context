@@ -632,7 +632,10 @@ module RailsAiContext
         # Show placeholder/example values, redact anything that looks real
         if stripped.match?(/\Ayour_|\Aexample_|xxx|changeme|TODO|REPLACE/i) || stripped.empty?
           stripped
-        elsif stripped.length > 40 || RailsAiContext::Redaction.secret_value?(stripped)
+        # Narrower than the `.env` test on purpose: an example file's values
+        # are placeholders, and one saying "secret" is a label rather than a
+        # credential. Only a real credential shape is worth hiding here.
+        elsif stripped.length > 40 || RailsAiContext::Redaction.credential_shaped?(stripped)
           RailsAiContext::Redaction::FILTERED
         else
           stripped

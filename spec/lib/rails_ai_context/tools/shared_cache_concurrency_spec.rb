@@ -174,7 +174,7 @@ RSpec.describe "BaseTool shared caches under concurrency" do
 
         50.times { |i| base.with_session("reader-#{i}") { base.session_queries } }
 
-        expect(base.session_bucket_count).to eq(0)
+        expect(base::SESSION_CONTEXT[:queries].size).to eq(0)
       end
 
       it "keeps the number of remembered sessions bounded" do
@@ -184,7 +184,23 @@ RSpec.describe "BaseTool shared caches under concurrency" do
           base.with_session("client-#{i}") { base.session_record("rails_get_schema", { n: i }) }
         end
 
-        expect(base.session_bucket_count).to be <= base::MAX_SESSIONS
+        expect(base::SESSION_CONTEXT[:queries].size).to be <= base::MAX_SESSIONS
+      end
+
+      # Evicting by creation order drops the long-running conversation and
+      # keeps a hundred idle newcomers - backwards, on the transport where
+      # one session stays open for hours.
+      it "keeps a session that is still being used" do
+        base.session_reset!
+
+        base.with_session("busy") { base.session_record("rails_get_schema", { n: 0 }) }
+        99.times { |i| base.with_session("idle-#{i}") { base.session_record("rails_get_schema", { n: i }) } }
+        base.with_session("busy") { base.session_record("rails_get_routes", {}) }
+
+        base.with_session("newcomer") { base.session_record("rails_get_schema", {}) }
+
+        expect(base.with_session("busy") { base.session_queries }).not_to be_empty
+        expect(base.with_session("idle-0") { base.session_queries }).to be_empty
       end
 
       it "keeps the most recent sessions when it evicts" do

@@ -237,7 +237,7 @@ module RailsAiContext
 
         def session_record(tool_name, params, summary = nil)
           SESSION_CONTEXT[:mutex].synchronize do
-            bucket = (SESSION_CONTEXT[:queries][current_session] ||= {})
+            bucket = touch_session
             evict_oldest_sessions
             key = session_key(tool_name, params)
             existing = bucket[key]
@@ -266,18 +266,25 @@ module RailsAiContext
           end
         end
 
-        def session_bucket_count
-          SESSION_CONTEXT[:mutex].synchronize { SESSION_CONTEXT[:queries].size }
-        end
-
         def session_reset!
           SESSION_CONTEXT[:mutex].synchronize do
             SESSION_CONTEXT[:queries].clear
           end
         end
 
-        # Ruby hashes keep insertion order, so the front of the hash is the
-        # least recently created session. Called with the mutex held.
+        # Re-inserting moves this session to the back, so hash order is
+        # least-recently-used rather than oldest-created. Without it a
+        # conversation that has run for hours is evicted ahead of a hundred
+        # idle newcomers - backwards, and worst on the long-lived transports
+        # that made bucketing necessary. Called with the mutex held.
+        def touch_session
+          queries = SESSION_CONTEXT[:queries]
+          queries[current_session] = queries.delete(current_session) || {}
+        end
+        private :touch_session
+
+        # The front of the hash is now the least recently used session.
+        # Called with the mutex held.
         def evict_oldest_sessions
           queries = SESSION_CONTEXT[:queries]
           queries.shift while queries.size > MAX_SESSIONS

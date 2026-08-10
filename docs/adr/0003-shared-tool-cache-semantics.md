@@ -10,6 +10,10 @@ Status: accepted
 
 **`session_queries` handed out live entries.** It returned `values.dup`, a shallow copy, so the entry hashes stayed live inside the record and kept being mutated by later calls - a caller's snapshot changed under it. It now copies each entry.
 
+**The record grew without bound, keyed by a client-controlled header.** Bucketing per conversation introduced a hash whose keys come from `Mcp-Session-Id`, in a process that stays up. Three things were wrong at once: the hash had a default block, so merely *reading* a session's history created a bucket; nothing capped the id's length; and nothing evicted. Reading no longer writes, ids are truncated to `MAX_SESSION_ID_LENGTH`, and the number of remembered conversations is capped at `MAX_SESSIONS`.
+
+Eviction is least-recently-used, not oldest-created. Recording re-inserts the session so hash order tracks use. Ordering by creation instead would evict the conversation that has run for hours ahead of a hundred idle newcomers - backwards, and worst on exactly the long-lived transports that made bucketing necessary.
+
 ## Intended semantics, not defects
 
 **The fingerprint walk happens under the mutex, not outside it.** The whole read path in `cached_context` - TTL check, fingerprint comparison, re-introspection - is inside one `synchronize`, so concurrent callers serialize instead of racing to introspect. Twenty threads arriving together produce exactly one introspection. The cost is that a fingerprint walk (~12ms in dev-mode installs, ~0.5ms in production) blocks other tool calls for its duration. That is the trade we want: a lock-free fast path would let several threads run the full 40-introspector walk at once, which is far more expensive than the wait it avoids.

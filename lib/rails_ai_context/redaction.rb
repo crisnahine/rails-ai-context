@@ -41,11 +41,15 @@ module RailsAiContext
     QUOTED_SECRET = /#{SECRET_NAME}#{ASSIGN}["'][^"']*["']/
     BARE_SECRET = /#{SECRET_NAME}#{ASSIGN}(?!["'])[^\s,;)\]}]+/
 
-    # What a credential looks like with no key beside it: a long hex blob, a
-    # vendor prefix, or a value that names itself. For callers reading a bare
-    # value out of `.env` or `.env.example`, where there is no assignment to
-    # match on.
-    SECRET_VALUE = /[a-f0-9]{16,}|sk_|pk_|key_|secret/i
+    # A value actually shaped like a credential: a long hex blob or a vendor
+    # prefix. For callers reading a bare value with no key beside it to match
+    # on.
+    CREDENTIAL_SHAPE = /[a-f0-9]{16,}|sk_|pk_/i
+
+    # The above, plus a value that merely names itself a secret. Right for a
+    # real `.env`, wrong for a `.env.example`, whose placeholders exist to be
+    # read and often say "secret" precisely because they are not one.
+    SECRET_VALUE = /#{CREDENTIAL_SHAPE}|key_|secret/i
 
     ANSI_ESCAPE = /\e\[[0-9;]*[mGKHF]/
     EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/i
@@ -97,9 +101,6 @@ module RailsAiContext
           .gsub(BARE_SECRET) { |m| descriptor?(m) ? m : m.sub(/\S+\z/, FILTERED) }
       end
 
-      # A config value arrives on its own, so only the setting's name says
-      # whether it is a secret: `config.secret_key = "s3cr3t"` reaches a
-      # listener as the bare string `"s3cr3t"`, which looks like any other.
       # A config value arrives without its context, so the setting's name is
       # what says whether it holds a secret. Values are walked rather than
       # type-checked: an evaluated value is often a hash or an array, and the
@@ -113,6 +114,10 @@ module RailsAiContext
 
       def secret_value?(value)
         value.to_s.match?(SECRET_VALUE)
+      end
+
+      def credential_shaped?(value)
+        value.to_s.match?(CREDENTIAL_SHAPE)
       end
 
       def secret_name?(name)
