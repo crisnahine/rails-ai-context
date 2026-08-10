@@ -86,10 +86,7 @@ module RailsAiContext
           source = assignments[key]
           next unless source
 
-          # Redact BEFORE truncating: a truncation cut landing between the
-          # password and its `@host` would leave the regex nothing to match
-          # and serve the credential prefix in plaintext.
-          notable[key] = redact_credentials(one_line(source)).truncate(60)
+          notable[key] = RailsAiContext::Redaction.redact_and_shorten(one_line(source), 60)
         end
       end
 
@@ -97,20 +94,6 @@ module RailsAiContext
       # renders inside backticks on one markdown line.
       def one_line(source)
         source.gsub(/\s+/, " ").strip
-      end
-
-      # Values come from real config files and can embed credentials (a
-      # Redis URL is the classic case). Strip URI userinfo before serving,
-      # matching the gem's never-serve-secrets posture.
-      #
-      # Regex by design: this scrubs vocabulary out of a value that has already
-      # been read from the AST, rather than parsing structure. A credential can
-      # sit in an interpolation, a heredoc or a bare string, and no node type
-      # marks one - the words are the signal.
-      def redact_credentials(value)
-        value
-          .gsub(%r{([a-z][a-z0-9+.-]*://)[^\s/]*:[^@\s]+@}i, "\\1[FILTERED]@")
-          .gsub(/(?<![a-zA-Z0-9])(?:password|passwd|secret|token|api_key)\s*["']?\s*(?::|=>)\s*["'][^"']*["']/i) { |m| m.sub(/["'][^"']*["']\s*\z/, '"[FILTERED]"') }
       end
 
       def current_environment

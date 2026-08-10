@@ -81,7 +81,7 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
     it "redacts password values" do
       result = described_class.call
       text = result.content.first[:text]
-      expect(text).to include("[REDACTED]")
+      expect(text).to include("[FILTERED]")
       expect(text).not_to include("secret123")
     end
 
@@ -89,7 +89,7 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : token=abc123secret\n")
       result = described_class.call
       text = result.content.first[:text]
-      expect(text).to include("[REDACTED]")
+      expect(text).to include("[FILTERED]")
       expect(text).not_to include("abc123secret")
     end
 
@@ -164,7 +164,7 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : cookie: abc123secret_session_data\n")
       result = described_class.call
       text = result.content.first[:text]
-      expect(text).to include("[REDACTED]")
+      expect(text).to include("[FILTERED]")
       expect(text).not_to include("abc123secret_session_data")
     end
 
@@ -172,7 +172,7 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : session_id=abc123secret\n")
       result = described_class.call
       text = result.content.first[:text]
-      expect(text).to include("[REDACTED]")
+      expect(text).to include("[FILTERED]")
       expect(text).not_to include("abc123secret")
     end
 
@@ -180,7 +180,7 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : Charge failed key=sk_live_1234567890abcdefghij\n")
       result = described_class.call
       text = result.content.first[:text]
-      expect(text).to include("[REDACTED]")
+      expect(text).to include("[FILTERED]")
       expect(text).not_to include("sk_live_1234567890abcdefghij")
     end
 
@@ -188,7 +188,7 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : slack_token=xoxb-1234567890-abcdefghij\n")
       result = described_class.call
       text = result.content.first[:text]
-      expect(text).to include("[REDACTED]")
+      expect(text).to include("[FILTERED]")
       expect(text).not_to include("xoxb-1234567890-abcdefghij")
     end
 

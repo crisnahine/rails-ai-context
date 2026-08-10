@@ -44,44 +44,6 @@ module RailsAiContext
 
       LEVEL_HIERARCHY = { "DEBUG" => 0, "INFO" => 1, "WARN" => 2, "ERROR" => 3, "FATAL" => 4 }.freeze
 
-      ANSI_ESCAPE = /\e\[[0-9;]*[mGKHF]/
-
-      REDACT_PATTERNS = [
-        /(?<=password=)\S+/i,
-        /(?<=password:\s)\S+/i,
-        /("password":\s*")[^"]+(")/i,
-        /("password"=>")[^"]+(")/i,
-        /(?<=token=)\S+/i,
-        /(?<=token:\s)\S+/i,
-        /(?<=secret=)\S+/i,
-        /(?<=secret:\s)\S+/i,
-        /(?<=api_key=)\S+/i,
-        /(?<=api_key:\s)\S+/i,
-        /(?<=authorization:\s)(Bearer\s)?\S+/i,
-        /(SECRET|PRIVATE|SIGNING|ENCRYPTION)[_A-Z]*=\S+/i,
-        /(?<=cookie:\s)\S+/i,
-        /(?<=session_id=)\S+/i,
-        /(?<=_session=)\S+/i,
-        /\bAKIA[0-9A-Z]{16}\b/,                          # AWS access key IDs
-        /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,  # JWT tokens
-        /-----BEGIN\s+(RSA|DSA|EC|OPENSSH)?\s*PRIVATE KEY-----/,       # SSH/TLS private keys
-        /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/i,
-        /\bsk_(?:live|test)_[A-Za-z0-9]{10,}\b/,             # Stripe secret keys
-        /\brk_(?:live|test)_[A-Za-z0-9]{10,}\b/,             # Stripe restricted keys
-        /\bSG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{10,}\b/,   # SendGrid API keys
-        /\bxox[bpras]-[A-Za-z0-9-]{10,}\b/,                  # Slack tokens
-        /\bghp_[A-Za-z0-9]{36,}\b/,                          # GitHub personal access tokens
-        /\bghu_[A-Za-z0-9]{36,}\b/,                          # GitHub user-to-server tokens
-        /\bghs_[A-Za-z0-9]{36,}\b/,                          # GitHub server-to-server tokens
-        /\bglpat-[A-Za-z0-9_-]{20,}\b/,                      # GitLab personal access tokens
-        /\bnpm_[A-Za-z0-9]{36,}\b/                           # npm tokens
-      ].freeze
-
-      # Lines that reveal env var names (dotenv, Figaro, etc.)
-      DOTENV_PATTERN = /\[dotenv\]\s+Set\s+.*/i
-      # Match ALL_CAPS env var assignments containing sensitive words
-      ENV_VAR_LINE_PATTERN = /\b[A-Z][A-Z0-9_]*(SECRET|KEY|TOKEN|PASSWORD|API|CREDENTIAL)[A-Z0-9_]*=\S+/
-
       def self.call(lines: nil, level: "all", file: nil, search: nil, server_context: nil, **_extra)
         warnings = []
 
@@ -273,28 +235,7 @@ module RailsAiContext
       # ── Redaction ───────────────────────────────────────────────────
 
       private_class_method def self.redact(text)
-        result = text.dup
-
-        # Strip ANSI escape sequences (color codes from dotenv, zeitwerk, etc.)
-        result.gsub!(ANSI_ESCAPE, "")
-
-        # Strip dotenv lines that reveal env var names (e.g., "[dotenv] Set SECRET_KEY_BASE, DATABASE_URL")
-        result.gsub!(DOTENV_PATTERN, "[dotenv] Set [ENV VARS REDACTED]")
-        # Strip standalone env var assignment lines (e.g., "GEMINI_API_KEY=...")
-        result.gsub!(ENV_VAR_LINE_PATTERN, "[ENV VAR REDACTED]")
-
-        REDACT_PATTERNS.each do |pattern|
-          if pattern.source.include?("password\":") || pattern.source.include?("password\"=>")
-            result.gsub!(pattern, '\1[REDACTED]\2')
-          elsif pattern.source.include?("SECRET|PRIVATE")
-            result.gsub!(pattern) { |m| m.split("=", 2)[0] + "=[REDACTED]" }
-          elsif pattern.source.include?("@")
-            result.gsub!(pattern, "[EMAIL]")
-          else
-            result.gsub!(pattern, "[REDACTED]")
-          end
-        end
-        result
+        RailsAiContext::Redaction.redact_log_line(text)
       end
 
       # ── Available log files ─────────────────────────────────────────

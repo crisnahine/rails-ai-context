@@ -613,7 +613,7 @@ module RailsAiContext
 
         redacted_rows = rows.map { |row|
           row.each_with_index.map { |val, i|
-            redacted_indices.include?(i) ? "[REDACTED]" : val
+            redacted_indices.include?(i) ? RailsAiContext::Redaction::FILTERED : val
           }
         }
 

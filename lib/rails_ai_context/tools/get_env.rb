@@ -618,7 +618,7 @@ module RailsAiContext
         stripped = value.strip.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
         # Don't expose values that look like actual secrets
         if stripped.length > 30 || stripped.match?(/[a-f0-9]{16,}|sk_|pk_|key_|secret/i)
-          "[redacted]"
+          RailsAiContext::Redaction::FILTERED
         else
           stripped
         end
@@ -631,7 +631,7 @@ module RailsAiContext
         if stripped.match?(/\Ayour_|\Aexample_|xxx|changeme|TODO|REPLACE/i) || stripped.empty?
           stripped
         elsif stripped.length > 40 || stripped.match?(/[a-f0-9]{16,}|sk_|pk_/)
-          "[redacted]"
+          RailsAiContext::Redaction::FILTERED
         else
           stripped
         end

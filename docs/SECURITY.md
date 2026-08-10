@@ -190,14 +190,45 @@ Complex patterns that would cause catastrophic backtracking raise `RegexpError` 
 
 ---
 
-## Log redaction
+## Redaction
 
-The `rails_read_logs` tool redacts sensitive data from log output:
+Everything that leaves your app through this gem - log lines, query rows, environment values, config source slices - passes through one redaction module before anything else can touch it. Redacting and shortening are a single operation there, so a long credential cannot be cut apart in a way that hides it from the pattern that would have caught it.
 
-- Passwords and tokens
-- Email addresses
-- Secret values
-- API keys
+What gets redacted:
+
+- Passwords, tokens, secrets and API keys, wherever they are named
+- Credentials embedded in URIs (`redis://user:pass@host`)
+- Email addresses in log lines
+- Values assigned to secret-named settings in initializers
+
+### Markers
+
+Redacted values carry one of two markers, and only these two:
+
+| Marker | Means |
+|--------|-------|
+| `[FILTERED]` | A value was removed because it is or may be a secret |
+| `[EMAIL]` | An email address was removed |
+
+Marker presence and this vocabulary are part of the output contract (see below) - you can pattern-match on them.
+
+---
+
+## Output contract
+
+**Contract, safe to depend on:**
+
+- Tool names and their input schemas
+- The presence of a redaction marker wherever a value was removed
+- The `[FILTERED]` / `[EMAIL]` marker vocabulary
+
+**Incidental, expected to change between releases:**
+
+- Response text, headings and formatting
+- Refusal and unavailability wording
+- Row and section ordering
+
+Pin your assertions to the first list. When something in the second list changes in a way that could break a pinned assertion, the CHANGELOG says so.
 
 ---
 

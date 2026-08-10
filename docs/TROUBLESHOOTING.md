@@ -188,7 +188,7 @@ Common false positives:
 - Hash characters in strings → write the hash outside a comment position
 - JSONB operators (`#>>`) → preserved correctly since v5.6.0
 
-### "Column values show [REDACTED]"
+### "Column values show [FILTERED]"
 
 Columns matching sensitive patterns are redacted. Configure:
 

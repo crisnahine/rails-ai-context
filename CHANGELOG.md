@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Initializer config values are redacted where they are read, not where
+  they are rendered.** The config-assignment listener served raw source
+  slices, so a `config.secret_key = "..."` in `devise.rb` reached
+  `rails_get_context` and the generated context files in plaintext. Values
+  assigned to secret-named settings are now filtered at emission, which
+  covers every current and future reader of that listener.
+- **Redaction and shortening are one operation.** They were separate calls
+  in the caller's hands, and getting the order wrong let a long credential
+  be cut apart before the pattern that would have caught it ever ran. The
+  module exposes `redact_and_shorten`, so the order is not a caller's to get
+  wrong.
+
+### Changed
+
+- **Redaction markers converge on `[FILTERED]`.** One module now owns the
+  patterns and the vocabulary. `[EMAIL]` stays as the one semantic marker.
+  Marker presence and this vocabulary are contract going forward; see the
+  output contract in `docs/SECURITY.md`.
+
+  | Was | Now |
+  |-----|-----|
+  | `[REDACTED]` | `[FILTERED]` |
+  | `[redacted]` | `[FILTERED]` |
+  | `[ENV VAR REDACTED]` | `[FILTERED]` |
+  | `[dotenv] Set [ENV VARS REDACTED]` | `[dotenv] Set [FILTERED]` |
+  | `[EMAIL]` | `[EMAIL]` (unchanged) |
+
 ### Added
 
 - **Twenty-seven sections now answer with the app not booted.** Gems, i18n,

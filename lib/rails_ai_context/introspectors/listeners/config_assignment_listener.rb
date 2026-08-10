@@ -37,11 +37,16 @@ module RailsAiContext
           return unless prefix
 
           value_node = node.arguments&.arguments&.first
+          setting = node.name.to_s.delete_suffix("=").to_sym
+
+          # Redacted here rather than by each consumer: an initializer's
+          # `config.secret_key = "..."` is a real credential, and a new reader
+          # of this listener is safe without remembering anything.
           @results << {
-            path:       prefix + [ node.name.to_s.delete_suffix("=").to_sym ],
+            path:       prefix + [ setting ],
             assignment: true,
             value:      value_node ? extract_value(value_node) : nil,
-            source:     value_node&.slice,
+            source:     RailsAiContext::Redaction.redact_setting(setting, value_node&.slice),
             location:   node.location.start_line
           }
         end

@@ -810,7 +810,7 @@ RSpec.describe RailsAiContext::Tools::Query do
       result = described_class.call(sql: "DESCRIBE products")
       text = result.content.first[:text]
       expect(text).to include("PRI")
-      expect(text).not_to include("REDACTED")
+      expect(text).not_to include("[FILTERED]")
     end
 
     it "still redacts sensitive columns for plain SELECT queries" do
@@ -823,7 +823,7 @@ RSpec.describe RailsAiContext::Tools::Query do
 
       result = described_class.call(sql: "SELECT id, cache_key FROM users")
       text = result.content.first[:text]
-      expect(text).to include("REDACTED")
+      expect(text).to include("[FILTERED]")
       expect(text).not_to include("sekret")
     end
   end
