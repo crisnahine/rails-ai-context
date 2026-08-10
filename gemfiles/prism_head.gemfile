@@ -1,0 +1,19 @@
+# frozen_string_literal: true
+
+# The canary. Runs the suite against prism's main branch so a removal there
+# surfaces in this repo before it surfaces in a user's bundle. Allowed to fail.
+
+source "https://rubygems.org"
+
+gemspec path: ".."
+
+gem "prism", github: "ruby/prism", branch: "main"
+
+rails_version = ENV.fetch("RAILS_VERSION", "8.0")
+
+group :development, :test do
+  gem "railties", "~> #{rails_version}.0"
+  gem "activerecord", "~> #{rails_version}.0"
+  gem "sqlite3"
+  gem "logger"
+end

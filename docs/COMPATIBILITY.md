@@ -19,7 +19,7 @@ document is aspirational.
 - **Rails (railties):** 7.0 - 8.1 (gemspec: `railties >= 7.0, < 9.0`)
 - **mcp gem:** `>= 0.8, < 2.0`
 - **thor:** `>= 1.0, < 3.0`
-- **prism:** `>= 0.28, < 2.0`
+- **prism:** `>= 1.4, < 2.0` (a CI leg pins the floor exactly and runs the suite against it)
 - **concurrent-ruby:** `>= 1.2, < 3.0`
 
 The gemspec's `railties` bound is wider than the CI matrix: point releases inside

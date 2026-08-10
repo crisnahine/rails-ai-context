@@ -1,0 +1,20 @@
+# frozen_string_literal: true
+
+# The gemspec's prism floor, pinned. Trimmed to what the suite needs so a dev
+# dependency cannot quietly resolve prism upward and turn the floor claim into
+# a test of whatever version happened to win.
+
+source "https://rubygems.org"
+
+gemspec path: ".."
+
+gem "prism", "= 1.4.0"
+
+rails_version = ENV.fetch("RAILS_VERSION", "8.0")
+
+group :development, :test do
+  gem "railties", "~> #{rails_version}.0"
+  gem "activerecord", "~> #{rails_version}.0"
+  gem "sqlite3"
+  gem "logger"
+end

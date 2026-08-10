@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly, for the prism HEAD canary only.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 jobs:
   test:
@@ -55,6 +59,64 @@ jobs:
       - name: Run RuboCop
         run: bundle exec rubocop --parallel
         if: matrix.ruby == '3.3' && matrix.rails == '8.0'
+
+  # The gemspec's prism floor is a claim; this is the test of it. Ruby 3.2,
+  # where prism is a real gem rather than stdlib, so the pin actually decides
+  # which parser runs. The trimmed gemfile keeps a dev dependency from
+  # resolving prism upward and turning this into a test of whatever won.
+  prism-floor:
+    runs-on: ubuntu-latest
+    name: prism floor (1.4.0)
+
+    env:
+      BUNDLE_GEMFILE: gemfiles/prism_floor.gemfile
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: Confirm the pin took
+        run: |
+          resolved=$(bundle exec ruby -rprism -e 'print Prism::VERSION')
+          echo "prism $resolved"
+          test "$resolved" = "1.4.0" || { echo "expected prism 1.4.0, got $resolved"; exit 1; }
+
+      - name: Run specs
+        run: bundle exec rspec
+
+  # Allowed to fail: it exists so a removal in prism's main branch surfaces
+  # here rather than in a user's bundle after the next release.
+  prism-head:
+    runs-on: ubuntu-latest
+    name: prism HEAD (canary)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+
+    env:
+      BUNDLE_GEMFILE: gemfiles/prism_head.gemfile
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: false
+
+      - name: Bundle against prism main
+        run: bundle install --jobs 4
+
+      - name: Report the version under test
+        run: bundle exec ruby -rprism -e 'puts "prism #{Prism::VERSION}"'
+
+      - name: Run specs
+        run: bundle exec rspec
 
   lint:
     runs-on: ubuntu-latest

@@ -9,6 +9,7 @@
 /tmp/
 *.gem
 Gemfile.lock
+gemfiles/*.lock
 spec/internal/log/
 
 # AI assistant configuration (local only)

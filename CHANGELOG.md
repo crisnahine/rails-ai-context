@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The prism floor rises from 0.28 to 1.4.** The old range was a claim
+  nothing tested. A CI leg now pins prism at exactly 1.4.0 on Ruby 3.2, where
+  prism is a real gem rather than stdlib, with a trimmed gemfile so a dev
+  dependency cannot resolve it upward and turn the floor into a test of
+  whatever version won. A scheduled allowed-to-fail leg runs the suite
+  against prism's main branch, so a removal there surfaces here rather than
+  in your bundle. 0.28 was measured green in the one configuration that could
+  be checked locally; the raise is a tightening to a version CI proves, not a
+  fix for a known break.
 - **Redaction markers converge on `[FILTERED]`.** One module now owns the
   patterns and the vocabulary. `[EMAIL]` stays as the one semantic marker.
   Marker presence and this vocabulary are contract going forward; see the

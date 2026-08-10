@@ -65,7 +65,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "zeitwerk", "~> 2.6"         # Autoloading
 
   # AST foundation (Phase 1: Ground Truth Engine)
-  spec.add_dependency "prism", ">= 0.28", "< 2.0"           # Ruby parser - stdlib in 3.3+, gem for 3.1-3.2
+  spec.add_dependency "prism", ">= 1.4", "< 2.0"            # Ruby parser - stdlib in 3.3+, gem for 3.1-3.2
   spec.add_dependency "concurrent-ruby", ">= 1.2", "< 3.0"  # Thread-safe AST cache via Concurrent::Map
 
   # Dev dependencies

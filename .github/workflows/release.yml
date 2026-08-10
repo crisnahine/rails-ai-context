@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  actions: read
 
 jobs:
   test:
@@ -78,8 +79,36 @@ jobs:
         run: bundle exec rubocop --parallel
         if: matrix.ruby == '3.3' && matrix.rails == '8.0'
 
+  # The e2e suite owns the pins this release could break - static-tier
+  # answers, redaction markers, the three install paths - and it does not run
+  # on tags. Tags are cut from main, which does run it, so require that run to
+  # be green on this exact commit rather than publishing on the unit matrix
+  # alone.
+  e2e-gate:
+    runs-on: ubuntu-latest
+    name: Require a green e2e run on this commit
+
+    steps:
+      - name: Check the E2E workflow's conclusion for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          conclusion=$(gh api \
+            "repos/$REPO/actions/workflows/e2e.yml/runs?head_sha=$SHA&status=completed" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
+
+          if [ "$conclusion" -eq 0 ]; then
+            echo "::error::No successful E2E run for $SHA."
+            echo "Run the E2E workflow against this commit (Actions > E2E > Run workflow), then re-tag."
+            exit 1
+          fi
+
+          echo "Found $conclusion successful E2E run(s) for $SHA"
+
   publish:
-    needs: test
+    needs: [test, e2e-gate]
     runs-on: ubuntu-latest
     name: Publish to RubyGems + GitHub Release
 
