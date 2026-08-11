@@ -128,6 +128,10 @@ module RailsAiContext
           lines << "## Credentials Keys (values hidden)"
           credentials_keys.each { |k| lines << "- `#{k}`" }
           lines << ""
+        elsif credentials_file_present?
+          lines << "## Credentials Keys (values hidden)"
+          lines << RailsAiContext::Confidence.unavailable("credentials are encrypted; reading the key names needs a booted app with its master key")
+          lines << ""
         end
 
         # Encrypted columns
@@ -227,6 +231,10 @@ module RailsAiContext
         if credentials_keys.any?
           lines << "## Credentials Keys (values hidden)"
           credentials_keys.each { |k| lines << "- `#{k}`" }
+          lines << ""
+        elsif credentials_file_present?
+          lines << "## Credentials Keys (values hidden)"
+          lines << RailsAiContext::Confidence.unavailable("credentials are encrypted; reading the key names needs a booted app with its master key")
           lines << ""
         end
 
@@ -498,6 +506,18 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] find_env_vars_with_prefix failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # An encrypted credentials file the tool could not open is a different
+      # fact from an app with no credentials, and only one of them is true here.
+      private_class_method def self.credentials_file_present?
+        root = rails_app.root.to_s
+        # Rails 6+ apps commonly carry only per-environment credentials, with
+        # no top-level file at all.
+        File.exist?(File.join(root, "config", "credentials.yml.enc")) ||
+          Dir.glob(File.join(root, "config", "credentials", "*.yml.enc")).any?
+      rescue StandardError
+        false
       end
 
       private_class_method def self.detect_credentials_keys

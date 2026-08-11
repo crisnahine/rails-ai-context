@@ -206,6 +206,51 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect(output).to be_a(String)
     end
 
+    # Asserting on the rendered output let a silent inversion ship: a boolean
+    # flag consumed no value, so `--app-only false` set app_only to true and
+    # dropped the "false" token. Read the parsed params instead.
+    describe "boolean values" do
+      def parse(args)
+        described_class.new("routes", args).send(:build_kwargs)
+      end
+
+      it "reads a space-separated false" do
+        expect(parse([ "--app-only", "false" ])).to include(app_only: false)
+      end
+
+      it "reads a space-separated true" do
+        expect(parse([ "--app-only", "true" ])).to include(app_only: true)
+      end
+
+      it "still treats a bare flag as true" do
+        expect(parse([ "--app-only" ])).to include(app_only: true)
+      end
+
+      it "reads --no-flag as false" do
+        expect(parse([ "--no-app-only" ])).to include(app_only: false)
+      end
+
+      it "reads --flag=false" do
+        expect(parse([ "--app-only=false" ])).to include(app_only: false)
+      end
+
+      it "accepts the other falsey spellings" do
+        expect(parse([ "--app-only", "no" ])).to include(app_only: false)
+        expect(parse([ "--app-only", "0" ])).to include(app_only: false)
+      end
+
+      it "leaves a following flag alone" do
+        expect(parse([ "--app-only", "--detail", "summary" ]))
+          .to include(app_only: true, detail: "summary")
+      end
+
+      it "does not swallow a following non-boolean word" do
+        parsed = described_class.new("search_code", [ "--exclude-tests", "pattern-ish" ])
+                                .send(:build_kwargs)
+        expect(parsed).to include(exclude_tests: true)
+      end
+    end
+
     it "converts kebab-case to snake_case" do
       runner = described_class.new("search_code", [ "--pattern", "test", "--match-type", "definition" ])
       output = runner.run

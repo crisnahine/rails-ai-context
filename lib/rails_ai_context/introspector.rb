@@ -122,9 +122,7 @@ module RailsAiContext
     end
 
     def unavailable_reason
-      reason = RailsAiContext.static_reason
-      base = "requires a booted Rails app"
-      reason ? "#{base} (#{reason})" : base
+      Introspectors::StaticTier.unavailable_reason
     end
 
     def rails_version

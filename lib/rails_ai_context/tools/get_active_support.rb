@@ -57,7 +57,19 @@ module RailsAiContext
           end
         end
 
+        # A section the introspector could not reach says so under its own
+        # heading. Silently omitting it reads as "nothing here".
+        def render_unavailable(lines, title, data)
+          return false unless data.is_a?(Hash) && data[:unavailable]
+
+          lines << "" << "## #{title}"
+          lines << RailsAiContext::Confidence.unavailable(data[:unavailable])
+          true
+        end
+
         def render_simple_list(lines, title, items)
+          return if render_unavailable(lines, title, items)
+
           items = Array(items)
           return if items.empty?
 
@@ -88,6 +100,8 @@ module RailsAiContext
         end
 
         def render_on_load_hooks(lines, hooks)
+          return if render_unavailable(lines, "Subscribed on_load Hooks", hooks)
+
           hooks = Array(hooks)
           return if hooks.empty?
 
@@ -96,6 +110,8 @@ module RailsAiContext
         end
 
         def render_cache(lines, cache)
+          return if render_unavailable(lines, "Cache Store", cache)
+
           cache = cache || {}
           return if cache.empty? || cache[:store].to_s.empty?
 

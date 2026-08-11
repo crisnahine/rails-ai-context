@@ -47,6 +47,50 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       text = result.content.first[:text]
       expect(text).to include("active_storage")
     end
+
+    # Only `full` was covered here, and only `full` listed from the unfiltered
+    # set. The default `standard` render re-split the routes and listed the app
+    # ones alone, so the header counted 50 above a body of 24.
+    it "includes framework routes at the default detail level" do
+      result = described_class.call(app_only: false)
+      text = result.content.first[:text]
+      expect(text).to include("active_storage")
+    end
+
+    it "lists as many routes as the header counts" do
+      result = described_class.call(app_only: false, limit: 1000)
+      text = result.content.first[:text]
+      header_count = text[/\A# Routes \((\d+) routes?/, 1].to_i
+      listed = text.scan(/^- `/).size
+      expect(listed).to eq(header_count)
+    end
+
+    # Sorted plainly, action_mailbox/ and active_storage/ lead the alphabet.
+    # On an app with more framework routes than the page limit, the app's own
+    # would paginate out of sight and a caller reading page one would conclude
+    # the app defines no routes.
+    it "lists the app's own routes before framework routes" do
+      result = described_class.call(app_only: false, limit: 1)
+      text = result.content.first[:text]
+      first_controller = text[/^## (.+)$/, 1]
+      expect(RailsAiContext::Tools::GetRoutes.framework_controller?(first_controller)).to be(false)
+    end
+  end
+
+  describe ".call with app_only:true" do
+    it "says how to see the routes it hid" do
+      result = described_class.call(app_only: true)
+      text = result.content.first[:text]
+      expect(text).to match(/app_only/)
+    end
+
+    it "lists as many routes as the header counts" do
+      result = described_class.call(app_only: true, limit: 1000)
+      text = result.content.first[:text]
+      header_count = text[/\A# Routes \((\d+) routes?/, 1].to_i
+      listed = text.scan(/^- `/).size
+      expect(listed).to eq(header_count)
+    end
   end
 
   describe "PUT/PATCH deduplication" do

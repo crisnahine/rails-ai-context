@@ -88,4 +88,19 @@ RSpec.describe RailsAiContext::Introspectors::EngineIntrospector do
       expect(result[:error]).to be_nil
     end
   end
+
+  # Testing `defined?(Rails::Engine)` answered from the half-finished boot that
+  # entered the static tier, so the marker never fired where it mattered. The
+  # tier decides, per ADR 0002.
+  describe "#static_call" do
+    subject(:result) { described_class.new(RailsAiContext::StaticApp.new(Dir.pwd)).static_call }
+
+    it "marks the list unavailable instead of returning none" do
+      expect(result[:rails_engines]).to eq({ unavailable: RailsAiContext::Introspectors::StaticTier.unavailable_reason })
+    end
+
+    it "still reads the mounted engines from config/routes.rb" do
+      expect(result[:mounted_engines]).to be_an(Array)
+    end
+  end
 end

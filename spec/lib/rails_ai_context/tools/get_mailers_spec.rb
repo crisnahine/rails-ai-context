@@ -86,4 +86,19 @@ RSpec.describe RailsAiContext::Tools::GetMailers do
       end
     end
   end
+  # The static tier has no boot, so no delivery method. Rendering the label
+  # with nothing after it reads as a mailer configured to deliver nowhere.
+  describe "without a delivery method" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        { jobs: { mailers: [ { name: "PostMailer", actions: %w[notify] } ] } }
+      )
+    end
+
+    it "omits the label rather than printing an empty value" do
+      text = described_class.call.content.first[:text]
+      expect(text).to include("PostMailer")
+      expect(text).not_to include("Delivery method:")
+    end
+  end
 end

@@ -34,6 +34,10 @@ module RailsAiContext
         }
       )
 
+      def self.framework_controller?(name)
+        route_prefixes.any? { |p| name.downcase.start_with?(p) }
+      end
+
       def self.route_prefixes
         RailsAiContext.configuration.excluded_route_prefixes
       end
@@ -61,9 +65,9 @@ module RailsAiContext
           # were dropped so headers can say the count is app-only, not the total.
           excluded_framework_count = 0
           if app_only
-            framework_ctrls = by_controller.select { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
+            framework_ctrls = by_controller.select { |k, _| framework_controller?(k) }
             excluded_framework_count = framework_ctrls.values.sum { |actions| dedupe_put_patch_routes(actions).size }
-            by_controller = by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
+            by_controller = by_controller.reject { |k, _| framework_controller?(k) }
           end
 
           # Filter by controller - accepts "posts", "PostsController", "posts_controller", "Api::V1::Posts"
@@ -133,11 +137,17 @@ module RailsAiContext
             text_response(lines.join("\n"))
 
           when "standard"
-            # Flatten all routes into a tagged array, then paginate
-            app_routes = controller ? by_controller : by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
-            framework_routes = controller ? {} : by_controller.select { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
-
-            flat_routes = app_routes.sort.flat_map { |ctrl, actions| actions.map { |r| r.merge(_ctrl: ctrl) } }
+            # List whatever survived the app_only filter. Re-splitting here
+            # dropped the framework routes from the body while the header kept
+            # counting them, so `app_only:false` announced 50 routes and showed
+            # 24 of them.
+            #
+            # App controllers first: sorted plainly, `action_mailbox/` and
+            # `active_storage/` lead the alphabet, so on an app with more
+            # framework routes than the page limit the app's own would
+            # paginate out of sight.
+            ordered = by_controller.sort_by { |ctrl, _| [ framework_controller?(ctrl) ? 1 : 0, ctrl ] }
+            flat_routes = ordered.flat_map { |ctrl, actions| actions.map { |r| r.merge(_ctrl: ctrl) } }
             page = paginate(flat_routes, offset: offset, limit: limit, default_limit: 150)
 
             lines = [ "# Routes (#{count_label})", "" ]
@@ -172,10 +182,9 @@ module RailsAiContext
               lines << "- `#{r[:verb]}` `#{r[:path]}` → #{r[:action]}#{helper_part}#{params_part}"
             end
 
-            if framework_routes.any?
-              total_fw = framework_routes.values.sum(&:size)
-              fw_names = framework_routes.keys.map { |k| k.split("/").first }.uniq.join(", ")
-              lines << "" << "_#{fw_names} framework routes: #{total_fw} total (use `controller:\"devise/sessions\"` to see details)_"
+            if excluded_framework_count > 0 && controller.nil?
+              lines << "" << "_#{count_phrase(excluded_framework_count, "framework route")} hidden. " \
+                             "Use `app_only:false` to include them._"
             end
 
             lines << "" << page[:hint] unless page[:hint].empty?

@@ -52,7 +52,8 @@ module RailsAiContext
           if page[:items].any?
             page[:items].each do |m|
               lines << "" << "## #{m[:name]}"
-              lines << "- **Delivery method:** #{m[:delivery_method]}"
+              # Configured at boot, so the static tier has no value to give.
+              lines << "- **Delivery method:** #{m[:delivery_method]}" if m[:delivery_method].present?
               lines << "- **Actions:** #{Array(m[:actions]).join(', ')}"
             end
           else

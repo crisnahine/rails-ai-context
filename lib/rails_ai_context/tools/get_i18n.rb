@@ -58,7 +58,9 @@ module RailsAiContext
           lines = [ "# I18n" ]
           lines << ""
           lines << "- **Default locale:** #{i18n[:default_locale]}"
-          lines << "- **Backend:** #{i18n[:backend]}"
+          # The backend class is a runtime fact. Printing the I18n gem's own
+          # default when no app booted states it as the app's choice.
+          lines << "- **Backend:** #{i18n[:backend]}" if i18n[:backend]
           lines << "- **Available locales:** #{available_list(i18n)}"
           lines << "- **Locale files:** #{i18n[:total_locale_files] || files.size}"
 

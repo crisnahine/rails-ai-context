@@ -18,6 +18,15 @@ module RailsAiContext
 
       KINDS = [ FILES_ONLY, RUNTIME_ONLY, ALTERNATE_SOURCE ].freeze
 
+      # One wording for "the app did not boot", carrying whatever the boot
+      # failure said. Forked copies drift, and a single run then emits two
+      # different explanations for the same condition.
+      def self.unavailable_reason
+        reason = RailsAiContext.static_reason
+        base = "requires a booted Rails app"
+        reason ? "#{base} (#{reason})" : base
+      end
+
       def static_tier(kind = nil)
         return declared_static_tier if kind.nil?
 

@@ -6,7 +6,7 @@ module RailsAiContext
     # and Action Cable channels.
     class JobIntrospector
       extend StaticTier
-      static_tier :files_only
+      static_tier :alternate_source
 
       CHANNEL_MACROS = %i[identified_by stream_from stream_for periodically].freeze
 
@@ -26,6 +26,19 @@ module RailsAiContext
           jobs: jobs,
           mailers: extract_mailers,
           channels: extract_channels,
+          recurring_jobs: extract_solid_queue_recurring,
+          sidekiq_config: extract_sidekiq_config
+        }
+      end
+
+      # Mailers and channels are ordinary classes in ordinary directories, so
+      # the answer is the same with or without a booted app. Only the way in
+      # differs: descendants when Rails is up, the AST when it is not.
+      def static_call
+        {
+          jobs: extract_jobs_from_source,
+          mailers: extract_mailers_from_source,
+          channels: extract_channels_from_source,
           recurring_jobs: extract_solid_queue_recurring,
           sidekiq_config: extract_sidekiq_config
         }
@@ -233,6 +246,63 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] extract_mailers failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # A mailer's actions are its public instance methods, which is exactly
+      # what `instance_methods(false)` reports on the booted side.
+      def extract_mailers_from_source
+        source_classes(File.join(app.root, "app", "mailers")).filter_map do |name, methods|
+          next if name == "ApplicationMailer"
+
+          actions = methods.select { |m| m[:scope] == :instance && m[:visibility] == :public }
+                           .map { |m| m[:name] }.sort
+          next if actions.empty?
+
+          { name: name, actions: actions, confidence: RailsAiContext::Confidence::STATIC }
+        end.sort_by { |m| m[:name] }
+      end
+
+      def extract_channels_from_source
+        # ApplicationCable holds the base Channel and Connection, neither of
+        # which is a channel of the app's own.
+        source_classes(File.join(app.root, "app", "channels")).filter_map do |name, methods|
+          next if name.start_with?("ApplicationCable::")
+
+          stream_methods = methods.select { |m| m[:scope] == :instance }
+                                  .map { |m| m[:name] }
+                                  .select { |m| m.start_with?("stream_") || m == "subscribed" }
+          { name: name, stream_methods: stream_methods, confidence: RailsAiContext::Confidence::STATIC }
+        end.sort_by { |c| c[:name] }
+      end
+
+      # Class name plus method list for every .rb under `dir`, read from the
+      # AST. Yields nothing when the directory is absent.
+      #
+      # The name comes from the path, not the AST: Zeitwerk requires the two to
+      # agree, and only the path carries the namespace. Reading `class Channel`
+      # out of `application_cable/channel.rb` yields "Channel", which matches
+      # no base-class filter and no name the booted app would report.
+      def source_classes(dir)
+        return [] unless Dir.exist?(dir)
+
+        Dir.glob(File.join(dir, "**/*.rb")).sort.filter_map do |path|
+          next unless File.exist?(path) && File.size(path) > 0
+          next if File.size(path) > RailsAiContext.configuration.max_file_size
+          # Rails adds app/*/concerns as its own autoload root, so what lives
+          # there is a mixin, not a mailer or a channel - and naming it from
+          # the path would invent a `Concerns::` namespace that never exists.
+          next if path.sub("#{dir}/", "").start_with?("concerns/")
+
+          walked = SourceIntrospector.walk(path, { methods: Listeners::MethodsListener })
+          [ constant_name_for(path, dir), walked[:methods] || [] ]
+        rescue StandardError, ScriptError => e
+          $stderr.puts "[rails-ai-context] source_classes failed for #{path}: #{e.message}" if ENV["DEBUG"]
+          nil
+        end
+      end
+
+      def constant_name_for(path, dir)
+        path.sub("#{dir}/", "").sub(/\.rb\z/, "").camelize
       end
 
       def extract_channels

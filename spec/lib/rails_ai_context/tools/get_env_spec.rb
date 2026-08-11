@@ -339,4 +339,24 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       end
     end
   end
+  # Rails 6+ apps commonly carry only per-environment credentials. Checking
+  # for the top-level file alone left those apps with the section silently
+  # absent - the "no credentials" vs "could not open them" confusion again.
+  describe "credentials file detection" do
+    it "counts a per-environment credentials file" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "credentials"))
+        File.write(File.join(dir, "config", "credentials", "production.yml.enc"), "x")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        expect(described_class.send(:credentials_file_present?)).to be(true)
+      end
+    end
+
+    it "is false when the app has no credentials at all" do
+      Dir.mktmpdir do |dir|
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        expect(described_class.send(:credentials_file_present?)).to be(false)
+      end
+    end
+  end
 end

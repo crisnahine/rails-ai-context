@@ -36,13 +36,14 @@ module RailsAiContext
 
         routes = context[:routes]
         if routes && !routes[:error]
-          internal = %w[action_mailbox/ active_storage/ rails/ conductor/ devise/ turbo/]
+          # From config, like rails_get_routes and rails_onboard. Hardcoding it
+          # here made one documented option enough to reopen the count drift.
+          internal = RailsAiContext.configuration.excluded_route_prefixes
           by_controller = routes[:by_controller] || {}
           app_ctrls = by_controller.keys.reject { |k| internal.any? { |p| k.downcase.start_with?(p) } }
-          # Numerator and denominator must describe the same population: app
-          # routes across app controllers, with the grand total (framework
-          # routes included) alongside for scale.
-          app_routes = app_ctrls.sum { |k| Array(by_controller[k]).size }
+          # Deduped, so this number, the grand total beside it, and
+          # rails_get_routes' header all describe the same population.
+          app_routes = app_ctrls.sum { |k| Tools::BaseTool.dedupe_put_patch_routes(Array(by_controller[k])).size }
           lines << "- Routes: #{count_phrase(app_routes, "app route")} across " \
                    "#{count_phrase(app_ctrls.size, "controller")} " \
                    "(#{routes[:total_routes]} total incl. framework)"

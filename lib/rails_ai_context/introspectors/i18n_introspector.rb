@@ -7,7 +7,12 @@ module RailsAiContext
     # Discovers internationalization setup: locales, backends, key counts.
     class I18nIntrospector
       extend StaticTier
-      static_tier :files_only
+      static_tier :alternate_source
+
+      # Both spellings apps use: `config.i18n.default_locale = :es` in
+      # application.rb or an environment file, and a bare
+      # `I18n.default_locale = :es` in an initializer.
+      DEFAULT_LOCALE_ASSIGNMENT = /(?:config\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
 
       attr_reader :app
 
@@ -30,7 +35,64 @@ module RailsAiContext
         { error: e.message }
       end
 
+      # The locale files are the same files either way; only the list of
+      # locales and the default came from a running I18n. Read both from disk
+      # rather than report the library's own defaults as the app's.
+      def static_call
+        locales = locales_from_files
+        default = default_locale_from_config
+
+        {
+          default_locale: default,
+          available_locales: locales,
+          backend: nil,
+          locale_files: extract_locale_files,
+          total_locale_files: count_locale_files,
+          locale_coverage: detect_locale_coverage(locales: locales.map(&:to_sym), default: default.to_sym)
+        }.merge(detect_fallback_config)
+      rescue => e
+        { error: e.message }
+      end
+
       private
+
+      # Every top-level key across config/locales - the same population Rails
+      # builds available_locales from.
+      def locales_from_files
+        dir = File.join(root, "config/locales")
+        return [] unless Dir.exist?(dir)
+
+        Dir.glob(File.join(dir, "**/*.{yml,yaml}")).flat_map do |path|
+          content = RailsAiContext::SafeFile.read(path)
+          next [] unless content
+
+          # aliases: true, like extract_locale_files. Sharing formats through a
+          # YAML anchor is ordinary, and without the flag Psych raises, the
+          # rescue swallows it, and every locale in that file disappears while
+          # the Locale Files section still lists it.
+          data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
+          data.is_a?(Hash) ? data.keys.map(&:to_s) : []
+        rescue StandardError
+          []
+        end.uniq.sort
+      end
+
+      # Rails' own default is :en, so "en" is the right answer when the app
+      # never says otherwise - not a guess.
+      def default_locale_from_config
+        candidates = [ File.join(root, "config", "application.rb") ] +
+                     Dir.glob(File.join(root, "config", "environments", "*.rb")) +
+                     Dir.glob(File.join(root, "config", "initializers", "*.rb"))
+
+        candidates.each do |path|
+          next unless File.exist?(path)
+
+          content = RailsAiContext::SafeFile.read(path)
+          match = content&.match(DEFAULT_LOCALE_ASSIGNMENT)
+          return match[1] if match
+        end
+        "en"
+      end
 
       def root
         app.root.to_s
@@ -77,8 +139,7 @@ module RailsAiContext
         {}
       end
 
-      def detect_locale_coverage
-        locales = I18n.available_locales
+      def detect_locale_coverage(locales: I18n.available_locales, default: I18n.default_locale)
         return {} if locales.size < 2
 
         # Coverage is the share of the default locale's keys that the other
@@ -86,8 +147,8 @@ module RailsAiContext
         # for a locale that translates few default keys but adds many of its
         # own - the one number a translator must not be told is fine.
         coverage = {}
-        default_keys = key_paths_for_locale(I18n.default_locale)
-        locales.reject { |l| l == I18n.default_locale }.each do |locale|
+        default_keys = key_paths_for_locale(default)
+        locales.reject { |l| l == default }.each do |locale|
           locale_keys = key_paths_for_locale(locale)
           translated = (default_keys & locale_keys).size
           coverage[locale.to_s] = {
@@ -110,7 +171,7 @@ module RailsAiContext
         find_locale_paths(locale).flat_map do |path|
           content = RailsAiContext::SafeFile.read(path)
           next [] unless content
-          data = YAML.safe_load(content, permitted_classes: [ Symbol ])
+          data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
           next [] unless data.is_a?(Hash)
 
           # A locale root may be written `en:` or `:en:` - both load, and both

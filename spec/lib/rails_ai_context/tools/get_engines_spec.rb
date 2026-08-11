@@ -80,5 +80,27 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
         expect(text).to include("[UNAVAILABLE: requires a booted Rails app]")
       end
     end
+
+    # Which engines a process loaded is unknowable without that process. The
+    # empty array it used to return rendered as "no loaded Rails::Engine
+    # subclasses detected" for an app that loads eight of them.
+    context "when the loaded-engine list is unavailable but routes parsed" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          { engines: { mounted_engines: [], rails_engines: { unavailable: "requires a booted Rails app" } } }
+        )
+      end
+
+      it "says the list is unavailable rather than empty" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("[UNAVAILABLE: requires a booted Rails app]")
+        expect(text).not_to include("No loaded Rails::Engine subclasses detected")
+      end
+
+      it "still reports the mounted engines it read from routes" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("## Mounted (config/routes.rb)")
+      end
+    end
   end
 end

@@ -107,4 +107,83 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       end
     end
   end
+
+  # Without a booted app, I18n.available_locales reports the library's own
+  # default, so an app with en and es was described as having one locale - in
+  # the same output that listed both files.
+  describe "#static_call" do
+    def static_result(locales)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "locales"))
+        locales.each { |name, body| File.write(File.join(dir, "config", "locales", name), body) }
+        yield dir if block_given?
+        return described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+    end
+
+    it "reads the available locales from the files on disk" do
+      result = static_result(
+        "en.yml" => "en:\n  hello: Hello\n  bye: Bye\n",
+        "es.yml" => "es:\n  hello: Hola\n"
+      )
+      expect(result[:available_locales]).to eq(%w[en es])
+      expect(result[:total_locale_files]).to eq(2)
+    end
+
+    it "computes coverage against the default locale" do
+      result = static_result(
+        "en.yml" => "en:\n  hello: Hello\n  bye: Bye\n",
+        "es.yml" => "es:\n  hello: Hola\n"
+      )
+      expect(result[:locale_coverage]["es"]).to include(keys: 1, missing: 1, extra: 0)
+    end
+
+    it "honours an explicit default locale from config" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n", "es.yml" => "es:\n  hello: Hola\n") do |dir|
+        File.write(File.join(dir, "config", "application.rb"), <<~RUBY)
+          module Dummy
+            class Application < Rails::Application
+              config.i18n.default_locale = :es
+            end
+          end
+        RUBY
+      end
+      expect(result[:default_locale]).to eq("es")
+    end
+
+    it "falls back to en when nothing overrides it" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n")
+      expect(result[:default_locale]).to eq("en")
+    end
+
+    it "does not claim a backend it cannot see" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n")
+      expect(result[:backend]).to be_nil
+    end
+
+    it "returns no locales when the directory is missing" do
+      Dir.mktmpdir do |dir|
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(result[:available_locales]).to eq([])
+      end
+    end
+    # An anchor and its alias live in one file - sharing date and number
+    # formats between a base locale and a regional one is the common case.
+    # Without aliases: true Psych raises, the rescue swallows it, and every
+    # locale in that file disappears while Locale Files still lists it.
+    it "reads locales from a file that uses YAML anchors" do
+      result = static_result(
+        "en.yml" => "en: &defaults\n  hello: Hello\nen-GB:\n  <<: *defaults\n  hello: Hullo\n"
+      )
+      expect(result[:available_locales]).to include("en", "en-GB")
+    end
+
+    it "honours a bare I18n.default_locale in an initializer" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n", "de.yml" => "de:\n  hello: Hallo\n") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "locale.rb"), "I18n.default_locale = :de\n")
+      end
+      expect(result[:default_locale]).to eq("de")
+    end
+  end
 end

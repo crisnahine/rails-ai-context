@@ -20,7 +20,11 @@ module RailsAiContext
         root = routes.find { |r| r[:path] == "/" && r[:verb]&.include?("GET") }
 
         {
-          total_routes: routes.size,
+          # Merged, because that is how every surface that lists routes counts
+          # them: Rails registers PATCH and PUT separately for one update
+          # action, and a raw total here left the generated context files
+          # quoting a grand total their own app-route number cannot reach.
+          total_routes: Tools::BaseTool.dedupe_put_patch_routes(routes).size,
           by_controller: group_by_controller(routes),
           api_namespaces: detect_api_namespaces(routes),
           mounted_engines: detect_mounted_engines,

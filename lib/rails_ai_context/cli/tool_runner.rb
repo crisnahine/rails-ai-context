@@ -15,6 +15,13 @@ module RailsAiContext
       class ToolNotFoundError < StandardError; end
       class InvalidArgumentError < StandardError; end
 
+      # The only words that read as true, and every word a boolean flag will
+      # consume as its value. Kept together so the two cannot drift: a word
+      # accepted here but missing from TRUTHY would silently mean false.
+      TRUTHY_WORDS = %w[true 1 yes].freeze
+      FALSEY_WORDS = %w[false 0 no].freeze
+      BOOLEAN_WORDS = (TRUTHY_WORDS + FALSEY_WORDS).freeze
+
       attr_reader :tool_class, :raw_args, :json_mode, :error
 
       def initialize(tool_name, raw_args, json_mode: false)
@@ -210,8 +217,18 @@ module RailsAiContext
               prop = properties[key] || {}
 
               if prop[:type] == "boolean"
-                result[key] = true
-                i += 1
+                # `--flag false` is the form docs/CLI.md teaches for every
+                # other param, so a boolean has to honour it too. Only an
+                # explicit boolean word is consumed - anything else stays a
+                # separate argument and the flag means true.
+                nxt = args[i + 1]
+                if nxt && BOOLEAN_WORDS.include?(nxt.downcase)
+                  result[key] = coerce_value(nxt, prop)
+                  i += 2
+                else
+                  result[key] = true
+                  i += 1
+                end
                 next
               end
 
@@ -247,7 +264,7 @@ module RailsAiContext
         when "integer"
           raw.to_i
         when "boolean"
-          %w[true 1 yes].include?(raw.to_s.downcase)
+          TRUTHY_WORDS.include?(raw.to_s.downcase)
         when "array"
           raw.is_a?(Array) ? raw : raw.to_s.split(",").map(&:strip)
         else

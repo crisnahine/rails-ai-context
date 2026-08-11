@@ -112,7 +112,7 @@ module RailsAiContext
         name: config.server_name,
         version: config.server_version,
         instructions: "Ground truth engine for Rails apps. Live Prism AST introspection. Zero stale data.",
-        tools: active_tools(config) + validated_custom_tools,
+        tools: merge_tools(active_tools(config), validated_custom_tools),
         resource_templates: Resources.resource_templates,
         configuration: mcp_config
       )
@@ -146,12 +146,53 @@ module RailsAiContext
       tools.reject { |t| skip.include?(t.tool_name) }
     end
 
+    # The MCP SDK refuses a tool list with a repeated name, so one duplicate
+    # takes the whole server down. Two ways they arise:
+    #
+    #   - The same class twice. Naming a BaseTool subclass in custom_tools
+    #     resolves its constant, which autoloads the file, which fires
+    #     `inherited` and enrols it in the registry active_tools reads.
+    #   - Two different classes claiming one name. Deliberate replacement is
+    #     spelled with skip_tools; without it, keep the built-in and say so.
+    def merge_tools(builtin, custom)
+      merged = (builtin + custom).uniq
+      builtin_names = builtin.to_set { |t| tool_label(t) }
+
+      merged.group_by { |t| tool_label(t) }.flat_map do |name, tools|
+        next tools if tools.size == 1
+
+        # Only skip_tools can settle a clash with a built-in; when both
+        # claimants are custom there is no built-in to skip, and saying so
+        # would send the user after a setting that cannot help.
+        advice = if builtin_names.include?(name)
+          "keeping the built-in. Add #{name.inspect} to config.skip_tools to replace it."
+        else
+          "keeping the first. Give one of them a different tool_name."
+        end
+        $stderr.puts "[rails-ai-context] WARNING: #{tools.size} tools claim the name #{name.inspect}; #{advice}"
+        [ tools.first ]
+      end
+    end
+
+    # MCP::Tool subclasses answer tool_name; anything else falls back to the
+    # class name, which is what the SDK would key on anyway.
+    def tool_label(tool)
+      tool.respond_to?(:tool_name) ? tool.tool_name : tool.name
+    end
+
+    # Read the list off the server rather than rebuilding it. Recomputing it
+    # from the registry drops any custom tool that is not a BaseTool, so the
+    # banner announced a different set than the server answered with.
+    def tool_banner(server)
+      names = server.tools.values.map { |t| tool_label(t) }.sort
+      "[rails-ai-context] Tools (#{names.size}): #{names.join(', ')}"
+    end
+
     def start_stdio(server)
       transport = MCP::Server::Transports::StdioTransport.new(server)
-      tools = active_tools(RailsAiContext.configuration)
       # Log to stderr so we don't pollute the JSON-RPC channel on stdout
       $stderr.puts "[rails-ai-context] MCP server started (stdio transport)"
-      $stderr.puts "[rails-ai-context] Tools (#{tools.size}): #{tools.map { |t| t.tool_name }.join(', ')}"
+      $stderr.puts tool_banner(server)
       maybe_start_live_reload(server)
       transport.open
     end
@@ -169,9 +210,8 @@ module RailsAiContext
                      "this exposes all tools to the network without authentication. " \
                      "Use 127.0.0.1 (default) unless you have external auth in place."
       end
-      tools = active_tools(config)
       $stderr.puts "[rails-ai-context] MCP server starting on #{config.http_bind}:#{config.http_port}#{config.http_path}"
-      $stderr.puts "[rails-ai-context] Tools (#{tools.size}): #{tools.map { |t| t.tool_name }.join(', ')}"
+      $stderr.puts tool_banner(server)
       maybe_start_live_reload(server)
 
       begin

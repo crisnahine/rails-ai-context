@@ -8,7 +8,7 @@ module RailsAiContext
     # Covers RAILS_NERVOUS_SYSTEM.md §17 (ActiveSupport).
     class ActiveSupportIntrospector
       extend StaticTier
-      static_tier :files_only
+      static_tier :alternate_source
 
       attr_reader :app
 
@@ -27,6 +27,25 @@ module RailsAiContext
         }
       rescue => e
         $stderr.puts "[rails-ai-context] ActiveSupportIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
+        { error: e.message }
+      end
+
+      # Concerns, MessageVerifier usage and tagged logging are read off disk.
+      # The registered deprecators, the subscribed load hooks and the cache
+      # store only exist in a running process; an empty list for them renders
+      # as "this app has none", so they refuse instead.
+      def static_call
+        unavailable = { unavailable: StaticTier.unavailable_reason }
+        {
+          concerns: extract_concerns,
+          deprecators: unavailable,
+          message_verifier_usage: extract_message_verifier_usage,
+          tagged_logging: detect_tagged_logging,
+          on_load_hooks: unavailable,
+          cache_usage: unavailable
+        }
+      rescue => e
+        $stderr.puts "[rails-ai-context] ActiveSupportIntrospector#static_call failed: #{e.message}" if ENV["DEBUG"]
         { error: e.message }
       end
 

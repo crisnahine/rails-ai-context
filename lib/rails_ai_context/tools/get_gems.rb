@@ -81,11 +81,14 @@ module RailsAiContext
               line += " _(config: #{config_hint})_" if config_hint
               lines << line
             end
-          else
+          elsif page[:total].zero?
             all_cats = (gems[:notable_gems] || []).map { |g| g[:category] }.uniq.sort
             hint = all_cats.any? ? " Available categories: #{all_cats.join(', ')}" : ""
             lines << "_No notable gems found#{" in category '#{category}'" unless category == 'all'}.#{hint}_"
           end
+          # An empty page past the end is not an empty app. Saying "no notable
+          # gems found" above "No items at offset 9999. Total: 13." contradicts
+          # itself, and the first line is the one that reads as the answer.
 
           lines << "" << page[:hint] unless page[:hint].empty?
           text_response(lines.join("\n"))

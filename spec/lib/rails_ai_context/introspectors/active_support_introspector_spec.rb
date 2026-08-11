@@ -73,4 +73,25 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
       end
     end
   end
+  # Deprecators, load hooks and the cache store live in a running process.
+  # Returning [] for them without a boot rendered as "this app has none".
+  describe "#static_call" do
+    subject(:result) { described_class.new(RailsAiContext::StaticApp.new(Dir.pwd)).static_call }
+
+    it "marks the deprecators registry unavailable" do
+      expect(result[:deprecators]).to eq({ unavailable: RailsAiContext::Introspectors::StaticTier.unavailable_reason })
+    end
+
+    it "marks the on_load hooks unavailable" do
+      expect(result[:on_load_hooks]).to eq({ unavailable: RailsAiContext::Introspectors::StaticTier.unavailable_reason })
+    end
+
+    it "marks the cache store unavailable" do
+      expect(result[:cache_usage]).to eq({ unavailable: RailsAiContext::Introspectors::StaticTier.unavailable_reason })
+    end
+
+    it "still reads the concerns off disk" do
+      expect(result[:concerns]).to be_a(Hash)
+    end
+  end
 end

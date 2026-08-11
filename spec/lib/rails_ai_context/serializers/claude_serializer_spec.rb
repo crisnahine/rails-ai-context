@@ -150,4 +150,22 @@ RSpec.describe RailsAiContext::Serializers::ClaudeSerializer do
       end
     end
   end
+  # The generated file and the routes tool answer the same question through
+  # different code paths. The serializer counted raw Rails routes while the
+  # tool merged each resource's PATCH/PUT pair, so one app produced two
+  # numbers - 27 in CLAUDE.md, 24 from rails_get_routes.
+  describe "route count parity with rails_get_routes" do
+    it "reports the same app route total the routes tool reports" do
+      RailsAiContext::Tools::GetRoutes.reset_cache!
+
+      routes_text = RailsAiContext::Tools::GetRoutes.call(detail: "standard").content.first[:text]
+      routes_total = routes_text[/# Routes \((\d+) route/, 1].to_i
+      expect(routes_total).to be > 0
+
+      output = described_class.new(RailsAiContext.introspect).call
+      serializer_total = output[/- Routes: (\d+) app route/, 1].to_i
+
+      expect(serializer_total).to eq(routes_total)
+    end
+  end
 end

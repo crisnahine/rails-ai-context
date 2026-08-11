@@ -6,7 +6,7 @@ module RailsAiContext
     # Identifies well-known engines and provides context about what each does.
     class EngineIntrospector
       extend StaticTier
-      static_tier :files_only
+      static_tier :alternate_source
 
       attr_reader :app
 
@@ -45,6 +45,20 @@ module RailsAiContext
         {
           mounted_engines: discover_mounted_engines,
           rails_engines: discover_rails_engines
+        }
+      rescue => e
+        { error: e.message }
+      end
+
+      # config/routes.rb is a file, so mounts read the same either way. Which
+      # engine classes a process loaded is only knowable from that process -
+      # and testing `defined?(Rails::Engine)` instead of the tier answered from
+      # the half-finished boot that put us here, which is the common way into
+      # the static tier.
+      def static_call
+        {
+          mounted_engines: discover_mounted_engines,
+          rails_engines: { unavailable: StaticTier.unavailable_reason }
         }
       rescue => e
         { error: e.message }

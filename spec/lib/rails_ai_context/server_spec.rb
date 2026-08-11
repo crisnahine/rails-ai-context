@@ -138,6 +138,41 @@ RSpec.describe RailsAiContext::Server do
       ensure
         RailsAiContext.configuration.custom_tools = []
       end
+
+      # A BaseTool subclass enters the `inherited` registry that active_tools
+      # reads, so naming one in custom_tools offered it to MCP::Server twice
+      # and the SDK rejected the duplicate name - taking the whole server down
+      # for any app that configured a custom tool.
+      context "when the custom tool is a BaseTool subclass" do
+        let(:registered_tool) do
+          Class.new(RailsAiContext::Tools::BaseTool) do
+            tool_name "rails_custom_registered_probe"
+            description "A custom tool that also lives in the registry"
+
+            def self.call(server_context: nil, **_params)
+              text_response("ok")
+            end
+          end
+        end
+
+        after { registered_tool.abstract! }
+
+        it "offers it to the MCP server exactly once" do
+          RailsAiContext.configuration.custom_tools = [ registered_tool ]
+          mcp_server = server.build
+          matching = mcp_server.tools.values.select { |t| t.tool_name == "rails_custom_registered_probe" }
+          expect(matching.size).to eq(1)
+        ensure
+          RailsAiContext.configuration.custom_tools = []
+        end
+
+        it "builds without raising on the duplicate name" do
+          RailsAiContext.configuration.custom_tools = [ registered_tool ]
+          expect { server.build }.not_to raise_error
+        ensure
+          RailsAiContext.configuration.custom_tools = []
+        end
+      end
     end
 
     context "with skip_tools" do
@@ -223,6 +258,28 @@ RSpec.describe RailsAiContext::Server do
         call_rack_app(transport, mcp_path)
         expect(RailsAiContext).to have_received(:log_warn).with(a_string_matching("transport exploded"))
       end
+    end
+  end
+  # The banner rebuilt the list from the BaseTool registry, so a custom tool
+  # that is a plain MCP::Tool never appeared in it - the server announced one
+  # set on stderr and answered with another.
+  describe "#tool_banner" do
+    let(:plain_custom_tool) do
+      Class.new(MCP::Tool) do
+        tool_name "custom_banner_probe"
+        description "A custom tool outside the BaseTool registry"
+      end
+    end
+
+    it "counts every tool the server actually serves" do
+      RailsAiContext.configuration.custom_tools = [ plain_custom_tool ]
+      mcp_server = server.build
+      banner = server.send(:tool_banner, mcp_server)
+
+      expect(banner).to include("custom_banner_probe")
+      expect(banner).to include("Tools (#{mcp_server.tools.size})")
+    ensure
+      RailsAiContext.configuration.custom_tools = []
     end
   end
 end

@@ -208,4 +208,19 @@ RSpec.describe RailsAiContext::Tools::GetGems do
       expect(text).to include("(config: config/queue.yml, config/recurring.yml)")
     end
   end
+
+  # An offset past the end used to render "_No notable gems found._" directly
+  # above "_No items at offset 9999. Total: 13._" - the first line reads as the
+  # answer and it was false.
+  describe "pagination past the end" do
+    it "does not claim the app has no gems" do
+      text = described_class.call(offset: 9_999).content.first[:text]
+      expect(text).not_to include("No notable gems found")
+    end
+
+    it "says which page was empty and how many there are" do
+      text = described_class.call(offset: 9_999).content.first[:text]
+      expect(text).to match(/No items at offset 9999/)
+    end
+  end
 end

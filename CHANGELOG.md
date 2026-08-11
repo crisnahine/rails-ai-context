@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`config.custom_tools` no longer takes the MCP server down.** Naming a
+  `BaseTool` subclass resolved its constant, which autoloaded the class and
+  enrolled it in the same registry the built-in list is read from, so it was
+  offered to the SDK twice and rejected as a duplicate name. The server exited
+  1 with an empty stdout while the CLI kept working. Tools are now merged by
+  name; two different classes claiming one name keep the built-in and warn.
+- **`--flag value` no longer inverts boolean parameters.** A boolean flag
+  consumed no value, so `--app-only false` set `app_only` to true and dropped
+  the `false` without a warning. Affected every boolean on every tool, and
+  `--param value` is the form the CLI docs teach.
+- **The static tier stops answering questions it cannot answer.** `mailers`
+  reported "no mailers found" for an app with mailers, `engines` reported no
+  engines loaded, `i18n` reported one locale while listing two locale files,
+  and the Action Cable channels, deprecators, on_load hooks, cache store and
+  credentials sections vanished with no marker. Mailers, channels and locales
+  are read from source through `static_call`; the rest report
+  `[UNAVAILABLE]`. Locale files using YAML anchors are read correctly, and an
+  `I18n.default_locale` set in an initializer is honoured.
+- **`app_only:false` lists the routes it counts.** It announced the unfiltered
+  total above a body containing only app routes, and never showed a framework
+  route. App routes are now listed first, so they cannot paginate out of sight.
+  `app_only:true` says how many routes it hid and how to see them.
+- **One app, one route count.** Generated context files counted raw routes
+  while the tools merged each resource's `PATCH`/`PUT` pair, so `CLAUDE.md` and
+  `rails_get_routes` quoted different numbers for the same app. The totals are
+  merged at the source, and the serializers read
+  `config.excluded_route_prefixes` instead of a hardcoded copy.
+- **`rails_get_gems` past the last page** no longer opens with "No notable gems
+  found" above its own "No items at offset N" note.
+- The MCP startup banner reads the list off the built server, so it cannot
+  announce a different set of tools than the server answers with.
+
 ## [5.20.0] - 2026-08-11
 
 ### Security

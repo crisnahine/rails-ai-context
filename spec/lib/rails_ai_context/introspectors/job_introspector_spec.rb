@@ -186,4 +186,114 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(introspector.send(:extract_channel_actions, lifecycle_only_class)).to be_nil
     end
   end
+
+  # Mailers and channels were read only through ActionMailer::Base.descendants
+  # and ActionCable::Channel::Base.descendants. With no booted Rails those
+  # constants are undefined, so the static tier answered "no mailers found" for
+  # an app with mailers - a false negative served as ground truth.
+  describe "#static_call" do
+    def static_result(&build)
+      Dir.mktmpdir do |dir|
+        build.call(dir)
+        return described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+    end
+
+    it "finds mailers and their actions from source" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
+        File.write(File.join(dir, "app", "mailers", "application_mailer.rb"), <<~RUBY)
+          class ApplicationMailer < ActionMailer::Base
+            default from: "from@example.com"
+          end
+        RUBY
+        File.write(File.join(dir, "app", "mailers", "post_mailer.rb"), <<~RUBY)
+          class PostMailer < ApplicationMailer
+            def notify
+              mail(to: "a@b.c")
+            end
+
+            private
+
+            def helper; end
+          end
+        RUBY
+      end
+
+      mailer = result[:mailers].find { |m| m[:name] == "PostMailer" }
+      expect(mailer).not_to be_nil
+      expect(mailer[:actions]).to eq(%w[notify])
+      expect(result[:mailers].map { |m| m[:name] }).not_to include("ApplicationMailer")
+    end
+
+    it "finds channels from source" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "channels", "application_cable"))
+        File.write(File.join(dir, "app", "channels", "application_cable", "channel.rb"), <<~RUBY)
+          module ApplicationCable
+            class Channel < ActionCable::Channel::Base; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "channels", "chat_channel.rb"), <<~RUBY)
+          class ChatChannel < ApplicationCable::Channel
+            def subscribed
+              stream_from "chat"
+            end
+          end
+        RUBY
+      end
+
+      channel = result[:channels].find { |c| c[:name] == "ChatChannel" }
+      expect(channel).not_to be_nil
+      expect(channel[:stream_methods]).to include("subscribed")
+      # Asserting only that the base class is absent passed while the names
+      # were unqualified: "Channel" and "Connection" were both counted.
+      expect(result[:channels].map { |c| c[:name] }).to eq(%w[ChatChannel])
+    end
+
+    it "names namespaced classes the way the booted app does" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers", "admin"))
+        File.write(File.join(dir, "app", "mailers", "admin", "report_mailer.rb"), <<~RUBY)
+          module Admin
+            class ReportMailer < ApplicationMailer
+              def weekly; end
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:mailers].map { |m| m[:name] }).to eq(%w[Admin::ReportMailer])
+    end
+
+    # app/*/concerns is its own Zeitwerk root, so what lives there is a mixin.
+    # Naming it from the path also invented a `Concerns::` namespace that no
+    # booted app would ever report.
+    it "ignores app/mailers/concerns and app/channels/concerns" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers", "concerns"))
+        FileUtils.mkdir_p(File.join(dir, "app", "channels", "concerns"))
+        File.write(File.join(dir, "app", "mailers", "concerns", "attachable.rb"), <<~RUBY)
+          module Attachable
+            def attach_logo; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "channels", "concerns", "traceable.rb"), <<~RUBY)
+          module Traceable
+            def subscribed; end
+          end
+        RUBY
+      end
+
+      expect(result[:mailers]).to eq([])
+      expect(result[:channels]).to eq([])
+    end
+
+    it "returns empty collections when the directories are missing" do
+      result = static_result { |_dir| nil }
+      expect(result[:mailers]).to eq([])
+      expect(result[:channels]).to eq([])
+      expect(result[:jobs]).to eq([])
+    end
+  end
 end

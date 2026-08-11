@@ -37,7 +37,9 @@ module RailsAiContext
           end
 
           lines << "" << "## Loaded Engine Classes"
-          if loaded.any?
+          if loaded.is_a?(Hash) && loaded[:unavailable]
+            lines << RailsAiContext::Confidence.unavailable(loaded[:unavailable])
+          elsif loaded.any?
             loaded.each do |e|
               parts = []
               parts << count_phrase(e[:route_count], "route") if e[:route_count]
