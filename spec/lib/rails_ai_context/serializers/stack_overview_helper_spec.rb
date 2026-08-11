@@ -142,4 +142,41 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(helper.full_preset_stack_lines).to eq([])
     end
   end
+  # `static_parse` is the marker SchemaIntrospector sets when it read
+  # db/schema.rb instead of the connection. Printed raw, CLAUDE.md line 6 named
+  # a database that does not exist - the first line an agent reads.
+  describe "#database_adapter_label" do
+    let(:host) do
+      Class.new do
+        include RailsAiContext::Serializers::StackOverviewHelper
+        attr_reader :context
+        def initialize(context) = @context = context
+        public :database_adapter_label
+      end
+    end
+
+    it "passes a real adapter through untouched" do
+      subject = host.new({})
+      expect(subject.database_adapter_label({ adapter: "PostgreSQL" })).to eq("PostgreSQL")
+    end
+
+    # The first attempt read context[:config], which carries no adapter key at
+    # all, so every app got "unknown". The gems answer it, as onboard does.
+    it "names the database from the gems when the schema was read from a file" do
+      subject = host.new({ gems: { notable_gems: [ { name: "pg" } ] } })
+      expect(subject.database_adapter_label({ adapter: "static_parse" })).to eq("PostgreSQL")
+    end
+
+    it "recognises the mysql adapters and sqlite" do
+      mysql = host.new({ gems: { notable_gems: [ { name: "trilogy" } ] } })
+      sqlite = host.new({ gems: { notable_gems: [ { name: "sqlite3" } ] } })
+      expect(mysql.database_adapter_label({ adapter: nil })).to eq("MySQL")
+      expect(sqlite.database_adapter_label({ adapter: "unknown" })).to eq("SQLite")
+    end
+
+    it "never leaks the internal marker when nothing can resolve it" do
+      subject = host.new({ gems: { error: "boom" } })
+      expect(subject.database_adapter_label({ adapter: "static_parse" })).to eq("unknown")
+    end
+  end
 end

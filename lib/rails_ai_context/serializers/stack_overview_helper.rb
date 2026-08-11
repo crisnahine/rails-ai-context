@@ -223,9 +223,19 @@ module RailsAiContext
         adapter = schema[:adapter]
         return adapter unless adapter.nil? || adapter == "static_parse" || adapter == "unknown"
 
-        config = context[:config]
-        live = SectionGuard.usable?(config) ? (config[:database_adapter] || config[:adapter]) : nil
-        live && !live.to_s.empty? ? live : "unknown"
+        # The gems, not the config: ConfigIntrospector reports cache/session/
+        # queue settings and no adapter at all, so reading it here answered
+        # "unknown" every time. onboard resolves the same question from the
+        # notable gems, and this is the same question.
+        gems = context[:gems]
+        return "unknown" unless SectionGuard.usable?(gems)
+
+        names = Array(gems[:notable_gems]).map { |g| g[:name] }
+        return "PostgreSQL" if names.include?("pg")
+        return "MySQL" if names.intersect?(%w[mysql2 trilogy])
+        return "SQLite" if names.include?("sqlite3")
+
+        "unknown"
       end
     end
   end

@@ -296,4 +296,24 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:jobs]).to eq([])
     end
   end
+  # `instance_methods(false)` is not Rails' definition of a mailer action: it
+  # includes ActiveSupport's generated `_run_*_callbacks` and every public
+  # helper, so an abstract base was reported as having deliverable actions.
+  describe "mailer actions" do
+    it "reports exactly what Rails dispatches on" do
+      result = described_class.new(Rails.application).call
+      result[:mailers].each do |mailer|
+        klass = mailer[:name].safe_constantize
+        next unless klass.respond_to?(:action_methods)
+
+        expect(mailer[:actions]).to eq(klass.action_methods.to_a.map(&:to_s).sort)
+      end
+    end
+
+    it "never reports an ActiveSupport callback runner as an action" do
+      result = described_class.new(Rails.application).call
+      all_actions = result[:mailers].flat_map { |m| m[:actions] }
+      expect(all_actions).to all(satisfy { |a| !a.start_with?("_run_") })
+    end
+  end
 end

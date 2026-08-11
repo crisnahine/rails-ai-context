@@ -234,15 +234,14 @@ module RailsAiContext
         ActionMailer::Base.descendants.filter_map do |mailer|
           next if mailer.name.nil?
 
-          # `action_methods` is Rails' own answer: it subtracts internal and
-          # inherited methods, so an abstract ApplicationMailer reports none
-          # and ActiveSupport's generated `_run_*_callbacks` never appears.
-          # `instance_methods(false)` listed both as deliverable actions.
-          actions = if mailer.respond_to?(:action_methods)
-            mailer.action_methods.to_a.map(&:to_s).sort
-          else
-            mailer.instance_methods(false).map(&:to_s).sort
-          end
+          # Rails' own answer: it subtracts internal and inherited methods, so
+          # an abstract ApplicationMailer reports none and ActiveSupport's
+          # generated `_run_*_callbacks` never appears. `instance_methods(false)`
+          # listed both as deliverable actions. Called bare, like
+          # ControllerIntrospector does - AbstractController::Base has defined
+          # it across the whole supported range, so a fallback here would only
+          # be unreachable code holding the old bug.
+          actions = mailer.action_methods.to_a.map(&:to_s).sort
           next if actions.empty?
 
           {
