@@ -494,5 +494,40 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(actions_for(Users::SessionsController)).to include("new", "create", "destroy")
       end
     end
+
+    # Doorkeeper mounted on the app's own base controller. Reflection is the
+    # only way to see the gem's actions, and it carries every public method the
+    # app's base controller and its concerns define along with them.
+    context "when the gem controller itself inherits the app's base controller" do
+      before do
+        FileUtils.mkdir_p(File.join(controllers_dir, "oauth"))
+        File.write(File.join(controllers_dir, "oauth", "authorizations_controller.rb"), <<~RUBY)
+          class Oauth::AuthorizationsController < Doorkeeper::AuthorizationsController
+            private
+
+            def store_current_location; end
+            def can_authorize_response?; end
+          end
+        RUBY
+
+        doorkeeper = Class.new(ApplicationController) do
+          def new; end
+          def create; end
+          def destroy; end
+          def show; end
+        end
+        stub_const("Doorkeeper::AuthorizationsController", doorkeeper)
+        stub_const("Oauth::AuthorizationsController", Class.new(doorkeeper))
+      end
+
+      it "reports the actions the gem defines" do
+        expect(actions_for(Oauth::AuthorizationsController)).to eq(%w[create destroy new show])
+      end
+
+      it "does not carry the base controller's public helpers in with them" do
+        expect(actions_for(Oauth::AuthorizationsController))
+          .not_to include("set_locale", "with_read_replica")
+      end
+    end
   end
 end

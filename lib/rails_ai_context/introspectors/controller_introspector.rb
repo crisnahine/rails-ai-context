@@ -187,7 +187,7 @@ module RailsAiContext
         # out, and the gem class supplies them. Reflection brings inherited
         # helpers along, which is worse than the alternative only if the
         # alternative is not claiming the controller serves nothing.
-        return ctrl.action_methods.to_a.sort if unreadable_ancestor || source.nil?
+        return reflected_actions(ctrl) if unreadable_ancestor || source.nil?
 
         # Every ancestor was readable and none defines an action. That is an
         # answer, and reflection would only overwrite it with helpers.
@@ -221,6 +221,28 @@ module RailsAiContext
           klass = klass.superclass
         end
         [ [], unreadable ]
+      end
+
+      # `action_methods` subtracts inherited methods only as far as the nearest
+      # abstract ancestor, and that is ActionController::Base. A gem controller
+      # mounted on the app's own base class - what Doorkeeper's `base_controller`
+      # setting produces - therefore arrives carrying every public method that
+      # base and its concerns define. The base's own answer is exactly that set,
+      # so subtracting it leaves the actions the gem contributes.
+      def reflected_actions(ctrl)
+        actions = ctrl.action_methods.to_a.map(&:to_s)
+        base = app_base_controller_for(ctrl)
+        actions -= base.action_methods.to_a.map(&:to_s) if base
+        actions.sort
+      end
+
+      def app_base_controller_for(ctrl)
+        klass = ctrl.superclass
+        while klass&.name && !framework_controller?(klass)
+          return klass if app_base_controller?(klass)
+          klass = klass.superclass
+        end
+        nil
       end
 
       def framework_controller?(klass)
