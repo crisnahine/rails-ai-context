@@ -209,12 +209,11 @@ module RailsAiContext
         end
       end
 
-      # `static_parse` is the marker SchemaIntrospector sets when it read
-      # db/schema.rb instead of the connection. It is an internal detail, and
-      # naming it as the database teaches the caller nothing.
-      private_class_method def self.adapter_label(schema)
-        adapter = schema[:adapter]
-        %w[static_parse unknown].include?(adapter.to_s) ? "unknown (schema read from file)" : adapter
+      # The same seam the generated context files use. Answering this question
+      # locally is how one app came to be told it runs on PostgreSQL by
+      # CLAUDE.md and on "unknown" by this tool, in the same session.
+      private_class_method def self.adapter_label(_schema = nil)
+        RailsAiContext::SchemaAdapter.label(cached_context)
       end
 
       private_class_method def self.models_for_table(table_name)

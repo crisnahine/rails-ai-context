@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_run_*_callbacks` and any public helper, so an abstract `ApplicationMailer`
   was reported as having deliverable actions. It now asks
   `action_methods`. (#126)
+- **One answer to which database the app runs on.** Four surfaces each carried
+  their own substitute for the internal `static_parse` marker and disagreed:
+  the generated `CLAUDE.md`, `rails_get_schema`, `rails_onboard` and
+  `rails ai:inspect` could name three different databases for one app, and
+  `onboard`'s gem loop let the last match win where the serializer's let the
+  first. They now share `RailsAiContext::SchemaAdapter`, which resolves from
+  the app's own database configuration first, then the `structure.sql` dialect
+  already parsed, then the Gemfile - order-independent. (#125)
 - **Generated context files no longer print `Database: static_parse`.** That is
   the internal marker for "read from db/schema.rb, not the connection";
   `onboard` already substituted the live adapter and the serializers did

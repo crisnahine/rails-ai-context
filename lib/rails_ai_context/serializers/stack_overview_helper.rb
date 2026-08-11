@@ -214,28 +214,11 @@ module RailsAiContext
         []
       end
 
-      # `static_parse` is the marker SchemaIntrospector sets when it read
-      # db/schema.rb instead of the connection. It is an internal detail, and
-      # printing it as the database taught every generated file that the app
-      # runs on something called static_parse. onboard already substitutes the
-      # live adapter; the generated files did not.
-      def database_adapter_label(schema)
-        adapter = schema[:adapter]
-        return adapter unless adapter.nil? || adapter == "static_parse" || adapter == "unknown"
-
-        # The gems, not the config: ConfigIntrospector reports cache/session/
-        # queue settings and no adapter at all, so reading it here answered
-        # "unknown" every time. onboard resolves the same question from the
-        # notable gems, and this is the same question.
-        gems = context[:gems]
-        return "unknown" unless SectionGuard.usable?(gems)
-
-        names = Array(gems[:notable_gems]).map { |g| g[:name] }
-        return "PostgreSQL" if names.include?("pg")
-        return "MySQL" if names.intersect?(%w[mysql2 trilogy])
-        return "SQLite" if names.include?("sqlite3")
-
-        "unknown"
+      # One seam for every surface that names the database, so the generated
+      # files, the tools and the rake task cannot answer differently for one
+      # app. See RailsAiContext::SchemaAdapter.
+      def database_adapter_label(_schema = nil)
+        SchemaAdapter.label(context)
       end
     end
   end

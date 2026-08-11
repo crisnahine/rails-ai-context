@@ -438,7 +438,7 @@ namespace :ai do
     puts ""
 
     if context[:schema] && !context[:schema][:error]
-      puts "📦 Database: #{RailsAiContext::CountPhrase.call(context[:schema][:total_tables], "table")} (#{context[:schema][:adapter]})"
+      puts "📦 Database: #{RailsAiContext::CountPhrase.call(context[:schema][:total_tables], "table")} (#{RailsAiContext::SchemaAdapter.label(context)})"
     end
 
     if context[:models] && !context[:models].is_a?(Hash)

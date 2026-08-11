@@ -594,31 +594,11 @@ module RailsAiContext
           end
         end
 
-        # Resolve the DB adapter name, preferring live config over schema introspection
-        def resolve_db_adapter(ctx, schema)
-          adapter = schema[:adapter]
-
-          # If the schema introspector returned a non-informative adapter name, try config
-          if adapter.nil? || adapter == "static_parse" || adapter == "unknown"
-            config_data = ctx[:config]
-            if config_data.is_a?(Hash) && !config_data[:error]
-              live_adapter = config_data[:database_adapter] || config_data[:adapter]
-              adapter = live_adapter if live_adapter
-            end
-          end
-
-          # Try to resolve from gems as a fallback
-          if adapter.nil? || adapter == "static_parse" || adapter == "unknown"
-            gems_data = ctx[:gems]
-            if gems_data.is_a?(Hash) && !gems_data[:error]
-              notable = gems_data[:notable_gems] || []
-              adapter = "PostgreSQL" if notable.any? { |g| g[:name] == "pg" }
-              adapter = "MySQL" if notable.any? { |g| %w[mysql2 trilogy].include?(g[:name]) }
-              adapter = "SQLite" if notable.any? { |g| g[:name] == "sqlite3" }
-            end
-          end
-
-          adapter || "unknown"
+        # The gems loop here let the LAST match win, so an app carrying both pg
+        # and sqlite3 was told SQLite by onboard and PostgreSQL by the
+        # generated files. One seam, one answer.
+        def resolve_db_adapter(ctx, _schema = nil)
+          RailsAiContext::SchemaAdapter.label(ctx)
         end
 
         def central_models(models, limit = 5)
