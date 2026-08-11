@@ -19,10 +19,37 @@ RSpec.describe RailsAiContext::SchemaAdapter do
     it "prefers the app's configured adapter" do
       context = {
         schema: { adapter: "static_parse", dialect: "sqlite" },
-        multi_database: { databases: [ { name: "primary", adapter: "pg" } ] },
+        multi_database: { databases: [ { name: "primary", adapter: "postgresql" } ] },
         gems: { notable_gems: [ { name: "sqlite3" } ] }
       }
       expect(described_class.label(context)).to eq("PostgreSQL")
+    end
+
+    # MultiDatabaseIntrospector reports ActiveRecord adapter names, not gem
+    # names. Feeding this example "pg" - a name no introspector emits here -
+    # is why the first version passed while a real Postgres app rendered
+    # "Database: postgresql".
+    it "uses the ActiveRecord adapter names the introspector actually emits" do
+      {
+        "postgresql" => "PostgreSQL",
+        "mysql2" => "MySQL",
+        "trilogy" => "MySQL",
+        "sqlite3" => "SQLite"
+      }.each do |configured, shown|
+        context = {
+          schema: { adapter: "static_parse" },
+          multi_database: { databases: [ { name: "primary", adapter: configured } ] }
+        }
+        expect(described_class.label(context)).to eq(shown)
+      end
+    end
+
+    it "passes an adapter it does not recognise through rather than losing it" do
+      context = {
+        schema: { adapter: "static_parse" },
+        multi_database: { databases: [ { name: "primary", adapter: "oracle_enhanced" } ] }
+      }
+      expect(described_class.label(context)).to eq("oracle_enhanced")
     end
 
     it "falls back to the structure.sql dialect" do

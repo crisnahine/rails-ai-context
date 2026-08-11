@@ -57,7 +57,11 @@ module RailsAiContext
       adapter = primary&.dig(:adapter)
       return nil if placeholder?(adapter)
 
-      GEM_ADAPTERS[adapter.to_s] || adapter
+      # These are ActiveRecord adapter names (`postgresql`, `sqlite3`), not gem
+      # names. The two overlap by accident at sqlite3/mysql2/trilogy, so
+      # reading only GEM_ADAPTERS let `postgresql` fall through raw - a Postgres
+      # app rendered "Database: postgresql" beside a SQLite app's "SQLite".
+      DIALECTS[adapter.to_s] || GEM_ADAPTERS[adapter.to_s] || adapter
     end
 
     def from_dialect(schema)
