@@ -186,6 +186,24 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
       expect(parse_and_dispatch(source).first[:signature]).to eq("call(recipient, options = {})")
     end
 
+    it "leaves a comment inside the parameter list out of the signature" do
+      source = <<~RUBY
+        class S
+          def call(
+            recipient, # who it goes to
+            options = {}
+          )
+          end
+        end
+      RUBY
+      expect(parse_and_dispatch(source).first[:signature]).to eq("call(recipient, options = {})")
+    end
+
+    it "keeps every kind of parameter in order" do
+      results = parse_and_dispatch("class S\n  def call(a, b = 1, *rest, c:, d: 2, **opts, &blk)\n  end\nend\n")
+      expect(results.first[:signature]).to eq("call(a, b = 1, *rest, c:, d: 2, **opts, &blk)")
+    end
+
     it "keeps parameters written without parens" do
       results = parse_and_dispatch("class S\n  def call a, b\n  end\nend\n")
       expect(results.first[:signature]).to eq("call(a, b)")

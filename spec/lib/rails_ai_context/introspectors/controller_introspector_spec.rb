@@ -466,5 +466,33 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(actions_for(Admin::BareController)).to eq([])
       end
     end
+
+    # What `rails g devise:controllers` writes: the app owns the file, every
+    # action in it is commented out, and the actions it serves are defined by a
+    # gem class whose source is not under app/controllers.
+    context "when a readable file inherits from a gem controller" do
+      before do
+        FileUtils.mkdir_p(File.join(controllers_dir, "users"))
+        File.write(File.join(controllers_dir, "users", "sessions_controller.rb"), <<~RUBY)
+          class Users::SessionsController < Devise::SessionsController
+            # def new
+            #   super
+            # end
+          end
+        RUBY
+
+        gem_ctrl = Class.new(ActionController::Base) do
+          def new; end
+          def create; end
+          def destroy; end
+        end
+        stub_const("Devise::SessionsController", gem_ctrl)
+        stub_const("Users::SessionsController", Class.new(gem_ctrl))
+      end
+
+      it "reports the actions the gem class defines" do
+        expect(actions_for(Users::SessionsController)).to include("new", "create", "destroy")
+      end
+    end
   end
 end

@@ -116,12 +116,32 @@ module RailsAiContext
         # as the bare name, which is how they are written.
         def signature_source(node, is_class_method)
           prefix = (is_class_method && node.receiver) ? "self." : ""
-          params = node.parameters&.location&.slice
-          return "#{prefix}#{node.name}" unless params
+          params = parameter_slices(node.parameters)
+          return "#{prefix}#{node.name}" if params.empty?
 
-          # A parameter list split over several lines keeps its newlines in the
-          # slice, and every caller renders a signature as one line.
-          "#{prefix}#{node.name}(#{params.gsub(/\s+/, ' ').strip})"
+          "#{prefix}#{node.name}(#{params.join(', ')})"
+        end
+
+        # Each parameter is sliced on its own rather than taking the whole list
+        # in one piece: a list split over several lines carries its newlines,
+        # and a comment written between two parameters would otherwise swallow
+        # the ones after it. Slicing keeps defaults as written, which is the
+        # reason for reading source here at all.
+        def parameter_slices(parameters)
+          return [] unless parameters
+
+          parts = []
+          %i[requireds optionals].each do |group|
+            next unless parameters.respond_to?(group)
+            parameters.public_send(group).each { |p| parts << p.location.slice }
+          end
+          parts << parameters.rest.location.slice if parameters.respond_to?(:rest) && parameters.rest
+          parameters.posts.each { |p| parts << p.location.slice } if parameters.respond_to?(:posts)
+          parameters.keywords.each { |p| parts << p.location.slice } if parameters.respond_to?(:keywords)
+          parts << parameters.keyword_rest.location.slice if parameters.respond_to?(:keyword_rest) && parameters.keyword_rest
+          parts << parameters.block.location.slice if parameters.respond_to?(:block) && parameters.block
+
+          parts.compact.map { |slice| slice.gsub(/\s+/, " ").strip }
         end
 
         def extract_params(node)

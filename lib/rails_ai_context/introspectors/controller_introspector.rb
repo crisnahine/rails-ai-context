@@ -178,17 +178,20 @@ module RailsAiContext
         own = extract_actions_from_source(source) if source
         return own if own&.any?
 
-        inherited, read_any_source = inherited_actions(ctrl)
+        inherited, unreadable_ancestor = inherited_actions(ctrl)
         return inherited if inherited.any?
 
-        # A file was read and it defines no action. That is an answer, and
-        # reflection would only overwrite it with inherited helpers.
-        return [] if source || read_any_source
+        # An ancestor exists that this app does not own the source of, so what
+        # it defines is invisible here. `rails g devise:controllers` writes
+        # exactly this: the app owns the file, every action in it is commented
+        # out, and the gem class supplies them. Reflection brings inherited
+        # helpers along, which is worse than the alternative only if the
+        # alternative is not claiming the controller serves nothing.
+        return ctrl.action_methods.to_a.sort if unreadable_ancestor || source.nil?
 
-        # Nothing readable anywhere: no file for this controller and none for
-        # any ancestor of it in the app. That is a controller from a gem or an
-        # engine, and reflection is the only thing left that knows anything.
-        ctrl.action_methods.to_a.sort
+        # Every ancestor was readable and none defines an action. That is an
+        # answer, and reflection would only overwrite it with helpers.
+        []
       rescue => e
         $stderr.puts "[rails-ai-context] extract_actions failed: #{e.message}" if ENV["DEBUG"]
         []
@@ -201,21 +204,23 @@ module RailsAiContext
       # it is what produced the leak above. A base class that only sets up
       # filters contributes nothing and the walk continues past it.
       #
-      # Returns the actions and whether any ancestor's source could be read at
-      # all, which is what tells an empty answer apart from an unknown one.
+      # Returns the actions and whether the walk passed an ancestor whose
+      # source it could not read, which is what tells an empty answer apart
+      # from one this app cannot see.
       def inherited_actions(ctrl)
-        read_any = false
+        unreadable = false
         klass = ctrl.superclass
         while klass&.name && !framework_controller?(klass) && !app_base_controller?(klass)
           src = read_source(klass)
           if src
-            read_any = true
             actions = extract_actions_from_source(src)
-            return [ actions, read_any ] if actions.any?
+            return [ actions, unreadable ] if actions.any?
+          else
+            unreadable = true
           end
           klass = klass.superclass
         end
-        [ [], read_any ]
+        [ [], unreadable ]
       end
 
       def framework_controller?(klass)

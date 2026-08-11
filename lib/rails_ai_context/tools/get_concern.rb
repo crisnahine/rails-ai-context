@@ -298,7 +298,10 @@ module RailsAiContext
         # pair of sections meant a concern outside them counted toward the
         # total and then appeared nowhere, which is a worse answer than the
         # undercount it replaced.
-        all_concerns.group_by { |c| c[:type] }.sort_by { |type, _| SECTION_ORDER.index(type) || SECTION_ORDER.size }
+        # Name breaks the tie: `sort_by` is not stable, so two types outside
+        # SECTION_ORDER would otherwise swap places between runs.
+        all_concerns.group_by { |c| c[:type] }
+                    .sort_by { |type, _| [ SECTION_ORDER.index(type) || SECTION_ORDER.size, type ] }
                     .each do |type, concerns|
           lines << "## #{type.camelize} Concerns (#{concerns.size})"
           concerns.each do |c|

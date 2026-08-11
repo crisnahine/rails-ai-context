@@ -48,6 +48,17 @@ RSpec.describe RailsAiContext::ConcernPaths do
         .to eq(%w[app/models/concerns])
     end
 
+    it "reads a configured path that is already absolute" do
+      outside = Dir.mktmpdir
+      FileUtils.mkdir_p(File.join(outside, "shared_concerns"))
+      allow(RailsAiContext.configuration).to receive(:concern_paths)
+        .and_return([ File.join(outside, "shared_concerns") ])
+
+      expect(described_class.resolve(tmpdir)).to eq([ File.join(outside, "shared_concerns") ])
+    ensure
+      FileUtils.remove_entry(outside) if outside
+    end
+
     it "skips a configured directory that does not exist" do
       allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[lib/nope])
 

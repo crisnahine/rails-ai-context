@@ -24,9 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subtracts inherited methods only as far as the nearest abstract ancestor:
   everything `ApplicationController` and its concerns define publicly came back
   as an action, so a two-route controller reported 19 of them. The actions of a
-  thin subclass now come from the source of the ancestor that defines them, and
-  reflection is left for the one case that has no source to read at all, a
-  controller from a gem or an engine. (#130)
+  thin subclass now come from the source of the ancestor that defines them.
+  Reflection is left for the case that has no source to read, an ancestor this
+  app does not own the file for, which is what a controller inheriting from a
+  gem or an engine looks like. (#130)
 
 - **`get_service_pattern` reports the service's entry point, not a nested
   class's.** Nesting a query builder inside the service that uses it is a

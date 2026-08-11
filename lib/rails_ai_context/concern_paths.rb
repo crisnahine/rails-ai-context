@@ -25,7 +25,9 @@ module RailsAiContext
         if configured.nil?
           Dir.glob(File.join(root, "app", "*", "concerns"))
         else
-          Array(configured).map { |rel| File.join(root, rel) }
+          # A path that is already absolute is taken as given; `File.join`
+          # would graft it onto the root and point at nothing.
+          Array(configured).map { |rel| File.absolute_path?(rel) ? rel : File.join(root, rel) }
         end
 
       dirs.uniq.select { |dir| Dir.exist?(dir) }.sort
