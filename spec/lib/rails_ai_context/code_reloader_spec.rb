@@ -20,16 +20,36 @@ RSpec.describe RailsAiContext::CodeReloader do
     # is set - and this app is exactly that shape (eager_load false,
     # enable_reloading false), which is why gating on eager_load reported a
     # reload that never happened.
-    it "is false when reloading is disabled, whatever eager_load says" do
+    # Rails 7.0 has no `enable_reloading` at all - stubbing it on the real
+    # config fails there, which is the whole reason the guard exists. Drive a
+    # stand-in config instead, one per supported spelling.
+    def app_with_config(config)
+      double("Rails.application", reloader: double("reloader"), config: config)
+    end
+
+    it "is false when reloading is disabled (7.1+ spelling)" do
       allow(RailsAiContext).to receive(:static_tier?).and_return(false)
-      allow(Rails.application.config).to receive(:eager_load).and_return(false)
-      allow(Rails.application.config).to receive(:enable_reloading).and_return(false)
+      config = double("config", enable_reloading: false, eager_load: false)
+      allow(Rails).to receive(:application).and_return(app_with_config(config))
       expect(described_class.reloadable?).to be(false)
     end
 
-    it "is true when reloading is enabled" do
+    it "is true when reloading is enabled (7.1+ spelling)" do
       allow(RailsAiContext).to receive(:static_tier?).and_return(false)
-      allow(Rails.application.config).to receive(:enable_reloading).and_return(true)
+      config = double("config", enable_reloading: true)
+      allow(Rails).to receive(:application).and_return(app_with_config(config))
+      expect(described_class.reloadable?).to be(true)
+    end
+
+    # Rails 7.0: only cache_classes exists, and it is the inverse.
+    it "falls back to cache_classes when enable_reloading is absent" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(false)
+      config = double("config", cache_classes: true)
+      allow(Rails).to receive(:application).and_return(app_with_config(config))
+      expect(described_class.reloadable?).to be(false)
+
+      config = double("config", cache_classes: false)
+      allow(Rails).to receive(:application).and_return(app_with_config(config))
       expect(described_class.reloadable?).to be(true)
     end
 
