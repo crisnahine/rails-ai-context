@@ -23,7 +23,10 @@ module RailsAiContext
         kwargs = normalize_detail(kwargs)
         Thread.current[:rails_ai_context_call_params] = session_params(kwargs)
 
-        append_note(super(**kwargs), invalid_detail_note(discarded))
+        # Held across the tool body: a concurrent live reload must not unload
+        # constants while this call is reading them.
+        result = RailsAiContext::CodeReloader.with_app_code { super(**kwargs) }
+        append_note(result, invalid_detail_note(discarded))
       rescue StandardError => e
         # A failed call must not leak its recorded params into the next
         # call's session entry.

@@ -15,16 +15,27 @@ RSpec.describe RailsAiContext::CodeReloader do
       expect(described_class.reloadable?).to be(false)
     end
 
-    it "is false when the app eager loads, because nothing is reloadable then" do
+    # eager_load is the wrong flag. With enable_reloading off, Rails registers
+    # no class_unload callback, so reload! reloads nothing however eager_load
+    # is set - and this app is exactly that shape (eager_load false,
+    # enable_reloading false), which is why gating on eager_load reported a
+    # reload that never happened.
+    it "is false when reloading is disabled, whatever eager_load says" do
       allow(RailsAiContext).to receive(:static_tier?).and_return(false)
-      allow(Rails.application.config).to receive(:eager_load).and_return(true)
+      allow(Rails.application.config).to receive(:eager_load).and_return(false)
+      allow(Rails.application.config).to receive(:enable_reloading).and_return(false)
       expect(described_class.reloadable?).to be(false)
     end
 
-    it "is true for a booted app that does not eager load" do
+    it "is true when reloading is enabled" do
       allow(RailsAiContext).to receive(:static_tier?).and_return(false)
-      allow(Rails.application.config).to receive(:eager_load).and_return(false)
+      allow(Rails.application.config).to receive(:enable_reloading).and_return(true)
       expect(described_class.reloadable?).to be(true)
+    end
+
+    it "agrees with Zeitwerk about whether this app can reload" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(false)
+      expect(described_class.reloadable?).to eq(Rails.autoloaders.main.reloading_enabled?)
     end
   end
 
@@ -53,6 +64,49 @@ RSpec.describe RailsAiContext::CodeReloader do
       allow(described_class).to receive(:reloadable?).and_return(true)
       allow(Rails.application.reloader).to receive(:reload!).and_raise(SyntaxError, "bad file")
       expect { expect(described_class.reload!).to be(false) }.not_to raise_error
+    end
+  end
+  describe ".with_app_code" do
+    it "runs the block exactly once when reloading is possible" do
+      allow(described_class).to receive(:reloadable?).and_return(true)
+      runs = 0
+      described_class.with_app_code { runs += 1 }
+      expect(runs).to eq(1)
+    end
+
+    it "runs the block exactly once when reloading is not possible" do
+      allow(described_class).to receive(:reloadable?).and_return(false)
+      runs = 0
+      described_class.with_app_code { runs += 1 }
+      expect(runs).to eq(1)
+    end
+
+    it "returns the block's value" do
+      allow(described_class).to receive(:reloadable?).and_return(false)
+      expect(described_class.with_app_code { :answer }).to eq(:answer)
+    end
+
+    # The sharing lock is what makes Dependencies.interlock able to see this
+    # call; without it a reload unloads constants mid-read.
+    it "takes the executor's lock when a reload could land" do
+      allow(described_class).to receive(:reloadable?).and_return(true)
+      expect(Rails.application.executor).to receive(:wrap).and_call_original
+      described_class.with_app_code { :ok }
+    end
+
+    it "does not take the lock when nothing can reload" do
+      allow(described_class).to receive(:reloadable?).and_return(false)
+      expect(Rails.application.executor).not_to receive(:wrap)
+      described_class.with_app_code { :ok }
+    end
+
+    it "lets an exception out rather than retrying the block" do
+      allow(described_class).to receive(:reloadable?).and_return(true)
+      runs = 0
+      expect {
+        described_class.with_app_code { runs += 1; raise ArgumentError, "boom" }
+      }.to raise_error(ArgumentError)
+      expect(runs).to eq(1)
     end
   end
 end

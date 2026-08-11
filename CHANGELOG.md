@@ -16,8 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stayed invisible for the life of the process, and the server told callers it
   did not exist. Routes were unaffected because `RouteIntrospector` already
   asked `routes_reloader.execute_if_updated`. Both change handlers now run
-  Rails' own reloader first, on booted non-eager-loading apps only, and a
-  failing reload leaves the process alive on its previous constants.
+  Rails' own reloader first, gated on `config.enable_reloading` (the flag that
+  decides whether Rails unloads anything - `eager_load` does not), and every
+  tool call now runs inside the executor so a reload cannot unload constants
+  while a call is reading them. A failing reload leaves the process alive.
 
 ### Added
 
