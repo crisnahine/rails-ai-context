@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.21.1] - 2026-08-12
+
+### Fixed
+
+- **A controller mounted on a gem's base class no longer reports the app's
+  helpers as actions.** 5.21.0 left reflection as the answer for a controller
+  with an ancestor whose source the app does not own, and `action_methods`
+  subtracts inherited methods only as far as the nearest abstract ancestor,
+  which is `ActionController::Base`. A gem controller mounted on the app's own
+  base class, which is what Doorkeeper's `base_controller` setting produces,
+  therefore arrived carrying every public method that base and its concerns
+  define: a controller serving 4 routes was reported with 16 entries, 13 of
+  them helpers such as `set_locale` and `with_read_replica`. The base
+  controller's own `action_methods` is exactly that set, so it is subtracted.
+  (#136)
+
 ## [5.21.0] - 2026-08-12
 
 ### Fixed
