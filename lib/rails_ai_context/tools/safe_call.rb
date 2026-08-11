@@ -25,23 +25,35 @@ module RailsAiContext
 
         # Held across the tool body: a concurrent live reload must not unload
         # constants while this call is reading them.
-        result = RailsAiContext::CodeReloader.with_app_code { super(**kwargs) }
-        append_note(result, invalid_detail_note(discarded))
-      rescue StandardError => e
-        # A failed call must not leak its recorded params into the next
-        # call's session entry.
-        Thread.current[:rails_ai_context_call_params] = nil
+        #
+        # The rescue sits INSIDE the block on purpose. `executor.wrap` reports
+        # anything that crosses it to the host app's error_reporter as
+        # unhandled, which would page a team over a failure this method turns
+        # into an ordinary isError result. Nothing escapes the block, so
+        # nothing is reported.
+        RailsAiContext::CodeReloader.with_app_code do
+          begin
+            append_note(super(**kwargs), invalid_detail_note(discarded))
+          rescue StandardError => e
+            # A failed call must not leak its recorded params into the next
+            # call's session entry.
+            Thread.current[:rails_ai_context_call_params] = nil
+            failure_response(e)
+          end
+        end
+      end
 
+      private
+
+      def failure_response(error)
         label = respond_to?(:tool_name) ? tool_name : name
-        origin = Array(e.backtrace).first.to_s
-        text = +"Tool #{label} failed: #{e.class}: #{e.message.to_s.lines.first&.strip}\n"
+        origin = Array(error.backtrace).first.to_s
+        text = +"Tool #{label} failed: #{error.class}: #{error.message.to_s.lines.first&.strip}\n"
         text << "At: #{origin}\n" unless origin.empty?
         text << "Recovery: retry with a narrower query (a single table, model, or " \
                 "controller), or run `rails-ai-context doctor` to check app health."
         MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
       end
-
-      private
 
       # The value the caller sent, when this tool takes a DetailLevel detail
       # and that value is not one of its levels.

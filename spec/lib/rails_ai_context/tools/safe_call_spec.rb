@@ -337,4 +337,28 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(response.content.first[:text]).to include("rails_spec_probe failed")
     end
   end
+  # executor.wrap reports anything crossing it to the host app's
+  # error_reporter as unhandled. A tool failure is handled here - it becomes an
+  # isError result - so letting it cross would page a team over a non-event.
+  describe "host error reporting" do
+    it "does not report a tool failure to the host app's error reporter" do
+      tool = build_tool do
+        def self.call(**_kwargs)
+          raise ArgumentError, "boom"
+        end
+      end
+      allow(RailsAiContext::CodeReloader).to receive(:reloadable?).and_return(true)
+
+      reported = []
+      subscriber = Object.new
+      subscriber.define_singleton_method(:report) { |error, **| reported << error }
+      Rails.error.subscribe(subscriber)
+
+      response = tool.call
+      expect(response.error?).to be(true)
+      expect(reported).to be_empty
+    ensure
+      Rails.error.unsubscribe(subscriber) if subscriber && Rails.error.respond_to?(:unsubscribe)
+    end
+  end
 end

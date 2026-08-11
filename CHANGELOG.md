@@ -18,8 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asked `routes_reloader.execute_if_updated`. Both change handlers now run
   Rails' own reloader first, gated on `config.enable_reloading` (the flag that
   decides whether Rails unloads anything - `eager_load` does not), and every
-  tool call now runs inside the executor so a reload cannot unload constants
-  while a call is reading them. A failing reload leaves the process alive.
+  tool call and every resource read now runs inside the executor so a reload
+  cannot unload constants while one is reading them. A failing reload leaves
+  the process alive, and a tool failure is not reported to the host app's
+  error reporter - it is handled here and returned as an isError result.
 
 ### Added
 

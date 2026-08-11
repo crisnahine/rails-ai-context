@@ -143,6 +143,13 @@ module RailsAiContext
       # the handler's return value into the JSON-RPC response without renaming
       # keys, so snake_case would leak to clients as-is.
       def handle_read(params)
+        # Resource reads introspect just like tool calls do, and they bypassed
+        # SafeCall entirely - so a live reload could unload constants while one
+        # was reading them and hand back a short list with nothing raised.
+        RailsAiContext::CodeReloader.with_app_code { read_resource(params) }
+      end
+
+      def read_resource(params)
         uri = params[:uri]
 
         # The two schemes are historical; accept either one for every
