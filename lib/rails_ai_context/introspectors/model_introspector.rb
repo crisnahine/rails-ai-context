@@ -222,7 +222,10 @@ module RailsAiContext
         model.validators.map do |validator|
           {
             kind: validator.kind.to_s,
-            attributes: validator.attributes.map(&:to_s),
+            # `validates_with` registers a bare ActiveModel::Validator, which
+            # has no #attributes - only EachValidator does. Calling it blind
+            # replaced the whole model's answer with one error line.
+            attributes: validator.respond_to?(:attributes) ? Array(validator.attributes).map(&:to_s) : [],
             options: sanitize_options(validator.options)
           }
         end
@@ -332,9 +335,15 @@ module RailsAiContext
       end
 
       def extract_callbacks_from_ast(source_data)
-        source_data[:callbacks].each_with_object({}) do |cb, hash|
-          type = cb[:type].to_s
-          (hash[type] ||= []) << cb[:method]
+        group_callbacks_by_type(source_data[:callbacks])
+      end
+
+      # One shape for both tiers: { "before_validation" => ["normalize"] }.
+      def group_callbacks_by_type(callbacks)
+        Array(callbacks).each_with_object({}) do |cb, hash|
+          next unless cb.is_a?(Hash) && cb[:type]
+
+          (hash[cb[:type].to_s] ||= []) << cb[:method]
         end
       end
 
@@ -576,7 +585,12 @@ module RailsAiContext
           validations: data[:validations],
           scopes: data[:scopes],
           enums: data[:enums],
-          callbacks: data[:callbacks],
+          # Same shape as the booted tier: a Hash keyed by callback type. The
+          # listener hands back a flat Array, and every consumer filters on
+          # `callbacks.is_a?(Hash)` - so passing it through rendered "No models
+          # with callbacks found" and then raised a TypeError on a Hash lookup
+          # against an Array.
+          callbacks: group_callbacks_by_type(data[:callbacks]),
           macros: data[:macros],
           methods: data[:methods]
         }
@@ -641,7 +655,12 @@ module RailsAiContext
           associations: data[:associations],
           validations: data[:validations],
           scopes: data[:scopes],
-          callbacks: data[:callbacks],
+          # Same shape as the booted tier: a Hash keyed by callback type. The
+          # listener hands back a flat Array, and every consumer filters on
+          # `callbacks.is_a?(Hash)` - so passing it through rendered "No models
+          # with callbacks found" and then raised a TypeError on a Hash lookup
+          # against an Array.
+          callbacks: group_callbacks_by_type(data[:callbacks]),
           methods: data[:methods]
         }
         collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)

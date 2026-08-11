@@ -209,6 +209,32 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
     # Asserting on the rendered output let a silent inversion ship: a boolean
     # flag consumed no value, so `--app-only false` set app_only to true and
     # dropped the "false" token. Read the parsed params instead.
+    # `validate --files a.rb b.rb` kept only a.rb and reported "1/1 files
+    # passed" - a validation tool answering "pass" for a set containing a
+    # broken file.
+    describe "array parameters" do
+      def parse(args)
+        described_class.new("validate", args).send(:build_kwargs)
+      end
+
+      it "takes every following token, not just the first" do
+        expect(parse([ "--files", "a.rb", "b.rb", "c.rb" ])).to include(files: %w[a.rb b.rb c.rb])
+      end
+
+      it "stops at the next flag" do
+        expect(parse([ "--files", "a.rb", "b.rb", "--level", "syntax" ]))
+          .to include(files: %w[a.rb b.rb], level: "syntax")
+      end
+
+      it "still accepts the comma-separated form" do
+        expect(parse([ "--files", "a.rb,b.rb" ])).to include(files: %w[a.rb b.rb])
+      end
+
+      it "handles a single file" do
+        expect(parse([ "--files", "a.rb" ])).to include(files: %w[a.rb])
+      end
+    end
+
     describe "boolean values" do
       def parse(args)
         described_class.new("routes", args).send(:build_kwargs)

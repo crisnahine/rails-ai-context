@@ -520,4 +520,53 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(result["User"][:associations]).not_to be_empty
     end
   end
+  # `validates_with` registers an ActiveModel::Validator, which has no
+  # #attributes - only EachValidator does. One of them anywhere on a model
+  # replaced the entire response with "Error inspecting X".
+  describe "a model using validates_with" do
+    before do
+      stub_const("QaShapeValidator", Class.new(ActiveModel::Validator) do
+        def validate(record); end
+      end)
+      Comment.validates_with QaShapeValidator
+    end
+
+    after { Comment.clear_validators! }
+
+    it "still returns the model instead of one error line" do
+      result = described_class.new(Rails.application).call
+      expect(result["Comment"]).to be_a(Hash)
+      expect(result["Comment"][:error]).to be_nil
+    end
+
+    it "reports the validator with no attributes rather than raising" do
+      result = described_class.new(Rails.application).call
+      kinds = Array(result["Comment"][:validations]).map { |v| v[:kind] }
+      expect(kinds).to include(a_string_matching(/qa_shape|QaShape/i))
+    end
+  end
+  # The two tiers used to hand back different types for one key: a Hash from
+  # the booted path, a flat Array from the listener. Every consumer filters on
+  # `is_a?(Hash)`, so static-tier callbacks vanished and a Hash lookup against
+  # the Array raised TypeError.
+  describe "#static_call callbacks shape" do
+    it "groups callbacks by type, like the booted tier" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            before_validation :normalize_title
+            after_create_commit :notify_subscribers
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        callbacks = result["Post"][:callbacks]
+
+        expect(callbacks).to be_a(Hash)
+        expect(callbacks["before_validation"]).to include("normalize_title")
+        expect(callbacks["after_create_commit"]).to include("notify_subscribers")
+      end
+    end
+  end
 end

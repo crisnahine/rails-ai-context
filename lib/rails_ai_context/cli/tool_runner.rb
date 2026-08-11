@@ -232,6 +232,24 @@ module RailsAiContext
                 next
               end
 
+              # An array param takes every following token, not just the
+              # first. `validate --files a.rb b.rb` used to keep a.rb, drop
+              # b.rb, and report "1/1 files passed" - a pass for a set holding
+              # a broken file.
+              if prop[:type] == "array"
+                values = []
+                j = i + 1
+                while j < args.size && !args[j].start_with?("--")
+                  values << args[j]
+                  j += 1
+                end
+                unless values.empty?
+                  result[key] = values.size == 1 ? coerce_value(values.first, prop) : values
+                  i = j
+                  next
+                end
+              end
+
               value = (i + 1 < args.size) ? args[i + 1] : nil
               if value && !value.start_with?("--")
                 result[key] = coerce_value(value, prop)

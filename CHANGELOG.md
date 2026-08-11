@@ -23,6 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the process alive, and a tool failure is not reported to the host app's
   error reporter - it is handled here and returned as an isError result.
 
+- **A `validates_with` validator no longer replaces the whole model answer.**
+  `ActiveModel::Validator` has no `#attributes` - only `EachValidator` does -
+  so one of them anywhere on a model turned `rails_get_model_details`,
+  `rails_get_callbacks` and `rails://models/X` into a single
+  "Error inspecting X" line. (#121)
+- **Static-tier callbacks are reported.** The two tiers handed back different
+  types for one key: a Hash keyed by callback type when booted, a flat Array
+  from the listener otherwise. Every consumer filters on `is_a?(Hash)`, so
+  `--no-boot` answered "No models with callbacks found" for an app full of
+  them, and `--model X --no-boot` raised `TypeError` on a Hash lookup against
+  an Array. (#122)
+- **`validate --files a.rb b.rb` validates every file.** Array parameters
+  consumed only the first token, so the rest were dropped silently and the
+  summary read "1/1 files passed" for a set containing a broken file. (#124)
+
 ### Added
 
 - **The static tier reads `config.api_only`.** Without a booted app the view
