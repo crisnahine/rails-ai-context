@@ -233,6 +233,29 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       it "handles a single file" do
         expect(parse([ "--files", "a.rb" ])).to include(files: %w[a.rb])
       end
+
+      # docs/CLI.md teaches both spellings; fixing only the space form left
+      # the equals form still dropping every file after the first.
+      it "takes every token after the equals form too" do
+        expect(parse([ "--files=a.rb", "b.rb" ])).to include(files: %w[a.rb b.rb])
+      end
+
+      # The comma form is the documented one. Mixing it with a second token
+      # used to fabricate a path no filesystem could hold.
+      it "splits commas in every collected token, not just a lone one" do
+        expect(parse([ "--files", "a.rb,b.rb", "c.rb" ])).to include(files: %w[a.rb b.rb c.rb])
+      end
+
+      it "reads a bare flag as no files rather than true" do
+        expect(parse([ "--files" ])).to include(files: [])
+      end
+
+      # Array params sit next to the rake-style key=value form. Consuming
+      # every non-flag token swallowed the next parameter whole.
+      it "stops at a rake-style key=value token" do
+        parsed = described_class.new("context", [ "--include", "callbacks", "model=Post" ]).send(:build_kwargs)
+        expect(parsed).to include(include: %w[callbacks], model: "Post")
+      end
     end
 
     describe "boolean values" do

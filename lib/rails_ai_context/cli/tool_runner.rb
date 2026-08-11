@@ -211,7 +211,17 @@ module RailsAiContext
             if arg.include?("=")
               key, value = arg.sub("--", "").split("=", 2)
               key = key.tr("-", "_").to_sym
-              result[key] = coerce_value(value, properties[key] || {})
+              prop = properties[key] || {}
+              if prop[:type] == "array"
+                # `--files=a.rb b.rb` is the same call as `--files a.rb b.rb`;
+                # honouring only one of the two spellings docs/CLI.md teaches
+                # left the other still dropping every file after the first.
+                trailing = collect_array_values(args, i + 1)
+                result[key] = Array(coerce_value(value, prop)) + trailing
+                i += 1 + values_consumed(args, i + 1)
+                next
+              end
+              result[key] = coerce_value(value, prop)
             else
               key = arg.sub("--", "").tr("-", "_").to_sym
               prop = properties[key] || {}
@@ -232,22 +242,22 @@ module RailsAiContext
                 next
               end
 
-              # An array param takes every following token, not just the
-              # first. `validate --files a.rb b.rb` used to keep a.rb, drop
-              # b.rb, and report "1/1 files passed" - a pass for a set holding
-              # a broken file.
               if prop[:type] == "array"
-                values = []
-                j = i + 1
-                while j < args.size && !args[j].start_with?("--")
-                  values << args[j]
-                  j += 1
-                end
+                values = collect_array_values(args, i + 1)
                 unless values.empty?
-                  result[key] = values.size == 1 ? coerce_value(values.first, prop) : values
-                  i = j
+                  result[key] = values
+                  i += 1 + values_consumed(args, i + 1)
                   next
                 end
+              end
+
+              # A bare `--files` with nothing after it is a mistake, not a
+              # request for `files: true` - an array param holding a Boolean
+              # reaches the tool as a type it never accepts.
+              if prop[:type] == "array"
+                result[key] = []
+                i += 1
+                next
               end
 
               value = (i + 1 < args.size) ? args[i + 1] : nil
@@ -274,6 +284,21 @@ module RailsAiContext
         end
 
         result
+      end
+
+      # Tokens belonging to an array flag: everything up to the next flag,
+      # stopping at a rake-style `key=value` token so `--include a model=Post`
+      # does not swallow the second parameter. Each token is still
+      # comma-split, so the documented `a.rb,b.rb` form keeps working and
+      # mixing the two spellings does not fabricate a path.
+      def collect_array_values(args, from)
+        args[from..].to_a
+            .take_while { |a| !a.start_with?("--") && !a.include?("=") }
+            .flat_map { |a| Array(coerce_value(a, { type: "array" })) }
+      end
+
+      def values_consumed(args, from)
+        args[from..].to_a.take_while { |a| !a.start_with?("--") && !a.include?("=") }.size
       end
 
       # Coerce a string value to the type specified in the JSON Schema property.
