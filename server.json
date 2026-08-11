@@ -7,7 +7,7 @@
     "url": "https://github.com/crisnahine/rails-ai-context",
     "source": "github"
   },
-  "version": "5.20.1",
+  "version": "5.20.2",
   "packages": [
     {
       "registryType": "mcpb",
