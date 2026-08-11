@@ -215,11 +215,22 @@ RSpec.describe RailsAiContext::Server do
       s.send(:rack_handler_options, handler, config)
     end
 
+    # Resolved the way start_http does, not through `require "rackup"`: Rails
+    # 7.0 caps rack below 3, where rackup is not a separate gem and that
+    # require raises. The production path already falls back to Rack::Handler,
+    # and puma registers itself with whichever of the two is present.
+    def resolved_handler
+      s.send(:default_rack_handler)
+    end
+
     before { allow($stderr).to receive(:puts) }
 
+    it "resolves Puma as the handler" do
+      expect(s.send(:puma_handler?, resolved_handler)).to be true
+    end
+
     it "pins Puma to one process" do
-      require "rackup"
-      expect(options_for(Rackup::Handler.get(:puma)))
+      expect(options_for(resolved_handler))
         .to eq(Host: config.http_bind, Port: config.http_port, workers: 0, config_files: [ "-" ])
     end
 
@@ -230,8 +241,7 @@ RSpec.describe RailsAiContext::Server do
     end
 
     it "says that it dropped the app's puma config" do
-      require "rackup"
-      options_for(Rackup::Handler.get(:puma))
+      options_for(resolved_handler)
       expect($stderr).to have_received(:puts).with(/single mode/)
     end
 
@@ -281,16 +291,16 @@ RSpec.describe RailsAiContext::Server do
       end
 
       it "runs one process despite the app's config" do
-        expect(resolved(options_for(Rackup::Handler.get(:puma)))[:workers]).to eq(0)
+        expect(resolved(options_for(resolved_handler))[:workers]).to eq(0)
       end
 
       it "runs one process despite WEB_CONCURRENCY" do
-        options = options_for(Rackup::Handler.get(:puma))
+        options = options_for(resolved_handler)
         expect(resolved(options, env: { "WEB_CONCURRENCY" => "4" })[:workers]).to eq(0)
       end
 
       it "does not take over the app's pidfile" do
-        expect(resolved(options_for(Rackup::Handler.get(:puma)))[:pidfile]).to be_nil
+        expect(resolved(options_for(resolved_handler))[:pidfile]).to be_nil
       end
     end
   end
