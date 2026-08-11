@@ -6,12 +6,26 @@ module RailsAiContext
     # versioning patterns, rate limiting.
     class ApiIntrospector
       extend StaticTier
-      static_tier :runtime_only
+      static_tier :alternate_source
 
       attr_reader :app
 
       def initialize(app)
         @app = app
+      end
+
+      # Everything but api_only needs a booted app, but api_only itself is a
+      # plain assignment in config/application.rb - and the view tools already
+      # read it there. Leaving this section wholly unavailable meant one
+      # process answering "this is an API-only app" from get_stimulus and
+      # "cannot say" from get_api.
+      def static_call
+        {
+          api_only: AppKind.api_only?(app.root),
+          unavailable_sections: StaticTier.unavailable_reason
+        }
+      rescue StandardError
+        { unavailable: StaticTier.unavailable_reason }
       end
 
       def call

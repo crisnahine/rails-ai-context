@@ -85,6 +85,19 @@ RSpec.describe RailsAiContext::AppKind do
       RUBY
     end
 
+    # The reason docs/INTROSPECTORS.md puts assignments in AST territory: a
+    # regex has to hand-roll what the parser already knows. A string that
+    # merely contains the assignment is not one.
+    it "is not fooled by the text appearing inside a string" do
+      expect(app_with(<<~'RUBY')).to be(false)
+        module Dummy
+          class Application < Rails::Application
+            BANNER = "set config.api_only = true to go headless"
+          end
+        end
+      RUBY
+    end
+
     it "is false when there is no application.rb at all" do
       Dir.mktmpdir { |dir| expect(described_class.api_only?(dir)).to be(false) }
     end

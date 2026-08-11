@@ -28,19 +28,27 @@ module RailsAiContext
       !!content&.match?(/^\s*gem\s+["']mongoid["']/)
     end
 
-    # Leading `#` excluded, so the commented example Rails ships with does not
-    # read as a declaration.
-    API_ONLY_ASSIGNMENT = /^\s*[^#\n]*config\.api_only\s*=\s*(true|false)/
-
     # An API-only app has no view layer, and saying "no Stimulus controllers
     # found" about one invites an agent to add some. The flag is written in
     # config/application.rb, so this answer needs no booted app.
+    #
+    # Read from the AST, not a regex: `config.api_only = true` is an
+    # assignment, which docs/INTROSPECTORS.md puts squarely in AST territory,
+    # and ConfigAssignmentListener already reports exactly this shape. A regex
+    # also has to hand-roll what the parser knows for free - comments, strings
+    # and heredocs that merely contain the text.
     def api_only?(root)
       path = File.join(root.to_s, "config", "application.rb")
       return false unless File.exist?(path)
+      return false unless RailsAiContext::SafeFile.read(path)
 
-      content = RailsAiContext::SafeFile.read(path)
-      content&.match(API_ONLY_ASSIGNMENT)&.captures&.first == "true"
+      walked = Introspectors::SourceIntrospector.walk(
+        path, { config: Introspectors::Listeners::ConfigAssignmentListener }
+      )
+      hit = Array(walked[:config]).find { |entry| entry[:path] == [ :api_only ] }
+      !hit.nil? && hit[:value] == true
+    rescue StandardError, ScriptError
+      false
     end
   end
 end
