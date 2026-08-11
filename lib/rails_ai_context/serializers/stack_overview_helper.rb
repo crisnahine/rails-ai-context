@@ -213,6 +213,20 @@ module RailsAiContext
         $stderr.puts "[rails-ai-context] Before actions scan skipped: #{e.message}" if ENV["DEBUG"]
         []
       end
+
+      # `static_parse` is the marker SchemaIntrospector sets when it read
+      # db/schema.rb instead of the connection. It is an internal detail, and
+      # printing it as the database taught every generated file that the app
+      # runs on something called static_parse. onboard already substitutes the
+      # live adapter; the generated files did not.
+      def database_adapter_label(schema)
+        adapter = schema[:adapter]
+        return adapter unless adapter.nil? || adapter == "static_parse" || adapter == "unknown"
+
+        config = context[:config]
+        live = SectionGuard.usable?(config) ? (config[:database_adapter] || config[:adapter]) : nil
+        live && !live.to_s.empty? ? live : "unknown"
+      end
     end
   end
 end

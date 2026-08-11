@@ -179,7 +179,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       it "still works when no jobs exist but channels do" do
         result = described_class.call
         text = result.content.first[:text]
-        expect(text).not_to include("No app/jobs/ directory found")
+        expect(text).not_to include("No app/jobs/ directory")
         expect(text).to include("ChatChannel")
       end
     end
@@ -194,7 +194,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       it "returns the no-async-stuff message" do
         result = described_class.call
         text = result.content.first[:text]
-        expect(text).to include("No app/jobs/ directory found")
+        expect(text).to include("No app/jobs/ directory")
         expect(text).to include("no Action Cable channels detected")
       end
     end
@@ -219,15 +219,15 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       it "says the directory exists but has no job classes, not that it's missing" do
         result = described_class.call
         text = result.content.first[:text]
-        expect(text).not_to include("No app/jobs/ directory found")
-        expect(text).to include("app/jobs/ exists but has no job classes beyond ApplicationJob")
+        expect(text).not_to include("No app/jobs/ directory")
+        expect(text).to include("No job classes in app/jobs/ beyond ApplicationJob")
       end
 
       it "gives the same truthful message for a specific job lookup" do
         result = described_class.call(job: "SendWelcomeEmail")
         text = result.content.first[:text]
-        expect(text).not_to include("No app/jobs/ directory found")
-        expect(text).to include("app/jobs/ exists but has no job classes beyond ApplicationJob")
+        expect(text).not_to include("No app/jobs/ directory")
+        expect(text).to include("No job classes in app/jobs/ beyond ApplicationJob")
       end
     end
   end

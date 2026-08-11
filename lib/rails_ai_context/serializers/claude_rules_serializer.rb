@@ -43,7 +43,7 @@ module RailsAiContext
         # Compact counts - gems and architecture are already in the root file (CLAUDE.md/AGENTS.md)
         schema = context[:schema]
         if SectionGuard.usable?(schema)
-          lines << "- Database: #{schema[:adapter]} - #{count_phrase(schema[:total_tables], "table")}"
+          lines << "- Database: #{database_adapter_label(schema)} - #{count_phrase(schema[:total_tables], "table")}"
         end
 
         models = context[:models]

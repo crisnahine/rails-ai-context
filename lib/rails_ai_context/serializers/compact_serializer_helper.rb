@@ -26,7 +26,7 @@ module RailsAiContext
         schema = context[:schema]
         if SectionGuard.usable?(schema)
           tables = schema[:total_tables]
-          lines << "- Database: #{schema[:adapter]} - #{count_phrase(tables, "table")}"
+          lines << "- Database: #{database_adapter_label(schema)} - #{count_phrase(tables, "table")}"
         end
 
         models = context[:models]

@@ -34,6 +34,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--no-boot` answered "No models with callbacks found" for an app full of
   them, and `--model X --no-boot` raised `TypeError` on a Hash lookup against
   an Array. (#122)
+- **`get_mailers` reports the actions Rails calls actions.** It listed
+  `instance_methods(false)`, which includes ActiveSupport's generated
+  `_run_*_callbacks` and any public helper, so an abstract `ApplicationMailer`
+  was reported as having deliverable actions. It now asks
+  `action_methods`. (#126)
+- **Generated context files no longer print `Database: static_parse`.** That is
+  the internal marker for "read from db/schema.rb, not the connection";
+  `onboard` already substituted the live adapter and the serializers did
+  not. (#125)
+- **`get_job_pattern` says what it checked.** "This app may not use background
+  jobs" was a claim about the whole app drawn from one directory, and apps
+  keeping Sidekiq workers in `app/workers/` were told they have none. (#120)
+- **`validate`'s empty-files message advises a syntax the CLI accepts.** It
+  recommended `files:["..."]`, which the CLI reads as a literal filename. (#124)
 - **`validate --files a.rb b.rb` validates every file.** Array parameters
   consumed only the first token, so the rest were dropped silently and the
   summary read "1/1 files passed" for a set containing a broken file. (#124)

@@ -48,7 +48,16 @@ module RailsAiContext
       VALID_LEVELS = %w[syntax rails].freeze
 
       def self.call(files:, level: "syntax", server_context: nil)
-        return text_response("No files provided. Pass file paths relative to Rails root (e.g. files:[\"app/models/post.rb\"]).") if files.nil? || files.empty?
+        # Both spellings, because the JSON form this used to suggest is not
+        # something the CLI accepts - following the advice produced
+        # "file not found" with the literal brackets in the name.
+        if files.nil? || files.empty?
+          return text_response(
+            "No files provided. Pass paths relative to Rails root - " \
+            "CLI: `--files app/models/post.rb app/models/user.rb`, " \
+            "MCP: `files: [\"app/models/post.rb\"]`."
+          )
+        end
         return text_response("Too many files (#{files.size}). Maximum is #{max_files} per call.") if files.size > max_files
         return text_response("Unknown level: '#{level}'. Valid values: #{VALID_LEVELS.join(', ')}") unless VALID_LEVELS.include?(level)
 
