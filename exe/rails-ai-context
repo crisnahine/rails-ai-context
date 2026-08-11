@@ -235,9 +235,7 @@ class RailsAiContextCLI < Thor
         exit 1
       end
 
-      # The gem, not the app: the identity table and the selection record
-      # live in it, and the prompts below read both. Still no Rails boot.
-      require_gem_without_app!
+      require_install_files!
 
       # --- Read previous selection (before prompts) ---
       previous_tools = read_previous_ai_tools
@@ -250,9 +248,6 @@ class RailsAiContextCLI < Thor
       cleanup_removed_tools(previous_tools, ai_tools) if previous_tools&.any?
 
       # --- One-time v5.0.0 legacy UI-pattern files cleanup prompt ---
-      # Boot Rails lazily: we need the gem loaded to access LegacyCleanup.
-      # But we avoid booting Rails here — require just the legacy_cleanup file.
-      require_relative "../lib/rails_ai_context/legacy_cleanup"
       ::RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Dir.pwd)
 
       # --- Record the selection (YAML, plus the initializer line) ---
@@ -728,6 +723,29 @@ class RailsAiContextCLI < Thor
         spec.full_require_paths.each { |p| $LOAD_PATH.unshift(p) unless $LOAD_PATH.include?(p) }
       end
       require "rails_ai_context"
+    end
+
+    # What `init` needs before it boots the app, loaded file by file rather
+    # than through the gem entry. The entry pulls in ActiveSupport and
+    # Zeitwerk, and require_gem_without_app! splices the newest installed
+    # framework paths in to get them - so booting the app afterwards leaves it
+    # running one framework tree with another already loaded, and Rails' own
+    # autoloader stops resolving implicit namespaces:
+    #
+    #   LoadError: cannot load such file -- <app>/app/channels/application_cable
+    #
+    # Every file here stands alone: no ActiveSupport, no Zeitwerk, no Rails.
+    def require_install_files!
+      %w[
+        install/ai_tool install/selection_record install/cleanup
+        mcp_config_generator legacy_cleanup
+      ].each { |file| require_relative "../lib/rails_ai_context/#{file}" }
+
+      return if ::RailsAiContext.respond_to?(:log_warn)
+
+      # Defined in the entry file, which is the thing that must not load yet.
+      # With no Rails in the process it only writes to stderr.
+      ::RailsAiContext.define_singleton_method(:log_warn) { |message| $stderr.puts(message) }
     end
 
     # Static tier: the gem loads standalone (no app constants), introspection
