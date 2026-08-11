@@ -165,6 +165,120 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
+    context "with services that nest helper classes" do
+      let(:tmpdir) { Dir.mktmpdir }
+      let(:services_dir) { File.join(tmpdir, "app", "services") }
+
+      before do
+        FileUtils.mkdir_p(services_dir)
+
+        File.write(File.join(services_dir, "account_search_service.rb"), <<~RUBY)
+          class AccountSearchService < BaseService
+            class QueryBuilder
+              def build
+                :query
+              end
+
+              private
+
+              def clause
+                :clause
+              end
+            end
+
+            def call(query, account = nil, options = {})
+              QueryBuilder.new.build
+            end
+          end
+        RUBY
+
+        File.write(File.join(services_dir, "notify_service.rb"), <<~RUBY)
+          class NotifyService < BaseService
+            class BaseCondition
+              private
+
+              def check
+                true
+              end
+            end
+
+            class DropCondition < BaseCondition
+            end
+
+            class FilterCondition < BaseCondition
+            end
+
+            def call(recipient, type, activity, **options)
+              recipient
+            end
+          end
+        RUBY
+
+        File.write(File.join(services_dir, "payloadable.rb"), <<~RUBY)
+          module Payloadable
+            def serialize_payload(record, serializer, options = {})
+              record
+            end
+
+            def signing_enabled?
+              true
+            end
+          end
+        RUBY
+
+        FileUtils.mkdir_p(File.join(services_dir, "admin"))
+        File.write(File.join(services_dir, "admin", "suspend_service.rb"), <<~RUBY)
+          module Admin
+            class SuspendService < BaseService
+              def call(account)
+                account
+              end
+            end
+          end
+        RUBY
+
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "reports the outer class entry point, not a nested class's method" do
+        result = described_class.call(detail: "standard")
+        text = result.content.first[:text]
+        expect(text).to include("**AccountSearchService**")
+        expect(text).to match(/\*\*AccountSearchService\*\*[^\n]*call\(query/)
+        expect(text).not_to match(/\*\*AccountSearchService\*\*[^\n]*build/)
+      end
+
+      it "does not let a nested class's private modifier hide the outer entry point" do
+        result = described_class.call(detail: "standard")
+        text = result.content.first[:text]
+        expect(text).to match(/\*\*NotifyService\*\*[^\n]*call\(recipient/)
+        expect(text).not_to match(/\*\*NotifyService\*\*[^\n]*none/)
+      end
+
+      it "still lists every public method of a bare module" do
+        result = described_class.call(detail: "standard")
+        text = result.content.first[:text]
+        expect(text).to match(/\*\*Payloadable\*\*[^\n]*serialize_payload/)
+        expect(text).to match(/\*\*Payloadable\*\*[^\n]*signing_enabled\?/)
+      end
+
+      it "keeps the entry point of a module-namespaced service" do
+        result = described_class.call(detail: "standard")
+        text = result.content.first[:text]
+        expect(text).to match(/\*\*SuspendService\*\*[^\n]*call\(account\)/)
+      end
+
+      it "reports nested-class methods for a single service too" do
+        result = described_class.call(service: "AccountSearchService")
+        text = result.content.first[:text]
+        expect(text).to include("call(query")
+        expect(text).not_to include("- `build`")
+      end
+    end
+
     context "with empty services directory" do
       let(:tmpdir) { Dir.mktmpdir }
 

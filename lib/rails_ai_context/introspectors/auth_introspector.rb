@@ -132,8 +132,13 @@ module RailsAiContext
         # Pundit
         policies_dir = File.join(root, "app/policies")
         if Dir.exist?(policies_dir)
+          # Named from the path relative to app/policies, not the basename:
+          # Zeitwerk makes admin/collection_policy.rb `Admin::CollectionPolicy`,
+          # and demodulizing it collided with the top-level policy of the same
+          # base name, so one name was listed twice and the other class could
+          # not be reached from the context at all.
           policies = Dir.glob(File.join(policies_dir, "**/*.rb")).map do |f|
-            File.basename(f, ".rb").camelize
+            f.sub("#{policies_dir}/", "").delete_suffix(".rb").camelize
           end.sort
           authz[:pundit] = policies if policies.any?
         end

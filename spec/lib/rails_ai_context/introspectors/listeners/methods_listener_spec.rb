@@ -156,4 +156,87 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
     expect(inner_pub[:visibility]).to eq(:private)
     expect(another[:visibility]).to eq(:private)
   end
+
+  describe "signature" do
+    it "keeps parameter defaults as written" do
+      results = parse_and_dispatch("class S\n  def call(query, account = nil, options = {})\n  end\nend\n")
+      expect(results.first[:signature]).to eq("call(query, account = nil, options = {})")
+    end
+
+    it "prefixes a class method with self." do
+      results = parse_and_dispatch("class S\n  def self.call(a)\n  end\nend\n")
+      expect(results.first[:signature]).to eq("self.call(a)")
+    end
+
+    it "omits the parens when a method takes no parameters" do
+      results = parse_and_dispatch("class S\n  def call\n  end\nend\n")
+      expect(results.first[:signature]).to eq("call")
+    end
+
+    it "folds a parameter list split over several lines onto one line" do
+      source = <<~RUBY
+        class S
+          def call(
+            recipient,
+            options = {}
+          )
+          end
+        end
+      RUBY
+      expect(parse_and_dispatch(source).first[:signature]).to eq("call(recipient, options = {})")
+    end
+
+    it "keeps parameters written without parens" do
+      results = parse_and_dispatch("class S\n  def call a, b\n  end\nend\n")
+      expect(results.first[:signature]).to eq("call(a, b)")
+    end
+  end
+
+  describe "owner" do
+    it "names the enclosing class of each method, outermost first" do
+      source = <<~RUBY
+        class AccountSearchService
+          class QueryBuilder
+            def build
+            end
+          end
+
+          def call
+          end
+        end
+      RUBY
+      results = parse_and_dispatch(source)
+      expect(results.find { |m| m[:name] == "build" }[:owner]).to eq(%w[AccountSearchService QueryBuilder])
+      expect(results.find { |m| m[:name] == "call" }[:owner]).to eq(%w[AccountSearchService])
+    end
+
+    it "records a module namespace as its own level" do
+      source = <<~RUBY
+        module Admin
+          class SuspendService
+            def call
+            end
+          end
+        end
+      RUBY
+      results = parse_and_dispatch(source)
+      expect(results.first[:owner]).to eq(%w[Admin SuspendService])
+    end
+
+    it "joins the compact form to the same constant as the nested form" do
+      source = <<~RUBY
+        class Admin::SuspendService
+          def call
+          end
+        end
+      RUBY
+      results = parse_and_dispatch(source)
+      expect(results.first[:owner].join("::")).to eq("Admin::SuspendService")
+    end
+
+    it "is empty for a method defined at the top level" do
+      results = parse_and_dispatch("def bare_helper\nend\n")
+      expect(results.first[:owner]).to eq([])
+    end
+  end
 end

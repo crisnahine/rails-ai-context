@@ -230,7 +230,7 @@ module RailsAiContext
 
     # Search and file discovery
     attr_accessor :search_extensions      # File extensions for Ruby fallback search (default: rb,js,erb,yml,yaml,json)
-    attr_accessor :concern_paths          # Where to look for concern source files (default: app/models/concerns)
+    attr_accessor :concern_paths          # Where to look for concern source files (default: nil, discovers app/*/concerns)
 
     # Frontend framework detection (optional overrides - auto-detected if nil)
     attr_accessor :frontend_paths         # User-declared frontend dirs (e.g. ["app/frontend", "../web-client"])
@@ -307,7 +307,7 @@ module RailsAiContext
       @ai_tools                 = nil
       @tool_mode                = :mcp
       @search_extensions        = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
-      @concern_paths            = %w[app/models/concerns app/controllers/concerns]
+      @concern_paths            = nil
       @frontend_paths           = nil
       @extra_app_paths          = []
       @query_timeout            = 5

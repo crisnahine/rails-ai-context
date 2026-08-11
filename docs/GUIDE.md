@@ -1285,8 +1285,10 @@ if defined?(RailsAiContext)
     # File extensions for Ruby fallback search
     # config.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
 
-    # Where to look for concern source files
-    # config.concern_paths = %w[app/models/concerns app/controllers/concerns]
+    # Where to look for concern source files. Left unset, every
+    # app/*/concerns directory is discovered. Setting this replaces
+    # that list, so it can narrow as well as reach outside app/.
+    # config.concern_paths = %w[app/models/concerns lib/concerns]
 
     # --- Live reload ---
 
@@ -1352,7 +1354,7 @@ end
 | `excluded_filters` | Array | `verify_authenticity_token`, etc. | Framework filter names hidden from controller output |
 | `excluded_middleware` | Array | standard Rails middleware | Default middleware hidden from config output |
 | `search_extensions` | Array | `rb js erb yml yaml json ts tsx vue svelte haml slim` | File extensions for Ruby fallback search |
-| `concern_paths` | Array | `app/models/concerns app/controllers/concerns` | Where to look for concern source files |
+| `concern_paths` | Array | `nil` (discovers `app/*/concerns`) | Where to look for concern source files. Setting it replaces discovery |
 
 ### Root file generation
 

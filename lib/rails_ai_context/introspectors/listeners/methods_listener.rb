@@ -14,27 +14,32 @@ module RailsAiContext
           @in_singleton_class = false
           @singleton_depth = 0
           @inline_visibility_stack = [ {} ] # stack of { method_name => visibility }
+          @owner_stack = []
         end
 
         # Reset visibility when entering a new class/module scope
         def on_class_node_enter(node)
           @visibility_stack.push(:public)
           @inline_visibility_stack.push({})
+          @owner_stack.push(constant_path_string(node.constant_path))
         end
 
         def on_class_node_leave(node)
           @visibility_stack.pop
           @inline_visibility_stack.pop
+          @owner_stack.pop
         end
 
         def on_module_node_enter(node)
           @visibility_stack.push(:public)
           @inline_visibility_stack.push({})
+          @owner_stack.push(constant_path_string(node.constant_path))
         end
 
         def on_module_node_leave(node)
           @visibility_stack.pop
           @inline_visibility_stack.pop
+          @owner_stack.pop
         end
 
         # Track `class << self` blocks
@@ -92,6 +97,13 @@ module RailsAiContext
             scope:        is_class_method ? :class : :instance,
             visibility:   visibility,
             params:       params,
+            # Enclosing class/module names, outermost first. A caller that
+            # wants one class's own methods needs this: a helper class nested
+            # inside a service is a separate owner, not part of its interface.
+            owner:        @owner_stack.dup,
+            # Sliced off the node so defaults read as written (`options = {}`);
+            # `params` records names only.
+            signature:    signature_source(node, is_class_method),
             location:     node.location.start_line,
             end_location: node.location.end_line,
             confidence:   RailsAiContext::Confidence::VERIFIED
@@ -99,6 +111,18 @@ module RailsAiContext
         end
 
         private
+
+        # `class << self` members carry no receiver of their own, so they read
+        # as the bare name, which is how they are written.
+        def signature_source(node, is_class_method)
+          prefix = (is_class_method && node.receiver) ? "self." : ""
+          params = node.parameters&.location&.slice
+          return "#{prefix}#{node.name}" unless params
+
+          # A parameter list split over several lines keeps its newlines in the
+          # slice, and every caller renders a signature as one line.
+          "#{prefix}#{node.name}(#{params.gsub(/\s+/, ' ').strip})"
+        end
 
         def extract_params(node)
           parameters = node.parameters

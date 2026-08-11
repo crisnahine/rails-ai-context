@@ -264,30 +264,41 @@ module RailsAiContext
             next unless source
             next unless source.include?("ENV")
 
-            vars = []
-            source.each_line.with_index(1) do |line, line_num|
-              # A commented-out ENV mention is documentation, not usage.
-              next if line.lstrip.start_with?("#")
-
-              # ENV["VAR_NAME"] or ENV['VAR_NAME']
-              line.scan(/ENV\[["']([^"']+)["']\]/).each do |match|
-                vars << { name: match[0], line: line_num }
-              end
-
-              # ENV.fetch("VAR_NAME") or ENV.fetch("VAR_NAME", default)
-              line.scan(/ENV\.fetch\(["']([^"']+)["'](?:\s*,\s*([^)]+))?\)/).each do |match|
-                default = match[1]&.strip
-                # Sanitize default - don't expose potential secrets
-                default = sanitize_default(default) if default
-                vars << { name: match[0], line: line_num, default: default }
-              end
-            end
-
+            vars = env_references(source)
             env_vars[file] = vars if vars.any?
           end
         end
 
         env_vars
+      end
+
+      # The parser decides what counts as a name. A line scan matched whatever
+      # sat between the quotes, so an app that builds its variable names by
+      # interpolation - the normal shape for one carrying several Redis
+      # connections - had `#{prefix}URL` reported as a variable, in the very
+      # tool someone reaches for when writing a .env.example. Comments come out
+      # for free, including one trailing a line that also reads ENV.
+      private_class_method def self.env_references(source)
+        ast = Introspectors::SourceIntrospector.walk_source(
+          source, { env: -> { Introspectors::Listeners::EnvAccessListener.new } }
+        )
+
+        (ast[:env] || []).filter_map do |entry|
+          name = entry[:key]
+          # The parser already guaranteed a literal, so this only has to reject
+          # what is not a variable name at all. Deliberately looser than
+          # EnvIntrospector's uppercase rule: that one filters a catalogue of
+          # known Rails variables, while this lists whatever the app reads, and
+          # a lowercase `ENV["port"]` is still a variable the app reads.
+          next unless name.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
+
+          var = { name: name, line: entry[:location] }
+          var[:default] = sanitize_default(entry[:default]) if entry[:default]
+          var
+        end
+      rescue => e
+        $stderr.puts "[rails-ai-context] env_references failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
       private_class_method def self.scan_env_example(root)

@@ -45,14 +45,33 @@ module RailsAiContext
             method:      "fetch",
             key:         key,
             has_default: args.size > 1 || !node.block.nil?,
+            # nil unless the fallback is a value that can be printed as one.
+            # `ENV.fetch("PORT", defaults[:port])` has a default, but naming
+            # it `defaults[:port]` puts a Ruby expression where a reader
+            # expects something to copy into a .env file.
+            default:     literal_value(args[1]),
             location:    node.location.start_line
           }
         end
 
+        # An interpolated name has no value at parse time, so it is not a
+        # variable name and this returns nil for it.
         def string_value(node)
           case node
           when Prism::StringNode then node.unescaped
           when Prism::SymbolNode then node.value
+          else nil
+          end
+        end
+
+        def literal_value(node)
+          case node
+          when Prism::StringNode  then node.unescaped
+          when Prism::SymbolNode  then ":#{node.value}"
+          when Prism::IntegerNode, Prism::FloatNode then node.value.to_s
+          when Prism::TrueNode    then "true"
+          when Prism::FalseNode   then "false"
+          when Prism::NilNode     then "nil"
           else nil
           end
         end

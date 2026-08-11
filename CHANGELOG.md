@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`get_env` no longer offers a name the app never reads.** An app that builds
+  its variable names by interpolation, the normal shape when it carries several
+  Redis connections, had `#{prefix}URL` reported as a variable name and
+  `defaults[:port]` reported as that variable's default. The scan reads the
+  parser now instead of matching whatever sat between two quotes, so a name
+  that does not exist until runtime is not offered to someone writing a
+  `.env.example`, and a default is printed only when it is a value. Comments
+  drop out for free, including one trailing a line that also reads `ENV`.
+  (#129)
+
+- **`get_controllers` no longer lists `set_locale` as an action.** A controller
+  whose own file defines no public method fell back to `action_methods`, which
+  subtracts inherited methods only as far as the nearest abstract ancestor:
+  everything `ApplicationController` and its concerns define publicly came back
+  as an action, so a two-route controller reported 19 of them. The actions of a
+  thin subclass now come from the source of the ancestor that defines them, and
+  reflection is left for the one case that has no source to read at all, a
+  controller from a gem or an engine. (#130)
+
+- **`get_service_pattern` reports the service's entry point, not a nested
+  class's.** Nesting a query builder inside the service that uses it is a
+  normal way to organise a large one, and the line scan could not see it: it
+  named `QueryBuilder#build` as the entry point of a 312-line service, and a
+  `private` inside a nested class hid the real `call` that followed the nested
+  class's `end`, reporting the service as having no entry point at all. The
+  methods now come from the AST, scoped to the class the file is named for.
+  (#131)
+
+- **`get_test_info` counts tests, not files.** "Test Counts by Category"
+  globbed every `.rb` under a category directory, so four mailer specs sitting
+  beside four mailer previews counted as eight tests. Anything a project keeps
+  next to its specs inflated the number. (#132)
+
+- **`get_concern` finds every concern the app has.** It searched two hardcoded
+  directories while `get_active_support` searched five, so one run answered 80
+  concerns and 81 concerns for the same app, and the mailer concern only the
+  second one found could not be reached by name through the first. Both now
+  read one seam, which discovers `app/*/concerns` the way Rails autoloads it,
+  so an app that keeps `app/serializers/concerns` is covered too. Concerns are
+  grouped and filterable by the directory that owns them. (#133)
+
+- **Namespaced Pundit policies keep their namespace.** Policy names came from
+  the basename, so `app/policies/admin/collection_policy.rb` and
+  `app/policies/collection_policy.rb` both read as `CollectionPolicy`. One name
+  was listed twice and the other class appeared nowhere in the generated
+  context or in `CLAUDE.md`, including the one that defines `destroy?`. (#135)
+
+- **Re-running a release no longer fails on the MCP Registry.** The registry
+  answers a repeat version with a 400, and the publish step had no guard, so
+  re-running a release that had already succeeded turned the workflow red with
+  nothing wrong. It now checks for the version first, the way the RubyGems step
+  already did.
+
+### Changed
+
+- **`config.concern_paths` replaces concern discovery instead of adding to
+  it.** Left unset, which is now the default, every `app/*/concerns` directory
+  is discovered. Setting it means those directories and no others, so it can
+  narrow as well as reach outside `app/`.
+
 ## [5.20.3] - 2026-08-11
 
 ### Fixed

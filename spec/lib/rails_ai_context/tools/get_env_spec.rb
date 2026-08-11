@@ -359,4 +359,95 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       end
     end
   end
+
+  describe ".scan_env_vars" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      # The outer stub replaces the very method under test here.
+      allow(described_class).to receive(:scan_env_vars).and_call_original
+      FileUtils.mkdir_p(File.join(tmpdir, "lib"))
+      allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    def scan(source, name: "redis_configuration.rb")
+      File.write(File.join(tmpdir, "lib", name), source)
+      described_class.send(:scan_env_vars, tmpdir).values.flatten
+    end
+
+    it "does not report an interpolated name as a variable" do
+      vars = scan(<<~RUBY)
+        class RedisConfiguration
+          def setup(prefix, defaults)
+            url  = ENV.fetch("\#{prefix}URL", nil)
+            port = ENV.fetch("\#{prefix}PORT", defaults[:port])
+            db   = ENV["\#{prefix}DB"]
+            [ url, port, db ]
+          end
+        end
+      RUBY
+
+      expect(vars).to be_empty
+    end
+
+    it "still reports a plain literal name beside an interpolated one" do
+      vars = scan(<<~RUBY)
+        class RedisConfiguration
+          def setup(prefix)
+            [ ENV.fetch("\#{prefix}URL", nil), ENV.fetch("REDIS_URL", nil) ]
+          end
+        end
+      RUBY
+
+      expect(vars.map { |v| v[:name] }).to eq(%w[REDIS_URL])
+    end
+
+    it "keeps a literal default" do
+      vars = scan(%{PORT = ENV.fetch("PORT", "3000")\n})
+      expect(vars.first).to include(name: "PORT", default: "3000")
+    end
+
+    it "does not print a Ruby expression where a default value belongs" do
+      vars = scan(%{PORT = ENV.fetch("PORT", defaults[:port])\n})
+      expect(vars.first[:name]).to eq("PORT")
+      expect(vars.first[:default]).to be_nil
+    end
+
+    it "does not print a method call as a default" do
+      vars = scan(%{PW = ENV.fetch("REDIS_PASSWORD", default_password)\n})
+      expect(vars.first[:default]).to be_nil
+    end
+
+    it "ignores an ENV reference that only appears in a comment" do
+      vars = scan(%{# ENV["LEGACY_TOKEN"] was removed\nX = ENV.fetch("REAL_TOKEN", nil)\n})
+      expect(vars.map { |v| v[:name] }).to eq(%w[REAL_TOKEN])
+    end
+
+    it "ignores a trailing comment on a line that also reads ENV" do
+      vars = scan(%{X = ENV.fetch("REAL_TOKEN", nil) # ENV["LEGACY_TOKEN"] is gone\n})
+      expect(vars.map { |v| v[:name] }).to eq(%w[REAL_TOKEN])
+    end
+
+    it "still reports a lowercase literal name" do
+      vars = scan(%(x = ENV["port"]\n))
+      expect(vars.map { |v| v[:name] }).to eq(%w[port])
+    end
+
+    it "reports a single-character name" do
+      vars = scan(%(x = ENV["X"]\n))
+      expect(vars.map { |v| v[:name] }).to eq(%w[X])
+    end
+
+    it "skips an empty name" do
+      vars = scan(%(x = ENV[""]\n))
+      expect(vars).to be_empty
+    end
+
+    it "records the line the reference sits on" do
+      vars = scan(%{\n\nX = ENV.fetch("REAL_TOKEN", nil)\n})
+      expect(vars.first[:line]).to eq(3)
+    end
+  end
 end

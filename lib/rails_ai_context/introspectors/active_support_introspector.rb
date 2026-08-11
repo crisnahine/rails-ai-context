@@ -55,19 +55,10 @@ module RailsAiContext
         app.root.to_s
       end
 
-      CONCERN_DIRS = %w[
-        app/models/concerns
-        app/controllers/concerns
-        app/jobs/concerns
-        app/mailers/concerns
-        app/channels/concerns
-      ].freeze
-
       def extract_concerns
         result = {}
-        CONCERN_DIRS.each do |rel_dir|
-          dir = File.join(root, rel_dir)
-          next unless Dir.exist?(dir)
+        ConcernPaths.resolve(root).each do |dir|
+          rel_dir = dir.sub("#{root}/", "")
 
           modules = Dir.glob(File.join(dir, "**/*.rb")).sort.filter_map do |path|
             content = RailsAiContext::SafeFile.read(path) or next

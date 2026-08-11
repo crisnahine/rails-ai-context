@@ -86,7 +86,7 @@ module RailsAiContext
         lines << "**Initialize:** `#{init_params}`" if init_params
 
         # Public methods
-        public_methods = extract_public_methods(source)
+        public_methods = extract_public_methods(source, constant_for(file, services_dir))
         if public_methods.any?
           lines << "" << "## Public Methods"
           public_methods.each { |m| lines << "- `#{m}`" }
@@ -139,7 +139,7 @@ module RailsAiContext
           relative = file.sub("#{root}/", "")
           class_name = extract_class_name(source) || File.basename(file, ".rb").camelize
           line_count = source.lines.size
-          public_methods = extract_public_methods(source)
+          public_methods = extract_public_methods(source, constant_for(file, services_dir))
 
           pattern_stats[:total] += 1
           has_initialize = source.match?(/def initialize/)
@@ -204,6 +204,13 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
+      # Zeitwerk requires the constant to match the path, and only the path
+      # carries the namespace: `admin/suspend_service.rb` is `Admin::SuspendService`,
+      # which no single `class` line in the file spells out.
+      private_class_method def self.constant_for(file, services_dir)
+        file.sub("#{services_dir}/", "").delete_suffix(".rb").camelize
+      end
+
       private_class_method def self.extract_class_name(source)
         match = source.match(/class\s+([\w:]+)/)
         match[1] if match
@@ -215,23 +222,39 @@ module RailsAiContext
         "initialize(#{match[1].strip})"
       end
 
-      private_class_method def self.extract_public_methods(source)
-        methods = []
-        in_private = false
+      # A service's interface is the public methods of the service class
+      # itself. Nesting a query builder or a set of condition objects inside
+      # the service that uses them is a normal way to organise a large one, and
+      # a line scan cannot see that: it reported the nested class's first `def`
+      # as the entry point, and a `private` inside a nested class hid the real
+      # `call` that followed the nested class's `end`.
+      #
+      # `expected_constant` comes from the path rather than the source, the way
+      # JobIntrospector names its classes - Zeitwerk requires the two to agree,
+      # and only the path carries the namespace. A file that does not follow
+      # the convention falls back to the shallowest nesting, which is the
+      # outermost definition in the file.
+      private_class_method def self.extract_public_methods(source, expected_constant = nil)
+        ast = Introspectors::SourceIntrospector.walk_source(
+          source, { methods: Introspectors::Listeners::MethodsListener }
+        )
+        methods = ast[:methods] || []
+        return [] if methods.empty?
 
-        source.each_line do |line|
-          in_private = true if line.match?(/\A\s*(private|protected)\s*$/)
-          in_private = false if line.match?(/\A\s*public\s*$/)
-          next if in_private
+        owner = primary_owner(methods, expected_constant)
 
-          if (match = line.match(/\A\s*def\s+((?:self\.)?[\w?!]+(?:\([^)]*\))?)/))
-            sig = match[1]
-            next if sig.start_with?("initialize")
-            methods << sig
-          end
-        end
+        methods.select { |m| m[:visibility] == :public && m[:owner].join("::") == owner }
+               .map { |m| m[:signature] }
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_public_methods AST failed: #{e.message}" if ENV["DEBUG"]
+        []
+      end
 
-        methods
+      private_class_method def self.primary_owner(methods, expected_constant)
+        owners = methods.map { |m| m[:owner].join("::") }
+        return expected_constant if expected_constant && owners.include?(expected_constant)
+
+        owners.min_by { |o| [ o.count(":"), o.length ] }
       end
 
       private_class_method def self.extract_dependencies(source, own_class_name)

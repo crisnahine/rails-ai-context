@@ -114,7 +114,7 @@ preset: full
 | `max_search_results` | Integer | `200` | Maximum search results |
 | `max_validate_files` | Integer | `50` | Maximum files for validation |
 | `search_extensions` | Array | `["rb", "js", "erb", "yml", "yaml", "json", "ts", "tsx", "vue", "svelte", "haml", "slim"]` | File extensions to search |
-| `concern_paths` | Array | `["app/models/concerns", "app/controllers/concerns"]` | Paths to scan for concerns |
+| `concern_paths` | Array | `nil` (discovers `app/*/concerns`) | Paths to scan for concerns. Setting it replaces discovery, so it can narrow as well as widen |
 | `frontend_paths` | Array | `nil` (auto-detect) | Override frontend file paths |
 | `extra_app_paths` | Array | `[]` | Extra directories under the app root to treat as application code |
 

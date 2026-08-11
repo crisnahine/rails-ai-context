@@ -358,4 +358,113 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
   end
+
+  describe "actions for a controller that defines none of its own" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:controllers_dir) { File.join(tmpdir, "app", "controllers") }
+    let(:introspector) { described_class.new(double("app", root: Pathname.new(tmpdir))) }
+
+    def source_for(ctrl)
+      File.read(File.join(controllers_dir, "#{ctrl.name.underscore}.rb"))
+    end
+
+    def actions_for(ctrl)
+      introspector.send(:extract_actions, ctrl, source_for(ctrl))
+    end
+
+    before do
+      FileUtils.mkdir_p(File.join(controllers_dir, "admin"))
+
+      File.write(File.join(controllers_dir, "application_controller.rb"), <<~RUBY)
+        class ApplicationController < ActionController::Base
+          def set_locale
+          end
+
+          def with_read_replica
+          end
+        end
+      RUBY
+
+      File.write(File.join(controllers_dir, "admin", "settings_controller.rb"), <<~RUBY)
+        class Admin::SettingsController < ApplicationController
+          def show
+          end
+
+          def update
+          end
+        end
+      RUBY
+
+      File.write(File.join(controllers_dir, "admin", "thin_controller.rb"), <<~RUBY)
+        class Admin::ThinController < Admin::SettingsController
+          private
+
+          def after_update_redirect_path
+            admin_root_path
+          end
+        end
+      RUBY
+
+      File.write(File.join(controllers_dir, "admin", "bare_controller.rb"), <<~RUBY)
+        class Admin::BareController < ApplicationController
+        end
+      RUBY
+
+      app_ctrl = Class.new(ActionController::Base) do
+        def set_locale; end
+        def with_read_replica; end
+      end
+      settings = Class.new(app_ctrl) do
+        def show; end
+        def update; end
+      end
+      thin = Class.new(settings) do
+        private
+
+        def after_update_redirect_path; end
+      end
+
+      stub_const("ApplicationController", app_ctrl)
+      stub_const("Admin::SettingsController", settings)
+      stub_const("Admin::ThinController", thin)
+      stub_const("Admin::BareController", Class.new(app_ctrl))
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "does not report inherited framework helpers as actions" do
+      expect(actions_for(Admin::ThinController)).not_to include("set_locale", "with_read_replica")
+    end
+
+    it "takes the actions its parent controller defines" do
+      expect(actions_for(Admin::ThinController)).to eq(%w[show update])
+    end
+
+    it "reports nothing for a controller whose only ancestor is ApplicationController" do
+      expect(actions_for(Admin::BareController)).to eq([])
+    end
+
+    it "still reports a controller's own actions without consulting the chain" do
+      expect(actions_for(Admin::SettingsController)).to eq(%w[show update])
+    end
+
+    context "when the controller has no source file at all" do
+      before do
+        gem_base = Class.new(ActionController::Base) do
+          def engine_index; end
+          def engine_show; end
+        end
+        stub_const("SomeEngine::WidgetsController", gem_base)
+      end
+
+      it "falls back to reflection rather than reporting nothing" do
+        expect(introspector.send(:extract_actions, SomeEngine::WidgetsController, nil))
+          .to include("engine_index", "engine_show")
+      end
+
+      it "does not fall back when the file was read and simply defines no action" do
+        expect(actions_for(Admin::BareController)).to eq([])
+      end
+    end
+  end
 end

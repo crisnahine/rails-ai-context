@@ -164,16 +164,69 @@ module RailsAiContext
       end
 
       # Prefer source-based parsing for actions - always reflects current file state.
-      # Falls back to reflection for controllers without readable source files.
+      #
+      # `action_methods` used to answer for a controller whose own file defines
+      # no public method, and it cannot: it subtracts inherited methods only as
+      # far as the nearest abstract ancestor, which is ActionController::Base.
+      # Everything ApplicationController and its concerns define publicly came
+      # back as an action, so a two-route controller reported 19 of them, most
+      # named things like `set_locale` and `pundit_user`.
+      #
+      # A thin subclass does still serve actions - its parent defines them - so
+      # the answer comes from the parent's source instead.
       def extract_actions(ctrl, source = nil)
-        if source
-          actions = extract_actions_from_source(source)
-          return actions if actions.any?
-        end
+        own = extract_actions_from_source(source) if source
+        return own if own&.any?
+
+        inherited, read_any_source = inherited_actions(ctrl)
+        return inherited if inherited.any?
+
+        # A file was read and it defines no action. That is an answer, and
+        # reflection would only overwrite it with inherited helpers.
+        return [] if source || read_any_source
+
+        # Nothing readable anywhere: no file for this controller and none for
+        # any ancestor of it in the app. That is a controller from a gem or an
+        # engine, and reflection is the only thing left that knows anything.
         ctrl.action_methods.to_a.sort
       rescue => e
         $stderr.puts "[rails-ai-context] extract_actions failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # The nearest ancestor in the app that defines actions of its own.
+      #
+      # The walk stops at ApplicationController by convention: it is where an
+      # app puts the helpers every controller shares, not actions, and reading
+      # it is what produced the leak above. A base class that only sets up
+      # filters contributes nothing and the walk continues past it.
+      #
+      # Returns the actions and whether any ancestor's source could be read at
+      # all, which is what tells an empty answer apart from an unknown one.
+      def inherited_actions(ctrl)
+        read_any = false
+        klass = ctrl.superclass
+        while klass&.name && !framework_controller?(klass) && !app_base_controller?(klass)
+          src = read_source(klass)
+          if src
+            read_any = true
+            actions = extract_actions_from_source(src)
+            return [ actions, read_any ] if actions.any?
+          end
+          klass = klass.superclass
+        end
+        [ [], read_any ]
+      end
+
+      def framework_controller?(klass)
+        return true if klass.name.start_with?("ActionController::", "AbstractController::")
+        return true if klass == ActionController::Base
+        return true if defined?(ActionController::API) && klass == ActionController::API
+        false
+      end
+
+      def app_base_controller?(klass)
+        klass.name == "ApplicationController" || klass.name.end_with?("::ApplicationController")
       end
 
       def extract_actions_from_source(source)
@@ -236,11 +289,7 @@ module RailsAiContext
       def collect_source_constraints(ctrl, current_source = nil)
         constraints = {}
         klass = ctrl
-        while klass && klass.name
-          break if klass.name.start_with?("ActionController::", "AbstractController::")
-          break if klass == ActionController::Base
-          break if defined?(ActionController::API) && klass == ActionController::API
-
+        while klass&.name && !framework_controller?(klass)
           src = (klass == ctrl) ? (current_source || read_source(klass)) : read_source(klass)
           if src
             extract_filters_from_source(src).each do |sf|

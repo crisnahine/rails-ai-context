@@ -244,10 +244,7 @@ module RailsAiContext
           next if concern_name.include?("::") && !concern_name.start_with?("App")
           next if %w[Kernel JSON PP Marshal].include?(concern_name)
 
-          underscore = concern_name.underscore
-          concern_path = RailsAiContext.configuration.concern_paths
-            .map { |dir| rails_app.root.join(dir, "#{underscore}.rb") }
-            .find { |p| File.exist?(p) }
+          concern_path = ConcernPaths.find_file(rails_app.root.to_s, concern_name)
           next unless concern_path
           next if File.size(concern_path) > max_size
 

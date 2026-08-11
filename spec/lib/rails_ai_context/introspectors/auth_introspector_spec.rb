@@ -118,6 +118,40 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       end
     end
 
+    context "with policies in a namespace directory" do
+      let(:policies_dir) { File.join(Rails.root, "app/policies") }
+
+      before do
+        FileUtils.mkdir_p(File.join(policies_dir, "admin"))
+        File.write(File.join(policies_dir, "collection_policy.rb"), "class CollectionPolicy; end")
+        File.write(File.join(policies_dir, "status_policy.rb"), "class StatusPolicy; end")
+        File.write(File.join(policies_dir, "admin", "collection_policy.rb"), "class Admin::CollectionPolicy; end")
+        File.write(File.join(policies_dir, "admin", "status_policy.rb"), "class Admin::StatusPolicy; end")
+      end
+
+      after { FileUtils.rm_rf(policies_dir) }
+
+      it "keeps the namespace in the constant name" do
+        expect(result[:authorization][:pundit]).to include("Admin::CollectionPolicy", "Admin::StatusPolicy")
+      end
+
+      it "still lists the top-level policy of the same base name" do
+        expect(result[:authorization][:pundit]).to include("CollectionPolicy", "StatusPolicy")
+      end
+
+      it "does not report one name twice for two different classes" do
+        pundit = result[:authorization][:pundit]
+        expect(pundit.uniq.size).to eq(pundit.size)
+      end
+
+      it "handles a namespace nested more than one level deep" do
+        FileUtils.mkdir_p(File.join(policies_dir, "admin", "reports"))
+        File.write(File.join(policies_dir, "admin", "reports", "note_policy.rb"), "class Admin::Reports::NotePolicy; end")
+
+        expect(result[:authorization][:pundit]).to include("Admin::Reports::NotePolicy")
+      end
+    end
+
     context "with CSP initializer" do
       let(:csp_file) { File.join(Rails.root, "config/initializers/content_security_policy.rb") }
 

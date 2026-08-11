@@ -141,5 +141,39 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         expect(result[:test_count_by_category]["models"]).to eq(2)
       end
     end
+
+    context "with non-spec Ruby files sitting beside the specs" do
+      let(:mailers_spec_dir) { File.join(Rails.root, "spec/mailers") }
+      let(:previews_dir) { File.join(mailers_spec_dir, "previews") }
+
+      before do
+        FileUtils.mkdir_p(previews_dir)
+        File.write(File.join(mailers_spec_dir, "user_mailer_spec.rb"), "# test")
+        File.write(File.join(previews_dir, "user_mailer_preview.rb"), "# not a test")
+        File.write(File.join(previews_dir, "admin_mailer_preview.rb"), "# not a test")
+      end
+
+      after { FileUtils.rm_rf(mailers_spec_dir) }
+
+      it "counts only the specs, not the previews beside them" do
+        expect(result[:test_count_by_category]["mailers"]).to eq(1)
+      end
+    end
+
+    context "with a minitest suite" do
+      let(:models_test_dir) { File.join(Rails.root, "test/models") }
+
+      before do
+        FileUtils.mkdir_p(models_test_dir)
+        File.write(File.join(models_test_dir, "user_test.rb"), "# test")
+        File.write(File.join(models_test_dir, "test_helper_shim.rb"), "# support")
+      end
+
+      after { FileUtils.rm_rf(models_test_dir) }
+
+      it "counts _test.rb files and skips support files" do
+        expect(result[:test_count_by_category]["models"]).to eq(1)
+      end
+    end
   end
 end

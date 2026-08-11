@@ -57,4 +57,47 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::EnvAccessListener do
 
     expect(results.first[:location]).to eq(2)
   end
+
+  describe "names built at runtime" do
+    it "does not read an interpolated name as a key" do
+      results = parse_and_dispatch('ENV.fetch("#{prefix}URL", nil)')
+      expect(results).to be_empty
+    end
+
+    it "does not read an interpolated subscript as a key" do
+      results = parse_and_dispatch('ENV["#{prefix}DB"]')
+      expect(results).to be_empty
+    end
+  end
+
+  describe "default" do
+    it "carries a literal string default" do
+      results = parse_and_dispatch('ENV.fetch("PORT", "3000")')
+      expect(results.first).to include(has_default: true, default: "3000")
+    end
+
+    it "carries a literal number default" do
+      results = parse_and_dispatch("ENV.fetch(\"SENTINEL_PORT\", 26_379)")
+      expect(results.first[:default]).to eq("26379")
+    end
+
+    it "carries a nil default" do
+      expect(parse_and_dispatch('ENV.fetch("URL", nil)').first[:default]).to eq("nil")
+    end
+
+    it "leaves an index expression out of the default" do
+      results = parse_and_dispatch('ENV.fetch("PORT", defaults[:port])')
+      expect(results.first).to include(has_default: true, default: nil)
+    end
+
+    it "leaves a method call out of the default" do
+      results = parse_and_dispatch('ENV.fetch("PASSWORD", default_password)')
+      expect(results.first[:default]).to be_nil
+    end
+
+    it "leaves a block default out" do
+      results = parse_and_dispatch('ENV.fetch("PORT") { compute_port }')
+      expect(results.first).to include(has_default: true, default: nil)
+    end
+  end
 end

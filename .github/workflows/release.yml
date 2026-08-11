@@ -227,7 +227,30 @@ jobs:
           echo "Publishing version $VERSION to MCP Registry"
           cat server.json
 
+      # The registry answers a repeat version with a 400, so re-running a
+      # release that already succeeded failed the workflow with nothing
+      # actually wrong. The RubyGems job guards the same way for the same
+      # reason. A lookup that errors leaves this false and lets the publish
+      # speak for itself, rather than skipping a release that never happened.
+      - name: Check if version already in the MCP Registry
+        id: check_registry
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          NAME="$(jq -r .name server.json)"
+          COUNT="$(curl -sf --get \
+            --data-urlencode "search=$NAME" \
+            --data-urlencode "version=$VERSION" \
+            https://registry.modelcontextprotocol.io/v0/servers | jq '.servers | length')"
+
+          if [ "${COUNT:-0}" -gt 0 ]; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$NAME v$VERSION already in the MCP Registry - skipping publish"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to MCP Registry
+        if: steps.check_registry.outputs.already_published == 'false'
         run: mcp-publisher publish
 
       # Only `version` goes back to main. The URL and digest stay placeholders

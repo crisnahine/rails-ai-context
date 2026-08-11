@@ -298,13 +298,16 @@ module RailsAiContext
         nil
       end
 
+      # Only files named for a test framework are counted. Globbing every .rb
+      # counted whatever a project keeps beside its specs - mailer previews,
+      # shared contexts, page objects - under a heading that promises tests.
       def detect_test_count_by_category
         counts = {}
         %w[models controllers requests system services integration features helpers views jobs mailers channels].each do |cat|
           %w[spec test].each do |base|
             dir = File.join(root, base, cat)
             next unless Dir.exist?(dir)
-            count = Dir.glob(File.join(dir, "**/*.rb")).size
+            count = Dir.glob(File.join(dir, "**/*_{spec,test}.rb")).size
             counts[cat] = (counts[cat] || 0) + count if count > 0
           end
         end

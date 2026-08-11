@@ -311,8 +311,10 @@ module RailsAiContext
             # File extensions for fallback search (when ripgrep unavailable)
             # config.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
 
-            # Where to look for concern source files
-            # config.concern_paths = %w[app/models/concerns app/controllers/concerns]
+            # Where to look for concern source files. Left unset, every
+            # app/*/concerns directory is discovered. Setting this replaces
+            # that list, so it can narrow as well as reach outside app/.
+            # config.concern_paths = %w[app/models/concerns lib/concerns]
         SECTION
         "Frontend" => <<~SECTION
             # ── Frontend Framework Detection ─────────────────────────────────

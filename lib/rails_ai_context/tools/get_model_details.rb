@@ -477,11 +477,7 @@ module RailsAiContext
       # Extract public method names from a concern's source file
       private_class_method def self.extract_concern_methods(concern_name)
         max_size = RailsAiContext.configuration.max_file_size
-        underscore = concern_name.underscore
-        # Search configurable concern paths
-        path = RailsAiContext.configuration.concern_paths
-          .map { |dir| rails_app.root.join(dir, "#{underscore}.rb") }
-          .find { |p| File.exist?(p) }
+        path = ConcernPaths.find_file(rails_app.root.to_s, concern_name)
         return nil unless path
         return nil if File.size(path) > max_size
 

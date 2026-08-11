@@ -346,5 +346,123 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("after_create")
       end
     end
+
+    context "with concerns outside app/models and app/controllers" do
+      let(:mailer_concerns_dir) { File.join(tmpdir, "app", "mailers", "concerns") }
+      let(:serializer_concerns_dir) { File.join(tmpdir, "app", "serializers", "concerns") }
+
+      before do
+        FileUtils.mkdir_p(mailer_concerns_dir)
+        FileUtils.mkdir_p(serializer_concerns_dir)
+
+        File.write(File.join(mailer_concerns_dir, "bulk_mail_settings_concern.rb"), <<~RUBY)
+          module BulkMailSettingsConcern
+            extend ActiveSupport::Concern
+
+            def bulk_headers
+              { "Precedence" => "bulk" }
+            end
+          end
+        RUBY
+
+        File.write(File.join(serializer_concerns_dir, "cacheable.rb"), <<~RUBY)
+          module Cacheable
+            extend ActiveSupport::Concern
+
+            def cache_key_for(record)
+              record.id
+            end
+          end
+        RUBY
+      end
+
+      it "counts mailer concerns in the total" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("# Concerns (4)")
+      end
+
+      it "lists the mailer concern under its own heading" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("Mailer Concerns")
+        expect(text).to include("BulkMailSettingsConcern")
+      end
+
+      it "finds a mailer concern asked for by name" do
+        result = described_class.call(name: "BulkMailSettingsConcern")
+        text = result.content.first[:text]
+        expect(text).to include("BulkMailSettingsConcern")
+        expect(text).to include("bulk_headers")
+      end
+
+      it "types a mailer concern as a mailer concern, not a controller one" do
+        text = described_class.call(name: "BulkMailSettingsConcern").content.first[:text]
+        expect(text).to include("**Type:** mailer concern")
+      end
+
+      it "finds the mailer that includes it" do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "mailers"))
+        File.write(File.join(tmpdir, "app", "mailers", "digest_mailer.rb"), <<~RUBY)
+          class DigestMailer < ApplicationMailer
+            include BulkMailSettingsConcern
+          end
+        RUBY
+
+        text = described_class.call(name: "BulkMailSettingsConcern").content.first[:text]
+        expect(text).to include("Included By")
+        expect(text).to include("DigestMailer")
+      end
+
+      it "does not claim a mailer concern is included by no one" do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "mailers"))
+        File.write(File.join(tmpdir, "app", "mailers", "digest_mailer.rb"),
+                   "class DigestMailer\n  include BulkMailSettingsConcern\nend\n")
+
+        text = described_class.call(name: "BulkMailSettingsConcern").content.first[:text]
+        expect(text).not_to include("_No models or controllers found")
+      end
+
+      it "picks up a non-stock app/*/concerns directory too" do
+        result = described_class.call
+        text = result.content.first[:text]
+        expect(text).to include("Cacheable")
+      end
+
+      it "filters to mailer concerns only" do
+        result = described_class.call(type: "mailer")
+        text = result.content.first[:text]
+        expect(text).to include("BulkMailSettingsConcern")
+        expect(text).not_to include("Searchable")
+      end
+
+      it "filters to a concern directory outside app/*/concerns" do
+        FileUtils.mkdir_p(File.join(tmpdir, "lib", "concerns"))
+        File.write(File.join(tmpdir, "lib", "concerns", "auditable.rb"),
+                   "module Auditable\n  def audit; end\nend\n")
+        allow(RailsAiContext.configuration).to receive(:concern_paths)
+          .and_return(%w[app/models/concerns lib/concerns])
+
+        text = described_class.call(type: "other").content.first[:text]
+        expect(text).to include("Auditable")
+        expect(text).not_to include("Searchable")
+      end
+
+      it "still filters models and controllers the way it always did" do
+        text = described_class.call(type: "model").content.first[:text]
+        expect(text).to include("Searchable")
+        expect(text).not_to include("BulkMailSettingsConcern")
+      end
+
+      it "agrees with the ActiveSupport introspector on the total" do
+        listed = described_class.call.content.first[:text][/# Concerns \((\d+)\)/, 1].to_i
+
+        app = double("app", root: Pathname.new(tmpdir))
+        introspected = RailsAiContext::Introspectors::ActiveSupportIntrospector
+                         .new(app).send(:extract_concerns).values.flatten.size
+
+        expect(listed).to eq(introspected)
+      end
+    end
   end
 end

@@ -16,8 +16,8 @@ module RailsAiContext
           },
           type: {
             type: "string",
-            enum: %w[model controller all],
-            description: "Filter by concern type. model: app/models/concerns/. controller: app/controllers/concerns/. all: both (default)."
+            enum: %w[model controller mailer job channel helper other all],
+            description: "Filter by concern type, named for the directory: model reads app/models/concerns/, mailer reads app/mailers/concerns/. other: a configured directory outside app/*/concerns. all: everything (default)."
           },
           detail: {
             type: "string",
@@ -35,6 +35,10 @@ module RailsAiContext
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
+
+      # Model and controller concerns lead because that is where most apps keep
+      # most of them; anything else follows in discovery order.
+      SECTION_ORDER = %w[model controller mailer job channel helper].freeze
 
       def self.call(name: nil, type: "all", detail: "standard", server_context: nil)
         root = rails_app.root.to_s
@@ -56,27 +60,17 @@ module RailsAiContext
       end
 
       private_class_method def self.resolve_concern_dirs(root, type)
-        dirs = case type
-        when "model"
-          [ File.join(root, "app", "models", "concerns") ]
-        when "controller"
-          [ File.join(root, "app", "controllers", "concerns") ]
-        else
-          [
-            File.join(root, "app", "models", "concerns"),
-            File.join(root, "app", "controllers", "concerns")
-          ]
-        end
+        dirs = ConcernPaths.resolve(root)
+        return dirs if type.nil? || type == "all"
 
-        dirs.select { |d| Dir.exist?(d) }
+        dirs.select { |dir| ConcernPaths.type_for(dir) == type }
       end
 
       private_class_method def self.searched_dirs(type)
-        case type
-        when "model" then %w[app/models/concerns/]
-        when "controller" then %w[app/controllers/concerns/]
-        else %w[app/models/concerns/ app/controllers/concerns/]
-        end
+        return [ "app/*/concerns/" ] if type.nil? || type == "all"
+        return [ "any configured directory outside app/*/concerns" ] if type == "other"
+
+        [ "app/#{type.pluralize}/concerns/" ]
       end
 
       private_class_method def self.show_concern(name, concern_dirs, root, max_size, detail = "standard")
@@ -131,7 +125,7 @@ module RailsAiContext
           next if sensitive_file?(relative_real)
 
           file_path = real
-          concern_type = dir.include?("models") ? "model" : "controller"
+          concern_type = ConcernPaths.type_for(dir)
           break
         end
 
@@ -231,15 +225,18 @@ module RailsAiContext
           lines << "" << "## Included By (#{includers.size})"
           includers.each { |i| lines << "- #{i}" }
         else
-          lines << "" << "_No models or controllers found that include this concern._"
+          lines << "" << "_Nothing in #{includer_locations(concern_type)} includes this concern._"
         end
 
         # Cross-reference hints
         lines << ""
-        if concern_type == "model"
+        case concern_type
+        when "model"
           lines << "_Next: `rails_get_model_details(model:\"ModelName\")` for models using this concern_"
-        else
+        when "controller"
           lines << "_Next: `rails_get_controllers(controller:\"ControllerName\")` for controllers using this concern_"
+        else
+          lines << "_Next: `rails_search_code(pattern:\"include #{name.demodulize.camelize}\")` for everything using this concern_"
         end
 
         text_response(lines.join("\n"))
@@ -250,7 +247,7 @@ module RailsAiContext
         real_root = File.realpath(root).to_s
 
         concern_dirs.each do |dir|
-          concern_type = dir.include?("models") ? "model" : "controller"
+          concern_type = ConcernPaths.type_for(dir)
           real_dir = File.realpath(dir).to_s
           Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file_path|
             # Apply the 5-rule file-reading pattern per CLAUDE.md. Even though
@@ -295,22 +292,16 @@ module RailsAiContext
           return text_response("No concerns found in #{concern_dirs.map { |d| d.sub("#{root}/", "") }.join(', ')}.")
         end
 
-        model_concerns = all_concerns.select { |c| c[:type] == "model" }
-        controller_concerns = all_concerns.select { |c| c[:type] == "controller" }
-
         lines = [ "# Concerns (#{all_concerns.size})", "" ]
 
-        if model_concerns.any?
-          lines << "## Model Concerns (#{model_concerns.size})"
-          model_concerns.each do |c|
-            lines << "- **#{c[:name]}** - #{count_phrase(c[:method_count], "method")} (`#{c[:path]}`)"
-          end
-          lines << ""
-        end
-
-        if controller_concerns.any?
-          lines << "## Controller Concerns (#{controller_concerns.size})"
-          controller_concerns.each do |c|
+        # Grouped by whatever types the app actually has. Rendering a fixed
+        # pair of sections meant a concern outside them counted toward the
+        # total and then appeared nowhere, which is a worse answer than the
+        # undercount it replaced.
+        all_concerns.group_by { |c| c[:type] }.sort_by { |type, _| SECTION_ORDER.index(type) || SECTION_ORDER.size }
+                    .each do |type, concerns|
+          lines << "## #{type.camelize} Concerns (#{concerns.size})"
+          concerns.each do |c|
             lines << "- **#{c[:name]}** - #{count_phrase(c[:method_count], "method")} (`#{c[:path]}`)"
           end
           lines << ""
@@ -461,18 +452,26 @@ module RailsAiContext
         []
       end
 
+      # Names the directories find_includers actually searched, so the empty
+      # answer says where it looked rather than naming two it may not have.
+      private_class_method def self.includer_locations(concern_type)
+        return "app/models or app/controllers" if concern_type.nil? || concern_type == "other"
+        "app/#{concern_type.pluralize}"
+      end
+
       private_class_method def self.find_includers(concern_name, root, concern_type)
         includers = []
         search_dirs = []
 
-        case concern_type
-        when "model"
+        # The type names the directory that holds the includers: a mailer
+        # concern is included by mailers. Only a concern from outside
+        # app/*/concerns has no directory to name, so that one searches both
+        # of the places a concern is usually included from.
+        if concern_type.nil? || concern_type == "other"
           search_dirs << File.join(root, "app", "models")
-        when "controller"
           search_dirs << File.join(root, "app", "controllers")
         else
-          search_dirs << File.join(root, "app", "models")
-          search_dirs << File.join(root, "app", "controllers")
+          search_dirs << File.join(root, "app", concern_type.pluralize)
         end
 
         max_size = RailsAiContext.configuration.max_file_size
