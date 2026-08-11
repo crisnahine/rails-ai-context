@@ -255,8 +255,10 @@ module RailsAiContext
         []
       end
 
-      # A mailer's actions are its public instance methods, which is exactly
-      # what `instance_methods(false)` reports on the booted side.
+      # A mailer's actions are its public instance methods. The booted side asks
+      # `action_methods`, which also subtracts inherited and internal ones - the
+      # AST cannot see that, so a public helper on a concrete mailer is still
+      # listed here and not there.
       def extract_mailers_from_source
         source_classes(File.join(app.root, "app", "mailers")).filter_map do |name, methods|
           next if name == "ApplicationMailer"

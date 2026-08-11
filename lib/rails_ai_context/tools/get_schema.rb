@@ -95,7 +95,7 @@ module RailsAiContext
               return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
             end
             lines = [ "# Schema Summary (#{count_phrase(total, "table")})", "" ]
-            lines << "**Adapter:** #{schema[:adapter]}" if schema[:adapter]
+            lines << "**Adapter:** #{adapter_label(schema)}" if schema[:adapter]
             lines.concat(static_source_lines(schema))
             paginated.each do |name|
               data = tables[name]
@@ -207,6 +207,14 @@ module RailsAiContext
             text_response(format_schema_markdown(schema))
           end
         end
+      end
+
+      # `static_parse` is the marker SchemaIntrospector sets when it read
+      # db/schema.rb instead of the connection. It is an internal detail, and
+      # naming it as the database teaches the caller nothing.
+      private_class_method def self.adapter_label(schema)
+        adapter = schema[:adapter]
+        %w[static_parse unknown].include?(adapter.to_s) ? "unknown (schema read from file)" : adapter
       end
 
       private_class_method def self.models_for_table(table_name)
@@ -333,7 +341,7 @@ module RailsAiContext
         lines = [
           "# Database Schema",
           "",
-          "- Adapter: #{schema[:adapter]}",
+          "- Adapter: #{adapter_label(schema)}",
           "- Tables: #{schema[:total_tables]}",
           ""
         ]
