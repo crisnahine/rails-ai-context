@@ -43,7 +43,7 @@ RSpec.describe RailsAiContext::LiveReload do
 
       it "sends notify_log_message with change details" do
         expect(mcp_server).to receive(:notify_log_message).with(
-          data: a_string_matching(/Files changed:.*Tool caches invalidated\./),
+          data: a_string_matching(/Files changed:.*Tool caches invalidated/),
           level: "info",
           logger: "rails-ai-context"
         )
@@ -51,7 +51,27 @@ RSpec.describe RailsAiContext::LiveReload do
       end
 
       it "logs to stderr" do
-        expect($stderr).to receive(:puts).with(a_string_matching(/Files changed:.*Tool caches invalidated\./))
+        expect($stderr).to receive(:puts).with(a_string_matching(/Files changed:.*Tool caches invalidated/))
+        live_reload.handle_change(changed_paths)
+      end
+
+      # Dropping the caches only rebuilds them from the constants Rails already
+      # had. Zeitwerk will not re-scan a directory it eager loaded, so without a
+      # reload the server keeps answering about the app as it was at boot.
+      it "reloads the app's code before rebuilding the caches" do
+        expect(RailsAiContext::CodeReloader).to receive(:reload!).and_return(true)
+        live_reload.handle_change(changed_paths)
+      end
+
+      it "says so when a reload actually ran" do
+        allow(RailsAiContext::CodeReloader).to receive(:reload!).and_return(true)
+        expect($stderr).to receive(:puts).with(a_string_matching(/app code reloaded/))
+        live_reload.handle_change(changed_paths)
+      end
+
+      it "stays quiet about reloading when the app cannot reload" do
+        allow(RailsAiContext::CodeReloader).to receive(:reload!).and_return(false)
+        expect($stderr).to receive(:puts).with(a_string_matching(/Tool caches invalidated\.\z/))
         live_reload.handle_change(changed_paths)
       end
     end

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A long-lived process no longer answers about the app as it was at boot.**
+  The MCP server and `watch` invalidated their own caches on a file change but
+  never reloaded Rails, and `Zeitwerk#eager_load_dir` does not re-scan a
+  directory it has already loaded - so a model written after the server started
+  stayed invisible for the life of the process, and the server told callers it
+  did not exist. Routes were unaffected because `RouteIntrospector` already
+  asked `routes_reloader.execute_if_updated`. Both change handlers now run
+  Rails' own reloader first, on booted non-eager-loading apps only, and a
+  failing reload leaves the process alive on its previous constants.
+
+### Added
+
+- **The static tier reads `config.api_only`.** Without a booted app the view
+  tools fell back to "no Stimulus controllers found" on an API-only app, where a
+  booted run says "Not applicable". Both were true, but only one of them stops
+  an agent adding a view layer to an app that has none by design.
+
 ## [5.20.1] - 2026-08-11
 
 ### Fixed

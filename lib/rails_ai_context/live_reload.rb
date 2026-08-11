@@ -55,6 +55,11 @@ module RailsAiContext
 
       @last_fingerprint = Fingerprinter.compute(app)
 
+      # Order matters: reload the app's code first, then drop the caches built
+      # from the old constants. Clearing caches alone left the server answering
+      # from whatever Rails autoloaded at boot.
+      reloaded = CodeReloader.reload!
+
       # Invalidate all tool caches (includes AstCache.clear)
       Tools::BaseTool.reset_all_caches!
 
@@ -64,12 +69,12 @@ module RailsAiContext
       # Notify connected MCP clients
       mcp_server.notify_resources_list_changed
       mcp_server.notify_log_message(
-        data: "#{message} Tool caches invalidated.",
+        data: "#{message} Tool caches invalidated#{reloaded ? " and app code reloaded" : ""}.",
         level: "info",
         logger: "rails-ai-context"
       )
 
-      $stderr.puts "[rails-ai-context] #{message} Tool caches invalidated."
+      $stderr.puts "[rails-ai-context] #{message} Tool caches invalidated#{reloaded ? " and app code reloaded" : ""}."
     rescue => e
       $stderr.puts "[rails-ai-context] Live reload error: #{e.message}"
     end

@@ -72,6 +72,9 @@ module RailsAiContext
       @last_fingerprint = Fingerprinter.compute(app)
 
       $stderr.puts "[rails-ai-context] Changes detected, regenerating context files..."
+      # Without this the regenerated files describe the app as it was when the
+      # watcher started, not as it is now.
+      CodeReloader.reload!
       result = RailsAiContext.generate_context(format: :all)
       result[:written].each { |f| $stderr.puts "  Updated: #{f}" }
       result[:skipped].each { |f| $stderr.puts "  Unchanged: #{f}" }

@@ -355,7 +355,15 @@ module RailsAiContext
           return api[:api_only] == true if api.is_a?(Hash) && api.key?(:api_only)
 
           app = rails_app
-          app.respond_to?(:config) && app.config.respond_to?(:api_only) && app.config.api_only == true
+          if app.respond_to?(:config) && app.config.respond_to?(:api_only)
+            return app.config.api_only == true
+          end
+
+          # Static tier: no booted config to ask, but the flag is declared in
+          # config/application.rb. Without this the view tools fall back to
+          # "none found", which reads as "not built yet" for an app that has
+          # no view layer by design.
+          AppKind.api_only?(app.root)
         rescue StandardError
           false
         end

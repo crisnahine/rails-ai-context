@@ -33,4 +33,60 @@ RSpec.describe RailsAiContext::AppKind do
       expect(described_class.mongoid?(dir)).to be(false)
     end
   end
+  # config.api_only lives in config/application.rb, so the static tier can know
+  # it. Without this, an API-only app was told "No Stimulus controllers found"
+  # where a booted app says "Not applicable" - literally true, but it invites
+  # an agent to add Stimulus to an app that has no view layer.
+  describe ".api_only?" do
+    def app_with(body, file: "config/application.rb")
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, file)))
+        File.write(File.join(dir, file), body)
+        return described_class.api_only?(dir)
+      end
+    end
+
+    it "reads config.api_only = true" do
+      expect(app_with(<<~RUBY)).to be(true)
+        module Dummy
+          class Application < Rails::Application
+            config.api_only = true
+          end
+        end
+      RUBY
+    end
+
+    it "reads an explicit false as false" do
+      expect(app_with(<<~RUBY)).to be(false)
+        module Dummy
+          class Application < Rails::Application
+            config.api_only = false
+          end
+        end
+      RUBY
+    end
+
+    it "ignores a commented-out assignment" do
+      expect(app_with(<<~RUBY)).to be(false)
+        module Dummy
+          class Application < Rails::Application
+            # config.api_only = true
+          end
+        end
+      RUBY
+    end
+
+    it "is false when application.rb says nothing about it" do
+      expect(app_with(<<~RUBY)).to be(false)
+        module Dummy
+          class Application < Rails::Application
+          end
+        end
+      RUBY
+    end
+
+    it "is false when there is no application.rb at all" do
+      Dir.mktmpdir { |dir| expect(described_class.api_only?(dir)).to be(false) }
+    end
+  end
 end

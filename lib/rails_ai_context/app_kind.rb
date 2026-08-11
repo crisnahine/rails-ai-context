@@ -27,5 +27,20 @@ module RailsAiContext
       content = RailsAiContext::SafeFile.read(gemfile)
       !!content&.match?(/^\s*gem\s+["']mongoid["']/)
     end
+
+    # Leading `#` excluded, so the commented example Rails ships with does not
+    # read as a declaration.
+    API_ONLY_ASSIGNMENT = /^\s*[^#\n]*config\.api_only\s*=\s*(true|false)/
+
+    # An API-only app has no view layer, and saying "no Stimulus controllers
+    # found" about one invites an agent to add some. The flag is written in
+    # config/application.rb, so this answer needs no booted app.
+    def api_only?(root)
+      path = File.join(root.to_s, "config", "application.rb")
+      return false unless File.exist?(path)
+
+      content = RailsAiContext::SafeFile.read(path)
+      content&.match(API_ONLY_ASSIGNMENT)&.captures&.first == "true"
+    end
   end
 end

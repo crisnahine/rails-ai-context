@@ -108,4 +108,19 @@ RSpec.describe RailsAiContext::Watcher do
       end
     end
   end
+  # The whole point of watch mode is that the generated files track the app.
+  # Regenerating without reloading rewrote them from the constants the watcher
+  # booted with, so a model added while it ran never appeared.
+  describe "#handle_change" do
+    it "reloads the app's code before regenerating" do
+      watcher = described_class.new(Rails.application)
+      allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_return(true)
+      allow(RailsAiContext::Fingerprinter).to receive(:compute).and_return("fp")
+      allow(RailsAiContext).to receive(:generate_context).and_return({ written: [], skipped: [] })
+      allow($stderr).to receive(:puts)
+
+      expect(RailsAiContext::CodeReloader).to receive(:reload!)
+      watcher.send(:handle_change)
+    end
+  end
 end
