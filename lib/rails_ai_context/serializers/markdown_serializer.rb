@@ -117,7 +117,7 @@ module RailsAiContext
         routes = context[:routes]
         return if routes[:error]
 
-        lines = [ "## Routes (#{routes[:total_routes]} total)" ]
+        lines = [ "## Routes (#{routes[:total_routes]} total#{RouteCoverage.suffix(routes)})" ]
         routes[:by_controller]&.sort&.each do |ctrl, actions|
           lines << "### #{escape_markdown(ctrl)}"
           actions.each do |r|

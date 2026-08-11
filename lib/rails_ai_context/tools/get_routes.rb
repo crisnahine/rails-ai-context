@@ -89,6 +89,12 @@ module RailsAiContext
           if unattributed_count > 0 && controller.nil?
             count_label += " and #{count_phrase(unattributed_count, "engine mount")}"
           end
+          # Dropping the count of what the static tier could not expand let a
+          # partial list read as the whole routing table, which is the one
+          # thing an unbooted answer must not do. All three detail levels share
+          # this label. Gated on `controller` because the caveat is about the
+          # whole table, and a filtered answer is not that.
+          count_label += RailsAiContext::RouteCoverage.suffix(routes) if controller.nil?
 
           case detail
           when "summary"

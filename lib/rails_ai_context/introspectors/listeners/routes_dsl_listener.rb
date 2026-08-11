@@ -272,7 +272,17 @@ module RailsAiContext
         def emit_dynamic(node)
           return if suppressed?
 
-          @results << { type: :dynamic, macro: node.name, location: node.location.start_line }
+          record = { type: :dynamic, macro: node.name, location: node.location.start_line }
+          # `draw(:admin)` names a file, and Rails resolves it by literal path.
+          # Recording the name is what lets the introspector follow it instead
+          # of writing off everything the file defines.
+          record[:target] = draw_target(node) if node.name == :draw
+          @results << record
+        end
+
+        def draw_target(node)
+          target = extract_first_symbol(node)
+          target unless target == RailsAiContext::Confidence::INFERRED
         end
 
         # Keyword options including hash-rocket string keys, so

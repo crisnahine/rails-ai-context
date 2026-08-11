@@ -46,7 +46,7 @@ module RailsAiContext
           app_routes = app_ctrls.sum { |k| Tools::BaseTool.dedupe_put_patch_routes(Array(by_controller[k])).size }
           lines << "- Routes: #{count_phrase(app_routes, "app route")} across " \
                    "#{count_phrase(app_ctrls.size, "controller")} " \
-                   "(#{routes[:total_routes]} total incl. framework)"
+                   "(#{routes[:total_routes]} total incl. framework#{RouteCoverage.suffix(routes)})"
         end
 
         jobs = context[:jobs]

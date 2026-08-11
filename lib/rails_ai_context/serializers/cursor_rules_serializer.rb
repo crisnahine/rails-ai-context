@@ -82,7 +82,7 @@ module RailsAiContext
 
         routes = context[:routes]
         if routes && !routes[:error]
-          lines << "- Routes: #{routes[:total_routes]}"
+          lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}"
         end
 
         gems = context[:gems]

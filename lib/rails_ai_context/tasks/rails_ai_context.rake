@@ -448,7 +448,7 @@ namespace :ai do
     end
 
     if context[:routes] && !context[:routes][:error]
-      puts "🛤️  Routes: #{context[:routes][:total_routes]}"
+      puts "🛤️  Routes: #{context[:routes][:total_routes]}#{RailsAiContext::RouteCoverage.suffix(context[:routes])}"
     end
 
     if context[:jobs]

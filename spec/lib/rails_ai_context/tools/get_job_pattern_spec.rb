@@ -230,5 +230,77 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("No job classes in app/jobs/ beyond ApplicationJob")
       end
     end
+
+    # An app can run all its async work through Sidekiq workers in app/workers/,
+    # which this tool does not read. Saying only that app/jobs/ is empty leaves
+    # out the one thing already in hand that says otherwise.
+    context "when app/jobs/ is empty but config/sidekiq.yml names queues" do
+      let(:sidekiq_config) { { concurrency: 5, queues: %w[default push mailers] } }
+
+      before do
+        allow(described_class).to receive(:cached_context)
+          .and_return(jobs: { jobs: [], mailers: [], channels: [], sidekiq_config: sidekiq_config })
+        allow(Dir).to receive(:exist?).and_call_original
+        allow(Dir).to receive(:exist?).with(File.join(Rails.root.to_s, "app", "jobs")).and_return(false)
+      end
+
+      it "names the queues it found" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("config/sidekiq.yml declares 3 queues: default, push, mailers")
+      end
+
+      it "reports the concurrency beside them" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("(concurrency: 5)")
+      end
+
+      it "keeps saying what it did check" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("No app/jobs/ directory")
+      end
+
+      it "says the same on a specific job lookup" do
+        text = described_class.call(job: "SendWelcomeEmail").content.first[:text]
+        expect(text).to include("config/sidekiq.yml declares 3 queues")
+      end
+
+      # A count of what app/jobs/ holds is still a claim about the app's async
+      # work, and on an app running most of it through Sidekiq that count is
+      # the small half.
+      context "and app/jobs/ does have a job" do
+        before do
+          allow(Dir).to receive(:exist?).with(File.join(Rails.root.to_s, "app", "jobs")).and_return(true)
+        end
+
+        it "names the queues beside the job listing" do
+          text = described_class.call.content.first[:text]
+          expect(text).to include("# Background Jobs")
+          expect(text).to include("config/sidekiq.yml declares 3 queues: default, push, mailers")
+        end
+
+        it "says the listing does not cover workers outside app/jobs/" do
+          text = described_class.call.content.first[:text]
+          expect(text).to include("Workers outside app/jobs/ are not covered by this tool.")
+        end
+      end
+
+      context "when the file has no queues" do
+        let(:sidekiq_config) { { concurrency: 5 } }
+
+        it "claims nothing about queues" do
+          text = described_class.call.content.first[:text]
+          expect(text).not_to include("config/sidekiq.yml")
+        end
+      end
+
+      context "when there is no sidekiq.yml at all" do
+        let(:sidekiq_config) { nil }
+
+        it "claims nothing about queues" do
+          text = described_class.call.content.first[:text]
+          expect(text).not_to include("config/sidekiq.yml")
+        end
+      end
+    end
   end
 end

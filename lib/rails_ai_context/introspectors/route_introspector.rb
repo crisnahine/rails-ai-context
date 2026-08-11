@@ -8,6 +8,10 @@ module RailsAiContext
       extend StaticTier
       static_tier :alternate_source
 
+      # A drawn file can draw again. Rails allows it; this stops a cycle of
+      # symlinked or mutually-drawing files from walking forever.
+      MAX_DRAW_DEPTH = 5
+
       attr_reader :app
 
       def initialize(app)
@@ -38,7 +42,8 @@ module RailsAiContext
         { error: e.message }
       end
 
-      # Static tier: answer route questions from config/routes.rb alone.
+      # Static tier: answer route questions from config/routes.rb and the
+      # files it draws.
       # Output mirrors the runtime shape exactly so tools, resources, and
       # serializers need no static-awareness of their own. Routes behind
       # dynamic constructs (devise_for, draw, concerns) are counted in
@@ -47,21 +52,23 @@ module RailsAiContext
         routes_path = File.join(app.root.to_s, "config", "routes.rb")
         return { error: "config/routes.rb not found in #{app.root}" } unless File.exist?(routes_path)
 
-        ast = SourceIntrospector.walk(routes_path, {
-          routes: -> { Listeners::RoutesDslListener.new },
-          mounts: -> { Listeners::MountListener.new }
-        })
-        records = ast[:routes] || []
+        records, mounts, files = walk_routes_file(routes_path)
         entries = records.select { |r| r[:type] == :route }
-        dynamic = records.count { |r| r[:type] == :dynamic }
+        # A followed `draw` is no longer unexpanded - its routes are in the
+        # list above. Counting it would overstate what is missing by exactly
+        # the number of files this pass just read.
+        dynamic = records.count { |r| r[:type] == :dynamic && !r[:followed] }
 
         result = {
-          total_routes: entries.size,
+          # Merged, for the reason `call` gives above: a raw total here made the
+          # generated files say "8 total" where rails_get_routes, which merges
+          # for itself, said 7 on the same `resources :posts`.
+          total_routes: Tools::BaseTool.dedupe_put_patch_routes(entries).size,
           by_controller: group_by_controller(entries),
           api_namespaces: static_api_namespaces(entries),
-          mounted_engines: (ast[:mounts] || []).map { |m| { engine: m[:engine], path: m[:path] } },
+          mounted_engines: mounts.map { |m| { engine: m[:engine], path: m[:path] } },
           root_route: static_root_route(entries),
-          note: "Parsed statically from config/routes.rb (app not booted)",
+          note: "Parsed statically from #{static_sources_phrase(files)} (app not booted)",
           confidence: Confidence::STATIC
         }
         result[:dynamic_routes] = dynamic if dynamic.positive?
@@ -71,6 +78,95 @@ module RailsAiContext
       end
 
       private
+
+      # An app that splits its routing table with `draw` keeps most of it in
+      # config/routes/*.rb, and reading config/routes.rb alone answered 94 on a
+      # 723-route app with nothing saying the count was partial. Rails resolves
+      # `draw(:admin)` to config/routes/admin.rb by literal path, so following
+      # it is a plain file read.
+      #
+      # Returns the merged records, mounts, and the files actually read.
+      def walk_routes_file(path, already_read = [], depth = 0)
+        return [ [], [], [] ] if depth > MAX_DRAW_DEPTH
+
+        already_read << path
+        ast = SourceIntrospector.walk(path, {
+          routes: -> { Listeners::RoutesDslListener.new },
+          mounts: -> { Listeners::MountListener.new }
+        })
+        records = ast[:routes] || []
+        mounts = ast[:mounts] || []
+        files = [ path ]
+
+        records.select { |r| r[:type] == :dynamic && r[:macro] == :draw }.each do |record|
+          target = draw_target_path(record[:target])
+          next unless target
+
+          # Two files can draw the same third one, and a cycle brings the walk
+          # back to a file it started at. Both mean the routes are already in
+          # the list, so the draw is expanded even though this branch will not
+          # read it again - and this is also what stops the recursion.
+          if already_read.include?(target)
+            record[:followed] = true
+            next
+          end
+
+          sub_records, sub_mounts, sub_files = walk_draw_target(target, already_read, depth)
+          # Only the depth cap and an unreadable file get here, and both mean
+          # routes are missing. Marking the draw followed would drop the caveat
+          # precisely where it is needed.
+          next if sub_files.empty?
+
+          record[:followed] = true
+          records.concat(sub_records)
+          mounts.concat(sub_mounts)
+          files.concat(sub_files)
+        end
+
+        [ records, mounts, files ]
+      end
+
+      # A drawn file that cannot be parsed - over AstCache's size ceiling, or
+      # syntax-broken - must cost its own routes, not the routing table. Before
+      # this walk existed only config/routes.rb could fail the whole section;
+      # letting the raise through would hand that power to every file it draws.
+      # The draw stays unmarked, so the count already says routes are missing.
+      def walk_draw_target(target, already_read, depth)
+        walk_routes_file(target, already_read, depth + 1)
+      rescue StandardError, ScriptError => e
+        $stderr.puts "[rails-ai-context] draw target #{target} skipped: #{e.message}" if ENV["DEBUG"]
+        [ [], [], [] ]
+      end
+
+      # `draw(:"admin/users")` is legal and resolves under config/routes/, but
+      # the name reaches here from source text, so the resolved path has to be
+      # confirmed inside that directory before it is read.
+      #
+      # Resolved with realpath, like safe_glob_realpath: expand_path folds
+      # `..` without following links, so a symlink under config/routes/ was
+      # enough to read a file anywhere on disk.
+      def draw_target_path(target)
+        return nil if target.nil? || target.to_s.empty?
+
+        dir = File.realpath(File.join(app.root.to_s, "config", "routes"))
+        candidate = File.realpath(File.join(dir, "#{target}.rb"))
+        return nil unless candidate.start_with?("#{dir}#{File::SEPARATOR}")
+        return nil unless File.file?(candidate)
+
+        candidate
+      rescue SystemCallError
+        # No config/routes/ at all, a dangling symlink, or a name that resolves
+        # to nothing. None of them is a route this pass can read.
+        nil
+      end
+
+      def static_sources_phrase(files)
+        root = "#{app.root}#{File::SEPARATOR}"
+        names = files.map { |f| f.delete_prefix(root) }
+        return names.first if names.size == 1
+
+        "#{names.first} and #{CountPhrase.call(names.size - 1, "file")} it draws"
+      end
 
       def extract_routes
         # Force Rails to reload routes if routes.rb has changed

@@ -48,6 +48,8 @@ module RailsAiContext
       end
       context[:_warnings] = warnings if warnings.any?
 
+      resolve_schema_adapter(context)
+
       context
     end
 
@@ -98,6 +100,41 @@ module RailsAiContext
     }.freeze
 
     private
+
+    # `SchemaIntrospector` writes `static_parse` when it read a dump instead of
+    # the connection, and every surface that rendered the section raw named a
+    # database that does not exist. Fixing that one surface at a time meant
+    # `.ai-context.json` and `rails://schema` still disagreed with the
+    # multi_database section of the same file. Resolving it here means the
+    # context never carries the placeholder, so nothing downstream has to
+    # remember. The raw observation stays under `adapter_source` for a reader
+    # that needs to know the schema was parsed rather than observed.
+    #
+    # Runs after the loop: the answer comes from the database config and gem
+    # list, which are sections of this same context.
+    #
+    # Rescued for the same reason the loop above is: this reads two other
+    # sections, and a malformed one raising here would cost the whole context
+    # rather than one entry. The placeholder surviving is the honest failure.
+    def resolve_schema_adapter(context)
+      schema = context[:schema]
+      return unless schema.is_a?(Hash) && !schema[:error]
+      # Only correct a claim that was made. A missing or nil adapter said
+      # nothing about the database, and answering for it would be the
+      # fabrication this method exists to remove.
+      return if schema[:adapter].nil?
+      return unless SchemaAdapter.placeholder?(schema[:adapter])
+
+      # "unknown" is a placeholder too. Swapping one for another buys nothing
+      # and would bury the parse mode that at least says how the schema was read.
+      resolved = SchemaAdapter.label(context)
+      return if SchemaAdapter.placeholder?(resolved)
+
+      schema[:adapter_source] = schema[:adapter]
+      schema[:adapter] = resolved
+    rescue StandardError => e
+      RailsAiContext.log_warn "[rails-ai-context] schema adapter resolution failed: #{e.message}"
+    end
 
     def app_name
       return File.basename(app.root.to_s) if app.is_a?(RailsAiContext::StaticApp)

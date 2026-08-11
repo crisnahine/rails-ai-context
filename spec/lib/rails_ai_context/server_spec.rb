@@ -202,6 +202,99 @@ RSpec.describe RailsAiContext::Server do
     end
   end
 
+  # MCP sessions live in the transport's own memory, so a forked Puma worker
+  # cannot answer a request whose `initialize` a sibling handled. Rackup hands
+  # Puma the host app's config/puma.rb unless told not to, and a real app sets
+  # `workers` there - which turned roughly half of all requests on a valid
+  # session into "Session not found".
+  describe "single-mode HTTP transport" do
+    let(:s) { described_class.new(app, transport: :http) }
+    let(:config) { RailsAiContext.configuration }
+
+    def options_for(handler)
+      s.send(:rack_handler_options, handler, config)
+    end
+
+    before { allow($stderr).to receive(:puts) }
+
+    it "pins Puma to one process" do
+      require "rackup"
+      expect(options_for(Rackup::Handler.get(:puma)))
+        .to eq(Host: config.http_bind, Port: config.http_port, workers: 0, config_files: [ "-" ])
+    end
+
+    # A stand-in rather than a real second handler: webrick and falcon are not
+    # in this bundle, and what is under test is only "not Puma".
+    it "leaves a non-Puma handler's options alone" do
+      expect(options_for(Module.new)).to eq(Host: config.http_bind, Port: config.http_port)
+    end
+
+    it "says that it dropped the app's puma config" do
+      require "rackup"
+      options_for(Rackup::Handler.get(:puma))
+      expect($stderr).to have_received(:puts).with(/single mode/)
+    end
+
+    it "passes the options to the handler it resolved" do
+      handler = double("handler")
+      allow(s).to receive_messages(default_rack_handler: handler, build: instance_double(MCP::Server))
+      allow(s).to receive(:rack_handler_options).and_return(Port: 6041)
+      allow(MCP::Server::Transports::StreamableHTTPTransport).to receive(:new)
+      allow(s).to receive(:maybe_start_live_reload)
+      allow(s).to receive(:tool_banner).and_return("")
+      allow(handler).to receive(:run)
+
+      s.send(:start_http, instance_double(MCP::Server))
+      expect(handler).to have_received(:run).with(anything, Port: 6041)
+    end
+
+    # The two options close two independent routes to a cluster, and Puma's own
+    # resolution is the only thing that can show it: refusing the config file
+    # still leaves WEB_CONCURRENCY, and pinning `workers` still lets the file's
+    # pidfile and preload_app! through.
+    describe "against Puma's own config resolution" do
+      def resolved(options, env: {})
+        require "puma/configuration"
+        original = ENV.to_h
+        env.each { |k, v| ENV[k] = v }
+        conf = ::Puma::Configuration.new(options.dup, {})
+        conf.clamp
+        conf.options
+      ensure
+        ENV.replace(original)
+      end
+
+      around do |example|
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config", "puma.rb"), <<~RUBY)
+            workers ENV.fetch("WEB_CONCURRENCY") { 2 }.to_i
+            preload_app!
+            pidfile "tmp/pids/server.pid"
+          RUBY
+          Dir.chdir(dir) { example.run }
+        end
+      end
+
+      it "would run a cluster on the app's config without the pin" do
+        expect(resolved({ Host: "127.0.0.1", Port: 6041 })[:workers]).to eq(2)
+      end
+
+      it "runs one process despite the app's config" do
+        expect(resolved(options_for(Rackup::Handler.get(:puma)))[:workers]).to eq(0)
+      end
+
+      it "runs one process despite WEB_CONCURRENCY" do
+        options = options_for(Rackup::Handler.get(:puma))
+        expect(resolved(options, env: { "WEB_CONCURRENCY" => "4" })[:workers]).to eq(0)
+      end
+
+      it "does not take over the app's pidfile" do
+        expect(resolved(options_for(Rackup::Handler.get(:puma)))[:pidfile]).to be_nil
+      end
+    end
+  end
+
   describe "#build_rack_app" do
     let(:s) { described_class.new(app, transport: :http) }
     let(:mcp_path) { RailsAiContext.configuration.http_path }

@@ -214,14 +214,41 @@ module RailsAiContext
       $stderr.puts tool_banner(server)
       maybe_start_live_reload(server)
 
-      begin
-        require "rackup"
-        Rackup::Handler.default.run(rack_app, Host: config.http_bind, Port: config.http_port)
-      rescue LoadError
-        # Fallback for older rack without rackup gem
-        require "rack/handler"
-        Rack::Handler.default.run(rack_app, Host: config.http_bind, Port: config.http_port)
-      end
+      handler = default_rack_handler
+      handler.run(rack_app, **rack_handler_options(handler, config))
+    end
+
+    def default_rack_handler
+      require "rackup"
+      Rackup::Handler.default
+    rescue LoadError
+      # Fallback for older rack without rackup gem
+      require "rack/handler"
+      Rack::Handler.default
+    end
+
+    # MCP sessions live in this process's memory, so a forked worker cannot
+    # answer a request whose `initialize` another worker handled - about half
+    # of them come back "Session not found". Puma's handler otherwise reads the
+    # host app's config/puma.rb, which on a real app sets `workers` (and a
+    # pidfile this server would then write over). Both options are load-bearing:
+    # refusing the file still leaves WEB_CONCURRENCY able to start a cluster on
+    # its own, and pinning the worker count still lets the file's pidfile and
+    # preload_app! through.
+    def rack_handler_options(handler, config)
+      options = { Host: config.http_bind, Port: config.http_port }
+      return options unless puma_handler?(handler)
+
+      $stderr.puts "[rails-ai-context] Puma pinned to single mode - MCP sessions are per-process, " \
+                   "so config/puma.rb and WEB_CONCURRENCY are not read."
+      options.merge(workers: 0, config_files: [ "-" ])
+    end
+
+    # The handler is whatever Rackup picked, and only Puma understands these
+    # keys. Puma::RackHandler is the module both Rackup::Handler::Puma and the
+    # older Rack::Handler::Puma extend, so this recognizes either.
+    def puma_handler?(handler)
+      defined?(::Puma::RackHandler) && handler.singleton_class.include?(::Puma::RackHandler)
     end
 
     # Conditionally start live reload based on configuration.

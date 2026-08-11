@@ -2,8 +2,10 @@
 
 module RailsAiContext
   module Introspectors
-    # Discovers background jobs (ActiveJob/Sidekiq), mailers,
-    # and Action Cable channels.
+    # Discovers ActiveJob jobs, mailers, and Action Cable channels. Sidekiq
+    # reaches this only as config/sidekiq.yml: a class that includes
+    # Sidekiq::Worker without subclassing ActiveJob::Base is not a descendant
+    # and does not live in app/jobs/, so neither pass here finds it.
     class JobIntrospector
       extend StaticTier
       static_tier :alternate_source
@@ -52,6 +54,7 @@ module RailsAiContext
         ActiveJob::Base.descendants.filter_map do |job|
           next if job.name.nil? || job.name == "ApplicationJob" ||
                   job.name.start_with?("ActionMailer", "ActiveStorage::", "ActionMailbox::", "Turbo::", "Sentry::")
+          next unless app_defined?(job)
 
           queue = job.queue_name
           queue = "dynamic" if queue.is_a?(Proc)
@@ -65,6 +68,26 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] extract_jobs failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # `descendants` is every ActiveJob subclass in the process, and the name
+      # prefixes above only cover the framework's own - a job from any other gem
+      # was counted as the app's. Where the class is defined answers it for gems
+      # the list has never heard of. A class with no source location stays:
+      # dropping one would understate what the app runs.
+      def app_defined?(job)
+        location = Object.const_source_location(job.name)&.first
+        return true unless location
+
+        File.realpath(location).start_with?("#{app_root_real}/")
+      rescue NameError, ArgumentError, TypeError, SystemCallError
+        true
+      end
+
+      def app_root_real
+        @app_root_real ||= File.realpath(app.root.to_s)
+      rescue SystemCallError
+        @app_root_real = app.root.to_s
       end
 
       def extract_jobs_from_source
@@ -255,10 +278,11 @@ module RailsAiContext
         []
       end
 
-      # A mailer's actions are its public instance methods. The booted side asks
-      # `action_methods`, which also subtracts inherited and internal ones - the
-      # AST cannot see that, so a public helper on a concrete mailer is still
-      # listed here and not there.
+      # A mailer's actions are its public instance methods, and the AST sees
+      # one file at a time. `action_methods` counts the public methods a mailer
+      # inherits too, so a public helper on a base class is an action the
+      # booted tier reports and this one cannot - the entries are tagged STATIC
+      # for that reason.
       def extract_mailers_from_source
         source_classes(File.join(app.root, "app", "mailers")).filter_map do |name, methods|
           next if name == "ApplicationMailer"

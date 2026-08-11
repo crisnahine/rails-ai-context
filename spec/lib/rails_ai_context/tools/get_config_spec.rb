@@ -259,7 +259,9 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Application Configuration")
-      expect(text).not_to include("Mailer")
+      # Only the line this key feeds. "Mailer delivery" beside it is read from
+      # the live Rails config, not from data[:mailer].
+      expect(text).not_to include("Mailer config:")
     end
 
     it "handles empty current_attributes" do

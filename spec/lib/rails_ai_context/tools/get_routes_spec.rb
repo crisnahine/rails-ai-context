@@ -212,4 +212,44 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(text).to include("**posts**")
     end
   end
+
+  # The static tier records the constructs it could not expand. The renderer
+  # dropped that number, so a partial list read as the whole routing table -
+  # and the generic [STATIC] footer says the opposite, since these are route
+  # definitions the parser did not follow, not runtime-only data.
+  describe "routes the static tier could not expand" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: {
+          total_routes: 9, by_controller: by_controller, api_namespaces: [],
+          dynamic_routes: 23
+        }
+      })
+    end
+
+    it "says how many are missing, in every detail level" do
+      %w[summary standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        expect(text).to include("23 dynamic constructs not expanded"), "missing at detail:#{detail}"
+      end
+    end
+
+    it "adds to the header rather than replacing what it said" do
+      expect(described_class.call.content.first[:text])
+        .to start_with("# Routes (7 routes, excluding 1 framework route, 23 dynamic constructs not expanded)")
+    end
+
+    it "says nothing when everything was expanded" do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 9, by_controller: by_controller, api_namespaces: [] }
+      })
+      expect(described_class.call.content.first[:text]).not_to include("not expanded")
+    end
+
+    # The caveat is about the whole table, and a filtered answer is not that.
+    it "stays out of a single-controller answer" do
+      text = described_class.call(controller: "posts").content.first[:text]
+      expect(text).not_to include("not expanded")
+    end
+  end
 end

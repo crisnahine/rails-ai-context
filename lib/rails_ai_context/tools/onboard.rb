@@ -285,7 +285,9 @@ module RailsAiContext
             .select { |k, _| prefixes.any? { |p| k.downcase.start_with?(p) } }
             .values.sum { |route_list| dedupe_put_patch_routes(route_list).size }
           framework_note = framework_count > 0 ? " (plus #{count_phrase(framework_count, 'framework route')})" : ""
-          lines << "Total: #{count_phrase(app_route_count, 'app route')} across #{count_phrase(app_ctrls.size, 'controller')}#{framework_note}."
+          lines << "Total: #{count_phrase(app_route_count, 'app route')} across " \
+                   "#{count_phrase(app_ctrls.size, 'controller')}#{framework_note}" \
+                   "#{RailsAiContext::RouteCoverage.suffix(routes)}."
           lines << ""
           lines
         end

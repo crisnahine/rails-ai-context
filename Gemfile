@@ -11,6 +11,15 @@ group :development, :test do
   gem "railties", "~> #{rails_version}.0"
   gem "activerecord", "~> #{rails_version}.0"
 
+  # The booted mailer path is only reachable with ActionMailer loaded. Without
+  # it ActionMailer::Base is undefined, extract_mailers returns [], and every
+  # assertion about mailer actions passes over an empty array.
+  gem "actionmailer", "~> #{rails_version}.0"
+
+  # The HTTP transport pins Puma to single mode; that pin is only testable
+  # against Puma's real option semantics.
+  gem "puma"
+
   # Rails 7.0's sqlite3 adapter caps at sqlite3 ~> 1.4; the 2.x line is only
   # supported from Rails 7.1 on. Newer Rails resolves sqlite3 2.x unpinned.
   if rails_version == "7.0"

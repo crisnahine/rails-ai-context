@@ -296,13 +296,87 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:jobs]).to eq([])
     end
   end
-  # `instance_methods(false)` is not Rails' definition of a mailer action: it
-  # includes ActiveSupport's generated `_run_*_callbacks` and every public
-  # helper, so an abstract base was reported as having deliverable actions.
+  # ActiveJob::Base.descendants is every job in the process, gems included. The
+  # framework name prefixes only cover Rails' own, so a job from any other gem
+  # counted as the app's: an app with 118 Sidekiq workers and no ActiveJob of
+  # its own reported "1 job", and that job was Chewy's indexing worker.
+  describe "whose jobs these are" do
+    # Stubbed rather than `load`-ed. A real subclass stays in
+    # ActiveJob::Base.descendants for the rest of the run and keeps its name
+    # even after remove_const, so a leftover from here would be counted as the
+    # app's own job by a later example - the very bug under test.
+    before { allow(Object).to receive(:const_source_location).and_call_original }
+
+    def job(name, defined_in:)
+      allow(Object).to receive(:const_source_location).with(name)
+        .and_return(defined_in && [ defined_in, 1 ])
+      double(name, name: name, queue_name: "default", priority: nil)
+    end
+
+    def names_reported_for(*jobs)
+      allow(ActiveJob::Base).to receive(:descendants).and_return(jobs)
+      described_class.new(Rails.application).call[:jobs].map { |j| j[:name] }
+    end
+
+    let(:app_job_file) { File.join(Rails.root, "app", "jobs", "example_job.rb") }
+
+    it "drops a job defined outside the app" do
+      gem_file = File.join(Gem.loaded_specs["rspec-core"].full_gem_path, "lib", "rspec", "core.rb")
+      expect(names_reported_for(job("GemIndexingWorker", defined_in: gem_file)))
+        .not_to include("GemIndexingWorker")
+    end
+
+    it "keeps a job defined inside the app" do
+      expect(names_reported_for(job("RuntimeProbeJob", defined_in: app_job_file)))
+        .to include("RuntimeProbeJob")
+    end
+
+    # Dropping one would understate what the app runs, which is the worse of
+    # the two mistakes this filter can make.
+    it "keeps a job whose source location is unknown" do
+      expect(names_reported_for(job("PlacelessWorker", defined_in: nil)))
+        .to include("PlacelessWorker")
+    end
+
+    it "keeps the app's job while dropping the gem's in one pass" do
+      gem_file = File.join(Gem.loaded_specs["rspec-core"].full_gem_path, "lib", "rspec", "core.rb")
+      reported = names_reported_for(
+        job("GemIndexingWorker", defined_in: gem_file),
+        job("RuntimeProbeJob", defined_in: app_job_file)
+      )
+      expect(reported).to eq(%w[RuntimeProbeJob])
+    end
+  end
+
+  # `instance_methods(false)` is not Rails' definition of a mailer action. It
+  # returns protected methods too, and from Rails 8.1 on, ActiveSupport aliases
+  # `_run_<kind>_callbacks` onto the first class in a hierarchy to declare a
+  # callback of that kind - so `ApplicationMailer` was reported as having three
+  # deliverable actions where Rails dispatches on none.
+  #
+  # The fixtures carry that shape: ApplicationMailer is an abstract base with a
+  # callback and two protected helpers, NotificationMailer a concrete mailer
+  # with one action and one protected helper beside it.
   describe "mailer actions" do
+    subject(:mailers) { described_class.new(Rails.application).call[:mailers] }
+
+    # Without ActionMailer in the bundle, ActionMailer::Base is undefined and
+    # extract_mailers returns [] - which would leave every assertion below
+    # passing over an empty array.
+    it "sees the fixture mailers" do
+      expect(mailers.map { |m| m[:name] }).to include("NotificationMailer", "UserMailer")
+    end
+
+    it "omits an abstract base that has no deliverable action" do
+      expect(mailers.map { |m| m[:name] }).not_to include("ApplicationMailer")
+    end
+
+    it "reports the action of a concrete mailer without the protected helper beside it" do
+      expect(mailers.find { |m| m[:name] == "NotificationMailer" }[:actions]).to eq(%w[digest])
+    end
+
     it "reports exactly what Rails dispatches on" do
-      result = described_class.new(Rails.application).call
-      result[:mailers].each do |mailer|
+      mailers.each do |mailer|
         klass = mailer[:name].safe_constantize
         next unless klass.respond_to?(:action_methods)
 
@@ -311,9 +385,49 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
     end
 
     it "never reports an ActiveSupport callback runner as an action" do
-      result = described_class.new(Rails.application).call
-      all_actions = result[:mailers].flat_map { |m| m[:actions] }
-      expect(all_actions).to all(satisfy { |a| !a.start_with?("_run_") })
+      expect(mailers.flat_map { |m| m[:actions] }).to all(satisfy { |a| !a.start_with?("_run_") })
+    end
+
+    it "answers the same as the static tier when no helper is inherited" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
+        %w[application_mailer notification_mailer].each do |name|
+          FileUtils.cp(File.join(Rails.root, "app", "mailers", "#{name}.rb"),
+                       File.join(dir, "app", "mailers"))
+        end
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mailers]
+        expect(static.map { |m| m.slice(:name, :actions) })
+          .to eq([ { name: "NotificationMailer", actions: %w[digest] } ])
+      end
+    end
+
+    # Rails dispatches on every public instance method a mailer inherits, not
+    # only the ones its own file defines. The AST sees one file at a time, so
+    # a public helper on a base class is an action the booted tier reports and
+    # the static tier cannot. Pinned because the gap is real and undocumented,
+    # not because it is acceptable.
+    it "misses an inherited public helper the booted tier calls an action" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers"))
+        File.write(File.join(dir, "app", "mailers", "billing_base_mailer.rb"), <<~RUBY)
+          class BillingBaseMailer < ActionMailer::Base
+            def locale_for_account(account) = account
+          end
+        RUBY
+        File.write(File.join(dir, "app", "mailers", "invoice_mailer.rb"), <<~RUBY)
+          class InvoiceMailer < BillingBaseMailer
+            def invoice(id)
+              mail(to: "test@example.com")
+            end
+          end
+        RUBY
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mailers]
+        invoice = static.find { |m| m[:name] == "InvoiceMailer" }
+        expect(invoice[:actions]).to eq(%w[invoice])
+        expect(invoice[:confidence]).to eq(RailsAiContext::Confidence::STATIC)
+      end
     end
   end
 end

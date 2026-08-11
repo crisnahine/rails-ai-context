@@ -50,7 +50,7 @@ module RailsAiContext
         lines << "- Models: #{models.size}" if models.is_a?(Hash) && !models[:error]
 
         routes = context[:routes]
-        lines << "- Routes: #{routes[:total_routes]}" if routes.is_a?(Hash) && !routes[:error]
+        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes.is_a?(Hash) && !routes[:error]
 
         lines.concat(full_preset_stack_lines)
 

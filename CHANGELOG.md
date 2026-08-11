@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`serve --transport http` no longer answers "Session not found" to about half
+  of all requests.** Rackup hands Puma the host app's `config/puma.rb`, and a
+  real app sets `workers` there, so the transport ran as a cluster - but MCP
+  sessions live in one process's memory, and a forked worker cannot answer a
+  request whose `initialize` a sibling handled. Puma is now pinned to single
+  mode. Both options are load-bearing: refusing the config file still leaves
+  `WEB_CONCURRENCY` able to start a cluster on its own, and pinning the worker
+  count still lets the file's `pidfile` and `preload_app!` through - the pidfile
+  being one this server would otherwise write over the app's own. (#123)
+
+- **A gem's background job is no longer counted as the app's.** `extract_jobs`
+  filtered `ActiveJob::Base.descendants` with a list of framework name
+  prefixes, which no list can keep up with: on an app with 118 Sidekiq workers
+  and no ActiveJob of its own, the generated `CLAUDE.md` read `Async: 1 job`
+  and that job was an indexing worker belonging to a gem. Ownership is now
+  decided by where the class is defined. A class with no source location is
+  kept, because understating what the app runs is the worse mistake. (#120)
+
+- **`get_job_pattern` now names the queues `config/sidekiq.yml` declares.**
+  `extract_sidekiq_config` already read them; holding the result back left the
+  answer describing `app/jobs/` and nothing else, on an app whose sidekiq.yml
+  is the one piece of evidence in reach that async work happens elsewhere. It
+  reaches the job listing as well as the empty-directory message - a count of
+  what `app/jobs/` holds is still a claim about the app's async work, and on an
+  app running most of it through Sidekiq that count is the small half. (#120)
+
+- **The context no longer carries `static_parse` as a database name.**
+  `SchemaIntrospector` writes that placeholder when it reads a dump instead of
+  the connection, and laundering it at each rendering surface left the ones
+  nobody thought of - `.ai-context.json` and `rails://schema` - naming a
+  database that does not exist beside a `multi_database` section in the same
+  file naming the real one. It is now resolved once, where the context is
+  assembled, so nothing downstream has to remember. The raw observation stays
+  under `adapter_source`. (#128)
+
+- **The static tier follows `draw` into `config/routes/*.rb`.** An app that
+  splits its routing table that way kept most of it in files the parser never
+  opened: `--no-boot` answered 94 routes on a 723-route app. Rails resolves
+  `draw(:admin)` by literal path, so following it is a plain file read; the
+  resolved path is confirmed inside `config/routes/` with `realpath` first, so
+  a symlink there cannot reach the rest of the disk. (#127)
+
+- **Every surface that prints a route count says how much of the table it
+  could not expand.** `RouteIntrospector` recorded `dynamic_routes` for
+  constructs it refused to fabricate (`devise_for`, a `draw` whose target is
+  computed or too large to parse) and nothing read it, so `rails_get_routes`,
+  `rails_onboard`, `CLAUDE.md`, the Cursor and Copilot rule files, the markdown
+  context and the rake summary all quoted a partial count as the whole routing
+  table. `RouteCoverage` is the one answer they now share, shaped as a suffix
+  so no call site needs a conditional of its own - nine each having to remember
+  is what produced this. A `draw` whose routes are in the list does not count,
+  whether this pass read the file or an earlier branch did; one stopped by the
+  depth cap, or naming a file too large to parse, does. A drawn file that
+  cannot be parsed costs its own routes rather than the whole section. (#127)
+
+- **The static tier counts an update route once.** Rails registers PATCH and
+  PUT separately for one action and every surface that lists routes merges
+  them, but the static total did not - so the generated files said "8 total"
+  where `rails_get_routes`, which merges for itself, said 7 on the same
+  `resources :posts`. (#127)
+
+### Changed
+
+- `actionmailer` and `puma` are development dependencies now. Without
+  ActionMailer loaded, `ActionMailer::Base` is undefined and every assertion
+  about mailer actions passed over an empty array; the Puma single-mode pin is
+  only testable against Puma's own option semantics. Neither affects the
+  gem's runtime dependencies. (#123, #126)
+
 ## [5.20.2] - 2026-08-11
 
 ### Fixed

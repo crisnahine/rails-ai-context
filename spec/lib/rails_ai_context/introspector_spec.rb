@@ -206,4 +206,76 @@ RSpec.describe RailsAiContext::Introspector do
       config.introspectors = original
     end
   end
+
+  # `static_parse` names no database. Laundering it at each surface left the
+  # ones nobody thought of - .ai-context.json and rails://schema - saying
+  # "static_parse" beside a multi_database section in the same file saying
+  # "sqlite3". Resolved here, the context never carries the placeholder.
+  describe "the schema adapter it hands downstream" do
+    let(:static_app) { RailsAiContext::StaticApp.new(File.expand_path("spec/fixtures/static_app")) }
+
+    subject(:schema) { described_class.new(static_app).call[:schema] }
+
+    it "names a real database rather than the parse mode" do
+      expect(schema[:adapter]).to eq("SQLite")
+    end
+
+    it "keeps the raw observation for a reader that needs it" do
+      expect(schema[:adapter_source]).to eq("static_parse")
+    end
+
+    it "agrees with the seam every other surface asks" do
+      context = described_class.new(static_app).call
+      expect(context[:schema][:adapter]).to eq(RailsAiContext::SchemaAdapter.label(context))
+    end
+
+    # The surface the generated file is built from.
+    it "carries the resolved name into .ai-context.json" do
+      context = described_class.new(static_app).call
+      json = JSON.parse(RailsAiContext::Serializers::JsonSerializer.new(context).call)
+      expect(json.dig("schema", "adapter")).to eq("SQLite")
+    end
+
+    it "leaves an observed adapter alone" do
+      context = { schema: { adapter: "PostgreSQL" } }
+      described_class.new(static_app).send(:resolve_schema_adapter, context)
+      expect(context[:schema]).to eq(adapter: "PostgreSQL")
+    end
+
+    it "leaves a failed schema section alone" do
+      context = { schema: { error: "boom" } }
+      described_class.new(static_app).send(:resolve_schema_adapter, context)
+      expect(context[:schema]).to eq(error: "boom")
+    end
+
+    it "does not answer for a section that never claimed an adapter" do
+      context = { schema: { total_tables: 7 } }
+      described_class.new(static_app).send(:resolve_schema_adapter, context)
+      expect(context[:schema]).to eq(total_tables: 7)
+    end
+
+    it "treats an explicit nil the same as no claim at all" do
+      context = { schema: { adapter: nil } }
+      described_class.new(static_app).send(:resolve_schema_adapter, context)
+      expect(context[:schema]).to eq(adapter: nil)
+    end
+
+    # "unknown" is a placeholder too. Trading one for another buys nothing and
+    # buries the parse mode, which at least says how the schema was read.
+    it "keeps the parse mode when nothing resolves the database" do
+      context = { schema: { adapter: "static_parse" } }
+      described_class.new(static_app).send(:resolve_schema_adapter, context)
+      expect(context[:schema]).to eq(adapter: "static_parse")
+    end
+
+    # It reads two other sections, so a malformed one must cost this answer,
+    # not the whole context - the same isolation every section already gets.
+    it "leaves the placeholder standing rather than taking the context down" do
+      context = { schema: { adapter: "static_parse" }, multi_database: { databases: [ "primary" ] } }
+      allow(RailsAiContext).to receive(:log_warn)
+
+      expect { described_class.new(static_app).send(:resolve_schema_adapter, context) }.not_to raise_error
+      expect(context[:schema][:adapter]).to eq("static_parse")
+    end
+  end
 end
