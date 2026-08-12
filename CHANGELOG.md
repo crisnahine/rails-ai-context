@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The static tier no longer drops a model's concerns.** Nothing in the
+  listener stack collected `include`/`prepend`, so `rails_get_model_details`
+  answered `--no-boot` with no Concerns section at all - not even an
+  `[UNAVAILABLE]` marker - for a model that includes one. A new
+  `MixinsListener` reads them from the source, filtered to the mixins
+  reflection would report so both tiers answer the same question. (#137)
+- **Cookie settings that Rails computes per request are named, not
+  inspected.** Rails 8 defaults `same_site` to a lambda, which reached
+  `.ai-context.json` as `#<Proc:0x...>` - an address that answers nothing and
+  moves on every boot, so the file was rewritten on every run even when the app
+  had not changed. Callables now render `[UNAVAILABLE: computed at request
+  time]`, nested ones included. (#138)
+- **Initializer sources are gem-relative instead of absolute machine paths.**
+  Every one of them was written into `.ai-context.json` as
+  `/Users/<name>/.rvm/gems/ruby-3.4.9/gems/railties-8.0.5.1/...`, which is
+  wrong on every other machine, wrong again after a Ruby upgrade, and carries
+  the generating developer's home directory into the app's repository. (#139)
+
 ## [5.21.1] - 2026-08-12
 
 ### Fixed

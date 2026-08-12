@@ -389,6 +389,39 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "reports the modules a model includes or prepends, and not what it extends" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            include Publishable
+            prepend Auditable
+            extend Searchable
+            has_many :comments
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Post"][:concerns]).to contain_exactly("Publishable", "Auditable")
+      end
+    end
+
+    it "leaves framework modules out of the concerns it reports" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            include ActiveModel::Validations
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Post"][:concerns]).to be_empty
+      end
+    end
+
     it "isolates a single unreadable model to its own entry" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))

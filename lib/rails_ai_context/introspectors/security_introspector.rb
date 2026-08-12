@@ -246,11 +246,17 @@ module RailsAiContext
         {}
       end
 
+      # Rails 8 defaults same_site to a lambda. Left alone it reaches
+      # .ai-context.json as an address that answers nothing and moves every
+      # boot, so the file is rewritten on every run. Nested one level down it
+      # is worse: the encoder renders it `{}`, which reads as a setting the app
+      # left empty.
       def serializable(value)
         case value
         when Symbol then value.to_s
-        when Hash then value.transform_keys(&:to_s)
-        when Array then value.map(&:to_s)
+        when Hash then value.each_with_object({}) { |(key, nested), result| result[key.to_s] = serializable(nested) }
+        when Array then value.map { |nested| serializable(nested) }
+        when Proc then Confidence.unavailable("computed at request time")
         else value
         end
       end

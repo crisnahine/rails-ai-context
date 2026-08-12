@@ -5,6 +5,14 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Introspectors::SecurityIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
 
+  def deep_values(value)
+    case value
+    when Hash  then value.values.flat_map { |v| deep_values(v) }
+    when Array then value.flat_map { |v| deep_values(v) }
+    else [ value ]
+    end
+  end
+
   describe "#call" do
     subject(:result) { introspector.call }
 
@@ -42,6 +50,34 @@ RSpec.describe RailsAiContext::Introspectors::SecurityIntrospector do
 
     it "returns cookies config as Hash" do
       expect(result[:cookies]).to be_a(Hash)
+    end
+
+    # Rails 8 ships a lambda as the default same_site. Serialized raw it
+    # reaches .ai-context.json as "#<Proc:0x...>" - an address that means
+    # nothing to the reader and changes on every boot, so the generated file
+    # is rewritten on every run.
+    it "describes a callable cookie option instead of inspecting it" do
+      allow(Rails.application.config).to receive(:session_options)
+        .and_return({ key: "_app_session", same_site: ->(_request) { :lax } })
+
+      cookies = described_class.new(Rails.application).call[:cookies]
+
+      expect(cookies[:same_site]).to eq("[UNAVAILABLE: computed at request time]")
+      expect(cookies.to_json).not_to include("#<Proc")
+    end
+
+    # A nested callable does not reach the file as an address - ActiveSupport's
+    # encoder renders it as `{}`, which reads as an empty setting rather than
+    # as one the gem could not state. Assert on the data, not on one encoder's
+    # rendering of it.
+    it "describes a callable nested inside a cookie option too" do
+      allow(Rails.application.config).to receive(:session_options)
+        .and_return({ key: "_app_session", domain: { hosts: [ ->(_request) { "example.com" } ] } })
+
+      cookies = described_class.new(Rails.application).call[:cookies]
+
+      expect(deep_values(cookies).grep(Proc)).to be_empty
+      expect(deep_values(cookies)).to include("[UNAVAILABLE: computed at request time]")
     end
 
     it "returns allow_browser as array" do

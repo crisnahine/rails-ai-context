@@ -591,9 +591,21 @@ module RailsAiContext
           # with callbacks found" and then raised a TypeError on a Hash lookup
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
+          concerns: static_concerns(data[:mixins]),
           macros: data[:macros],
           methods: data[:methods]
         }
+      end
+
+      # Only the mixins reflection would report, so both tiers answer the same
+      # question. This sees the model file alone, where the booted tier also
+      # walks what its superclass and its concerns pulled in.
+      def static_concerns(mixins)
+        (mixins || [])
+          .select { |mixin| mixin[:ancestor] }
+          .map { |mixin| mixin[:name] }
+          .reject { |name| framework_concern?(name) }
+          .uniq
       end
 
       # Mongoid documents are invisible to ActiveRecord reflection, so both

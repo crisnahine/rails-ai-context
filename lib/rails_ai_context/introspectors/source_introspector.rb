@@ -20,7 +20,8 @@ module RailsAiContext
         enums:        Listeners::EnumsListener,
         callbacks:    Listeners::CallbacksListener,
         macros:       Listeners::MacrosListener,
-        methods:      Listeners::MethodsListener
+        methods:      Listeners::MethodsListener,
+        mixins:       Listeners::MixinsListener
       }.freeze
 
       # Introspect a file on disk (cached parse) with default listeners.

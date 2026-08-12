@@ -41,6 +41,27 @@ RSpec.describe RailsAiContext::Introspectors::InitializerIntrospector do
       expect(with_source).to be > 0
     end
 
+    # These sources are written into .ai-context.json, which the app commits.
+    # An absolute path is wrong on every other machine, wrong again after a
+    # Ruby upgrade, and it carries the generating developer's username.
+    it "reports gem-owned sources gem-relative rather than as machine paths" do
+      gem_roots = Gem.path.map { |path| File.join(path, "gems") }
+      machine_paths = result[:initializers].filter_map { |i| i[:source] }
+        .select { |source| gem_roots.any? { |root| source.start_with?(root) } }
+
+      expect(machine_paths).to be_empty
+    end
+
+    it "names the gem and version it relativized against" do
+      railties = Gem.loaded_specs["railties"]&.full_gem_path
+      skip "railties is not installed under a gem root" unless railties &&
+        Gem.path.any? { |dir| railties.start_with?(File.join(dir, "gems")) }
+
+      sources = result[:initializers].filter_map { |i| i[:source] }
+
+      expect(sources).to include(a_string_starting_with("#{File.basename(railties)}/"))
+    end
+
     it "lists application initializer files from config/initializers/" do
       expect(result[:application_initializers]).to be_an(Array)
     end
