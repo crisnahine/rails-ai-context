@@ -148,6 +148,16 @@ RSpec.describe RailsAiContext::Tools::Validate do
       expect(text).to include("1/1 files passed")
     end
 
+    # An attribute reader has no `def` to find, so a column named like a
+    # helper read as a broken route until the column list was consulted.
+    it "does not report a model's own *_url column as a missing route helper" do
+      result = described_class.call(files: [ "app/models/post.rb" ], level: "rails")
+      text = result.content.first[:text]
+
+      expect(text).not_to include("canonical_url - route helper not found")
+      expect(text).to include("1/1 files passed")
+    end
+
     it "still reports route-like calls when the local method is defined in another class" do
       File.write(file_path, <<~RUBY)
         class LocalRouteDefinition

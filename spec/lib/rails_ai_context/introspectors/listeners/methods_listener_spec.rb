@@ -3,9 +3,9 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
-  def parse_and_dispatch(source)
+  def parse_and_dispatch(source, **options)
     result     = Prism.parse(source)
-    listener   = described_class.new
+    listener   = described_class.new(**options)
     RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
     listener.results
   end
@@ -76,6 +76,28 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
     names = results.map { |m| m[:name] }
     expect(names).not_to include("initialize")
     expect(names).to include("call")
+  end
+
+  it "records initialize, with its owner, when asked for it" do
+    source = <<~RUBY
+      class Service
+        class Failure < StandardError
+          def initialize(message, accounts)
+            super(message)
+          end
+        end
+
+        def initialize
+          @started = true
+        end
+      end
+    RUBY
+    results = parse_and_dispatch(source, include_initialize: true)
+    ctors = results.select { |m| m[:name] == "initialize" }
+    expect(ctors.map { |m| [ m[:owner].join("::"), m[:signature] ] }).to contain_exactly(
+      [ "Service::Failure", "initialize(message, accounts)" ],
+      [ "Service", "initialize" ]
+    )
   end
 
   it "extracts method parameters" do

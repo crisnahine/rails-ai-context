@@ -67,6 +67,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::SchemaDslListener do
     expect(fks.first).to include(from: "posts", to: "users")
   end
 
+  it "keeps the column and primary_key options on add_foreign_key" do
+    results = parse_and_dispatch('add_foreign_key "statuses", "accounts", column: "in_reply_to_account_id", primary_key: "uuid"')
+    fk = results.find { |r| r[:type] == :foreign_key }
+    expect(fk).to include(from: "statuses", to: "accounts", column: "in_reply_to_account_id", primary_key: "uuid")
+  end
+
   it "detects create_enum" do
     results = parse_and_dispatch('create_enum "status", ["draft", "published", "archived"]')
     enums = results.select { |r| r[:type] == :enum }

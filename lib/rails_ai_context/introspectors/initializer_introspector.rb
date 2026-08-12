@@ -110,28 +110,10 @@ module RailsAiContext
         return nil unless loc
 
         path, line = loc
-        "#{relativize_source(path)}:#{line}"
+        "#{PortablePath.relativize(path, root)}:#{line}"
       rescue => e
         $stderr.puts "[rails-ai-context] block_source_location failed: #{e.message}" if ENV["DEBUG"]
         nil
-      end
-
-      # These sources are written into .ai-context.json, which the app commits.
-      # An absolute path is wrong on every other machine and carries the
-      # generating developer's home directory, so app paths go app-relative and
-      # gem paths keep the gem and version instead of the install prefix.
-      def relativize_source(path)
-        return path.sub("#{root}/", "") if path.start_with?(root)
-
-        gem_roots.each do |gem_root|
-          return path.delete_prefix(gem_root) if path.start_with?(gem_root)
-        end
-        path
-      end
-
-      def gem_roots
-        @gem_roots ||= (Gem.path + [ Gem.default_dir ]).compact.uniq
-          .map { |dir| File.join(dir, "gems") + File::SEPARATOR }
       end
     end
   end

@@ -64,12 +64,18 @@ module RailsAiContext
           to_arg = args[1]
           return unless from_arg.is_a?(Prism::StringNode) && to_arg.is_a?(Prism::StringNode)
 
+          options = extract_keyword_options(node)
+
           @results << {
-            type:     :foreign_key,
-            from:     from_arg.unescaped,
-            to:       to_arg.unescaped,
-            location: node.location.start_line
-          }
+            type:        :foreign_key,
+            from:        from_arg.unescaped,
+            to:          to_arg.unescaped,
+            # Absent means the Rails convention holds; naming it here would
+            # make a declared column indistinguishable from a guessed one.
+            column:      options[:column]&.to_s,
+            primary_key: options[:primary_key]&.to_s,
+            location:    node.location.start_line
+          }.compact
         end
 
         def extract_enum(node)

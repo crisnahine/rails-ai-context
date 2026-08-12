@@ -20,6 +20,14 @@ Avoid "format" for either sense - claude is not a file format, and the word coll
 
 `Install::AiTool` is the one table of what each means: name, context files, MCP config shape, legacy leftovers. `Install::SelectionRecord` owns which ones the user picked - written to YAML always and to the initializer line inside a Rails app, read initializer-first because that is the file a user hand-edits.
 
+## Path
+
+Two senses, one per module, and neither is bare "path" in a name.
+
+**Where code lives** - `PathResolver` answers which directories a kind of app code can occupy for a given root: conventional layout, packwerk packs, in-repo engines, configured extras.
+
+**How a path is written down** - `PortablePath` rewrites one so it means the same thing on another machine, because what it touches ends up in `.ai-context.json` and the app commits that file. App paths go app-relative, gem paths keep the gem and version and drop the install prefix. "Relativize" always means this.
+
 ## Static tier
 
 The mode where the app did not boot, or `--no-boot` was passed. What an introspector answers here is what it declared, never what a runtime check happened to detect. Every introspector in `INTROSPECTOR_MAP` extends `StaticTier` and names one of three kinds:

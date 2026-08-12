@@ -8,4 +8,8 @@ class Post < ApplicationRecord
 
   scope :published, -> { where(published: true) }
   scope :recent, -> { order(created_at: :desc) }
+
+  def display_url
+    canonical_url.presence
+  end
 end

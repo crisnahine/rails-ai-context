@@ -136,12 +136,10 @@ module RailsAiContext
         "#{hit[:method]}: #{values.first}"
       end
 
-      # Rails lists a path once per railtie that contributed it.
+      # Rails lists a path once per railtie that contributed it, and every
+      # engine's paths sit under the machine's gem prefix rather than the app.
       def relativize(paths)
-        Array(paths).map { |p|
-          s = p.to_s
-          s.start_with?(root) ? s.sub("#{root}/", "") : s
-        }.uniq
+        PortablePath.relativize_all(paths, root)
       end
     end
   end

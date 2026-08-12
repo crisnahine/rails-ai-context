@@ -214,6 +214,20 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
 
       expect(reader.foreign_keys).to eq([ { from: "posts", to: "users" } ])
     end
+
+    it "keeps a declared column and primary_key" do
+      reader = reader_for(<<~RUBY)
+        create_table "comments" do |t|
+          t.integer "parent_post_id"
+        end
+
+        add_foreign_key "comments", "posts", column: "parent_post_id", primary_key: "uuid"
+      RUBY
+
+      expect(reader.foreign_keys).to eq(
+        [ { from: "comments", to: "posts", column: "parent_post_id", primary_key: "uuid" } ]
+      )
+    end
   end
 
   describe "#enums" do

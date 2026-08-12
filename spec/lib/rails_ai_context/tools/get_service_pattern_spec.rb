@@ -175,6 +175,10 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         File.write(File.join(services_dir, "account_search_service.rb"), <<~RUBY)
           class AccountSearchService < BaseService
             class QueryBuilder
+              def initialize(query, account, options = {})
+                @query = query
+              end
+
               def build
                 :query
               end
@@ -210,6 +214,38 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
             def call(recipient, type, activity, **options)
               recipient
+            end
+          end
+        RUBY
+
+        File.write(File.join(services_dir, "post_status_service.rb"), <<~RUBY)
+          class PostStatusService < BaseService
+            class UnexpectedMentionsError < StandardError
+              def initialize(message, accounts)
+                super(message)
+              end
+            end
+
+            def initialize
+              @idempotency_duplicate = nil
+            end
+
+            def call(account, options = {})
+              account
+            end
+          end
+        RUBY
+
+        File.write(File.join(services_dir, "misnamed_file.rb"), <<~RUBY)
+          class ImportRunner
+            class Row
+              def cells
+                []
+              end
+            end
+
+            def initialize(path)
+              @path = path
             end
           end
         RUBY
@@ -276,6 +312,31 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         text = result.content.first[:text]
         expect(text).to include("call(query")
         expect(text).not_to include("- `build`")
+      end
+
+      it "prints no Initialize line when only a nested class defines one" do
+        result = described_class.call(service: "AccountSearchService")
+        text = result.content.first[:text]
+        expect(text).not_to include("Initialize:")
+      end
+
+      # The constructor and the interface have to name the same owner. Read by
+      # two walks, a class whose only own method is `initialize` lost the owner
+      # election in one of them and kept it in the other, so the outer
+      # constructor was printed beside a nested class's methods.
+      it "pairs the constructor with the same owner the interface came from" do
+        result = described_class.call(service: "misnamed_file")
+        text = result.content.first[:text]
+
+        expect(text).to include("**Initialize:** `initialize(path)`")
+        expect(text).not_to include("cells")
+      end
+
+      it "reports the outer class's own constructor, parentheses or not" do
+        result = described_class.call(service: "PostStatusService")
+        text = result.content.first[:text]
+        expect(text).to include("**Initialize:** `initialize`")
+        expect(text).not_to include("initialize(message, accounts)")
       end
     end
 

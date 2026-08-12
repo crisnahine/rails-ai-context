@@ -12,6 +12,7 @@ ActiveRecord::Schema.define(version: 2024_01_15_000000) do
     t.text "body"
     t.boolean "published", default: false
     t.integer "comments_count", default: 0
+    t.string "canonical_url"
     t.references "user"
     t.timestamps
   end

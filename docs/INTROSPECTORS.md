@@ -184,7 +184,7 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
 | CallbacksListener | All AR callback types, `after_commit` with `on:` resolution |
 | MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` |
-| MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self` |
+| MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`; `include_initialize: true` adds the constructor a caller reports on its own |
 | MixinsListener | `include`, `prepend`, `extend`, flagging the ones that reach the ancestor chain |
 
 ### The targeted-walk listeners

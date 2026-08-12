@@ -298,6 +298,17 @@ module RailsAiContext
         entry
       end
 
+      # Rails omits column:/primary_key: only where the convention holds, so
+      # the fallback is what was declared rather than a guess. Both dump
+      # readers land here so the convention lives in one place.
+      def foreign_key_entry(from, to, column, primary_key)
+        {
+          from_table: from, to_table: to,
+          column: column&.to_s || "#{to.to_s.singularize}_id",
+          primary_key: primary_key&.to_s || "id"
+        }
+      end
+
       def static_index(index)
         columns = index[:columns]
         return nil if columns.empty?
@@ -330,12 +341,9 @@ module RailsAiContext
         end
 
         schema.foreign_keys.each do |fk|
-          # SchemaDslListener doesn't capture column/primary_key options for
-          # add_foreign_key; fall back to convention.
-          tables[fk[:from]]&.dig(:foreign_keys)&.push({
-            from_table: fk[:from], to_table: fk[:to],
-            column: "#{fk[:to].singularize}_id", primary_key: "id"
-          })
+          tables[fk[:from]]&.dig(:foreign_keys)&.push(
+            foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key])
+          )
         end
 
         check_constraints = schema.check_constraints
@@ -815,8 +823,7 @@ module RailsAiContext
           to = entry[:to_table]
           return unless tables[from]
           opts = entry[:options] || {}
-          column = opts[:column]&.to_s || "#{to&.to_s&.chomp('s')}_id"
-          tables[from][:foreign_keys] << { from_table: from, to_table: to, column: column, primary_key: "id" }
+          tables[from][:foreign_keys] << foreign_key_entry(from, to, opts[:column], opts[:primary_key])
         end
       end
 

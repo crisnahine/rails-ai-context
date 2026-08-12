@@ -588,6 +588,28 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(post_cols).to include(a_hash_including(name: "slug", type: "string"))
       end
 
+      it "names an implied foreign key column from the singular target table" do
+        migrate_dir = File.join(fixture_path, "db", "migrate")
+        File.write(File.join(migrate_dir, "20250101000004_add_statuses.rb"), <<~RUBY)
+          class AddStatuses < ActiveRecord::Migration[8.0]
+            def change
+              create_table :statuses do |t|
+                t.string :name
+              end
+              add_foreign_key :posts, :statuses
+              add_foreign_key :posts, :users, column: :author_id
+            end
+          end
+        RUBY
+
+        result = introspector.call
+
+        expect(result[:tables]["posts"][:foreign_keys]).to eq([
+          { from_table: "posts", to_table: "statuses", column: "status_id", primary_key: "id" },
+          { from_table: "posts", to_table: "users", column: "author_id", primary_key: "id" }
+        ])
+      end
+
       it "extracts indexes from migrations" do
         result = introspector.call
         user_indexes = result[:tables]["users"][:indexes]
@@ -696,6 +718,33 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:total_tables]).to eq(1)
         expect(result[:tables]).to have_key("widgets")
         expect(result[:adapter]).to eq("static_parse")
+      end
+    end
+
+    it "names the declared foreign key column instead of the target table convention" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 2024_01_01_000000) do
+            create_table "posts" do |t|
+              t.string "title"
+            end
+
+            create_table "comments" do |t|
+              t.integer "post_id"
+              t.integer "parent_post_id"
+            end
+
+            add_foreign_key "comments", "posts"
+            add_foreign_key "comments", "posts", column: "parent_post_id"
+          end
+        RUBY
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:tables]["comments"][:foreign_keys]).to eq([
+          { from_table: "comments", to_table: "posts", column: "post_id", primary_key: "id" },
+          { from_table: "comments", to_table: "posts", column: "parent_post_id", primary_key: "id" }
+        ])
       end
     end
 

@@ -8,8 +8,11 @@ module RailsAiContext
       # visibility modifier calls, including inline forms like
       # `private :method_name`.
       class MethodsListener < BaseListener
-        def initialize
-          super
+        # A constructor is not part of the callable interface every other
+        # caller asks for, so it stays out unless one asks for it by name.
+        def initialize(include_initialize: false)
+          super()
+          @include_initialize = include_initialize
           @visibility_stack = [ :public ]
           @in_singleton_class = false
           @singleton_depth = 0
@@ -84,8 +87,7 @@ module RailsAiContext
           is_class_method = @in_singleton_class || node.receiver&.is_a?(Prism::SelfNode)
           method_name = node.name.to_s
 
-          # Skip initialize for instance methods
-          return if method_name == "initialize" && !is_class_method
+          return if method_name == "initialize" && !is_class_method && !@include_initialize
 
           # Inline visibility (`private :foo`) takes precedence over positional
           visibility = @inline_visibility_stack.last[method_name] || @visibility_stack.last

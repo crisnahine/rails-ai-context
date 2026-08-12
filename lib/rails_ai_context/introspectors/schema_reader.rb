@@ -117,7 +117,10 @@ module RailsAiContext
         when :add_index
           schema[:tables][event[:table]]&.dig(:indexes)&.push(index_entry(event))
         when :foreign_key
-          schema[:foreign_keys] << { from: event[:from], to: event[:to] }
+          schema[:foreign_keys] << {
+            from: event[:from], to: event[:to],
+            column: event[:column], primary_key: event[:primary_key]
+          }.compact
         when :enum
           schema[:enums] << { name: event[:name], values: event[:values] }
         when :check_constraint

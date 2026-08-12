@@ -81,12 +81,14 @@ module RailsAiContext
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
 
+        owned = owned_methods(source, constant_for(file, services_dir))
+
         # Initialize params
-        init_params = extract_initialize_params(source)
+        init_params = extract_initialize_params(owned)
         lines << "**Initialize:** `#{init_params}`" if init_params
 
         # Public methods
-        public_methods = extract_public_methods(source, constant_for(file, services_dir))
+        public_methods = extract_public_methods(owned)
         if public_methods.any?
           lines << "" << "## Public Methods"
           public_methods.each { |m| lines << "- `#{m}`" }
@@ -139,20 +141,23 @@ module RailsAiContext
           relative = file.sub("#{root}/", "")
           class_name = extract_class_name(source) || File.basename(file, ".rb").camelize
           line_count = source.lines.size
-          public_methods = extract_public_methods(source, constant_for(file, services_dir))
+          owned = owned_methods(source, constant_for(file, services_dir))
+          public_methods = extract_public_methods(owned)
+          init_params = extract_initialize_params(owned)
 
           pattern_stats[:total] += 1
-          has_initialize = source.match?(/def initialize/)
+          has_initialize = !init_params.nil?
           pattern_stats[:initialize_call] += 1 if has_initialize && public_methods.any? { |m| m.start_with?("call") }
           pattern_stats[:initialize_single_method] += 1 if has_initialize && public_methods.size == 1
-          pattern_stats[:class_method_call] += 1 if source.match?(/def self\.call/)
+          pattern_stats[:class_method_call] += 1 if owned.any? { |m| m[:scope] == :class && m[:name] == "call" }
           pattern_stats[:result_object] += 1 if source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/)
 
           service_data << {
             file: relative,
             class_name: class_name,
             line_count: line_count,
-            public_methods: public_methods
+            public_methods: public_methods,
+            init_params: init_params
           }
         end
 
@@ -183,13 +188,12 @@ module RailsAiContext
             methods_str = s[:public_methods].any? ? s[:public_methods].join(", ") : "none"
             lines << "- **Methods:** #{methods_str}"
 
+            lines << "- **Initialize:** `#{s[:init_params]}`" if s[:init_params]
+
             # Read source for additional detail
             full_path = File.join(root, s[:file])
             source = safe_read(full_path)
             if source
-              init_params = extract_initialize_params(source)
-              lines << "- **Initialize:** `#{init_params}`" if init_params
-
               side_effects = extract_side_effects(source)
               lines << "- **Side effects:** #{side_effects.join(', ')}" if side_effects.any?
 
@@ -216,17 +220,11 @@ module RailsAiContext
         match[1] if match
       end
 
-      private_class_method def self.extract_initialize_params(source)
-        match = source.match(/def initialize\(([^)]*)\)/m)
-        return nil unless match
-        "initialize(#{match[1].strip})"
-      end
-
-      # A service's interface is the public methods of the service class
-      # itself. Nesting a query builder or a set of condition objects inside
-      # the service that uses them is a normal way to organise a large one, and
-      # a line scan cannot see that: it reported the nested class's first `def`
-      # as the entry point, and a `private` inside a nested class hid the real
+      # The methods the service class defines itself. Nesting a query builder
+      # or a set of condition objects inside the service that uses them is a
+      # normal way to organise a large one, and a line scan cannot see that:
+      # it reported the nested class's first `def` as the entry point, its
+      # constructor as the service's, and a `private` inside it hid the real
       # `call` that followed the nested class's `end`.
       #
       # `expected_constant` comes from the path rather than the source, the way
@@ -234,20 +232,34 @@ module RailsAiContext
       # and only the path carries the namespace. A file that does not follow
       # the convention falls back to the shallowest nesting, which is the
       # outermost definition in the file.
-      private_class_method def self.extract_public_methods(source, expected_constant = nil)
+      #
+      # One walk per file: the interface and the constructor have to resolve
+      # the same owner, and a second walk could pick a different one.
+      private_class_method def self.owned_methods(source, expected_constant = nil)
         ast = Introspectors::SourceIntrospector.walk_source(
-          source, { methods: Introspectors::Listeners::MethodsListener }
+          source, { methods: -> { Introspectors::Listeners::MethodsListener.new(include_initialize: true) } }
         )
         methods = ast[:methods] || []
         return [] if methods.empty?
 
         owner = primary_owner(methods, expected_constant)
-
-        methods.select { |m| m[:visibility] == :public && m[:owner].join("::") == owner }
-               .map { |m| m[:signature] }
+        methods.select { |m| m[:owner].join("::") == owner }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_public_methods AST failed: #{e.message}" if ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] owned_methods AST failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # A service that defines no constructor answers `.new` with no arguments.
+      private_class_method def self.extract_initialize_params(owned)
+        ctor = owned.find { |m| m[:name] == "initialize" && m[:scope] == :instance }
+        ctor && ctor[:signature]
+      end
+
+      # The constructor is reported on its own line, not as part of the
+      # interface, which is why it is dropped here rather than at the walk.
+      private_class_method def self.extract_public_methods(owned)
+        owned.select { |m| m[:visibility] == :public && m[:name] != "initialize" }
+             .map { |m| m[:signature] }
       end
 
       private_class_method def self.primary_owner(methods, expected_constant)

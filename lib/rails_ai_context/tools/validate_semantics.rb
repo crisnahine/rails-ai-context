@@ -203,23 +203,23 @@ module RailsAiContext
         if file.end_with?(".html.erb", ".erb")
           if visitor
             warnings.concat(check_partial_existence_ast(file, visitor))
-            warnings.concat(check_route_helpers_ast(visitor, context))
+            warnings.concat(check_route_helpers_ast(file, visitor, context))
           else
             warnings.concat(check_partial_existence_regex(file, content))
-            warnings.concat(check_route_helpers_regex(content, context))
+            warnings.concat(check_route_helpers_regex(file, content, context))
           end
           warnings.concat(check_stimulus_controllers(content, context))
           warnings.concat(check_instance_variable_usage(file, content, context))
           warnings.concat(check_respond_to_template_existence(file, content))
         elsif file.end_with?(".rb")
           if visitor
-            warnings.concat(check_route_helpers_ast(visitor, context))
+            warnings.concat(check_route_helpers_ast(file, visitor, context))
             warnings.concat(check_partial_existence_ast(file, visitor, qualified_only: true))
             warnings.concat(check_column_references_ast(file, visitor, context))
             warnings.concat(check_strong_params_ast(file, visitor, context))
             warnings.concat(check_callback_existence_ast(file, visitor, context))
           else
-            warnings.concat(check_route_helpers_regex(content, context))
+            warnings.concat(check_route_helpers_regex(file, content, context))
             warnings.concat(check_column_references_regex(file, content, context))
           end
           # Cache-only checks (no AST needed)
@@ -313,12 +313,14 @@ module RailsAiContext
       ASSET_HELPER_PREFIXES = %w[image asset font stylesheet javascript audio video file compute_asset auto_discovery_link favicon].freeze
       DEVISE_HELPER_NAMES = %w[session registration password confirmation unlock omniauth_callback user_session user_registration user_password user_confirmation user_unlock].freeze
 
-      private_class_method def self.check_route_helpers_ast(visitor, context)
+      private_class_method def self.check_route_helpers_ast(file, visitor, context)
         warnings = []
         routes = context[:routes]
         return warnings unless routes && routes[:by_controller]
         valid_names = build_route_name_set(routes)
         return warnings if valid_names.empty?
+
+        columns = helper_shaped_columns(file, context)
 
         seen = Set.new
         visitor.route_helper_calls.each do |call|
@@ -326,6 +328,7 @@ module RailsAiContext
           next if seen.include?(helper)
           seen << helper
           next if visitor.local_route_method_defined?(helper, call[:scope], call[:method_kind])
+          next if columns.include?(helper)
 
           name = helper.sub(/_(path|url)\z/, "")
           next if ASSET_HELPER_PREFIXES.any? { |p| name.start_with?(p) }
@@ -338,12 +341,14 @@ module RailsAiContext
       end
 
       # Regex fallback
-      private_class_method def self.check_route_helpers_regex(content, context)
+      private_class_method def self.check_route_helpers_regex(file, content, context)
         warnings = []
         routes = context[:routes]
         return warnings unless routes && routes[:by_controller]
         valid_names = build_route_name_set(routes)
         return warnings if valid_names.empty?
+
+        columns = helper_shaped_columns(file, context)
 
         seen = Set.new
         local_method_names = local_route_like_method_names(content)
@@ -353,12 +358,25 @@ module RailsAiContext
           next if seen.include?(helper)
           seen << helper
           next if local_method_names.include?(helper)
+          next if columns.include?(helper)
           next if ASSET_HELPER_PREFIXES.any? { |p| name.start_with?(p) }
           next if DEVISE_HELPER_NAMES.include?(name)
           next if %w[edit new polymorphic].include?(name)
           warnings << "#{helper} - route helper not found" unless valid_names.include?(name)
         end
         warnings
+      end
+
+      # A column named `shared_inbox_url` reads as a receiverless call to a
+      # route helper, and the attribute reader it resolves to has no `def`
+      # anywhere to find it by. Columns only: an association named like a
+      # helper is not a reader, and suppressing on it would hide a real
+      # missing route.
+      private_class_method def self.helper_shaped_columns(file, context)
+        valid = model_valid_columns(file, context)
+        return Set.new unless valid
+
+        valid[:table_columns].select { |c| c.to_s.end_with?("_path", "_url") }.to_set
       end
 
       private_class_method def self.local_route_like_method_names(content)
@@ -432,14 +450,16 @@ module RailsAiContext
         table_data = schema[:tables] && schema[:tables][table_name]
         return nil unless table_data
 
-        columns = Set.new
-        table_data[:columns]&.each { |c| columns << c[:name] }
+        table_columns = Set.new
+        table_data[:columns]&.each { |c| table_columns << c[:name] }
+
+        columns = table_columns.dup
         model_data[:associations]&.each do |a|
           columns << a[:name] if a[:name]
           columns << a[:foreign_key] if a[:foreign_key]
         end
 
-        { columns: columns, table: table_name, model: model_name, model_data: model_data }
+        { columns: columns, table_columns: table_columns, table: table_name, model: model_name, model_data: model_data }
       end
 
       # ── CHECK 4: Strong params vs schema (AST) ───────────────────────

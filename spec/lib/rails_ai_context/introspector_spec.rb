@@ -36,6 +36,30 @@ RSpec.describe RailsAiContext::Introspector do
       end
     end
 
+    # This context is written to .ai-context.json, which the app commits - see
+    # the Path entry in CONTEXT.md for why a machine path there is a defect.
+    #
+    # The home directory is listed independently of what PortablePath knows:
+    # built from its own prefixes alone, this passes whenever the module
+    # returns none.
+    it "carries no path from the generating machine" do
+      prefixes = RailsAiContext::PortablePath.gem_roots +
+        RailsAiContext::PortablePath.gem_checkouts.map(&:first) +
+        [ File.join(Dir.home, "") ]
+
+      machine_paths = []
+      walk = lambda do |node, key|
+        case node
+        when Hash  then node.each { |k, v| walk.call(v, "#{key}.#{k}") }
+        when Array then node.each_with_index { |v, i| walk.call(v, "#{key}[#{i}]") }
+        when String then machine_paths << "#{key}: #{node}" if prefixes.any? { |p| node.include?(p) }
+        end
+      end
+      walk.call(introspector.call, "context")
+
+      expect(machine_paths).to be_empty
+    end
+
     it "collects _warnings when an introspector fails" do
       # Use a minimal config with a known-bad introspector name won't work here,
       # so instead stub one introspector to raise

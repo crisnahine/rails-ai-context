@@ -105,6 +105,23 @@ RSpec.describe RailsAiContext::Introspectors::AutoloadIntrospector do
       end
     end
 
+    # Every engine's paths land on the `once` autoloader, under the machine's
+    # gem prefix rather than the app root.
+    context "when an autoloader roots a directory inside an installed gem" do
+      let(:gem_dir) { File.join(Gem.path.first, "gems", "doorkeeper-5.9.5", "app", "controllers") }
+      let(:loader) { double("Zeitwerk::Loader", tag: "rails.once", dirs: [ gem_dir ]) }
+
+      before do
+        allow(Rails).to receive(:autoloaders).and_return(double("autoloaders", main: loader, once: loader))
+      end
+
+      it "reports the gem and version rather than the install prefix" do
+        once = result[:autoloaders].find { |l| l[:name] == "once" }
+
+        expect(once[:root_dirs]).to eq([ "doorkeeper-5.9.5/app/controllers" ])
+      end
+    end
+
     # `config.autoload_lib` plus an engine leaves lib in the array twice.
     context "when Rails lists a path once per contributing railtie" do
       let(:config) do

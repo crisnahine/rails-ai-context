@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Foreign keys name the column that was declared, not one invented from the
+  target table.** `add_foreign_key "accounts", "accounts", column:
+  "moved_to_account_id"` was reported as `account_id`, a column the table does
+  not have, and two such keys on one table collided into the same invented
+  name. The schema listener dropped `column:`/`primary_key:` entirely, so the
+  convention was the only answer; it is now the fallback for the case Rails
+  omits the option in. The migration-replay path invented `statuse_id` from
+  `statuses` for the same reason. (#140)
+- **A service's constructor is read from the service, not from the first
+  nested class in the file.** `rails_get_service_pattern` matched the first
+  `def initialize(` anywhere in the source, so a nested error class or query
+  builder supplied the signature for a service that defines no constructor,
+  and an agent reading it wrote `PostStatusService.new(message, accounts)` for
+  a class whose real interface is `.new.call(...)`. The constructor now comes
+  from the AST walk that already resolves the interface owner, and a
+  parenthesis-less `def initialize` is no longer missed. (#141)
+- **Autoloader root_dirs are gem-relative, like initializer sources.** #139
+  fixed the sources and left `autoload.autoloaders[].root_dirs`, where every
+  engine's paths land, still absolute in `.ai-context.json`. Both introspectors
+  now share one `PortablePath`, which also collapses a gem the Gemfile takes
+  from `path:` or `git:`. A guard spec walks the whole generated context for
+  paths from the generating machine. (#142)
+- **A model's `*_url` and `*_path` columns are not reported as missing route
+  helpers.** `rails_validate` read every receiverless call ending in `_url` as
+  a route helper, and an attribute reader has no `def` for the local-method
+  escape to find, so `shared_inbox_url` on Mastodon's `accounts` warned as a
+  broken route. The check now consults the model's own column list. (#143)
+
 ## [5.21.2] - 2026-08-12
 
 ### Fixed
