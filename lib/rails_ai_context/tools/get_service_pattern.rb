@@ -243,7 +243,7 @@ module RailsAiContext
         return [] if methods.empty?
 
         owner = primary_owner(methods, expected_constant)
-        methods.select { |m| m[:owner].join("::") == owner }
+        Introspectors::ActionResolver.own_methods(methods, owner)
       rescue => e
         $stderr.puts "[rails-ai-context] owned_methods AST failed: #{e.message}" if ENV["DEBUG"]
         []
@@ -263,7 +263,7 @@ module RailsAiContext
       end
 
       private_class_method def self.primary_owner(methods, expected_constant)
-        owners = methods.map { |m| m[:owner].join("::") }
+        owners = methods.map { |m| Introspectors::ActionResolver.owner_name(m) }
         return expected_constant if expected_constant && owners.include?(expected_constant)
 
         owners.min_by { |o| [ o.count(":"), o.length ] }

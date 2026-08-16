@@ -50,6 +50,10 @@ Three senses inside the gem, and the payload one is wider than either everyday R
 
 **Mixin** - the static detection feeding the payload: any `include`, `prepend` or `extend` with a constant argument, as `MixinsListener` reports it. Named mixin because it captures more than concerns; its `ancestor` flag marks the subset that becomes one.
 
+## Action
+
+The callable interface of a class as this gem reports it: the class's own public instance methods - a class nested in the same file is a separate owner, not part of the interface - minus framework-shaped `_` names, read source-first, with reflection minus the app-owned base as the honest fallback. `ActionResolver` is the one answer; controller and mailer are configurations of it, and a channel's "stream methods" are a narrower selection of the same reading.
+
 ## Standalone
 
 Two senses on different axes. Qualify it; the bare word does not say which.

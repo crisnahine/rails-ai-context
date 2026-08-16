@@ -104,8 +104,9 @@ module RailsAiContext
 
         Dir.glob(File.join(dir, "**/*.rb")).filter_map do |path|
           relative = path.sub("#{dir}/", "")
+          module_name = relative.sub(/\.rb\z/, "").camelize
           ast_data = SourceIntrospector.walk(path, { methods: Listeners::MethodsListener })
-          methods = ast_data[:methods].map { |m| m[:name] }
+          methods = ActionResolver.own_methods(ast_data[:methods], module_name).map { |m| m[:name] }
           {
             file: relative,
             methods: methods

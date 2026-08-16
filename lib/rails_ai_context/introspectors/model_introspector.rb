@@ -351,8 +351,9 @@ module RailsAiContext
         # Scope names to exclude from class methods (they appear in :scopes already)
         scope_names = source_data[:scopes].map { |s| s[:name].to_s }.to_set
 
-        # Source-defined class methods (AST)
-        source_methods = source_data[:methods]
+        # Source-defined class methods (AST), the model's own - a class nested
+        # in the model file is a separate owner.
+        source_methods = ActionResolver.own_methods(source_data[:methods], model.name)
           .select { |m| m[:scope] == :class && m[:visibility] == :public }
           .map { |m| m[:name] }
           .reject { |m| scope_names.include?(m) }
@@ -378,8 +379,8 @@ module RailsAiContext
       def extract_instance_methods_from_ast(model, source_data)
         generated = generated_association_methods(model)
 
-        # Source-defined instance methods (AST)
-        source_methods = source_data[:methods]
+        # Source-defined instance methods (AST), the model's own.
+        source_methods = ActionResolver.own_methods(source_data[:methods], model.name)
           .select { |m| m[:scope] == :instance && m[:visibility] == :public }
           .map { |m| m[:name] }
 
@@ -593,7 +594,7 @@ module RailsAiContext
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(data[:mixins]),
           macros: data[:macros],
-          methods: data[:methods]
+          methods: ActionResolver.own_methods(data[:methods], class_name)
         }
       end
 

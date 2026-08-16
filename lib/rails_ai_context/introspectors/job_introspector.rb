@@ -257,14 +257,11 @@ module RailsAiContext
         ActionMailer::Base.descendants.filter_map do |mailer|
           next if mailer.name.nil?
 
-          # Rails' own answer: it subtracts internal and inherited methods, so
-          # an abstract ApplicationMailer reports none and ActiveSupport's
-          # generated `_run_*_callbacks` never appears. `instance_methods(false)`
-          # listed both as deliverable actions. Called bare, like
-          # ControllerIntrospector does - AbstractController::Base has defined
-          # it across the whole supported range, so a fallback here would only
-          # be unreachable code holding the old bug.
-          actions = mailer.action_methods.to_a.map(&:to_s).sort
+          # Reflection with the app-base subtraction: `action_methods` stops
+          # subtracting at the framework base, so a public helper on a
+          # non-abstract ApplicationMailer would arrive as a deliverable
+          # action - the mailer reading of the controller leak.
+          actions = ActionResolver.reflected_actions(mailer, kind: :mailer)
           next if actions.empty?
 
           {
@@ -287,8 +284,7 @@ module RailsAiContext
         source_classes(File.join(app.root, "app", "mailers")).filter_map do |name, methods|
           next if name == "ApplicationMailer"
 
-          actions = methods.select { |m| m[:scope] == :instance && m[:visibility] == :public }
-                           .map { |m| m[:name] }.sort
+          actions = ActionResolver.own_actions(methods, class_name: name)
           next if actions.empty?
 
           { name: name, actions: actions, confidence: RailsAiContext::Confidence::STATIC }
@@ -301,9 +297,10 @@ module RailsAiContext
         source_classes(File.join(app.root, "app", "channels")).filter_map do |name, methods|
           next if name.start_with?("ApplicationCable::")
 
-          stream_methods = methods.select { |m| m[:scope] == :instance }
-                                  .map { |m| m[:name] }
-                                  .select { |m| m.start_with?("stream_") || m == "subscribed" }
+          stream_methods = ActionResolver.own_methods(methods, name)
+                                         .select { |m| m[:scope] == :instance }
+                                         .map { |m| m[:name] }
+                                         .select { |m| m.start_with?("stream_") || m == "subscribed" }
           { name: name, stream_methods: stream_methods, confidence: RailsAiContext::Confidence::STATIC }
         end.sort_by { |c| c[:name] }
       end

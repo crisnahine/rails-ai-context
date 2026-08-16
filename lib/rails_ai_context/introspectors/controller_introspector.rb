@@ -33,7 +33,7 @@ module RailsAiContext
         # Discover controllers from filesystem that may not be loaded as classes
         discover_from_filesystem.each do |name, path|
           next if result.key?(name)
-          result[name] = extract_details_from_source(path)
+          result[name] = extract_details_from_source(path, name)
         end
 
         { controllers: result }
@@ -45,7 +45,7 @@ module RailsAiContext
       # class loading and reflection never run.
       def static_call
         result = discover_from_filesystem.each_with_object({}) do |(name, path), hash|
-          hash[name] = extract_details_from_source(path).merge(confidence: Confidence::STATIC)
+          hash[name] = extract_details_from_source(path, name).merge(confidence: Confidence::STATIC)
         rescue => e
           hash[name] = { error: e.message }
         end
@@ -116,7 +116,7 @@ module RailsAiContext
       end
 
       # Extract details purely from source file (for controllers not loaded as classes)
-      def extract_details_from_source(path)
+      def extract_details_from_source(path, class_name)
         source = RailsAiContext::SafeFile.read(path)
         return { error: "unreadable" } unless source
         parent = extract_parent_class_ast(source)
@@ -124,7 +124,7 @@ module RailsAiContext
         details = {
           parent_class: parent,
           api_controller: parent.include?("API"),
-          actions: extract_actions_from_source(source),
+          actions: ActionResolver.actions_from_source(source, class_name: class_name),
           filters: extract_filters_from_source(source),
           concerns: extract_concerns_from_source(source),
           strong_params: extract_strong_params(source),
@@ -163,112 +163,14 @@ module RailsAiContext
         false
       end
 
-      # Prefer source-based parsing for actions - always reflects current file state.
-      #
-      # `action_methods` used to answer for a controller whose own file defines
-      # no public method, and it cannot: it subtracts inherited methods only as
-      # far as the nearest abstract ancestor, which is ActionController::Base.
-      # Everything ApplicationController and its concerns define publicly came
-      # back as an action, so a two-route controller reported 19 of them, most
-      # named things like `set_locale` and `pundit_user`.
-      #
-      # A thin subclass does still serve actions - its parent defines them - so
-      # the answer comes from the parent's source instead.
+      # The whole chain - own source, app-owned ancestors, reflection with the
+      # base subtraction - lives in ActionResolver, shared with the mailer
+      # path. `rails g devise:controllers` is the live reflection case: the
+      # app owns the file, every action in it is commented out, and the gem
+      # class supplies them.
       def extract_actions(ctrl, source = nil)
-        own = extract_actions_from_source(source) if source
-        return own if own&.any?
-
-        inherited, unreadable_ancestor = inherited_actions(ctrl)
-        return inherited if inherited.any?
-
-        # An ancestor exists that this app does not own the source of, so what
-        # it defines is invisible here. `rails g devise:controllers` writes
-        # exactly this: the app owns the file, every action in it is commented
-        # out, and the gem class supplies them. Reflection brings inherited
-        # helpers along, which is worse than the alternative only if the
-        # alternative is not claiming the controller serves nothing.
-        return reflected_actions(ctrl) if unreadable_ancestor || source.nil?
-
-        # Every ancestor was readable and none defines an action. That is an
-        # answer, and reflection would only overwrite it with helpers.
-        []
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_actions failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      # The nearest ancestor in the app that defines actions of its own.
-      #
-      # The walk stops at ApplicationController by convention: it is where an
-      # app puts the helpers every controller shares, not actions, and reading
-      # it is what produced the leak above. A base class that only sets up
-      # filters contributes nothing and the walk continues past it.
-      #
-      # Returns the actions and whether the walk passed an ancestor whose
-      # source it could not read, which is what tells an empty answer apart
-      # from one this app cannot see.
-      def inherited_actions(ctrl)
-        unreadable = false
-        klass = ctrl.superclass
-        while klass&.name && !framework_controller?(klass) && !app_base_controller?(klass)
-          src = read_source(klass)
-          if src
-            actions = extract_actions_from_source(src)
-            return [ actions, unreadable ] if actions.any?
-          else
-            unreadable = true
-          end
-          klass = klass.superclass
-        end
-        [ [], unreadable ]
-      end
-
-      # `action_methods` subtracts inherited methods only as far as the nearest
-      # abstract ancestor, and that is ActionController::Base. A gem controller
-      # mounted on the app's own base class - what Doorkeeper's `base_controller`
-      # setting produces - therefore arrives carrying every public method that
-      # base and its concerns define. The base's own answer is exactly that set,
-      # so subtracting it leaves the actions the gem contributes.
-      def reflected_actions(ctrl)
-        actions = ctrl.action_methods.to_a.map(&:to_s)
-        base = app_base_controller_for(ctrl)
-        actions -= base.action_methods.to_a.map(&:to_s) if base
-        actions.sort
-      end
-
-      def app_base_controller_for(ctrl)
-        klass = ctrl.superclass
-        while klass&.name && !framework_controller?(klass)
-          return klass if app_base_controller?(klass)
-          klass = klass.superclass
-        end
-        nil
-      end
-
-      def framework_controller?(klass)
-        return true if klass.name.start_with?("ActionController::", "AbstractController::")
-        return true if klass == ActionController::Base
-        return true if defined?(ActionController::API) && klass == ActionController::API
-        false
-      end
-
-      def app_base_controller?(klass)
-        klass.name == "ApplicationController" || klass.name.end_with?("::ApplicationController")
-      end
-
-      def extract_actions_from_source(source)
-        ast_result = SourceIntrospector.walk_source(source, {
-          methods: Listeners::MethodsListener
-        })
-        methods = ast_result[:methods] || []
-        methods
-          .select { |m| m[:scope] == :instance && m[:visibility] == :public }
-          .map { |m| m[:name] }
-          .reject { |name| name.start_with?("_") }
-          .sort
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_actions_from_source AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        ActionResolver.resolve(ctrl, source: source, kind: :controller,
+                               read_source: method(:read_source))
       end
 
       # Hybrid approach: reflection for complete filter names (handles inheritance + skips),
@@ -316,7 +218,7 @@ module RailsAiContext
       def collect_source_constraints(ctrl, current_source = nil)
         constraints = {}
         klass = ctrl
-        while klass&.name && !framework_controller?(klass)
+        while klass&.name && !ActionResolver.framework?(klass, kind: :controller)
           src = (klass == ctrl) ? (current_source || read_source(klass)) : read_source(klass)
           if src
             extract_filters_from_source(src).each do |sf|

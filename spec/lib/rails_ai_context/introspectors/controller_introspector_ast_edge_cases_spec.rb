@@ -498,7 +498,8 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      actions = introspector.send(:extract_actions_from_source, source)
+      actions = RailsAiContext::Introspectors::ActionResolver
+        .actions_from_source(source, class_name: "UnderscoreController")
       expect(actions).to include("index")
       expect(actions).not_to include("_callback")
     end

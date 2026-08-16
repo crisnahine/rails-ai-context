@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A class nested inside a controller, mailer, model or helper file no
+  longer contributes its methods to the host's interface.** "Which public
+  methods are this class's own" had five transcriptions with five filter
+  sets; they now share `ActionResolver`, which filters listener output by the
+  owner field the listener always emitted, walks app-owned ancestors, and
+  falls back to reflection with the #136 base subtraction. Mailers had kept
+  the pre-#136 reflection answer, so a public helper on a non-abstract
+  `ApplicationMailer` arrived as a deliverable action; they subtract now, and
+  static mailer actions apply the same underscore rule as controllers. (#149)
+
 - **Mounted engines render again in `rails_onboard` and the context files.**
   `EngineIntrospector` emits `:mounted_engines`; the tool read `:engines` then
   `:mounted`, and the stack line read `:mounted`, so both fell back to "none"
