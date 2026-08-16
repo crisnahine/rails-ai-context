@@ -16,6 +16,17 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       tool_names = tools.map(&:tool_name)
       expect(tool_names).not_to include("rails_security_scan")
     end
+
+    # Every neighbouring key in the generated initializer takes symbols
+    # (ai_tools, tool_mode, preset), so %i[] is the spelling a reader reaches
+    # for - and it used to skip nothing at all, silently.
+    it "respects skip_tools written as symbols" do
+      RailsAiContext.configuration.skip_tools = %i[rails_security_scan]
+      tool_names = described_class.available_tools.map(&:tool_name)
+      expect(tool_names).not_to include("rails_security_scan")
+    ensure
+      RailsAiContext.configuration.skip_tools = []
+    end
   end
 
   describe ".short_name" do
