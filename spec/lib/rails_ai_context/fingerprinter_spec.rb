@@ -69,6 +69,28 @@ RSpec.describe RailsAiContext::Fingerprinter do
       expect(described_class::WATCHED_FILES).to include("tsconfig.json")
     end
 
+    it "includes the Gemfile in WATCHED_FILES" do
+      expect(described_class::WATCHED_FILES).to include("Gemfile")
+    end
+
+    it "watches a packwerk pack's models, so a pack edit invalidates the cache" do
+      require "tmpdir"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "packs", "billing", "app", "models"))
+        dirs = described_class.send(:watched_dirs, root)
+        expect(dirs).to include(File.join(root, "packs", "billing", "app", "models"))
+      end
+    end
+
+    it "watches every concern home the resolver names" do
+      require "tmpdir"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "serializers", "concerns"))
+        dirs = described_class.send(:watched_dirs, root)
+        expect(dirs).to include(File.join(root, "app", "serializers", "concerns"))
+      end
+    end
+
     it "detects changes to package.json" do
       package_json = File.join(Rails.root, "package.json")
       next unless File.exist?(package_json)
