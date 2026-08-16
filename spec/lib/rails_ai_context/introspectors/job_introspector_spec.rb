@@ -281,6 +281,32 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:mailers].map { |m| m[:name] }).to contain_exactly("UserMailer")
     end
 
+    # A mailer's actions are often written as modules mixed into one class -
+    # GitLab keeps 20 of them under app/mailers/emails, holding every
+    # notification it sends. Those are a mailer's interface; an interceptor is
+    # not, and the framework hook is what tells them apart.
+    it "keeps a module whose methods are mailer actions" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers", "emails"))
+        File.write(File.join(dir, "app", "mailers", "notify.rb"), <<~RUBY)
+          class Notify < ApplicationMailer
+            include Emails::Issues
+          end
+        RUBY
+        File.write(File.join(dir, "app", "mailers", "emails", "issues.rb"), <<~RUBY)
+          module Emails
+            module Issues
+              def new_issue_email(recipient_id)
+                mail(to: recipient_id)
+              end
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:mailers].map { |m| m[:name] }).to include("Emails::Issues")
+    end
+
     it "names a namespaced mailer by the constant its source declares" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers", "oauth"))

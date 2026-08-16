@@ -280,9 +280,23 @@ module RailsAiContext
       # inherits too, so a public helper on a base class is an action the
       # booted tier reports and this one cannot - the entries are tagged STATIC
       # for that reason.
+      # ActionMailer's interceptor and observer hooks. A class or module under
+      # app/mailers that implements one is registered with the framework, not
+      # delivered by it: reporting OpenProject's Interceptors::DefaultHeaders
+      # as a mailer offered `delivering_email` as an email somebody can send.
+      # Everything else in that directory stays - a mailer's actions are as
+      # often written as modules mixed into one class as they are methods on
+      # it, and GitLab keeps 20 such modules holding every notification it
+      # sends.
+      MAILER_FRAMEWORK_HOOKS = %w[delivering_email previewing_email delivered_email].freeze
+
       def extract_mailers_from_source
         source_classes(File.join(app.root, "app", "mailers")).filter_map do |name, methods|
           next if name == "ApplicationMailer"
+
+          # The hook is as often a class method as an instance one, so the
+          # whole declared method list is what decides, not the action list.
+          next if Array(methods).any? { |m| MAILER_FRAMEWORK_HOOKS.include?(m[:name].to_s) }
 
           actions = ActionResolver.own_actions(methods, class_name: name)
           next if actions.empty?
@@ -328,14 +342,11 @@ module RailsAiContext
           source = RailsAiContext::SafeFile.read(path)
           next unless source
 
-          # Only a class that inherits something names a mailer or a channel.
-          # app/mailers is also where ActionMailer interceptors live, written
-          # as a module or as a bare class, and reporting one of those offers
-          # `delivering_email` - a hook the framework calls - as an email
-          # somebody can send.
+          # Whether a declaration belongs here is decided by its own methods -
+          # see MAILER_FRAMEWORK_HOOKS - because a mailer's actions are as
+          # often written as modules mixed into one class as they are methods
+          # on it. Reading the file is only about naming it.
           path_name = path_name_for(path, dir)
-          next unless DeclaredConstant.own_subclass?(source, path_name)
-
           walked = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })
           [ DeclaredConstant.resolve(source, path_name), walked[:methods] || [] ]
         rescue StandardError, ScriptError => e
