@@ -205,6 +205,19 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       end
     end
 
+    # Locale files are usually named for their locale, but nothing requires it.
+    # A locale carried in a shared file has translations; saying it has none
+    # would be a positive claim that is false.
+    it "scores a locale whose translations live in a shared file" do
+      result = static_result(
+        "en.yml"           => "en:\n  hello: Hello\n  bye: Bye\n",
+        "translations.yml" => "es:\n  hello: Hola\n"
+      )
+
+      expect(result[:locale_coverage].keys).to contain_exactly("es")
+      expect(result[:locales_without_translations]).to be_empty
+    end
+
     it "honours a bare I18n.default_locale in an initializer" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n", "de.yml" => "de:\n  hello: Hallo\n") do |dir|
         FileUtils.mkdir_p(File.join(dir, "config", "initializers"))

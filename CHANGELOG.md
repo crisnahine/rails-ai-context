@@ -30,7 +30,11 @@ Discourse and Mastodon. Every one of them exits 0.
   `def down` says how to reverse the change, so replaying it alongside `up`
   cancelled the migration out. On a migrations-only app the ordinary
   up-creates/down-drops pair erased two tables OpenProject really has (35
-  to 37), and the reverse pair would have invented one it dropped.
+  to 37), and the reverse pair would have invented one it dropped. The same
+  now holds for the block spellings, `reversible { |dir| dir.down { ... } }`
+  and `revert`, and for the `t.timestamps` inside them - those were found by
+  a separate walk over the whole file, so a down body's timestamps landed on
+  the last table created on the way up.
 - **i18n coverage skips locales that carry no translations, and says so.** A
   language-name lookup table under `config/locales` contributes a top-level
   key per language, and Rails does load each as an available locale. Scoring

@@ -157,18 +157,18 @@ module RailsAiContext
         default_keys = key_paths_for_locale(default)
         locales.reject { |l| l == default }.each do |locale|
           locale_keys = key_paths_for_locale(locale)
+          translated = (default_keys & locale_keys).size
 
-          # A locale with no file of its own carries no translations to
-          # measure. Rails still lists it - a language-name lookup table under
-          # config/locales contributes a top-level key per language - but
-          # scoring it produces a row per language saying every key is missing,
-          # which describes a translation effort nobody started.
-          if locale_keys.empty?
+          # A locale that translates none of the default's keys has no coverage
+          # to report. Rails lists it because a language-name lookup table
+          # under config/locales contributes a top-level key per language, and
+          # scoring those produced a row per language saying every key was
+          # missing - a translation effort nobody had started. Naming them is
+          # the honest form; a row of zeroes is not.
+          if translated.zero?
             untranslated << locale.to_s
             next
           end
-
-          translated = (default_keys & locale_keys).size
           coverage[locale.to_s] = {
             keys: locale_keys.size,
             missing: (default_keys - locale_keys).size,
@@ -213,11 +213,28 @@ module RailsAiContext
         base = File.join(app.root, "config", "locales")
         return [] unless Dir.exist?(base)
         loc = locale.to_s
-        Dir.glob(File.join(base, "**/*.{yml,yaml}")).select do |p|
+        all = Dir.glob(File.join(base, "**/*.{yml,yaml}"))
+        named = all.select do |p|
           name = File.basename(p, ".*")
           rel = p.sub("#{base}/", "")
           name == loc || name.end_with?(".#{loc}") || rel.start_with?("#{loc}/") || rel.include?("/#{loc}/")
         end
+        return named if named.any?
+
+        # Nothing requires a locale file to be named for its locale. Reading
+        # the convention alone reports a locale carried in a shared file as
+        # having no translations, which is a positive claim and a false one.
+        all.select { |p| declares_locale?(p, loc) }
+      end
+
+      def declares_locale?(path, loc)
+        content = RailsAiContext::SafeFile.read(path)
+        return false unless content
+
+        data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
+        data.is_a?(Hash) && data.keys.map(&:to_s).include?(loc)
+      rescue StandardError
+        false
       end
 
       def nested_key_paths(hash, prefix = nil, paths = [])

@@ -183,15 +183,9 @@ module RailsAiContext
     # Additional MCP tool classes to register alongside built-in tools
     attr_accessor :custom_tools
 
-    # Built-in tool names to skip (e.g. %w[rails_security_scan rails_query])
+    # Built-in tool names to skip (e.g. %w[rails_security_scan rails_query]).
+    # Written through a coercing setter - see #skip_tools=.
     attr_reader :skip_tools
-
-    # A tool name is a String, and both readers compare against one. Every
-    # neighbouring key here takes symbols, so %i[] is written often enough that
-    # accepting it as a no-op meant a configured skip silently kept the tool.
-    def skip_tools=(value)
-      @skip_tools = Array(value).map(&:to_s)
-    end
 
     # Which AI tools to generate context for (selected during install)
     # nil = all formats, or %i[claude cursor copilot opencode codex]
@@ -359,6 +353,14 @@ module RailsAiContext
       name = name.to_sym
       raise ArgumentError, "Unknown preset: #{name}. Valid presets: #{PRESETS.keys.join(", ")}" unless PRESETS.key?(name)
       @introspectors = PRESETS[name].dup
+    end
+
+    # A tool name is a String, and both the MCP server and the CLI compare
+    # against one. Every neighbouring key in the generated initializer takes
+    # symbols, so %i[] is written often enough that accepting it as a no-op
+    # meant a configured skip silently kept the tool.
+    def skip_tools=(value)
+      @skip_tools = Array(value).map(&:to_s)
     end
 
     def output_dir_for(app)

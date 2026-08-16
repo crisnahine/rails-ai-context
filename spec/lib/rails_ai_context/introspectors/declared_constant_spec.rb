@@ -44,10 +44,70 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.resolve(nil, "WidgetsController")).to eq("WidgetsController")
     end
 
+    # An acronym in the last segment is the same defect as one in the
+    # namespace: `APIController` in api_controller.rb, `CSVController` in
+    # csv_controller.rb.
+    it "prefers a declared name that differs from the path only by case" do
+      source = "class APIController < ApplicationController\nend\n"
+
+      expect(described_class.resolve(source, "ApiController")).to eq("APIController")
+    end
+
+    it "reads a root-scoped declaration" do
+      source = "class ::ActivityPub::CollectionsController < ApplicationController\nend\n"
+
+      expect(described_class.resolve(source, "Activitypub::CollectionsController"))
+        .to eq("ActivityPub::CollectionsController")
+    end
+
+    # A file may open more than one class. Only the one Zeitwerk expects at
+    # this path names the file, and it is not always written first.
+    it "picks the declared class this path names, not the first one" do
+      source = "class Legacy::WidgetsController\nend\n\nclass Admin::WidgetsController\nend\n"
+
+      expect(described_class.resolve(source, "Admin::WidgetsController")).to eq("Admin::WidgetsController")
+    end
+
     it "takes the outermost class when one is nested inside another" do
       source = "class PostsController < ApplicationController\n  class Error < StandardError\n  end\nend\n"
 
       expect(described_class.resolve(source, "PostsController")).to eq("PostsController")
+    end
+  end
+
+  # "Does this file's own subject exist as a class" is a different question
+  # from "what is it called", and app/mailers needs the first one: a module
+  # holding a nested error class declares a class, but not its own.
+  describe ".declares_own_class?" do
+    it "is true for a class at the file's own level" do
+      source = "module OAuth\n  class TokenMailer < ApplicationMailer\n  end\nend\n"
+
+      expect(described_class.declares_own_class?(source, "Oauth::TokenMailer")).to be(true)
+    end
+
+    it "is false for a module whose only class is nested deeper" do
+      source = <<~RUBY
+        module Interceptors
+          module DefaultHeaders
+            class Error < StandardError
+            end
+
+            def delivering_email(mail); end
+          end
+        end
+      RUBY
+
+      expect(described_class.declares_own_class?(source, "Interceptors::DefaultHeaders")).to be(false)
+    end
+
+    it "is true for a bare class in a namespaced directory" do
+      source = "class Channel < ActionCable::Channel::Base\nend\n"
+
+      expect(described_class.declares_own_class?(source, "ApplicationCable::Channel")).to be(true)
+    end
+
+    it "is false when nothing is declared" do
+      expect(described_class.declares_own_class?("X = 1\n", "Widgets")).to be(false)
     end
   end
 end

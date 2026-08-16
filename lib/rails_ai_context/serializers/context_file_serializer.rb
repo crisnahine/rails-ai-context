@@ -48,8 +48,8 @@ module RailsAiContext
         # went on gitignoring it. A single explicit format is a request for one
         # file and stays one.
         formats = case format
-        when :all   then ALL_FORMATS
-        when Array  then format | [ :json ]
+        when :all             then ALL_FORMATS
+        when Array            then format.empty? ? [] : format | [ :json ]
         else Array(format)
         end
         output_dir = RailsAiContext.configuration.output_dir_for(Rails.application)

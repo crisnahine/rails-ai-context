@@ -40,14 +40,17 @@ module RailsAiContext
         # reverse pair invented one it dropped.
         down_ranges = []
         find_down_bodies(root, down_ranges)
-        entries = (ast_data[:migration] + ast_data[:schema])
+        all_entries = (ast_data[:migration] + ast_data[:schema])
           .reject { |r| down_ranges.any? { |range| range.cover?(r[:location]) } }
-        all_entries = entries.sort_by { |r| r[:location] }
+          .sort_by { |r| r[:location] }
 
         # t.timestamps has no column-name argument, so SchemaDslListener skips
-        # it; a direct walk finds the call sites.
+        # it; a direct walk finds the call sites. The walk sees the whole file,
+        # so a down body's timestamps would be attributed to the last table
+        # created on the way up - the same filter has to apply here.
         timestamps_lines = Set.new
         find_timestamps_calls(root, timestamps_lines)
+        timestamps_lines.delete_if { |line| down_ranges.any? { |range| range.cover?(line) } }
 
         all_entries.each do |entry|
           if entry.key?(:action)
@@ -80,9 +83,16 @@ module RailsAiContext
       end
 
       # Line ranges of every `def down` / `def self.down` in the file.
+      # Every way a migration spells "this part only runs on the way down":
+      # `def down`, `reversible { |dir| dir.down { ... } }`, and `revert`.
       def find_down_bodies(node, ranges)
-        if node.is_a?(Prism::DefNode) && node.name == :down
-          ranges << (node.location.start_line..node.location.end_line)
+        case node
+        when Prism::DefNode
+          ranges << (node.location.start_line..node.location.end_line) if node.name == :down
+        when Prism::CallNode
+          if %i[down revert].include?(node.name) && node.block
+            ranges << (node.location.start_line..node.location.end_line)
+          end
         end
         node.child_nodes.compact.each { |child| find_down_bodies(child, ranges) }
       end

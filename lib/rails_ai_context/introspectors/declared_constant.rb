@@ -11,12 +11,13 @@ module RailsAiContext
     # static tier has not loaded, so the source is the only place the real
     # constant is written down.
     #
-    # The path stays the answer when the source does not carry the whole name -
-    # `application_cable/channel.rb` declaring a bare `class Channel` is the
-    # case the path exists for. A declared name is taken only when it names the
-    # same file: same number of segments, same last segment. Prism parses a
-    # file with a syntax error into a partial tree, so without the second
-    # condition a half-written `class Broken` renames the whole controller.
+    # An inflection only ever changes the case of a segment, so the declared
+    # class that names a file is the one equal to the path name ignoring case.
+    # Anything else - a second class in the file, a nested error class, a
+    # partial tree Prism recovered from a syntax error - is not this file's
+    # class, and there the path stays the answer: it is the only thing carrying
+    # the namespace when the source does not, which is what
+    # `application_cable/channel.rb` needs.
     module DeclaredConstant
       module_function
 
@@ -24,43 +25,70 @@ module RailsAiContext
       # @param path_name [String] the name derived from the file's path
       # @return [String] the constant to call this file's class
       def resolve(source, path_name)
-        declared = first_declared(source)
-        return path_name unless declared
-        return path_name unless declared.count(":") == path_name.count(":")
-        return path_name unless declared.split("::").last == path_name.split("::").last
-
-        declared
+        name_for(declared_classes(source), path_name)
       end
 
-      # Fully qualified name of the first class the source declares, module
-      # nesting included. Nil when nothing parses or nothing is declared.
-      def first_declared(source)
-        return nil unless source
+      # Whether the file declares a class of its own, as opposed to a module
+      # that happens to hold one. app/mailers is where ActionMailer
+      # interceptors live, and reporting one as a mailer offers
+      # `delivering_email` - a hook the framework calls - as an email to send.
+      def declares_own_class?(source, path_name)
+        own_class?(declared_classes(source), path_name)
+      end
+
+      # Fully qualified names of every class the source declares, module
+      # nesting included, in source order. Empty when nothing parses.
+      def declared_classes(source)
+        return [] unless source
 
         root = AstCache.parse_string(source)&.value
-        root && search(root, [])
+        return [] unless root
+
+        [].tap { |names| collect(root, [], names) }
       rescue StandardError, ScriptError => e
         $stderr.puts "[rails-ai-context] DeclaredConstant failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        []
       end
 
-      def search(node, scope)
+      # --- decisions over an already-collected list ---
+
+      def name_for(declared, path_name)
+        declared.find { |name| name.casecmp?(path_name) } || path_name
+      end
+
+      # A class nested deeper than the file's own constant belongs to whatever
+      # declares it, not to the file.
+      def own_class?(declared, path_name)
+        depth = path_name.split("::").size
+        declared.any? { |name| name.split("::").size <= depth }
+      end
+
+      # --- walking ---
+
+      def collect(node, scope, names)
         case node
         when Prism::ClassNode
-          (scope + [ node.constant_path.slice ]).join("::")
+          names << qualify(scope, node)
+          descend(node, scope + [ segment(node) ], names)
         when Prism::ModuleNode
-          descend(node, scope + [ node.constant_path.slice ])
+          descend(node, scope + [ segment(node) ], names)
         else
-          descend(node, scope)
+          descend(node, scope, names)
         end
       end
 
-      def descend(node, scope)
-        node.child_nodes.compact.each do |child|
-          found = search(child, scope)
-          return found if found
-        end
-        nil
+      def descend(node, scope, names)
+        node.child_nodes.compact.each { |child| collect(child, scope, names) }
+      end
+
+      def qualify(scope, node)
+        (scope + [ segment(node) ]).join("::")
+      end
+
+      # `class ::Foo::Bar` is the same constant as `class Foo::Bar`; the root
+      # scope operator is not part of the name.
+      def segment(node)
+        node.constant_path.slice.delete_prefix("::")
       end
     end
   end

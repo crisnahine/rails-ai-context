@@ -308,10 +308,12 @@ module RailsAiContext
       # Class name plus method list for every .rb under `dir`, read from the
       # AST. Yields nothing when the directory is absent.
       #
-      # The name comes from the path, not the AST: Zeitwerk requires the two to
-      # agree, and only the path carries the namespace. Reading `class Channel`
-      # out of `application_cable/channel.rb` yields "Channel", which matches
-      # no base-class filter and no name the booted app would report.
+      # The name comes from the constant the source declares, with the path as
+      # the fallback - see DeclaredConstant for which wins when. The path has
+      # to stay in the picture because it is the only thing carrying the
+      # namespace when the source does not: `class Channel` in
+      # `application_cable/channel.rb` matches no base-class filter and no name
+      # the booted app would report.
       def source_classes(dir)
         return [] unless Dir.exist?(dir)
 
@@ -329,17 +331,22 @@ module RailsAiContext
           # Only a class names a mailer or a channel. app/mailers is also where
           # ActionMailer interceptors live, and reporting one of those offers
           # `delivering_email` - a hook - as an email somebody can send.
-          next unless DeclaredConstant.first_declared(source)
+          path_name = path_name_for(path, dir)
+          declared = DeclaredConstant.declared_classes(source)
+          next unless DeclaredConstant.own_class?(declared, path_name)
 
           walked = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })
-          [ DeclaredConstant.resolve(source, constant_name_for(path, dir)), walked[:methods] || [] ]
+          [ DeclaredConstant.name_for(declared, path_name), walked[:methods] || [] ]
         rescue StandardError, ScriptError => e
           $stderr.puts "[rails-ai-context] source_classes failed for #{path}: #{e.message}" if ENV["DEBUG"]
           nil
         end
       end
 
-      def constant_name_for(path, dir)
+      # The candidate a path camelizes to. Not the constant when the app
+      # registers an inflection for one of its segments, which is why the
+      # source gets the first word.
+      def path_name_for(path, dir)
         path.sub("#{dir}/", "").sub(/\.rb\z/, "").camelize
       end
 

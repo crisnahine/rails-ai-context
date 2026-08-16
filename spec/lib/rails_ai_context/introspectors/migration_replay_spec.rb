@@ -139,6 +139,49 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     expect(tables.keys).not_to include("legacy_things")
   end
 
+  # t.timestamps is found by its own walk over the whole file, so a `down`
+  # body's timestamps were attributed to the last table created on the way up.
+  it "does not give an up table the timestamps of a down table" do
+    tables = replay([ <<~RUBY ])
+      class SwapWidgets < ActiveRecord::Migration[7.1]
+        def up
+          create_table :widgets do |t|
+            t.string :name
+          end
+        end
+
+        def down
+          create_table :old_widgets do |t|
+            t.string :name
+            t.timestamps
+          end
+        end
+      end
+    RUBY
+
+    expect(tables["widgets"][:columns].map { |c| c[:name] }).to eq(%w[id name])
+  end
+
+  # `reversible` and `revert` are the modern spelling of the same intent, and
+  # they are blocks inside `change` rather than a method named down.
+  it "ignores a drop inside reversible's down block" do
+    tables = replay([ <<~RUBY ])
+      class CreateProjectTypes < ActiveRecord::Migration[7.1]
+        def change
+          create_table :project_types do |t|
+            t.string :name
+          end
+
+          reversible do |dir|
+            dir.down { drop_table :project_types }
+          end
+        end
+      end
+    RUBY
+
+    expect(tables.keys).to include("project_types")
+  end
+
   # The fix must not reach so far that it stops honouring a real drop.
   it "still drops a table a later migration removes on the way up" do
     tables = replay([ <<~RUBY, <<~RUBY2 ])
