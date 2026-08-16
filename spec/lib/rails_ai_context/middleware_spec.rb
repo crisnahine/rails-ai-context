@@ -24,6 +24,13 @@ RSpec.describe RailsAiContext::Middleware do
       expect(status).not_to eq(200)
     end
 
+    it "lets a downstream app exception propagate instead of answering an MCP error frame" do
+      raising = described_class.new(->(_env) { raise "app boom" })
+      env = Rack::MockRequest.env_for("/users")
+
+      expect { raising.call(env) }.to raise_error("app boom")
+    end
+
     # What the frame contains is McpEdge's, pinned once in mcp_edge_spec.
     # What this transport owes is routing a raise into it rather than letting
     # the exception reach the rackup.

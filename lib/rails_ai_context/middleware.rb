@@ -15,19 +15,7 @@ module RailsAiContext
     end
 
     def call(env)
-      config = RailsAiContext.configuration
-      path = config.http_path
-
-      if env["PATH_INFO"] == path || env["PATH_INFO"] == "#{path}/"
-        request = Rack::Request.new(env)
-        Tools::BaseTool.with_session_for(env) do
-          transport.handle_request(request)
-        end
-      else
-        @app.call(env)
-      end
-    rescue => e
-      McpEdge.internal_error_response(e)
+      McpEdge.rack_call(env, transport: transport) { @app.call(env) }
     end
 
     private

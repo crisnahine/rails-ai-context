@@ -31,9 +31,31 @@ module RailsAiContext
         [ 500, { "Content-Type" => "application/json" }, [ internal_error_frame(error) ] ]
       end
 
-      # Memoization is the caller's: the middleware holds one per instance,
-      # the controller one per class, and the standalone server one per
-      # process.
+      # The whole Rack-shaped request: the path match (trailing slash
+      # included), session scoping, dispatch and error containment. The
+      # middleware and the standalone server used to state these ten lines
+      # separately, and only the non-match branch differs, so the caller
+      # supplies it as the block. The block runs outside the rescue: an
+      # exception from the app behind the middleware is the app's to handle,
+      # not an MCP error frame.
+      def rack_call(env, transport:)
+        path = RailsAiContext.configuration.http_path
+        return yield unless env["PATH_INFO"] == path || env["PATH_INFO"] == "#{path}/"
+
+        begin
+          request = Rack::Request.new(env)
+          Tools::BaseTool.with_session_for(env) do
+            transport.handle_request(request)
+          end
+        rescue => e
+          internal_error_response(e)
+        end
+      end
+
+      # Memoization is the caller's: the middleware holds one per instance
+      # and the controller one per class. The standalone server builds its
+      # own transport because start_http also needs the underlying server
+      # for the banner and live reload.
       def build_transport(app = nil)
         app ||= Rails.application
         MCP::Server::Transports::StreamableHTTPTransport.new(Server.new(app, transport: :http).build)

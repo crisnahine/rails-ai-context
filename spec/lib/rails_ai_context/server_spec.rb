@@ -310,7 +310,7 @@ RSpec.describe RailsAiContext::Server do
     let(:mcp_path) { RailsAiContext.configuration.http_path }
 
     def call_rack_app(transport, path_info)
-      rack_app = s.send(:build_rack_app, transport, mcp_path)
+      rack_app = s.send(:build_rack_app, transport)
       rack_app.call(
         "PATH_INFO" => path_info,
         "REQUEST_METHOD" => "POST",
