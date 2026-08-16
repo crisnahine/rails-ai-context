@@ -253,7 +253,7 @@ module RailsAiContext
     attr_accessor :excluded_association_names # Framework association names hidden from model output
 
     # Search and file discovery
-    attr_accessor :search_extensions      # File extensions for Ruby fallback search (default: rb,js,erb,yml,yaml,json)
+    attr_accessor :search_extensions      # File extensions searched, on the ripgrep path and the fallback alike
     attr_accessor :concern_paths          # Where to look for concern source files (default: nil, discovers app/*/concerns)
 
     # Frontend framework detection (optional overrides - auto-detected if nil)

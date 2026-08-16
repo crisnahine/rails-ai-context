@@ -203,7 +203,7 @@ module RailsAiContext
         SECTION
         "Search" => <<~SECTION,
             # ── Search ────────────────────────────────────────────────────────
-            # File extensions for fallback search (when ripgrep unavailable)
+            # File extensions searched, on the ripgrep path and the fallback alike
             # config.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
 
             # Where to look for concern source files. Left unset, every
