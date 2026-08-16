@@ -266,6 +266,13 @@ module RailsAiContext
 
         if file_type
           cmd.push("--type-add", "custom:*.#{file_type}", "--type", "custom")
+        else
+          # Without this, `search_extensions` reached the Ruby fallback only,
+          # and the same configuration gave two different answers depending on
+          # whether ripgrep happened to be installed.
+          RailsAiContext.configuration.search_extensions.each do |ext|
+            cmd << "--glob=*.#{ext.to_s.delete_prefix('.')}"
+          end
         end
 
         cmd << "--" # Prevent pattern from being parsed as flags

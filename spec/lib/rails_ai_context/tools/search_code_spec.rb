@@ -45,6 +45,19 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       expect(text).to include("Search:")
     end
 
+    # search_extensions reached the Ruby fallback and not the ripgrep path, so
+    # the same config gave two different answers depending on whether rg
+    # happened to be installed - and on the machines where it is, which is most
+    # of them, narrowing the list did nothing at all.
+    it "honours search_extensions whichever search backend runs" do
+      RailsAiContext.configuration.search_extensions = %w[md]
+      text = described_class.call(pattern: "class").content.first[:text]
+
+      expect(text).not_to match(/\.rb[:\s]/)
+    ensure
+      RailsAiContext.configuration.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
+    end
+
     it "returns a not-found message for unmatched patterns" do
       result = described_class.call(pattern: "zzz_impossible_pattern_zzz_42")
       text = result.content.first[:text]

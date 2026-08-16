@@ -1353,7 +1353,7 @@ end
 | `excluded_concerns` | Array | framework regex patterns | Regex patterns for concerns to hide from model output |
 | `excluded_filters` | Array | `verify_authenticity_token`, etc. | Framework filter names hidden from controller output |
 | `excluded_middleware` | Array | standard Rails middleware | Default middleware hidden from config output |
-| `search_extensions` | Array | `rb js erb yml yaml json ts tsx vue svelte haml slim` | File extensions for Ruby fallback search |
+| `search_extensions` | Array | `rb js erb yml yaml json ts tsx vue svelte haml slim` | File extensions searched, on both the ripgrep and fallback paths |
 | `concern_paths` | Array | `nil` (discovers `app/*/concerns`) | Where to look for concern source files. Setting it replaces discovery |
 
 ### Root file generation
