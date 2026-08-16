@@ -213,38 +213,60 @@ module RailsAiContext
         []
       end
 
-      # Finds all YAML files contributing translations for the given locale:
-      #   config/locales/en.yml
-      #   config/locales/devise.en.yml
-      #   config/locales/en/users.yml
-      #   config/locales/admin/en.yml
-      def find_locale_paths(locale)
-        base = File.join(app.root, "config", "locales")
-        return [] unless Dir.exist?(base)
-        loc = locale.to_s
-        all = Dir.glob(File.join(base, "**/*.{yml,yaml}"))
-        named = all.select do |p|
-          name = File.basename(p, ".*")
-          rel = p.sub("#{base}/", "")
-          name == loc || name.end_with?(".#{loc}") || rel.start_with?("#{loc}/") || rel.include?("/#{loc}/")
-        end
-        # Nothing requires a locale file to be named for its locale, and a
-        # locale can have both: its own file and keys in a shared one. Reading
-        # the convention alone scores it on a fraction of what it translates,
-        # and reports a locale that lives only in a shared file as having no
-        # translations - a positive claim, and a false one.
-        (named + all.reject { |p| named.include?(p) }.select { |p| declares_locale?(p, loc) }).uniq
-      end
+# Finds all YAML files contributing translations for the given locale:
+#   config/locales/en.yml
+#   config/locales/devise.en.yml
+#   config/locales/en/users.yml
+#   config/locales/admin/en.yml
+def find_locale_paths(locale)
+  base = locales_dir
+  return [] unless base
 
-      def declares_locale?(path, loc)
-        content = RailsAiContext::SafeFile.read(path)
-        return false unless content
+  loc = locale.to_s
+  named = locale_file_paths.select do |p|
+    name = File.basename(p, ".*")
+    rel = p.sub("#{base}/", "")
+    name == loc || name.end_with?(".#{loc}") || rel.start_with?("#{loc}/") || rel.include?("/#{loc}/")
+  end
 
-        data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
-        data.is_a?(Hash) && data.keys.map(&:to_s).include?(loc)
-      rescue StandardError
-        false
-      end
+  # Nothing requires a locale file to be named for its locale, and a
+  # locale can have both: its own file and keys in a shared one. Reading
+  # the convention alone scores it on a fraction of what it translates,
+  # and reports a locale that lives only in a shared file as having no
+  # translations - a positive claim, and a false one.
+  (named + paths_by_declared_locale.fetch(loc, [])).uniq
+end
+
+def locales_dir
+  return @locales_dir if defined?(@locales_dir)
+
+  dir = File.join(app.root, "config", "locales")
+  @locales_dir = Dir.exist?(dir) ? dir : nil
+end
+
+def locale_file_paths
+  @locale_file_paths ||= locales_dir ? Dir.glob(File.join(locales_dir, "**/*.{yml,yaml}")).sort : []
+end
+
+# locale => the files declaring it, built in ONE pass. Asking every file
+# about every locale is O(locales x files): 187 locales over 108 files
+# took Discourse's i18n answer from under a second to four and a half
+# minutes.
+def paths_by_declared_locale
+  @paths_by_declared_locale ||= locale_file_paths.each_with_object({}) do |path, index|
+    top_level_locales(path).each { |loc| (index[loc] ||= []) << path }
+  end
+end
+
+def top_level_locales(path)
+  content = RailsAiContext::SafeFile.read(path)
+  return [] unless content
+
+  data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
+  data.is_a?(Hash) ? data.keys.map(&:to_s) : []
+rescue StandardError
+  []
+end
 
       def nested_key_paths(hash, prefix = nil, paths = [])
         return paths unless hash.is_a?(Hash)

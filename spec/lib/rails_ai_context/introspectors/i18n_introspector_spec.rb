@@ -231,6 +231,24 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:locale_coverage]["es"]).to include(coverage_pct: 100.0, extra: 1)
     end
 
+    # Reading every file to answer "which files hold locale X" once per locale
+    # is O(locales x files): on Discourse, 187 locales over 108 files took the
+    # introspector from under a second to four and a half minutes.
+    it "reads each locale file a bounded number of times" do
+      reads = 0
+      allow(RailsAiContext::SafeFile).to receive(:read).and_wrap_original do |orig, *args, **kw|
+        reads += 1
+        orig.call(*args, **kw)
+      end
+
+      files = (1..12).to_h { |i| [ "loc#{i}.yml", "loc#{i}:\n  hello: H#{i}\n" ] }
+      static_result(files.merge("en.yml" => "en:\n  hello: Hello\n"))
+
+      # One pass to index the files, plus each locale's own matched files. The
+      # per-locale full scan this guards against is 13 x 13 = 169 and up.
+      expect(reads).to be < 100
+    end
+
     # Coverage is measured against the default locale's keys. With none to
     # measure against, every locale scores zero - and calling them all
     # untranslated says something false about each one.
