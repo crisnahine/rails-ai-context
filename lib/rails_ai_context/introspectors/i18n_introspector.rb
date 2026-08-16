@@ -155,25 +155,34 @@ module RailsAiContext
         coverage = {}
         untranslated = []
         default_keys = key_paths_for_locale(default)
+
+        # Coverage is the share of the default locale's keys another locale
+        # also defines. With no keys to measure against - a default_locale the
+        # app configures but ships no file for - every locale scores zero, and
+        # bucketing them all as untranslated says something false about each.
+        return [ {}, [] ] if default_keys.empty?
         locales.reject { |l| l == default }.each do |locale|
           locale_keys = key_paths_for_locale(locale)
           translated = (default_keys & locale_keys).size
+          pct = ((translated.to_f / default_keys.size) * 100).round(1)
 
-          # A locale that translates none of the default's keys has no coverage
-          # to report. Rails lists it because a language-name lookup table
-          # under config/locales contributes a top-level key per language, and
-          # scoring those produced a row per language saying every key was
-          # missing - a translation effort nobody had started. Naming them is
-          # the honest form; a row of zeroes is not.
-          if translated.zero?
+          # Below the rounding floor there is nothing to show but zeroes. Rails
+          # lists a locale per language when the app keeps a language-name
+          # lookup table under config/locales, and such a table shares a key or
+          # two with the default by coincidence - on Discourse that produced
+          # 138 rows reading "0.0% - 11918 missing", a translation effort
+          # nobody had started. Naming those locales is the honest form; a
+          # screen of zeroes is not.
+          if pct.zero?
             untranslated << locale.to_s
             next
           end
+
           coverage[locale.to_s] = {
             keys: locale_keys.size,
             missing: (default_keys - locale_keys).size,
             extra: (locale_keys - default_keys).size,
-            coverage_pct: default_keys.any? ? ((translated.to_f / default_keys.size) * 100).round(1) : 0
+            coverage_pct: pct
           }
         end
         [ coverage, untranslated ]
@@ -219,12 +228,12 @@ module RailsAiContext
           rel = p.sub("#{base}/", "")
           name == loc || name.end_with?(".#{loc}") || rel.start_with?("#{loc}/") || rel.include?("/#{loc}/")
         end
-        return named if named.any?
-
-        # Nothing requires a locale file to be named for its locale. Reading
-        # the convention alone reports a locale carried in a shared file as
-        # having no translations, which is a positive claim and a false one.
-        all.select { |p| declares_locale?(p, loc) }
+        # Nothing requires a locale file to be named for its locale, and a
+        # locale can have both: its own file and keys in a shared one. Reading
+        # the convention alone scores it on a fraction of what it translates,
+        # and reports a locale that lives only in a shared file as having no
+        # translations - a positive claim, and a false one.
+        (named + all.reject { |p| named.include?(p) }.select { |p| declares_locale?(p, loc) }).uniq
       end
 
       def declares_locale?(path, loc)

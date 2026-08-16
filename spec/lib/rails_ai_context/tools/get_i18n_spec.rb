@@ -56,14 +56,14 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
 
       it "says how many locales it left out of coverage" do
         text = described_class.call.content.first[:text]
-        expect(text).to include("2 of 4 locales translate none of en's keys")
+        expect(text).to include("2 of 4 locales translate under 0.1% of en's keys")
       end
 
       # Asking for one of them by name must not answer with a silent gap where
       # the coverage line sits for every other locale.
       it "says why the detail view has no coverage line" do
         text = described_class.call(locale: "aa").content.first[:text]
-        expect(text).to include("translates none of en's keys")
+        expect(text).to include("translates under 0.1% of en's keys")
       end
     end
 

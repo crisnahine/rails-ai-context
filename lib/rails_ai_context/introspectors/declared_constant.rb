@@ -39,12 +39,24 @@ module RailsAiContext
       # Fully qualified names of every class the source declares, module
       # nesting included, in source order. Empty when nothing parses.
       def declared_classes(source)
+        declarations(source).map { |d| d[:name] }
+      end
+
+      # The same list narrowed to classes that inherit something. A mailer or a
+      # channel always does; an interceptor written as a bare class does not,
+      # and app/mailers is where interceptors live.
+      def declared_subclasses(source)
+        declarations(source).select { |d| d[:superclass] }.map { |d| d[:name] }
+      end
+
+      # @return [Array<Hash>] { name:, superclass: } per declared class
+      def declarations(source)
         return [] unless source
 
         root = AstCache.parse_string(source)&.value
         return [] unless root
 
-        [].tap { |names| collect(root, [], names) }
+        [].tap { |found| collect(root, [], found) }
       rescue StandardError, ScriptError => e
         $stderr.puts "[rails-ai-context] DeclaredConstant failed: #{e.message}" if ENV["DEBUG"]
         []
@@ -65,20 +77,20 @@ module RailsAiContext
 
       # --- walking ---
 
-      def collect(node, scope, names)
+      def collect(node, scope, found)
         case node
         when Prism::ClassNode
-          names << qualify(scope, node)
-          descend(node, scope + [ segment(node) ], names)
+          found << { name: qualify(scope, node), superclass: node.superclass&.slice }
+          descend(node, scope + [ segment(node) ], found)
         when Prism::ModuleNode
-          descend(node, scope + [ segment(node) ], names)
+          descend(node, scope + [ segment(node) ], found)
         else
-          descend(node, scope, names)
+          descend(node, scope, found)
         end
       end
 
-      def descend(node, scope, names)
-        node.child_nodes.compact.each { |child| collect(child, scope, names) }
+      def descend(node, scope, found)
+        node.child_nodes.compact.each { |child| collect(child, scope, found) }
       end
 
       def qualify(scope, node)

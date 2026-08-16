@@ -328,15 +328,18 @@ module RailsAiContext
           source = RailsAiContext::SafeFile.read(path)
           next unless source
 
-          # Only a class names a mailer or a channel. app/mailers is also where
-          # ActionMailer interceptors live, and reporting one of those offers
-          # `delivering_email` - a hook - as an email somebody can send.
+          # Only a class that inherits something names a mailer or a channel.
+          # app/mailers is also where ActionMailer interceptors live, written
+          # as a module or as a bare class, and reporting one of those offers
+          # `delivering_email` - a hook the framework calls - as an email
+          # somebody can send.
           path_name = path_name_for(path, dir)
-          declared = DeclaredConstant.declared_classes(source)
-          next unless DeclaredConstant.own_class?(declared, path_name)
+          declarations = DeclaredConstant.declarations(source)
+          subclasses = declarations.select { |d| d[:superclass] }.map { |d| d[:name] }
+          next unless DeclaredConstant.own_class?(subclasses, path_name)
 
           walked = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })
-          [ DeclaredConstant.name_for(declared, path_name), walked[:methods] || [] ]
+          [ DeclaredConstant.name_for(declarations.map { |d| d[:name] }, path_name), walked[:methods] || [] ]
         rescue StandardError, ScriptError => e
           $stderr.puts "[rails-ai-context] source_classes failed for #{path}: #{e.message}" if ENV["DEBUG"]
           nil

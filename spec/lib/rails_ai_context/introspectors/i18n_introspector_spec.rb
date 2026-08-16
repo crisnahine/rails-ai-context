@@ -218,6 +218,33 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:locales_without_translations]).to be_empty
     end
 
+    # A locale can have both: a file of its own AND keys in a shared file.
+    # Reading only the named one scores it on a fraction of what it translates.
+    it "reads a locale's own file and the shared file together" do
+      result = static_result(
+        "en.yml"     => "en:\n  a: A\n  b: B\n",
+        "es.yml"     => "es:\n  only_es: X\n",
+        "shared.yml" => "es:\n  a: Aa\n  b: Bb\n"
+      )
+
+      expect(result[:locales_without_translations]).to be_empty
+      expect(result[:locale_coverage]["es"]).to include(coverage_pct: 100.0, extra: 1)
+    end
+
+    # Coverage is measured against the default locale's keys. With none to
+    # measure against, every locale scores zero - and calling them all
+    # untranslated says something false about each one.
+    it "claims nothing about coverage when the default locale has no keys" do
+      result = static_result(
+        "en.yml" => "en:\n  a: A\n",
+        "fr.yml" => "fr:\n  a: Aa\n"
+      ) { |dir| File.write(File.join(dir, "config", "application.rb"), "config.i18n.default_locale = :de\n") }
+
+      expect(result[:default_locale]).to eq("de")
+      expect(result[:locale_coverage]).to be_empty
+      expect(result[:locales_without_translations]).to be_empty
+    end
+
     it "honours a bare I18n.default_locale in an initializer" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n", "de.yml" => "de:\n  hello: Hallo\n") do |dir|
         FileUtils.mkdir_p(File.join(dir, "config", "initializers"))

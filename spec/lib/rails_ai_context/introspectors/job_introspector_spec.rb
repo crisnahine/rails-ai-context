@@ -255,6 +255,32 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:mailers].map { |m| m[:name] }).to contain_exactly("UserMailer")
     end
 
+    # An interceptor is as often a class as a module, and a mailer always
+    # inherits something. A bare class under app/mailers is neither.
+    it "does not report a parentless class in app/mailers as a mailer" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers", "interceptors"))
+        File.write(File.join(dir, "app", "mailers", "user_mailer.rb"), <<~RUBY)
+          class UserMailer < ApplicationMailer
+            def welcome
+              mail(to: "a@b.c")
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "mailers", "interceptors", "default_headers.rb"), <<~RUBY)
+          module Interceptors
+            class DefaultHeaders
+              def self.delivering_email(mail); end
+
+              def default_headers; end
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:mailers].map { |m| m[:name] }).to contain_exactly("UserMailer")
+    end
+
     it "names a namespaced mailer by the constant its source declares" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "mailers", "oauth"))
