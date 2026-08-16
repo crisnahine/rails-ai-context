@@ -42,6 +42,24 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       expect(text).to include("**fr**: 80.0% - 80 unique keys")
     end
 
+    # An app whose config/locales holds a language-name table lists far more
+    # available locales than it has coverage rows for. Without a word about
+    # the gap, a reader counts 187 locales, then 49 rows, and cannot tell
+    # which number is wrong.
+    context "when some locales carry no translations" do
+      let(:i18n_data) do
+        super().merge(
+          available_locales: %w[en fr aa zu],
+          locales_without_translations: %w[aa zu]
+        )
+      end
+
+      it "says how many locales it left out of coverage" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("2 of 4 locales have no translations of their own")
+      end
+    end
+
     # Coverage counts a key path once; the per-file list below it counts each
     # file's leaves. Without the label the two numbers look like a bug.
     it "says the coverage key total counts unique paths" do

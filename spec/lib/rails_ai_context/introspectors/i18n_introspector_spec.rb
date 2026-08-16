@@ -178,6 +178,33 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:available_locales]).to include("en", "en-GB")
     end
 
+    # A language-name lookup table is an ordinary thing to keep under
+    # config/locales, and Rails really does load every one of its top-level
+    # keys as an available locale. What it does not have is translations: on
+    # Discourse, 138 of 186 coverage rows read "0.0% - 0 unique keys - 11918
+    # missing" for languages nobody ever translated.
+    describe "a locale-name table under config/locales" do
+      let(:result) do
+        static_result(
+          "en.yml"    => "en:\n  hello: Hello\n  bye: Bye\n",
+          "es.yml"    => "es:\n  hello: Hola\n",
+          "names.yml" => "aa:\n  name: Afar\nzu:\n  name: Zulu\n"
+        )
+      end
+
+      it "still lists its keys as available locales, the way Rails does" do
+        expect(result[:available_locales]).to include("aa", "zu")
+      end
+
+      it "reports no coverage for a locale with no translations of its own" do
+        expect(result[:locale_coverage].keys).to contain_exactly("es")
+      end
+
+      it "names the locales it left out of coverage" do
+        expect(result[:locales_without_translations]).to contain_exactly("aa", "zu")
+      end
+    end
+
     it "honours a bare I18n.default_locale in an initializer" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n", "de.yml" => "de:\n  hello: Hallo\n") do |dir|
         FileUtils.mkdir_p(File.join(dir, "config", "initializers"))

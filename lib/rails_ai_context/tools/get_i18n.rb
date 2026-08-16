@@ -72,6 +72,16 @@ module RailsAiContext
             end
           end
 
+          # A language-name table under config/locales makes Rails list a
+          # locale per language. Saying so is what keeps the available count
+          # and the shorter coverage list from reading as a contradiction.
+          untranslated = i18n[:locales_without_translations] || []
+          if untranslated.any?
+            total = (i18n[:available_locales] || []).size
+            lines << "" << "_#{untranslated.size} of #{total} locales have no translations of their own " \
+                           "and are left out of coverage: #{untranslated.sort.join(', ')}._"
+          end
+
           fallbacks = i18n[:fallbacks] || {}
           if fallbacks.any?
             lines << "" << "## Fallbacks"

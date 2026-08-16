@@ -21,13 +21,15 @@ module RailsAiContext
       end
 
       def call
+        coverage, untranslated = detect_locale_coverage
         result = {
           default_locale: I18n.default_locale.to_s,
           available_locales: I18n.available_locales.map(&:to_s).sort,
           backend: I18n.backend.class.name,
           locale_files: extract_locale_files,
           total_locale_files: count_locale_files,
-          locale_coverage: detect_locale_coverage
+          locale_coverage: coverage,
+          locales_without_translations: untranslated
         }
         result.merge!(detect_fallback_config)
         result
@@ -41,6 +43,7 @@ module RailsAiContext
       def static_call
         locales = locales_from_files
         default = default_locale_from_config
+        coverage, untranslated = detect_locale_coverage(locales: locales.map(&:to_sym), default: default.to_sym)
 
         {
           default_locale: default,
@@ -48,7 +51,8 @@ module RailsAiContext
           backend: nil,
           locale_files: extract_locale_files,
           total_locale_files: count_locale_files,
-          locale_coverage: detect_locale_coverage(locales: locales.map(&:to_sym), default: default.to_sym)
+          locale_coverage: coverage,
+          locales_without_translations: untranslated
         }.merge(detect_fallback_config)
       rescue => e
         { error: e.message }
@@ -139,17 +143,31 @@ module RailsAiContext
         {}
       end
 
+      # @return [Array(Hash, Array<String>)] coverage per locale, and the
+      #   locales left out of it because they carry no translations.
       def detect_locale_coverage(locales: I18n.available_locales, default: I18n.default_locale)
-        return {} if locales.size < 2
+        return [ {}, [] ] if locales.size < 2
 
         # Coverage is the share of the default locale's keys that the other
         # locale also defines. Comparing raw counts instead reports over 100%
         # for a locale that translates few default keys but adds many of its
         # own - the one number a translator must not be told is fine.
         coverage = {}
+        untranslated = []
         default_keys = key_paths_for_locale(default)
         locales.reject { |l| l == default }.each do |locale|
           locale_keys = key_paths_for_locale(locale)
+
+          # A locale with no file of its own carries no translations to
+          # measure. Rails still lists it - a language-name lookup table under
+          # config/locales contributes a top-level key per language - but
+          # scoring it produces a row per language saying every key is missing,
+          # which describes a translation effort nobody started.
+          if locale_keys.empty?
+            untranslated << locale.to_s
+            next
+          end
+
           translated = (default_keys & locale_keys).size
           coverage[locale.to_s] = {
             keys: locale_keys.size,
@@ -158,10 +176,10 @@ module RailsAiContext
             coverage_pct: default_keys.any? ? ((translated.to_f / default_keys.size) * 100).round(1) : 0
           }
         end
-        coverage
+        [ coverage, untranslated ]
       rescue => e
         $stderr.puts "[rails-ai-context] detect_locale_coverage failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        [ {}, [] ]
       end
 
       # Dotted key paths a locale defines, with the locale root stripped so
