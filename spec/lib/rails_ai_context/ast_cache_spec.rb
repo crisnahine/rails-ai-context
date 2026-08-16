@@ -75,4 +75,35 @@ RSpec.describe RailsAiContext::AstCache do
       large.close!
     end
   end
+
+  describe ".parse_string" do
+    before { described_class.clear }
+
+    it "parses a source string once and serves the rest from the cache" do
+      source = "class CachedProbe\n  def index; end\nend\n"
+
+      expect(Prism).to receive(:parse).once.and_call_original
+      first = described_class.parse_string(source)
+      second = described_class.parse_string(source)
+
+      expect(second).to equal(first)
+      expect(described_class.size).to eq(1)
+    end
+
+    it "keeps distinct sources distinct" do
+      a = described_class.parse_string("class A; end\n")
+      b = described_class.parse_string("class B; end\n")
+
+      expect(a).not_to equal(b)
+      expect(described_class.size).to eq(2)
+    end
+
+    it "bypasses the cache for oversize sources instead of raising" do
+      stub_const("RailsAiContext::AstCache::MAX_PARSE_SIZE", 10)
+
+      result = described_class.parse_string("class TooBigForTheCache; end\n")
+      expect(result).to be_a(Prism::ParseResult)
+      expect(described_class.size).to eq(0)
+    end
+  end
 end

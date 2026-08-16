@@ -41,10 +41,21 @@ module RailsAiContext
       STORE.compute_if_absent(key) { Prism.parse(content) }
     end
 
-    # Parse a Ruby source string (no caching).
-    # Returns a Prism::ParseResult.
+    # Parse a Ruby source string, cached by content digest. The name always
+    # promised a cache; the implementation was a bypass, so a controller was
+    # parsed up to ten times per static run because every extractor received
+    # the text and re-parsed it.
     def self.parse_string(source)
-      Prism.parse(source)
+      return Prism.parse(source) if source.bytesize > MAX_PARSE_SIZE
+
+      key = "string:#{Digest::SHA256.hexdigest(source)}"
+
+      cached = STORE[key]
+      return cached if cached
+
+      evict_if_full
+
+      STORE.compute_if_absent(key) { Prism.parse(source) }
     end
 
     # Invalidate all cached entries for a given path.
