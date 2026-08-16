@@ -2,77 +2,57 @@
 
 # rails-ai-context
 
-**Your AI is guessing your Rails app. Every guess costs you time.**
+*Give your AI coding assistant ground truth about your Rails app*
 
+[![Gem Version](https://img.shields.io/gem/v/rails-ai-context?style=flat-square&color=brightgreen)](https://rubygems.org/gems/rails-ai-context)
+[![Downloads](https://img.shields.io/gem/dt/rails-ai-context?style=flat-square&color=blue)](https://rubygems.org/gems/rails-ai-context)
+[![CI](https://img.shields.io/github/actions/workflow/status/crisnahine/rails-ai-context/ci.yml?style=flat-square&label=CI)](https://github.com/crisnahine/rails-ai-context/actions)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green?style=flat-square)](https://registry.modelcontextprotocol.io)
+[![Ruby](https://img.shields.io/badge/Ruby-3.1_to_3.4-CC342D?style=flat-square&logo=ruby&logoColor=white)](https://github.com/crisnahine/rails-ai-context)
+[![Rails](https://img.shields.io/badge/Rails-7.0_to_8.1-CC0000?style=flat-square&logo=rubyonrails&logoColor=white)](https://github.com/crisnahine/rails-ai-context)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
-<a href="https://claude.ai/claude-code"><img src="https://img.shields.io/badge/Claude_Code-ee8b4a?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude Code"></a>
-<a href="https://cursor.com"><img src="https://img.shields.io/badge/Cursor-000000?style=for-the-badge&logo=cursor&logoColor=white" alt="Cursor"></a>
-<a href="https://github.com/features/copilot"><img src="https://img.shields.io/badge/GitHub_Copilot-000000?style=for-the-badge&logo=githubcopilot&logoColor=white" alt="GitHub Copilot"></a>
-<a href="https://opencode.ai"><img src="https://img.shields.io/badge/OpenCode-4285F4?style=for-the-badge&logoColor=white" alt="OpenCode"></a>
-<a href="https://codex.openai.com"><img src="https://img.shields.io/badge/Codex_CLI-412991?style=for-the-badge&logo=openai&logoColor=white" alt="Codex CLI"></a>
-<a href="docs/CLI.md"><img src="https://img.shields.io/badge/Any_Terminal-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white" alt="Any Terminal"></a>
+[![Claude Code](https://img.shields.io/badge/Claude_Code-ee8b4a?style=flat-square&logo=anthropic&logoColor=white)](https://claude.ai/claude-code)
+[![Cursor](https://img.shields.io/badge/Cursor-000000?style=flat-square&logo=cursor&logoColor=white)](https://cursor.com)
+[![GitHub Copilot](https://img.shields.io/badge/GitHub_Copilot-000000?style=flat-square&logo=githubcopilot&logoColor=white)](https://github.com/features/copilot)
+[![OpenCode](https://img.shields.io/badge/OpenCode-4285F4?style=flat-square&logoColor=white)](https://opencode.ai)
+[![Codex CLI](https://img.shields.io/badge/Codex_CLI-412991?style=flat-square&logo=openai&logoColor=white)](https://codex.openai.com)
+[![Any terminal](https://img.shields.io/badge/Any_terminal-4EAA25?style=flat-square&logo=gnubash&logoColor=white)](docs/CLI.md)
 
+:star: If this gem saves you a correction loop, star it on GitHub!
 
-
-[![Gem Version](https://img.shields.io/gem/v/rails-ai-context?color=brightgreen)](https://rubygems.org/gems/rails-ai-context)
-[![Downloads](https://img.shields.io/gem/dt/rails-ai-context?color=blue)](https://rubygems.org/gems/rails-ai-context)
-[![CI](https://github.com/crisnahine/rails-ai-context/actions/workflows/ci.yml/badge.svg)](https://github.com/crisnahine/rails-ai-context/actions)
-[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green)](https://registry.modelcontextprotocol.io)
-<br>
-[![Ruby](https://img.shields.io/badge/Ruby-3.1%20%7C%203.2%20%7C%203.3%20%7C%203.4-CC342D)](https://github.com/crisnahine/rails-ai-context)
-[![Rails](https://img.shields.io/badge/Rails-7.0%20%7C%207.1%20%7C%207.2%20%7C%208.0%20%7C%208.1-CC0000)](https://github.com/crisnahine/rails-ai-context)
-[![Tests](https://img.shields.io/badge/Tests-2608%20passing-brightgreen)](https://github.com/crisnahine/rails-ai-context/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-</div>
-
-
-
-## The problem
-
-You've seen it. Your AI:
-
-- **Writes a migration for a column that already exists** - didn't check the schema
-- **Creates a method that duplicates one in a concern** - didn't know it was there
-- **Uses the wrong association name** - `user.posts` when it's `user.articles`
-- **Generates tests that don't match your patterns** - factories when you use fixtures, or the reverse
-- **Adds a gem you already have** - or calls an API from one you don't
-- **Misses `before_action` filters from parent controllers** - then wonders why auth fails
-- **Invents a method** that isn't in your codebase - then you spend 10 minutes finding out
-
-You catch it. You fix it. You re-prompt. It breaks something else.
-
-**The real cost of AI coding isn't the tokens - it's the correction loop.** Every guess is a round-trip: you catch it, you fix it, you re-prompt, and something adjacent breaks. This gem kills the guessing at its source.
-
-<br>
-
-## Two commands. Problem gone.
-
-```bash
-gem "rails-ai-context", group: :development
-rails generate rails_ai_context:install
-```
-
-### Or standalone - no Gemfile needed
-
-```bash
-gem install rails-ai-context
-cd your-rails-app
-rails-ai-context init     # interactive setup
-rails-ai-context serve    # start MCP server
-```
-
-<div align="center">
+[Why](#why) • [Features](#features) • [Getting started](#getting-started) • [Usage](#usage) • [Tools](#tools) • [Configuration](#configuration) • [Documentation](#documentation)
 
 ![Install demo](demo/demo.gif)
 
 </div>
 
-Now your AI doesn't guess - it **asks your app directly.** 45 tools and 5 resource templates that query your schema, models, routes, controllers, views, and conventions on demand. Model introspection uses Prism AST parsing - every result carries a `[VERIFIED]` or `[INFERRED]` confidence tag so AI knows what's ground truth and what needs runtime checking.
+**rails-ai-context** is a Ruby gem that turns your Rails app into the source of truth for AI coding assistants. Instead of guessing your schema, associations, routes and conventions from training data, the assistant asks your app: 45 read-only tools served over [MCP](https://modelcontextprotocol.io) or run from the CLI, plus generated context files for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI.
 
-<br>
+> [!TIP]
+> Nothing to add to your Gemfile if you don't want to. `gem install rails-ai-context`, then `rails-ai-context init` inside any Rails app. It also works on an app that won't boot: pass `--no-boot` and every tool answers from the source files.
 
-## See the difference
+## Why
+
+You have seen your assistant do these:
+
+- Write a migration for a column that already exists.
+- Call `user.posts` when the association is `user.articles`.
+- Scaffold tests with FactoryBot in a fixture-based suite.
+- Miss a `before_action` inherited from a parent controller, then wonder why auth fails.
+- Add a gem you already have, or call an API from one you don't.
+- Invent a method that isn't in the codebase.
+
+You catch it, fix it, re-prompt, and something next to it breaks. The tokens are cheap; the correction loop is what costs you the afternoon. This gem removes the guess at the source.
+
+| You ask the AI to... | Without | With |
+|:---|:---|:---|
+| Add a `subscription_tier` column to users | Writes the migration, duplicates an existing column | Reads the live schema, sees `subscription_status`, asks before migrating |
+| Call `user.posts` in a controller | Guesses; `NoMethodError` at runtime | Resolves the real association from the model |
+| Write tests for a new model | Scaffolds with FactoryBot | Detects your fixture-based suite and matches it |
+| Fix a failing create action | Misses the inherited `authenticate_user!` | Gets parent-controller filters inline with the action source |
+| Build a dashboard page | Invents Tailwind classes from memory | Gets your real button/card/alert patterns |
+| Trace where `publishable?` is used | Reads 6 files in sequence, still misses callers | One call: definition + source + every caller + tests |
 
 <div align="center">
 
@@ -80,442 +60,190 @@ Now your AI doesn't guess - it **asks your app directly.** 45 tools and 5 resour
 
 </div>
 
-One call returns: definition + source code + every caller grouped by type + tests. **Replaces 4-5 sequential file reads.**
+## Features
 
-<br>
+- **45 read-only tools** for schema, models, controllers, routes, views, Stimulus, Turbo, jobs, services, mailers, i18n, gems, config, tests, security, performance and more. Every answer comes from your app.
+- **Prism AST parsing** for model introspection. Each result carries `[VERIFIED]` or `[INFERRED]` so the assistant knows what is ground truth and what needs a runtime check.
+- **Three ways in**: MCP over stdio, MCP mounted inside your Rails app over HTTP, or plain CLI in any terminal.
+- **Generated context files** for Claude Code, Cursor, GitHub Copilot, OpenCode and Codex CLI, with the MCP config each tool auto-detects on project open.
+- **Live resources**: `rails://` and `rails-ai-context://` URIs that introspect fresh on every read.
+- **Anti-hallucination rules** shipped in every generated context file, on by default.
+- **Static tier**: when the app can't boot, tools answer from `config/routes.rb`, `db/schema.rb`, migrations and source files, and say so.
+- **Works with real app shapes**: packwerk packs, in-repo engines, multi-database schema dumps, Mongoid, API-only apps.
+- **Custom tools**: register your own `MCP::Tool` classes next to the built-in ones and test them with the bundled `TestHelper`.
 
-## What stops being wrong
+## Getting started
 
-Real scenarios where AI goes sideways - and what it does instead with ground truth:
+### Requirements
 
-| You ask AI to... | Without - AI guesses | With - AI verifies first |
-|:-----|:-----|:-----|
-| Add a `subscription_tier` column to users | Writes the migration, duplicates an existing column | Reads live schema, spots `subscription_status` already exists, asks before migrating |
-| Call `user.posts` in a controller | Uses the guess; runtime `NoMethodError` | Resolves the actual association (`user.articles`) from the model |
-| Write tests for a new model | Scaffolds with FactoryBot | Detects your fixture-based suite and matches it |
-| Fix a failing create action | Misses inherited `before_action :authenticate_user!` | Returns parent-controller filters inline with the action source |
-| Build a dashboard page | Invents Tailwind classes from memory | Returns your actual button/card/alert patterns, copy-paste ready |
-| Trace where `publishable?` is used | Reads 6 files sequentially, still misses callers | Single call: definition + source + every caller + tests |
+- Ruby 3.1 or newer
+- Rails 7.0 or newer
+- Optional: `brakeman` for `security_scan`, `listen` for `watch`, `ripgrep` for faster `search_code`
 
-<details>
-<summary><strong>Verify it on your own app</strong></summary>
-
-<br>
-
-Run these before and after installing to see what changes in *your* codebase:
+### Install in the Gemfile
 
 ```bash
-# Schema: does AI know what columns exist?
+bundle add rails-ai-context --group development
+rails generate rails_ai_context:install
+```
+
+The generator asks which AI tools you use and whether you want MCP or CLI mode, then writes the context files, the MCP config for each tool, and `config/initializers/rails_ai_context.rb`. Re-running it is safe; it keeps what you have and adds what is missing.
+
+### Install standalone
+
+```bash
+gem install rails-ai-context
+cd your-rails-app
+rails-ai-context init
+rails-ai-context serve
+```
+
+No Gemfile change. Config lives in `.rails-ai-context.yml`. Works with rbenv, rvm, asdf, mise, chruby and system Ruby. See [Standalone](docs/STANDALONE.md).
+
+### Check it works
+
+```bash
+rails ai:doctor                                  # in-Gemfile: readiness score + diagnostics
+rails-ai-context doctor                          # standalone
+
 rails 'ai:tool[schema]' table=users
-
-# Trace: find every caller of a method across the codebase
-rails 'ai:tool[search_code]' pattern=your_method match_type=trace
-
-# Model: associations, scopes, callbacks, concerns - all resolved
 rails 'ai:tool[model_details]' model=User
-
-# Controllers: action source + inherited filters + strong params in one shot
-rails 'ai:tool[controllers]' controller=UsersController action=create
+rails 'ai:tool[search_code]' pattern=publishable? match_type=trace
 ```
 
-Compare what AI outputs with and without these tools wired in. The difference is measured in *corrections avoided*, not bytes saved.
+Then open the project in your AI tool. The MCP config it wrote is picked up on open, and the assistant starts calling `rails_get_model_details` instead of guessing.
 
-</details>
+> [!NOTE]
+> The CLI commands above are for you. When MCP is connected the assistant calls the same tools itself; you never type them.
 
-<br>
+## Usage
 
-## Three ways to use it
+### MCP over stdio
 
-<table>
-<tr>
-<td width="33%">
+The default. Each AI tool gets its own config file (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `opencode.json`, `.codex/config.toml`) pointing at:
 
-### MCP Server (stdio)
-
-AI calls tools directly via the protocol. Each AI tool gets its own config file - auto-detected on project open.
-
-```
-rails ai:serve
+```bash
+rails ai:serve             # in-Gemfile
+rails-ai-context serve     # standalone
 ```
 
-```
-→ rails_search_code(pattern: "publishable?", match_type: "trace")
-→ rails_get_schema(table: "users")
-→ rails_analyze_feature(feature: "billing")
-```
+### MCP over HTTP
 
-</td>
-<td width="33%">
-
-### MCP Server (HTTP)
-
-Mount inside your Rails app - inherits routing, auth, and middleware.
+Mount the server inside your app. It inherits your routing, auth and middleware, and needs no second process.
 
 ```ruby
 # config/routes.rb
 mount RailsAiContext::Engine, at: "/mcp"
 ```
 
-Native Rails controller transport. No separate process needed.
+Point the client at `http://localhost:3000/mcp`. There is also a standalone HTTP process: `rails-ai-context serve --transport http --port 6029`.
 
-</td>
-<td width="33%">
+> [!WARNING]
+> Each connected client that opens the SSE channel holds one server thread for the life of the connection. Fine for development; raise Puma's thread count or use the standalone HTTP process if several clients share the app.
 
 ### CLI
 
-Same 45 tools, no server needed. Works in any terminal, any AI tool.
+Same 45 tools, no server, any terminal.
 
 ```bash
 rails 'ai:tool[search_code]' pattern="publishable?" match_type=trace
-rails 'ai:tool[schema]' table=users
-rails 'ai:tool[analyze_feature]' feature=billing
+rails-ai-context tool schema --table users --detail full
 ```
 
-</td>
-</tr>
-</table>
+Tool names resolve loosely: `schema`, `get_schema` and `rails_get_schema` all work. Most tools take `detail=summary|standard|full`.
 
-> **[Full Guide →](docs/GUIDE.md)** - every command, every parameter, every configuration option.
-
-<br>
-
-## Real-world examples
-
-<details>
-<summary><strong>"Add a subscription field to users"</strong></summary>
-
-<br>
-
-```bash
-rails 'ai:tool[schema]' table=users
-```
-```
-## Table: users
-| Column              | Type    | Null | Default |
-|---------------------|---------|------|---------|
-| email               | string  | NO   | [unique] |
-| subscription_status | string  | yes  | "free"   |
-| created_at          | datetime| NO   |          |
-```
-
-AI sees `subscription_status` already exists. Checks the model, then generates a correct migration - **first attempt**.
-
-</details>
-
-<details>
-<summary><strong>"Fix the broken post creation flow"</strong></summary>
-
-<br>
-
-```bash
-rails 'ai:tool[controllers]' controller=PostsController action=create
-```
-```
-# PostsController#create
-
-Filters: before_action :authenticate_user!, before_action :set_post (only: show, edit)
-Strong params: post_params → title, body, published_at
-Renders: redirect_to @post | render :new
-```
-
-AI sees the inherited `authenticate_user!` filter, the actual strong params, and the render paths. No guessing.
-
-</details>
-
-<details>
-<summary><strong>"Build a new dashboard view"</strong></summary>
-
-<br>
-
-```bash
-# Check existing view patterns
-rails 'ai:tool[view]' controller=dashboard
-# → templates with ivars, Turbo frames, Stimulus controllers, partial locals
-
-# See existing components + usage examples
-rails 'ai:tool[component_catalog]' detail=standard
-# → ViewComponent/Phlex props, slots, previews, sidecar assets
-
-# Get Stimulus data-attributes
-rails 'ai:tool[stimulus]' controller=chart
-# → correct HTML with dashes (not underscores) + reverse view lookup
-```
-
-</details>
-
-<br>
-
-## 45 Tools
-
-Every tool is **read-only** and returns data verified against your actual app - not guesses, not training data.
-
-<details open>
-<summary><strong>Search & Trace</strong></summary>
-
-| Tool | What it does |
-|:-----|:------------|
-| `search_code` | Trace: definition + source + callers + tests. Also: definition, call, class filters |
-| `get_edit_context` | Method-aware code extraction with class context |
-
-</details>
-
-<details open>
-<summary><strong>Understand</strong></summary>
-
-| Tool | What it does |
-|:-----|:------------|
-| `analyze_feature` | Full-stack: models + controllers + routes + services + jobs + views + tests |
-| `get_context` | Composite: schema + model + controller + routes + views in one call |
-| `onboard` | Narrative app walkthrough (quick/standard/full) |
-
-</details>
-
-<details open>
-<summary><strong>Schema & Models</strong></summary>
-
-| Tool | What it does |
-|:-----|:------------|
-| `get_schema` | Columns with indexed/unique/encrypted/default hints |
-| `get_model_details` | AST-parsed associations, validations, scopes, enums, macros - each result tagged `[VERIFIED]` or `[INFERRED]` |
-| `get_callbacks` | Callbacks in Rails execution order with source |
-| `get_concern` | Concern methods + source + which models include it |
-
-</details>
-
-<details open>
-<summary><strong>Controllers & Routes</strong></summary>
-
-| Tool | What it does |
-|:-----|:------------|
-| `get_controllers` | Actions + inherited filters + render map + strong params |
-| `get_routes` | Code-ready helpers (`post_path(@record)`) + required params |
-
-</details>
-
-<details open>
-<summary><strong>Views & Frontend</strong></summary>
-
-| Tool | What it does |
-|:-----|:------------|
-| `get_view` | Templates with ivars, Turbo wiring, Stimulus refs, partial locals |
-| `get_stimulus` | HTML data-attributes (dashes!) + targets + values + actions |
-| `get_partial_interface` | What locals to pass + what methods are called on them |
-| `get_turbo_map` | Broadcast → subscription wiring + mismatch warnings |
-| `get_frontend_stack` | React/Vue/Svelte/Angular, Hotwire, TypeScript, package manager |
-
-</details>
-
-<details open>
-<summary><strong>Testing & Quality</strong></summary>
-
-| Tool | What it does |
-|:-----|:------------|
-| `get_test_info` | Fixtures + relationships + test template matching your patterns |
-| `generate_test` | Test scaffolding matching your project's patterns |
-| `validate` | Syntax + semantic + Brakeman security in one call |
-| `security_scan` | Brakeman static analysis - SQL injection, XSS, mass assignment |
-| `performance_check` | N+1 risks, missing indexes, counter_cache, eager load candidates |
-
-</details>
-
-<details open>
-<summary><strong>App Config & Services</strong></summary>
-
-| Tool | What it does |
-|:-----|:------------|
-| `get_conventions` | Auth checks, flash messages, create action template, test patterns |
-| `get_config` | Database, auth framework, assets, cache, queue, Action Cable |
-| `get_gems` | Notable gems with versions, categories, config file locations |
-| `get_env` | Environment variables + credentials keys (not values) |
-| `get_helper_methods` | App + framework helpers with view cross-references |
-| `get_service_pattern` | Interface, dependencies, side effects, callers |
-| `get_job_pattern` | Queue, retries, guard clauses, broadcasts, schedules |
-| `get_component_catalog` | ViewComponent/Phlex: props, slots, previews, sidecar assets |
-| `get_i18n` | Locales, translation files with key counts, per-locale coverage, fallbacks |
-| `get_mailers` | Mailer classes with delivery actions and delivery method |
-| `get_engines` | Mounted engines (with known-engine descriptions) + loaded engine classes |
-| `get_autoload` | Zeitwerk mode, autoload/eager-load paths, collapsed dirs, custom inflections |
-| `get_active_support` | Concerns registry, deprecators, MessageVerifier usage, on_load hooks, cache store |
-| `get_env_config` | Per-environment config: notable toggles + every config key each env sets |
-
-</details>
-
-<details open>
-<summary><strong>Data & Debugging</strong></summary>
-
-| Tool | What it does |
-|:-----|:------------|
-| `dependency_graph` | Model/service dependency graph in Mermaid or text format |
-| `migration_advisor` | Migration code generation with reversibility + affected models |
-| `search_docs` | Bundled topic index with weighted keyword search |
-| `query` | Safe read-only SQL with timeout, row limit, column redaction |
-| `read_logs` | Reverse file tail with level filtering and sensitive data redaction |
-| `diagnose` | One-call error diagnosis with classification + context + git + logs |
-| `review_changes` | PR/commit review with per-file context + warnings |
-| `runtime_info` | Live DB pool, table sizes, pending migrations, cache stats, queue depth |
-| `session_context` | Session-aware context tracking across tool calls |
-
-</details>
-
-> **[All 45 tools with parameters →](docs/TOOLS.md)** &nbsp;|&nbsp; **[Real-world recipes →](docs/RECIPES.md)**
-
-<br>
-
-## Live Resources (VFS)
-
-AI clients can also read structured data through **resource templates** - `rails-ai-context://` URIs that introspect fresh on every request. Zero stale data.
-
-| Resource Template | What it returns |
-|:------------------|:---------------|
-| `rails-ai-context://controllers/{name}` | Actions, inherited filters, strong params |
-| `rails-ai-context://controllers/{name}/{action}` | Action source code with applicable filters |
-| `rails-ai-context://views/{path}` | View template content (path traversal protected) |
-| `rails-ai-context://routes/{controller}` | Live route map filtered by controller |
-| `rails://models/{name}` | Per-model details: associations, validations, schema |
-
-Plus 9 static resources (schema, routes, conventions, gems, controllers, config, tests, migrations, engines) that AI clients read directly.
-
-<br>
-
-## Anti-Hallucination Protocol
-
-Every generated context file ships with **6 rules that force AI verification** before writing code. The protocol targets the exact cognitive failures that produce confident-wrong code: statistical priors overriding observed facts, pattern completion beating verification, stale context lies.
-
-<details>
-<summary><strong>The 6 rules (shown to AI in every CLAUDE.md / .cursor/rules / .cursorrules / .github/instructions)</strong></summary>
-
-<br>
-
-1. **Verify before you write.** Never reference a column, association, route, helper, method, class, partial, or gem not verified in THIS project via a tool call in THIS turn. Never invent names that "sound right."
-2. **Mark every assumption.** If proceeding without verification, prefix with `[ASSUMPTION]`. Silent assumptions forbidden. "I'd need to check X first" is a preferred answer.
-3. **Training data describes average Rails. This app isn't average.** When something feels "obviously" standard Rails, query anyway. Check `rails_get_conventions` + `rails_get_gems` BEFORE scaffolding.
-4. **Check the inheritance chain before every edit.** Inherited `before_action` filters, concerns, includes, STI parents. Inheritance is never flat.
-5. **Empty tool output is information, not permission.** "0 callers found" signals investigation, not license to proceed on guesses.
-6. **Stale context lies. Re-query after writes.** Earlier tool output may be wrong after edits.
-
-Enabled by default. Disable with `config.anti_hallucination_rules = false` if you prefer your own rules.
-
-</details>
-
-<br>
-
-## How it works
-
-```mermaid
-graph TD
-    A["Your Rails App\nmodels + schema + routes + controllers + views + jobs"] -->|"40 introspectors"| B
-
-    B["rails-ai-context\nPrism AST parsing · Cached · Confidence-tagged\nVFS: rails-ai-context:// URIs introspected fresh"]
-
-    B --> C["MCP Server\nstdio / HTTP\n45 tools · 5 templates"]
-    B --> D["CLI Tools\nRake / Thor\nSame 45 tools"]
-    B --> E["Static Files\nCLAUDE.md · .cursor/rules/ · .cursorrules\n.github/instructions/"]
-
-    style A fill:#4a9eff,stroke:#2d7ad4,color:#fff
-    style B fill:#2d2d2d,stroke:#555,color:#fff
-    style C fill:#0984e3,stroke:#0770c2,color:#fff
-    style D fill:#00cec9,stroke:#00b5b0,color:#fff
-    style E fill:#a29bfe,stroke:#8c83f0,color:#fff
-```
-
-<br>
-
-## Install
-
-**Option A - In Gemfile:**
-
-```bash
-gem "rails-ai-context", group: :development
-rails generate rails_ai_context:install
-```
-
-**Option B - Standalone (no Gemfile entry needed):**
-
-```bash
-gem install rails-ai-context
-cd your-rails-app
-rails-ai-context init
-```
-
-Both paths ask which AI tools you use (Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI) and whether you want MCP or CLI mode. Each tool gets its own MCP config file - auto-detected on project open.
-
-<br>
-
-## Commands
+### Commands
 
 | In-Gemfile | Standalone | What it does |
-|:-----------|:-----------|:------------|
+|:---|:---|:---|
+| `rails ai:serve` | `rails-ai-context serve` | Start the MCP server (stdio) |
+| `rails ai:serve_http` | `rails-ai-context serve --transport http` | Start the MCP server (HTTP) |
+| `rails 'ai:tool[NAME]'` | `rails-ai-context tool NAME` | Run one tool |
+| `rails ai:tool` | `rails-ai-context tool --list` | List the tools |
 | `rails ai:context` | `rails-ai-context context` | Generate context files |
-| `rails 'ai:tool[NAME]'` | `rails-ai-context tool NAME` | Run any of the 45 tools |
-| `rails ai:tool` | `rails-ai-context tool --list` | List all available tools |
-| `rails ai:serve` | `rails-ai-context serve` | Start MCP server (stdio) |
-| `rails ai:doctor` | `rails-ai-context doctor` | Diagnostics + AI readiness score |
-| `rails ai:watch` | `rails-ai-context watch` | Auto-regenerate on file changes |
+| `rails ai:doctor` | `rails-ai-context doctor` | Diagnostics and readiness score |
+| `rails ai:watch` | `rails-ai-context watch` | Regenerate on file change |
+| `rails 'ai:preset[NAME]'` | `rails-ai-context preset NAME` | Run a multi-tool preset (`architecture`, `debugging`, `migration`) |
 
-<br>
+Flags shared by the app-reading commands: `--app-path PATH` to target another directory, `--environment ENV` to set `RAILS_ENV`, and `--no-boot` to skip the boot attempt and answer from source. Full list in the [CLI reference](docs/CLI.md).
 
-## Static tier: works even when the app can't boot
+## Tools
 
-`rails-ai-context` attempts a full boot for live reflection. When boot fails
-(missing ENV vars, unreachable services, a broken initializer) the `serve`
-and `tool` commands fall back to the **static tier** instead of dying:
-routes come from parsing `config/routes.rb`, schema from `db/schema.rb` /
-`db/structure.sql` / migrations, models and controllers from their source
-files. Every response carries a banner explaining the degradation, static
-data is tagged `[STATIC]`, and sections that genuinely need a booted app
-report `[UNAVAILABLE]` with the reason.
+Every tool is read-only and answers from your app.
 
-Flags:
+| Category | Tools |
+|:---|:---|
+| Search and trace | `search_code`, `get_edit_context` |
+| Understand | `analyze_feature`, `get_context`, `onboard` |
+| Schema and models | `get_schema`, `get_model_details`, `get_callbacks`, `get_concern` |
+| Controllers and routes | `get_controllers`, `get_routes` |
+| Views and frontend | `get_view`, `get_stimulus`, `get_partial_interface`, `get_turbo_map`, `get_frontend_stack` |
+| Testing and quality | `get_test_info`, `generate_test`, `validate`, `security_scan`, `performance_check` |
+| App config and services | `get_api`, `get_conventions`, `get_config`, `get_gems`, `get_env`, `get_helper_methods`, `get_service_pattern`, `get_job_pattern`, `get_component_catalog`, `get_i18n`, `get_mailers`, `get_engines`, `get_autoload`, `get_active_support`, `get_env_config` |
+| Data and debugging | `dependency_graph`, `migration_advisor`, `search_docs`, `query`, `read_logs`, `diagnose`, `review_changes`, `runtime_info`, `session_context` |
 
-- `--no-boot` (serve, tool) - skip the boot attempt entirely and serve
-  static analysis. Fast, and immune to boot-time side effects.
-- `--app-path PATH` (all app-reading commands) - run against a Rails app in
-  another directory.
-- `--environment ENV` (all commands) - set RAILS_ENV for the boot attempt.
+A few worth knowing on day one:
 
-`rails-ai-context doctor` still requires a bootable app: its job is
-diagnosing why boot fails.
+- `search_code` with `match_type=trace` returns definition, source, every caller grouped by type, and the tests, in one call. That replaces 4 to 5 file reads.
+- `get_controllers` returns the action source with inherited filters, strong params and the render map.
+- `get_model_details` returns associations, validations, scopes, enums and macros from the AST, each tagged `[VERIFIED]` or `[INFERRED]`.
+- `query` runs read-only SQL with a timeout, a row limit and column redaction. `read_logs` redacts sensitive data before it leaves the process.
 
-<br>
+Parameters for all 45 are in the [tools reference](docs/TOOLS.md); worked examples in [recipes](docs/RECIPES.md).
 
-## App shapes
+### Live resources
 
-Beyond the conventional layout, code is discovered in packwerk packs
-(`packs/*/app/*`), in-repo engines (`engines/*/app/*`), and any directories
-listed in `extra_app_paths` in `.rails-ai-context.yml`. Rails multi-database
-schema dumps (`db/queue_schema.rb` and friends) are reported under a
-`Secondary databases` section. Mongoid apps get an honest
-`[UNAVAILABLE]` schema signal plus basic static model data (fields, embedded
-relations) instead of misleading empty output, and API-only apps get
-"not applicable" answers from view and frontend tools instead of silent
-empty listings.
+MCP clients can also read structured data as resources. Templates introspect fresh on every request:
 
-<br>
+| URI | Returns |
+|:---|:---|
+| `rails://models/{name}` | Associations, validations, schema for one model |
+| `rails-ai-context://controllers/{name}` | Actions, inherited filters, strong params |
+| `rails-ai-context://controllers/{name}/{action}` | Action source with the filters that apply |
+| `rails-ai-context://views/{path}` | View template content (path traversal blocked) |
+| `rails-ai-context://routes/{controller}` | Live route map for one controller |
 
-## Documentation
+Plus 9 static resources: `rails://schema`, `routes`, `conventions`, `gems`, `controllers`, `config`, `tests`, `migrations`, `engines`.
 
-| | |
-|:------|:------------|
-| **[Quickstart](docs/QUICKSTART.md)** | 5-minute getting started |
-| **[Tools Reference](docs/TOOLS.md)** | All 45 tools with every parameter |
-| **[Recipes](docs/RECIPES.md)** | Real-world workflows and examples |
-| **[Custom Tools](docs/CUSTOM_TOOLS.md)** | Build and test your own MCP tools |
-| **[Configuration](docs/CONFIGURATION.md)** | 40+ config options with defaults |
-| **[AI Tool Setup](docs/SETUP.md)** | Claude, Cursor, Copilot, OpenCode, Codex |
-| **[Architecture](docs/ARCHITECTURE.md)** | System design and internals |
-| **[Introspectors](docs/INTROSPECTORS.md)** | All 40 introspectors and AST engine |
-| **[Security](docs/SECURITY.md)** | 4-layer SQL safety and file blocking |
-| **[CLI Reference](docs/CLI.md)** | Commands and argument syntax |
-| **[Standalone](docs/STANDALONE.md)** | Use without Gemfile entry |
-| **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and fixes |
-| **[FAQ](docs/FAQ.md)** | Frequently asked questions |
-| **[Compatibility](docs/COMPATIBILITY.md)** | Supported versions, operating tiers, and the shape matrix with proof sources |
+## Anti-hallucination rules
 
-<br>
+Every generated context file (`CLAUDE.md`, `.cursor/rules/`, `.github/instructions/`, `AGENTS.md`) ships with six rules the assistant reads before writing code:
 
-## Build your own tools
+1. Verify before you write. Never reference a column, association, route, helper, method, class, partial or gem that a tool call in this turn did not confirm.
+2. Mark every assumption with `[ASSUMPTION]`. "I'd need to check X first" is a good answer.
+3. Training data describes average Rails. This app isn't average. When something feels obviously standard, query anyway.
+4. Check the inheritance chain before every edit: inherited filters, concerns, includes, STI parents.
+5. Empty tool output is information. "0 callers found" means investigate, it does not mean proceed.
+6. Stale context lies. Re-query after writes.
 
-Register custom MCP tools alongside the 45 built-in ones:
+On by default. Turn off with `config.anti_hallucination_rules = false` if you prefer your own.
+
+## When the app can't boot
+
+`rails-ai-context` tries a full boot for live reflection. When boot fails (missing ENV vars, an unreachable service, a broken initializer) the app-reading commands fall back to the static tier instead of dying: routes from `config/routes.rb`, schema from `db/schema.rb`, `db/structure.sql` or migrations, models and controllers from their source files. Every response carries a banner naming the degradation, static data is tagged `[STATIC]`, and sections that need a booted app report `[UNAVAILABLE]` with the reason.
+
+`--no-boot` skips the attempt outright, which is fast and immune to boot-time side effects. `doctor` still needs a bootable app; diagnosing the boot is its job.
+
+Code is found in the conventional layout, in packwerk packs (`packs/*/app/*`), in in-repo engines (`engines/*/app/*`), and in any `extra_app_paths` from `.rails-ai-context.yml`. Multi-database schema dumps (`db/queue_schema.rb` and friends) show up under a `Secondary databases` section. Mongoid apps get an `[UNAVAILABLE]` schema signal plus static model data instead of an empty table, and API-only apps get "not applicable" from the view and frontend tools instead of a silent blank. Details in [Compatibility](docs/COMPATIBILITY.md).
+
+## Configuration
+
+```ruby
+# config/initializers/rails_ai_context.rb
+if defined?(RailsAiContext)
+  RailsAiContext.configure do |config|
+    config.ai_tools  = %i[claude cursor]   # which AI tools to generate for
+    config.tool_mode = :mcp                # :mcp (default) or :cli
+    config.preset    = :full               # :full (40 introspectors) or :standard (17)
+  end
+end
+```
+
+Standalone installs use the same keys in `.rails-ai-context.yml`. All options with defaults are in [Configuration](docs/CONFIGURATION.md).
+
+### Custom tools
+
+Register your own tools next to the built-in ones:
 
 ```ruby
 # app/mcp_tools/rails_get_business_metrics.rb
@@ -532,7 +260,7 @@ end
 config.custom_tools = ["RailsGetBusinessMetrics"]
 ```
 
-Test with the built-in `TestHelper` (works with RSpec and Minitest):
+Test them with the bundled helper (RSpec or Minitest):
 
 ```ruby
 include RailsAiContext::TestHelper
@@ -541,63 +269,61 @@ response = execute_tool("business_metrics", period: "month")
 assert_tool_response_includes(response, "Users")
 ```
 
-> **[Custom Tools Guide →](docs/CUSTOM_TOOLS.md)**
+See [Custom tools](docs/CUSTOM_TOOLS.md).
 
-<br>
+### Observability
 
-## Configuration
-
-```ruby
-# config/initializers/rails_ai_context.rb
-if defined?(RailsAiContext)
-  RailsAiContext.configure do |config|
-    config.ai_tools   = %i[claude cursor] # Which AI tools to generate for
-    config.tool_mode  = :mcp              # :mcp (default) or :cli
-    config.preset     = :full             # :full (40 introspectors) or :standard (17)
-  end
-end
-```
-
-> **[All 40+ configuration options →](docs/CONFIGURATION.md)**
-
-<br>
-
-## Observability
-
-Every MCP tool call fires an `ActiveSupport::Notifications` event:
+Every MCP call fires an `ActiveSupport::Notifications` event:
 
 ```ruby
 ActiveSupport::Notifications.subscribe("rails_ai_context.tools.call") do |event|
   ms = (event.payload[:duration].to_f * 1000).round
-  Rails.logger.info "[MCP] #{event.payload[:tool_name]} - #{ms}ms"
+  Rails.logger.info "[MCP] #{event.payload[:tool_name]} #{ms}ms"
 end
 ```
 
-<br>
+## How it works
 
-## Requirements
+```mermaid
+graph TD
+    A["Your Rails app\nmodels + schema + routes + controllers + views + jobs"] -->|"40 introspectors"| B
+    B["rails-ai-context\nPrism AST · cached · confidence-tagged\nstatic tier when the app can't boot"]
+    B --> C["MCP server\nstdio / HTTP\n45 tools · 5 templates · 9 resources"]
+    B --> D["CLI\nrake / Thor\nsame 45 tools"]
+    B --> E["Context files\nCLAUDE.md · .cursor/rules/ · .github/instructions/ · AGENTS.md"]
 
-- **Ruby** >= 3.1 &nbsp;&nbsp; **Rails** >= 7.0
-- **Optional:** `brakeman` for security scanning, `listen` for watch mode, `ripgrep` for fast search
+    style A fill:#4a9eff,stroke:#2d7ad4,color:#fff
+    style B fill:#2d2d2d,stroke:#555,color:#fff
+    style C fill:#0984e3,stroke:#0770c2,color:#fff
+    style D fill:#00cec9,stroke:#00b5b0,color:#fff
+    style E fill:#a29bfe,stroke:#8c83f0,color:#fff
+```
 
-<br>
+Internals, the introspector list and the AST engine are in [Architecture](docs/ARCHITECTURE.md) and [Introspectors](docs/INTROSPECTORS.md).
 
----
+## Documentation
+
+| | |
+|:---|:---|
+| [Quickstart](docs/QUICKSTART.md) | Up and running in 5 minutes |
+| [Guide](docs/GUIDE.md) | Every command, parameter and option |
+| [Tools reference](docs/TOOLS.md) | All 45 tools with every parameter |
+| [Recipes](docs/RECIPES.md) | Real workflows, end to end |
+| [AI tool setup](docs/SETUP.md) | Claude Code, Cursor, Copilot, OpenCode, Codex CLI, HTTP transport |
+| [CLI reference](docs/CLI.md) | Commands, flags and argument syntax |
+| [Standalone](docs/STANDALONE.md) | Use without a Gemfile entry |
+| [Configuration](docs/CONFIGURATION.md) | Every option with its default |
+| [Custom tools](docs/CUSTOM_TOOLS.md) | Build and test your own tools |
+| [Architecture](docs/ARCHITECTURE.md) | System design and internals |
+| [Introspectors](docs/INTROSPECTORS.md) | All 40 introspectors and the AST engine |
+| [Security](docs/SECURITY.md) | SQL safety layers and file blocking |
+| [Compatibility](docs/COMPATIBILITY.md) | Supported versions, operating tiers, app shape matrix |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common problems and fixes |
+| [FAQ](docs/FAQ.md) | Frequently asked questions |
 
 <div align="center">
-
-## About
-
-Built by a Rails developer with 10+ years of production experience.<br>
-2727 tests + 158-example e2e harness. 45 tools. 5 resource templates. 40 introspectors. Standalone or in-Gemfile.<br>
-MIT licensed. [Contributions welcome.](CONTRIBUTING.md)
-
 <br>
 
-If this gem saves you time, consider [sponsoring the project](https://github.com/sponsors/crisnahine).
-
-<br>
-
-[![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+Built by a Rails developer with 10+ years in production. If it saves you time, consider [sponsoring the project](https://github.com/sponsors/crisnahine).
 
 </div>
