@@ -280,9 +280,23 @@ module RailsAiContext
       # inherits too, so a public helper on a base class is an action the
       # booted tier reports and this one cannot - the entries are tagged STATIC
       # for that reason.
+      # ActionMailer's interceptor and observer hooks. A class or module under
+      # app/mailers that implements one is registered with the framework, not
+      # delivered by it: reporting OpenProject's Interceptors::DefaultHeaders
+      # as a mailer offered `delivering_email` as an email somebody can send.
+      # Everything else in that directory stays - a mailer's actions are as
+      # often written as modules mixed into one class as they are methods on
+      # it, and GitLab keeps 20 such modules holding every notification it
+      # sends.
+      MAILER_FRAMEWORK_HOOKS = %w[delivering_email previewing_email delivered_email].freeze
+
       def extract_mailers_from_source
         source_classes(File.join(app.root, "app", "mailers")).filter_map do |name, methods|
           next if name == "ApplicationMailer"
+
+          # The hook is as often a class method as an instance one, so the
+          # whole declared method list is what decides, not the action list.
+          next if Array(methods).any? { |m| MAILER_FRAMEWORK_HOOKS.include?(m[:name].to_s) }
 
           actions = ActionResolver.own_actions(methods, class_name: name)
           next if actions.empty?
@@ -308,10 +322,12 @@ module RailsAiContext
       # Class name plus method list for every .rb under `dir`, read from the
       # AST. Yields nothing when the directory is absent.
       #
-      # The name comes from the path, not the AST: Zeitwerk requires the two to
-      # agree, and only the path carries the namespace. Reading `class Channel`
-      # out of `application_cable/channel.rb` yields "Channel", which matches
-      # no base-class filter and no name the booted app would report.
+      # The name comes from the constant the source declares, with the path as
+      # the fallback - see DeclaredConstant for which wins when. The path has
+      # to stay in the picture because it is the only thing carrying the
+      # namespace when the source does not: `class Channel` in
+      # `application_cable/channel.rb` matches no base-class filter and no name
+      # the booted app would report.
       def source_classes(dir)
         return [] unless Dir.exist?(dir)
 
@@ -323,15 +339,30 @@ module RailsAiContext
           # the path would invent a `Concerns::` namespace that never exists.
           next if path.sub("#{dir}/", "").start_with?("concerns/")
 
-          walked = SourceIntrospector.walk(path, { methods: Listeners::MethodsListener })
-          [ constant_name_for(path, dir), walked[:methods] || [] ]
+          source = RailsAiContext::SafeFile.read(path)
+          next unless source
+
+          # Whether a declaration belongs here is decided by its own methods -
+          # see MAILER_FRAMEWORK_HOOKS - because a mailer's actions are as
+          # often written as modules mixed into one class as they are methods
+          # on it. Reading the file is only about naming it.
+          #
+          # The methods are the file's, not one class's, which is what lets a
+          # mixin's actions count. The cost: a file declaring both a mailer and
+          # an interceptor is read as one, and the hook drops both.
+          path_name = path_name_for(path, dir)
+          walked = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })
+          [ DeclaredConstant.resolve(source, path_name), walked[:methods] || [] ]
         rescue StandardError, ScriptError => e
           $stderr.puts "[rails-ai-context] source_classes failed for #{path}: #{e.message}" if ENV["DEBUG"]
           nil
         end
       end
 
-      def constant_name_for(path, dir)
+      # The candidate a path camelizes to. Not the constant when the app
+      # registers an inflection for one of its segments, which is why the
+      # source gets the first word.
+      def path_name_for(path, dir)
         path.sub("#{dir}/", "").sub(/\.rb\z/, "").camelize
       end
 

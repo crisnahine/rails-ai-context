@@ -203,7 +203,7 @@ module RailsAiContext
         SECTION
         "Search" => <<~SECTION,
             # ── Search ────────────────────────────────────────────────────────
-            # File extensions for fallback search (when ripgrep unavailable)
+            # File extensions the Ruby fallback searches (ripgrep searches every file)
             # config.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
 
             # Where to look for concern source files. Left unset, every
@@ -283,10 +283,14 @@ module RailsAiContext
 
         SECTION
 
-        # All remaining sections use defaults (commented out)
+        # All remaining sections use defaults (commented out). They go through
+        # the same reindent the update path uses: the AI Tools section above
+        # carries the configure body's indent and these are written flush, so
+        # appending them raw left the file with two indents, and the guard wrap
+        # preserved the gap by indenting both equally.
         CONFIG_SECTIONS.each do |name, section_content|
           next if name == "AI Tools" # already added with dynamic values
-          content += section_content + "\n"
+          content += reindent_section_content(section_content, content) + "\n"
         end
 
         content += "end\n"

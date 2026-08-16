@@ -42,6 +42,50 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       expect(text).to include("**fr**: 80.0% - 80 unique keys")
     end
 
+    # An app whose config/locales holds a language-name table lists far more
+    # available locales than it has coverage rows for. Without a word about
+    # the gap, a reader counts 187 locales, then 49 rows, and cannot tell
+    # which number is wrong.
+    context "when some locales carry no translations" do
+      let(:i18n_data) do
+        super().merge(
+          available_locales: %w[en fr aa zu],
+          locale_coverage: super()[:locale_coverage].merge(
+            "aa" => { keys: 1, coverage_pct: 0.0, missing: 100, extra: 1 },
+            "zu" => { keys: 1, coverage_pct: 0.0, missing: 100, extra: 1 }
+          ),
+          locales_without_translations: [ { locale: "aa", keys: 1 }, { locale: "zu", keys: 1 } ]
+        )
+      end
+
+      it "says how many locales it left out of coverage" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("2 of 4 locales round to 0.0% against en")
+      end
+
+      # A language-name table gives every one of them the same key count, and
+      # repeating it per name ran to 138 copies of "(2 keys)" on Discourse.
+      it "states a shared key count once instead of per name" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("Each defines 1 key of its own: aa, zu")
+        expect(text).not_to include("aa (1 key)")
+      end
+
+      # Grouping them keeps 138 rows of zeroes off the overview.
+      it "keeps their rows out of the coverage list" do
+        text = described_class.call.content.first[:text]
+        expect(text).not_to include("**aa**: 0.0%")
+      end
+
+      # The group is a summary, not a deletion: asking for one by name still
+      # has to answer with its numbers.
+      it "still answers with the numbers when asked for one by name" do
+        text = described_class.call(locale: "aa").content.first[:text]
+        expect(text).to include("**Unique keys:** 1 (0.0% of en)")
+        expect(text).to include("100 missing")
+      end
+    end
+
     # Coverage counts a key path once; the per-file list below it counts each
     # file's leaves. Without the label the two numbers look like a bug.
     it "says the coverage key total counts unique paths" do
@@ -74,6 +118,26 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       it "shows coverage for the filtered locale" do
         text = described_class.call(locale: "fr").content.first[:text]
         expect(text).to include("**Unique keys:** 80 (80.0% of en)")
+      end
+
+      # The filename convention is not the only way a file serves a locale:
+      # gem-provided files are named for the gem, and GitLab's zh-CN lives in
+      # devise.zh-cn.yml. The tool listed both and then said it had none.
+      it "finds a locale's files when the filename does not spell the locale" do
+        allow(described_class).to receive(:cached_context).and_return(
+          i18n: i18n_data.merge(
+            available_locales: %w[en zh-CN],
+            locale_files: [
+              { file: "en.yml", key_count: 100, locales: %w[en] },
+              { file: "devise.zh-cn.yml", key_count: 49, locales: %w[zh-CN] }
+            ]
+          )
+        )
+
+        text = described_class.call(locale: "zh-CN").content.first[:text]
+
+        expect(text).to include("devise.zh-cn.yml")
+        expect(text).not_to include("No locale files found")
       end
 
       it "returns not-found with suggestions for an unknown locale" do

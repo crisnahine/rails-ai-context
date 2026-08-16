@@ -445,8 +445,7 @@ module RailsAiContext
         schema = context[:schema]
         return nil unless models && schema
 
-        model_name = file.sub("app/models/", "").sub(/\.rb$/, "").camelize
-        model_data = models[model_name]
+        model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return nil unless model_data
 
         table_name = model_data[:table_name]
@@ -522,8 +521,7 @@ module RailsAiContext
         models = context[:models]
         return warnings unless models
 
-        model_name = file.sub("app/models/", "").sub(/\.rb$/, "").camelize
-        model_data = models[model_name]
+        model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
 
         # Build set of known methods (instance + from source content)
@@ -558,7 +556,7 @@ module RailsAiContext
         # Map file to controller name: app/controllers/posts_controller.rb → posts
         relative = file.sub("app/controllers/", "").sub(/_controller\.rb$/, "")
         ctrl_key = relative.gsub("/", "::")
-        ctrl_class = ctrl_key.camelize + "Controller"
+        ctrl_class = RailsAiContext::Payload.controller_for_route_key(context, ctrl_key)&.first
 
         # Get controller actions
         ctrl_data = controllers[:controllers] && controllers[:controllers][ctrl_class]
@@ -589,8 +587,7 @@ module RailsAiContext
         models = context[:models]
         return warnings unless models
 
-        model_name = file.sub("app/models/", "").sub(/\.rb$/, "").camelize
-        model_data = models[model_name]
+        model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
 
         (model_data[:associations] || []).each do |assoc|
@@ -612,8 +609,7 @@ module RailsAiContext
         models = context[:models]
         return warnings unless schema && models
 
-        model_name = file.sub("app/models/", "").sub(/\.rb$/, "").camelize
-        model_data = models[model_name]
+        model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
 
         table_name = model_data[:table_name]
@@ -701,14 +697,18 @@ module RailsAiContext
         parts = file.sub("app/views/", "").split("/")
         return warnings if parts.size < 2
 
+        # A view directory names the route key, not the constant: camelizing
+        # app/views/activitypub/ back gives Activitypub, which is not what the
+        # app declares, and the check then stops running for that whole tree.
         ctrl_dir = parts[0..-2].join("/")
-        ctrl_class = "#{ctrl_dir.camelize}Controller"
-        controllers = context.dig(:controllers, :controllers) || {}
-        ctrl_data = controllers[ctrl_class]
+        ctrl_class, ctrl_data = RailsAiContext::Payload.controller_for_route_key(context, ctrl_dir)
         return warnings unless ctrl_data
 
         # Get all instance variables set across all actions
-        source_path = rails_app.root.join("app", "controllers", "#{ctrl_class.underscore}.rb")
+        ctrl_file = RailsAiContext::Payload.controller_file(context, ctrl_class)
+        return warnings unless ctrl_file
+
+        source_path = rails_app.root.join(ctrl_file)
         return warnings unless File.exist?(source_path)
 
         ctrl_source = RailsAiContext::SafeFile.read(source_path)
@@ -842,7 +842,7 @@ module RailsAiContext
 
         # Check 14: Missing FK indexes on tables referenced in validated files
         if file.start_with?("app/models/") && perf[:missing_fk_indexes]&.any?
-          model_name = file.sub("app/models/", "").sub(/\.rb$/, "").tr("/", "::").camelize
+          model_name = RailsAiContext::Payload.model_for_file(context, file)&.first
           perf[:missing_fk_indexes].each do |finding|
             next unless finding.is_a?(Hash) && finding[:model] == model_name
             warnings << "#{finding[:column]} on #{finding[:table]} - missing index on foreign key (performance)"

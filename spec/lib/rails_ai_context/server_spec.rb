@@ -185,6 +185,14 @@ RSpec.describe RailsAiContext::Server do
         RailsAiContext.configuration.skip_tools = []
       end
 
+      it "excludes tools named with symbols" do
+        RailsAiContext.configuration.skip_tools = [ RailsAiContext::Tools::GetSchema.tool_name.to_sym ]
+        mcp_server = server.build
+        expect(mcp_server.tools.values).not_to include(RailsAiContext::Tools::GetSchema)
+      ensure
+        RailsAiContext.configuration.skip_tools = []
+      end
+
       it "includes all tools when skip_tools is empty" do
         RailsAiContext.configuration.skip_tools = []
         mcp_server = server.build

@@ -112,6 +112,42 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       expect(all.index(:opencode)).to be < all.index(:codex)
     end
 
+    # The install generator always records a tool selection, and every later
+    # `rails ai:context` passes that list here. `.ai-context.json` is not an AI
+    # tool and no install menu can offer it, so a selection used to turn the
+    # machine artifact off for good - while the generator still gitignored it.
+    it "writes .ai-context.json alongside a recorded tool selection" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        described_class.new(context, format: %i[claude cursor copilot opencode codex]).call
+
+        expect(File).to exist(File.join(dir, ".ai-context.json"))
+      end
+    end
+
+    # An explicit `--format claude` asks for one thing and must get one thing.
+    it "does not write .ai-context.json for a single explicit format" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        described_class.new(context, format: :claude).call
+
+        expect(File).not_to exist(File.join(dir, ".ai-context.json"))
+      end
+    end
+
+    # An empty selection asks for nothing, and used to write nothing. Reading
+    # "a list means the machine artifact too" too literally turned it into a
+    # run that writes exactly one file nobody chose.
+    it "writes nothing for an empty selection" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        result = described_class.new(context, format: []).call
+
+        expect(result[:written]).to be_empty
+        expect(File).not_to exist(File.join(dir, ".ai-context.json"))
+      end
+    end
+
     it "raises for unknown format" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)

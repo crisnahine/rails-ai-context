@@ -193,6 +193,32 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).not_to include("postmark")
     end
 
+    # A gap is a claim that something has no test. A scan that stopped at
+    # MAX_SCAN_FILES cannot make it: on an app with more specs than the cap,
+    # the ones covering the feature are simply never reached, and every
+    # controller in it was reported as untested.
+    it "claims no test gap when the spec scan stopped at the cap" do
+      Dir.mktmpdir("rac_gap") do |tmp|
+        spec_dir = File.join(tmp, "spec", "requests")
+        FileUtils.mkdir_p(spec_dir)
+        (described_class::MAX_SCAN_FILES + 5).times do |i|
+          File.write(File.join(spec_dir, "aaa_filler#{i}_spec.rb"), "# widget\n")
+        end
+        FileUtils.mkdir_p(File.join(tmp, "app", "controllers"))
+        File.write(File.join(tmp, "app", "controllers", "widgets_controller.rb"),
+                   "class WidgetsController < ApplicationController\n  def index; end\nend\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "WidgetsController" => { file: "app/controllers/widgets_controller.rb", actions: [ "index" ] } } }
+        )
+
+        text = described_class.call(feature: "widget").content.first[:text]
+
+        expect(text).not_to include("no test file found")
+      end
+    end
+
     context "DoS cap (v5.8.1 round 2)" do
       it "caps discover_services at MAX_SCAN_FILES and emits truncation note" do
         Dir.mktmpdir("rac_dos_services") do |tmp|

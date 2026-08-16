@@ -140,8 +140,13 @@ class RailsAiContextCLI < Thor
 
     desc "context", "Generate AI context files"
     option :format, type: :string, default: nil, desc: "Format: claude, cursor, copilot, opencode, codex, json, all (default: from config)"
+    option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def context
-      boot_rails!
+      # A repo you have just cloned is the case an agent most needs these files
+      # for, and it is the case least likely to boot. Every command that reads
+      # the app degrades the way `tool` does; doctor, whose job is diagnosing
+      # the boot, is the one that still fails.
+      boot_rails!(allow_static: true)
 
       if options[:format]
         cleanup_tools = options[:format] == "all" ? nil : [ options[:format].to_sym ]
@@ -180,8 +185,9 @@ class RailsAiContextCLI < Thor
     end
 
     desc "inspect", "Print introspection summary"
+    option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def inspect_app
-      boot_rails!
+      boot_rails!(allow_static: true)
       require "json"
 
       context = ::RailsAiContext.introspect
@@ -195,8 +201,9 @@ class RailsAiContextCLI < Thor
     commands["inspect"] = commands.delete("inspect_app")
 
     desc "watch", "Watch for changes and auto-regenerate context files"
+    option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def watch
-      boot_rails!
+      boot_rails!(allow_static: true)
       ::RailsAiContext::Watcher.new.start
     end
 
@@ -227,6 +234,7 @@ class RailsAiContextCLI < Thor
     end
 
     desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml and .mcp.json)"
+    option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def init
       config_path = File.join(Dir.pwd, "config", "environment.rb")
       unless File.exist?(config_path)
@@ -260,7 +268,10 @@ class RailsAiContextCLI < Thor
       add_to_gitignore
 
       # --- Boot Rails, load config, generate context ---
-      boot_rails!
+      # The config files are already on disk by now, so failing here leaves the
+      # app half set up and calls the whole thing a failure. Setup is exactly
+      # what you run on a repo you have just cloned.
+      boot_rails!(allow_static: true)
 
       $stderr.puts ""
       $stderr.puts "Generating AI context files..."
@@ -277,6 +288,7 @@ class RailsAiContextCLI < Thor
     end
 
     desc "preset NAME", "Run a multi-tool preset (architecture, debugging, migration)"
+    option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def preset(name = nil)
       require_relative "../lib/rails_ai_context/presets"
       presets = ::RailsAiContext::Presets::DEFINITIONS
@@ -294,7 +306,7 @@ class RailsAiContextCLI < Thor
         return
       end
 
-      boot_rails!
+      boot_rails!(allow_static: true)
 
       preset = presets[name]
       $stderr.puts "=" * 60
@@ -328,8 +340,9 @@ class RailsAiContextCLI < Thor
     end
 
     desc "facts", "Print concise schema facts summary (tables, associations, dependencies)"
+    option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def facts
-      boot_rails!
+      boot_rails!(allow_static: true)
 
       context = ::RailsAiContext.introspect
       puts ::RailsAiContext::FactsFormatter.render(context, inspect_hint: "rails-ai-context inspect")
@@ -460,6 +473,11 @@ class RailsAiContextCLI < Thor
 
       begin
         require_gem_without_app!
+        # Boot is what normally loads .rails-ai-context.yml, so without it the
+        # listing took the gem's defaults and advertised tools the app has
+        # configured off - which the very next call then refuses by name.
+        # The app under analysis, which --app-path may have moved.
+        ::RailsAiContext::Configuration.auto_load!(File.expand_path(@app_path_override || options[:app_path] || Dir.pwd))
         puts ::RailsAiContext::CLI::ToolRunner.tool_list
         puts ""
         puts "Run inside a Rails app to execute tools - static source analysis works even when the app can't boot (see --no-boot)."
@@ -514,6 +532,19 @@ class RailsAiContextCLI < Thor
       ENV["RAILS_ENV"] = environment_opt if environment_opt
 
       if allow_static && (no_boot || options[:no_boot])
+        # Something to read, or the static tier describes a directory that is
+        # not an app: in an empty folder this wrote a CLAUDE.md reporting
+        # "Migrations: 0 total" and exited 0. The bar is source, not boot
+        # files - an engine keeps its dummy app under spec/dummy, so its root
+        # has app/ and no config/, and it is a real target.
+        unless File.exist?(File.join(Dir.pwd, "config", "application.rb")) ||
+               File.exist?(File.join(Dir.pwd, "config", "environment.rb")) ||
+               Dir.glob(File.join(Dir.pwd, "app", "**", "*.rb")).any?
+          $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
+          $stderr.puts "Run this command from your Rails app root directory (or pass --app-path)."
+          exit 1
+        end
+
         enter_static_tier!("static mode requested with --no-boot")
         return
       end

@@ -226,14 +226,27 @@ module RailsAiContext
 
         # ── Cache section ────────────────────────────────────────────────
 
+        # A store's #stats is a Hash - memcached returns curr_items, bytes and
+        # friends. Rendering it with #inspect puts a Ruby literal in an answer
+        # a reader has to parse; the pairs are the facts.
+        def cache_stat_lines(stats)
+          return [ "**Stats:** #{stats}" ] unless stats.is_a?(Hash)
+          return [ "_No cache stats reported._" ] if stats.empty?
+
+          [ "**Stats:**" ] + stats.map { |key, value| "- #{key}: #{format_stat_value(value)}" }
+        end
+
+        def format_stat_value(value)
+          value.is_a?(Hash) ? value.map { |k, v| "#{k}: #{v}" }.join(", ") : value.to_s
+        end
+
         def gather_cache
           cache = Rails.cache
           lines = [ "## Cache", "" ]
           lines << "**Store:** #{cache.class.name.demodulize}"
 
           if cache.respond_to?(:stats)
-            stats = cache.stats
-            lines << "**Stats:** #{stats.inspect}"
+            cache_stat_lines(cache.stats).each { |line| lines << line }
           elsif cache.respond_to?(:redis)
             begin
               info = cache.redis.info("stats")
@@ -247,9 +260,12 @@ module RailsAiContext
               lines << "_Redis stats not available: #{e.message}_"
             end
           elsif defined?(ActiveSupport::Cache::MemoryStore) && cache.is_a?(ActiveSupport::Cache::MemoryStore)
-            # MemoryStore has no #stats method - its own #inspect (entry
-            # count, byte size, options) is the closest thing it exposes.
-            lines << "**Stats:** #{cache.inspect}"
+            # MemoryStore has no #stats method - its own #inspect is where the
+            # entry count and byte size live. Read the numbers out of it; the
+            # string itself is an object dumped into prose.
+            shape = cache.inspect
+            lines << "**Entries:** #{shape[/entries=(\d+)/, 1] || "unknown"}"
+            lines << "**Size:** #{shape[/size=(\d+)/, 1] || "unknown"} bytes"
           else
             lines << "_Stats not available for #{cache.class.name}. Supported: Redis, MemoryStore._"
           end

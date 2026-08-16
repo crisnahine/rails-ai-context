@@ -62,7 +62,7 @@ module RailsAiContext
 
         if controller
           # Normalize: accept "PostsController", "posts", "posts_controller", "Admin::PostsController"
-          ctrl_lower = controller.underscore.delete_suffix("_controller")
+          ctrl_lower = RailsAiContext::Payload.controller_route_key(cached_context, controller)
           ctrl_lower_alt = controller.downcase.delete_suffix("controller")
           filtered_templates = templates.select { |k, _|
             k_down = k.downcase
@@ -536,7 +536,7 @@ module RailsAiContext
           .sort
 
         if controller
-          ctrl_lower = controller.underscore.delete_suffix("_controller")
+          ctrl_lower = RailsAiContext::Payload.controller_route_key(cached_context, controller)
           ctrl_lower_alt = controller.downcase.delete_suffix("controller")
           templates = templates.select { |t|
             t_down = t.downcase

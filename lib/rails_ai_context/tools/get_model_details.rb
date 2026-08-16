@@ -400,9 +400,20 @@ module RailsAiContext
         lines.join("\n")
       end
 
+      # The model's own file, not app/models/<underscored>.rb rebuilt from its
+      # name - that misses a pack, an engine, and any inflection the app
+      # registers.
+      private_class_method def self.relative_model_path(model_name)
+        RailsAiContext::Payload.model_file(cached_context, model_name)
+      end
+
+      private_class_method def self.model_source_path(model_name)
+        rails_app.root.join(relative_model_path(model_name))
+      end
+
       # Extract bodies of custom validate methods (single-line or first meaningful line)
       private_class_method def self.extract_custom_validate_bodies(model_name, method_names)
-        path = rails_app.root.join("app", "models", "#{model_name.underscore}.rb")
+        path = model_source_path(model_name)
         return {} unless File.exist?(path) && File.size(path) <= max_file_size
 
         source = RailsAiContext::SafeFile.read(path)
@@ -423,7 +434,7 @@ module RailsAiContext
 
       # Extract class methods defined in the model source (not inherited)
       private_class_method def self.extract_source_defined_methods(model_name, class_methods: false)
-        path = rails_app.root.join("app", "models", "#{model_name.underscore}.rb")
+        path = model_source_path(model_name)
         return nil unless File.exist?(path)
         return nil if File.size(path) > max_file_size
 
@@ -446,7 +457,7 @@ module RailsAiContext
 
       # Extract public method signatures (name + params) from model source
       private_class_method def self.extract_method_signatures(model_name)
-        path = rails_app.root.join("app", "models", "#{model_name.underscore}.rb")
+        path = model_source_path(model_name)
         return nil unless File.exist?(path)
         return nil if File.size(path) > max_file_size
 
@@ -500,7 +511,7 @@ module RailsAiContext
       end
 
       private_class_method def self.extract_model_structure(model_name)
-        path = "app/models/#{model_name.underscore}.rb"
+        path = relative_model_path(model_name)
         full_path = rails_app.root.join(path)
         return nil unless File.exist?(full_path)
         return nil if File.size(full_path) > max_file_size

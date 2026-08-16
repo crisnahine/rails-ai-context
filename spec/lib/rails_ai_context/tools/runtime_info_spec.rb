@@ -102,14 +102,36 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
     end
 
     describe "cache section coherence (MemoryStore)" do
-      it "shows real MemoryStore stats instead of the generic not-available message" do
-        allow(Rails).to receive(:cache).and_return(ActiveSupport::Cache::MemoryStore.new)
+      # MemoryStore has no #stats, and its own #inspect is where the entry
+      # count and byte size live. Passing that string through put a raw
+      # `#<ActiveSupport::Cache::MemoryStore ...>` into the answer - the shape
+      # this gem has shipped as a defect before, when a Proc's address reached
+      # a file an app commits.
+      it "reports the numbers, not the object" do
+        store = ActiveSupport::Cache::MemoryStore.new
+        store.write("a", "1")
+        allow(Rails).to receive(:cache).and_return(store)
 
-        result = described_class.call(section: "cache")
-        text = result.content.first[:text]
+        text = described_class.call(section: "cache").content.first[:text]
+
         expect(text).to include("MemoryStore")
-        expect(text).to include("entries=")
+        expect(text).to include("**Entries:** 1")
+        expect(text).to match(/\*\*Size:\*\* \d+ bytes/)
+        expect(text).not_to include("#<")
         expect(text).not_to include("Stats not available for MemoryStore")
+      end
+
+      # A store that does answer #stats returns a Hash, and Hash#inspect is
+      # still an object dumped into prose.
+      it "renders a stats hash as facts" do
+        store = double("CacheStore", stats: { "curr_items" => 12, "bytes" => 3400 })
+        allow(store).to receive(:is_a?).and_return(false)
+        allow(Rails).to receive(:cache).and_return(store)
+
+        text = described_class.call(section: "cache").content.first[:text]
+
+        expect(text).to include("curr_items: 12")
+        expect(text).not_to include("=>")
       end
     end
   end

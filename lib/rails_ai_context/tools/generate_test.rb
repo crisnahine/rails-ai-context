@@ -123,8 +123,16 @@ module RailsAiContext
           end
         end
 
+        # The model's file, minus the models root and the extension.
+        def model_path_stem(name)
+          RailsAiContext::Payload.model_file(cached_context, name)
+            .sub(%r{\A.*app/models/}, "").sub(/\.rb\z/, "")
+        end
+
         def generate_rspec_model(name, data, patterns, tests_data)
-          file_path = "spec/models/#{name.underscore}_spec.rb"
+          # The spec mirrors the model's own path, and underscoring the name
+          # does not reproduce it: OAuthClientConfig is oauth_client_config.rb.
+          file_path = "spec/models/#{model_path_stem(name)}_spec.rb"
           factory = find_factory_name(name, tests_data)
           lines = []
           lines << "# #{file_path}"
@@ -259,9 +267,9 @@ module RailsAiContext
         end
 
         def generate_minitest_model(name, data, _patterns, tests_data)
-          file_path = "test/models/#{name.underscore}_test.rb"
+          file_path = "test/models/#{model_path_stem(name)}_test.rb"
           factory = find_factory_name(name, tests_data)
-          table = data[:table_name] || name.underscore.pluralize
+          table = data[:table_name] || model_path_stem(name).split("/").last.pluralize
           lines = []
           lines << "# #{file_path}"
           lines << ""
@@ -403,7 +411,7 @@ module RailsAiContext
           ctrl_name = ctrl_name.strip
           # Normalize: "posts" → "PostsController", "PostsController" stays
           ctrl_class = ctrl_name.end_with?("Controller") ? ctrl_name : "#{ctrl_name.camelize}Controller"
-          snake = ctrl_class.underscore.delete_suffix("_controller")
+          snake = RailsAiContext::Payload.controller_route_key(cached_context, ctrl_class)
 
           routes = cached_context[:routes] || {}
           by_ctrl = routes[:by_controller] || {}

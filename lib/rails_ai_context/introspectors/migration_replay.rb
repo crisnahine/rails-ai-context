@@ -32,12 +32,25 @@ module RailsAiContext
         })
 
         current_table = nil
-        all_entries = (ast_data[:migration] + ast_data[:schema]).sort_by { |r| r[:location] }
+        root = AstCache.parse_string(content).value
+
+        # A `def down` says what to undo, not what the schema holds. Replaying
+        # it alongside `up` cancels the migration out: the ordinary
+        # up-creates/down-drops pair erased a table the app really has, and the
+        # reverse pair invented one it dropped.
+        down_ranges = []
+        find_down_bodies(root, down_ranges)
+        all_entries = (ast_data[:migration] + ast_data[:schema])
+          .reject { |r| down_ranges.any? { |range| range.cover?(r[:location]) } }
+          .sort_by { |r| r[:location] }
 
         # t.timestamps has no column-name argument, so SchemaDslListener skips
-        # it; a direct walk finds the call sites.
+        # it; a direct walk finds the call sites. The walk sees the whole file,
+        # so a down body's timestamps would be attributed to the last table
+        # created on the way up - the same filter has to apply here.
         timestamps_lines = Set.new
-        find_timestamps_calls(AstCache.parse_string(content).value, timestamps_lines)
+        find_timestamps_calls(root, timestamps_lines)
+        timestamps_lines.delete_if { |line| down_ranges.any? { |range| range.cover?(line) } }
 
         all_entries.each do |entry|
           if entry.key?(:action)
@@ -69,6 +82,27 @@ module RailsAiContext
         end
       end
 
+      # Line ranges of the parts that only run on the way down: `def down`,
+      # `reversible { |dir| dir.down { ... } }`, and a `revert` block.
+      #
+      # `revert` is skipped rather than inverted. Inverting it properly means
+      # running each operation backwards, and the failure modes are not
+      # symmetric: skipping under-reports a table that reverting a drop would
+      # restore, while guessing over-reports one the app does not have. This
+      # gem would rather omit than invent. `revert SomeMigration`, the
+      # argument form, is not seen at all.
+      def find_down_bodies(node, ranges)
+        case node
+        when Prism::DefNode
+          ranges << (node.location.start_line..node.location.end_line) if node.name == :down
+        when Prism::CallNode
+          if %i[down revert].include?(node.name) && node.block
+            ranges << (node.location.start_line..node.location.end_line)
+          end
+        end
+        node.child_nodes.compact.each { |child| find_down_bodies(child, ranges) }
+      end
+
       def find_timestamps_calls(node, lines)
         case node
         when Prism::CallNode
@@ -87,8 +121,13 @@ module RailsAiContext
 
       # A replayed create_table implies its id column the way a dumped one
       # does; leaving it out gave the same app two answers depending on which
-      # file it committed.
+      # file it committed. A table the replay cannot name it cannot report -
+      # Canvas calls `create_table table_name do |t|` with a local computed at
+      # run time, and keeping the entry put a nil key in the schema that took a
+      # whole context run down the moment a serializer sorted the names.
       def seed_table(tables, table, options, pk_type)
+        return if table.nil? || table.to_s.empty?
+
         tables[table] ||= {
           columns: implicit_pk_columns(options, pk_type),
           indexes: [],

@@ -226,6 +226,104 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:mailers].map { |m| m[:name] }).not_to include("ApplicationMailer")
     end
 
+    # ActionMailer interceptors are modules, and app/mailers is where they
+    # live. Reporting one as a mailer offers `delivering_email` - an interceptor
+    # hook - as an email an agent can send.
+    it "does not report a module in app/mailers as a mailer" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers", "interceptors"))
+        File.write(File.join(dir, "app", "mailers", "user_mailer.rb"), <<~RUBY)
+          class UserMailer < ApplicationMailer
+            def welcome
+              mail(to: "a@b.c")
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "mailers", "interceptors", "default_headers.rb"), <<~RUBY)
+          module Interceptors
+            module DefaultHeaders
+              module_function
+
+              def delivering_email(mail); end
+
+              def default_headers; end
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:mailers].map { |m| m[:name] }).to contain_exactly("UserMailer")
+    end
+
+    # An interceptor is as often a class as a module, and a mailer always
+    # inherits something. A bare class under app/mailers is neither.
+    it "does not report a parentless class in app/mailers as a mailer" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers", "interceptors"))
+        File.write(File.join(dir, "app", "mailers", "user_mailer.rb"), <<~RUBY)
+          class UserMailer < ApplicationMailer
+            def welcome
+              mail(to: "a@b.c")
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "mailers", "interceptors", "default_headers.rb"), <<~RUBY)
+          module Interceptors
+            class DefaultHeaders
+              def self.delivering_email(mail); end
+
+              def default_headers; end
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:mailers].map { |m| m[:name] }).to contain_exactly("UserMailer")
+    end
+
+    # A mailer's actions are often written as modules mixed into one class -
+    # GitLab keeps 20 of them under app/mailers/emails, holding every
+    # notification it sends. Those are a mailer's interface; an interceptor is
+    # not, and the framework hook is what tells them apart.
+    it "keeps a module whose methods are mailer actions" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers", "emails"))
+        File.write(File.join(dir, "app", "mailers", "notify.rb"), <<~RUBY)
+          class Notify < ApplicationMailer
+            include Emails::Issues
+          end
+        RUBY
+        File.write(File.join(dir, "app", "mailers", "emails", "issues.rb"), <<~RUBY)
+          module Emails
+            module Issues
+              def new_issue_email(recipient_id)
+                mail(to: recipient_id)
+              end
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:mailers].map { |m| m[:name] }).to include("Emails::Issues")
+    end
+
+    it "names a namespaced mailer by the constant its source declares" do
+      result = static_result do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "mailers", "oauth"))
+        File.write(File.join(dir, "app", "mailers", "oauth", "token_mailer.rb"), <<~RUBY)
+          module OAuth
+            class TokenMailer < ApplicationMailer
+              def issued
+                mail(to: "a@b.c")
+              end
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:mailers].map { |m| m[:name] }).to contain_exactly("OAuth::TokenMailer")
+    end
+
     it "finds channels from source" do
       result = static_result do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "channels", "application_cable"))

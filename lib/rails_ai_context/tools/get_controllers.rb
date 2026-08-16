@@ -193,7 +193,9 @@ module RailsAiContext
         end
 
         # Detect skip_before_action declarations in the child controller source
-        source_path = rails_app.root.join("app", "controllers", "#{controller_name.underscore}.rb")
+        carried = RailsAiContext::Payload.controller_file(cached_context, controller_name)
+        source_path = carried ? rails_app.root.join(carried) :
+          rails_app.root.join("app", "controllers", "#{controller_name.underscore}.rb")
         skipped_filters = detect_skipped_filters(source_path, action_name)
 
         # Include inherited filters from parent controller, excluding skipped ones
@@ -205,7 +207,7 @@ module RailsAiContext
         source_with_lines = extract_method_with_lines(source_path, action_name)
 
         lines = [ "# #{controller_name}##{action_name}", "" ]
-        lines << "**File:** `app/controllers/#{controller_name.underscore}.rb`"
+        lines << "**File:** `#{carried || "app/controllers/#{controller_name.underscore}.rb"}`"
 
         if parent_filters.any? || filters.any? || skipped_filters.any?
           lines << "" << "## Applicable Filters"
@@ -549,14 +551,17 @@ module RailsAiContext
 
         # Hydrate with schema hints for models referenced in this controller
         if RailsAiContext.configuration.hydration_enabled
-          source_path = rails_app.root.join("app", "controllers", "#{name.underscore}.rb")
+          carried = RailsAiContext::Payload.controller_file(cached_context, name)
+          source_path = carried ? rails_app.root.join(carried) :
+            rails_app.root.join("app", "controllers", "#{name.underscore}.rb")
           hydration = Hydrators::ControllerHydrator.call(source_path.to_s, context: cached_context)
           hydration_text = Hydrators::HydrationFormatter.format(hydration)
           lines << "" << hydration_text unless hydration_text.empty?
         end
 
-        # Cross-reference hints
-        ctrl_path = name.underscore.delete_suffix("_controller")
+        # Cross-reference hints. The route key is the controller's path, which
+        # the class name does not reproduce wherever an inflection is in play.
+        ctrl_path = RailsAiContext::Payload.controller_route_key(cached_context, name)
         model_name = ctrl_path.split("/").last.singularize.camelize
         lines << ""
         lines << "_Next: `rails_get_routes(controller:\"#{ctrl_path}\")` for routes"

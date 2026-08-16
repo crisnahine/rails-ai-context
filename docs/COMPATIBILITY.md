@@ -70,23 +70,37 @@ Two tiers, both reachable over the CLI and MCP (stdio and HTTP):
 (ActiveRecord connections, `Rails.application.routes`, loaded classes) plus the
 Prism AST layer for source-level facts (scopes, callbacks, strong params).
 
-**STATIC** - the app didn't boot, or `--no-boot` was passed. Only introspectors
-that define a `static_call` path can answer without a booted app:
+**STATIC** - the app didn't boot, or `--no-boot` was passed. 32 of the 40
+introspectors answer here; each declares which of three kinds it is
+(ADR-0002), so what a tier can say is a declaration rather than a guess.
+
+**files-only** (23) run unchanged against the static app handle, because they
+only ever read files: `gems`, `views`, `view_templates`, `turbo`, `stimulus`,
+`active_storage`, `action_text`, `auth`, `tests`, `rake_tasks`, `assets`,
+`devops`, `action_mailbox`, `migrations`, `seeds`, `middleware`, `env_config`,
+`multi_database`, `components`, `performance`, `frontend_frameworks`,
+`credentials` and `env`.
+
+**alternate-source** (9) have a `static_call` that reads a different source
+from the booted path:
 
 | Introspector | Static source |
 |:---|:---|
-| `schema` | `db/schema.rb` / `db/structure.sql` / migration files |
-| `migrations` | migration file list + `db/structure.sql`'s trailing `schema_migrations` insert |
-| `routes` | `config/routes.rb` parsed with a dedicated Prism listener |
+| `schema` | `db/schema.rb` / `db/structure.sql` / migration replay |
 | `models` | `app/models/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
+| `routes` | `config/routes.rb` parsed with a dedicated Prism listener |
 | `controllers` | `app/controllers/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
-| `env_config` | `config/environments/*.rb` read from disk - file-based, so the static tier serves the same data as a booted app |
+| `jobs` | `app/jobs`, `app/mailers` and `app/channels` parsed for classes and their public methods |
+| `i18n` | every top-level key across `config/locales`, and the default locale read from `config/` |
+| `api` | serializers, API controllers and route constraints read from source |
+| `engines` | `config/routes.rb` mounts, plus the Gemfile |
+| `active_support` | concern and core-extension use read from source |
 
-The other 34 introspectors (views, jobs, gems, turbo, i18n, active_storage,
-auth, api, and the rest) have no static path and report `{ unavailable: reason
-}` in this tier - by construction, not by shape: `Introspector#run_introspector`
-(`lib/rails_ai_context/introspector.rb`) falls back to the same message
-regardless of what triggered the static tier.
+**runtime-only** (8) report `{ unavailable: reason }` here, and only these:
+`conventions`, `database_stats`, `config`, `initializers`, `autoload`,
+`connection_pool`, `security` and `observability`. The fallback message comes
+from `Introspector#run_introspector` (`lib/rails_ai_context/introspector.rb`)
+and is the same whatever put the gem in the static tier.
 
 `doctor` never enters the static tier - its job is diagnosing why boot failed,
 so it always requires a bootable app.

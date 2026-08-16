@@ -42,8 +42,21 @@ module RailsAiContext
       # Write context files, skipping unchanged ones.
       # @return [Hash] { written: [paths], skipped: [paths] }
       def call
-        formats = format == :all ? ALL_FORMATS : Array(format)
-        output_dir = RailsAiContext.configuration.output_dir_for(Rails.application)
+        # `.ai-context.json` is the machine artifact, not an AI tool, so no
+        # install menu can offer it. A recorded tool selection arrives here as
+        # a list and used to switch the file off for good, while the generator
+        # went on gitignoring it. A single explicit format is a request for one
+        # file and stays one.
+        formats = case format
+        when :all             then ALL_FORMATS
+        when Array            then format.empty? ? [] : format | [ :json ]
+        else Array(format)
+        end
+        # `default_app` is the tier-aware handle: the booted application, or the
+        # filesystem-rooted stand-in. Reaching for `Rails.application` directly
+        # raises NameError under `--no-boot`, where Rails is never loaded at all
+        # - a different path from a boot that started and failed.
+        output_dir = RailsAiContext.configuration.output_dir_for(RailsAiContext.default_app)
         generate_root = RailsAiContext.configuration.generate_root_files
         written = []
         skipped = []

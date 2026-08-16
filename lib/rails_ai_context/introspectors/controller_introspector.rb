@@ -30,9 +30,17 @@ module RailsAiContext
           hash[ctrl.name] = { error: e.message }
         end
 
-        # Discover controllers from filesystem that may not be loaded as classes
-        discover_from_filesystem.each do |name, path|
+        # Discover controllers from filesystem that may not be loaded as classes.
+        # Reflection has already named every controller it loaded, so the file's
+        # own source is only worth reading for the ones it did not - resolving
+        # the declared constant up front would read and parse every controller
+        # in the app to produce a name this loop throws away.
+        discover_from_filesystem.each do |path_name, path|
+          next if result.key?(path_name)
+
+          name = DeclaredConstant.resolve(RailsAiContext::SafeFile.read(path), path_name)
           next if result.key?(name)
+
           result[name] = extract_details_from_source(path, name)
         end
 
@@ -44,10 +52,13 @@ module RailsAiContext
       # Static tier: every controller goes through the source-only extractor;
       # class loading and reflection never run.
       def static_call
-        result = discover_from_filesystem.each_with_object({}) do |(name, path), hash|
+        # No reflection here, so every file's own source is the only source of
+        # its name as well as its details.
+        result = discover_from_filesystem.each_with_object({}) do |(path_name, path), hash|
+          name = DeclaredConstant.resolve(RailsAiContext::SafeFile.read(path), path_name)
           hash[name] = extract_details_from_source(path, name).merge(confidence: Confidence::STATIC)
         rescue => e
-          hash[name] = { error: e.message }
+          hash[path_name] = { error: e.message }
         end
         {
           controllers: result,
@@ -107,10 +118,13 @@ module RailsAiContext
         RailsAiContext::PathResolver.controller_dirs(app.root).each_with_object({}) do |controllers_dir, result|
           Dir.glob(File.join(controllers_dir, "**", "*_controller.rb")).sort.each do |path|
             relative = path.sub("#{controllers_dir}/", "")
-            class_name = relative.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
-            next if class_name == "ApplicationController"
-            next if class_name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
-            result[class_name] ||= path
+            # The candidate the path camelizes to. Callers resolve the constant
+            # the source declares where they need it; doing it here would read
+            # and parse every controller file for both tiers.
+            path_name = relative.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
+            next if path_name == "ApplicationController"
+            next if path_name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
+            result[path_name] ||= path
           end
         end
       end
@@ -119,6 +133,10 @@ module RailsAiContext
       def extract_details_from_source(path, class_name)
         source = RailsAiContext::SafeFile.read(path)
         return { error: "unreadable" } unless source
+
+        # Carry the file that was read: the declared name does not round-trip
+        # back to a path. See CONTEXT.md, "Declared constant".
+        relative_file = path.to_s.sub("#{app.root}/", "")
         parent = extract_parent_class_ast(source)
         rate_limit = rate_limit_entry(source)
         details = {
@@ -132,7 +150,8 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source),
           rate_limit: extract_rate_limit(source, rate_limit),
           rate_limit_parsed: parse_rate_limit(rate_limit),
-          turbo_stream_actions: extract_turbo_stream_actions(source)
+          turbo_stream_actions: extract_turbo_stream_actions(source),
+          file: relative_file
         }.compact
         details
       rescue => e
@@ -154,8 +173,18 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source),
           rate_limit: extract_rate_limit(source, rate_limit),
           rate_limit_parsed: parse_rate_limit(rate_limit),
-          turbo_stream_actions: extract_turbo_stream_actions(source)
+          turbo_stream_actions: extract_turbo_stream_actions(source),
+          file: relative_source_path(ctrl)
         }.compact
+      end
+
+      # App-relative path of the file the class was defined in, for consumers
+      # that would otherwise reconstruct it from the name.
+      def relative_source_path(ctrl)
+        path = source_path(ctrl)
+        return nil unless path && File.exist?(path)
+
+        path.to_s.sub("#{app.root}/", "")
       end
 
       def api_controller?(ctrl)
@@ -773,10 +802,20 @@ module RailsAiContext
         RailsAiContext::SafeFile.read(path)
       end
 
+      # Ruby knows where the class was defined; the underscored name only
+      # agrees when the app registers no inflection. See CONTEXT.md,
+      # "Declared constant".
       def source_path(ctrl)
-        root = app.root.to_s
-        underscored = ctrl.name.underscore
-        File.join(root, "app", "controllers", "#{underscored}.rb")
+        # Contained under the app root: a constant defined by a gem - or by a
+        # spec - is not this app's controller file.
+        located = Object.const_source_location(ctrl.name)&.first
+        if located && File.exist?(located) && located.to_s.start_with?("#{app.root}/")
+          return located
+        end
+
+        File.join(app.root.to_s, "app", "controllers", "#{ctrl.name.underscore}.rb")
+      rescue StandardError
+        File.join(app.root.to_s, "app", "controllers", "#{ctrl.name.underscore}.rb")
       end
     end
   end

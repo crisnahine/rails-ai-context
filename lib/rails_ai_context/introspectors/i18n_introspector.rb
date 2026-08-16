@@ -12,7 +12,10 @@ module RailsAiContext
       # Both spellings apps use: `config.i18n.default_locale = :es` in
       # application.rb or an environment file, and a bare
       # `I18n.default_locale = :es` in an initializer.
-      DEFAULT_LOCALE_ASSIGNMENT = /(?:config\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
+      # Anchored past the line start so a commented example does not win:
+      # GitLab ships `# config.i18n.default_locale = :de` and every coverage
+      # line then measured an English app against German.
+      DEFAULT_LOCALE_ASSIGNMENT = /^[^\S\n]*(?:config\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
 
       attr_reader :app
 
@@ -21,13 +24,15 @@ module RailsAiContext
       end
 
       def call
+        coverage, untranslated = detect_locale_coverage
         result = {
           default_locale: I18n.default_locale.to_s,
           available_locales: I18n.available_locales.map(&:to_s).sort,
           backend: I18n.backend.class.name,
           locale_files: extract_locale_files,
           total_locale_files: count_locale_files,
-          locale_coverage: detect_locale_coverage
+          locale_coverage: coverage,
+          locales_without_translations: untranslated
         }
         result.merge!(detect_fallback_config)
         result
@@ -41,6 +46,7 @@ module RailsAiContext
       def static_call
         locales = locales_from_files
         default = default_locale_from_config
+        coverage, untranslated = detect_locale_coverage(locales: locales.map(&:to_sym), default: default.to_sym)
 
         {
           default_locale: default,
@@ -48,7 +54,8 @@ module RailsAiContext
           backend: nil,
           locale_files: extract_locale_files,
           total_locale_files: count_locale_files,
-          locale_coverage: detect_locale_coverage(locales: locales.map(&:to_sym), default: default.to_sym)
+          locale_coverage: coverage,
+          locales_without_translations: untranslated
         }.merge(detect_fallback_config)
       rescue => e
         { error: e.message }
@@ -80,8 +87,15 @@ module RailsAiContext
       # Rails' own default is :en, so "en" is the right answer when the app
       # never says otherwise - not a guess.
       def default_locale_from_config
+        # config/environments/*.rb arrive in glob order, so whichever file
+        # carried an assignment first won whatever environment it belonged to -
+        # and development.rb sorts ahead of production.rb.
+        env = ENV["RAILS_ENV"] || "development"
+        environments = Dir.glob(File.join(root, "config", "environments", "*.rb"))
+          .partition { |path| File.basename(path, ".rb") == env }.flatten
+
         candidates = [ File.join(root, "config", "application.rb") ] +
-                     Dir.glob(File.join(root, "config", "environments", "*.rb")) +
+                     environments +
                      Dir.glob(File.join(root, "config", "initializers", "*.rb"))
 
         candidates.each do |path|
@@ -110,6 +124,9 @@ module RailsAiContext
             begin
               data = YAML.load_file(path, permitted_classes: [ Symbol ], aliases: true) || {}
               info[:key_count] = count_keys(data)
+              # Which locales this file actually serves. The filename is only a
+              # convention, and a gem-provided file is named for the gem.
+              info[:locales] = data.is_a?(Hash) ? data.keys.map(&:to_s) : []
             rescue => e
               $stderr.puts "[rails-ai-context] extract_locale_files failed: #{e.message}" if ENV["DEBUG"]
               info[:parse_error] = true
@@ -139,29 +156,55 @@ module RailsAiContext
         {}
       end
 
+      # @return [Array(Hash, Array<String>)] coverage per locale, and the
+      #   locales left out of it because they carry no translations.
       def detect_locale_coverage(locales: I18n.available_locales, default: I18n.default_locale)
-        return {} if locales.size < 2
+        return [ {}, [] ] if locales.size < 2
 
         # Coverage is the share of the default locale's keys that the other
         # locale also defines. Comparing raw counts instead reports over 100%
         # for a locale that translates few default keys but adds many of its
         # own - the one number a translator must not be told is fine.
         coverage = {}
+        untranslated = []
         default_keys = key_paths_for_locale(default)
+
+        # With nothing to measure against - a default_locale the app
+        # configures but ships no file for - every locale scores zero, and
+        # bucketing them all says something false about each.
+        return [ {}, [] ] if default_keys.empty?
         locales.reject { |l| l == default }.each do |locale|
           locale_keys = key_paths_for_locale(locale)
           translated = (default_keys & locale_keys).size
+          pct = ((translated.to_f / default_keys.size) * 100).round(1)
+
+          # Below the rounding floor there is nothing to show but zeroes. Rails
+          # lists a locale per language when the app keeps a language-name
+          # lookup table under config/locales, and such a table shares a key or
+          # two with the default by coincidence - on Discourse that produced
+          # 138 rows reading "0.0% - 11918 missing", a translation effort
+          # nobody had started.
+          #
+          # The key count travels with the name: a locale can define plenty and
+          # still share none with the default, and a bare name reads as "not
+          # translated" when the truth is "translated something else".
+          #
+          # The row is written either way. Naming a locale here only asks the
+          # renderer to group it; deleting its numbers would leave a
+          # translation genuinely started below the floor with nothing to read.
+          untranslated << { locale: locale.to_s, keys: locale_keys.size } if pct.zero?
+
           coverage[locale.to_s] = {
             keys: locale_keys.size,
             missing: (default_keys - locale_keys).size,
             extra: (locale_keys - default_keys).size,
-            coverage_pct: default_keys.any? ? ((translated.to_f / default_keys.size) * 100).round(1) : 0
+            coverage_pct: pct
           }
         end
-        coverage
+        [ coverage, untranslated ]
       rescue => e
         $stderr.puts "[rails-ai-context] detect_locale_coverage failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        [ {}, [] ]
       end
 
       # Dotted key paths a locale defines, with the locale root stripped so
@@ -192,14 +235,53 @@ module RailsAiContext
       #   config/locales/en/users.yml
       #   config/locales/admin/en.yml
       def find_locale_paths(locale)
-        base = File.join(app.root, "config", "locales")
-        return [] unless Dir.exist?(base)
+        base = locales_dir
+        return [] unless base
+
         loc = locale.to_s
-        Dir.glob(File.join(base, "**/*.{yml,yaml}")).select do |p|
+        named = locale_file_paths.select do |p|
           name = File.basename(p, ".*")
           rel = p.sub("#{base}/", "")
           name == loc || name.end_with?(".#{loc}") || rel.start_with?("#{loc}/") || rel.include?("/#{loc}/")
         end
+
+        # Nothing requires a locale file to be named for its locale, and a
+        # locale can have both: its own file and keys in a shared one. Reading
+        # the convention alone scores it on a fraction of what it translates,
+        # and reports a locale that lives only in a shared file as having no
+        # translations - a positive claim, and a false one.
+        (named + paths_by_declared_locale.fetch(loc, [])).uniq
+      end
+
+      def locales_dir
+        return @locales_dir if defined?(@locales_dir)
+
+        dir = File.join(app.root, "config", "locales")
+        @locales_dir = Dir.exist?(dir) ? dir : nil
+      end
+
+      def locale_file_paths
+        @locale_file_paths ||= locales_dir ? Dir.glob(File.join(locales_dir, "**/*.{yml,yaml}")).sort : []
+      end
+
+      # locale => the files declaring it, built in ONE pass. Asking every file
+      # about every locale is O(locales x files): 187 locales over 108 files
+      # took Discourse's i18n answer from under a second to four and a half
+      # minutes.
+      def paths_by_declared_locale
+        @paths_by_declared_locale ||= locale_file_paths.each_with_object({}) do |path, index|
+          top_level_locales(path).each { |loc| (index[loc] ||= []) << path }
+        end
+      end
+
+      def top_level_locales(path)
+        content = RailsAiContext::SafeFile.read(path)
+        return [] unless content
+
+        data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
+        data.is_a?(Hash) ? data.keys.map(&:to_s) : []
+      rescue StandardError
+        []
       end
 
       def nested_key_paths(hash, prefix = nil, paths = [])

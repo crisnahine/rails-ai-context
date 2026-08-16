@@ -55,14 +55,14 @@ module RailsAiContext
         discover_jobs(root, pattern, lines)
         discover_views(ctx, root, pattern, lines)
         discover_stimulus(ctx, pattern, lines)
-        test_files = discover_tests(root, pattern, lines)
+        test_files, tests_truncated = discover_tests(root, pattern, lines)
         discover_related_models(ctx, matched_models, lines)
         discover_concerns(ctx, matched_models, lines)
         discover_callbacks(ctx, matched_models, lines)
         discover_channels(root, pattern, lines)
         discover_mailers(root, pattern, lines)
         discover_env_dependencies(root, pattern, matched_models, lines)
-        discover_test_gaps(root, pattern, matched_models, ctx, test_files || [], lines)
+        discover_test_gaps(root, pattern, matched_models, ctx, test_files || [], lines, truncated: tests_truncated)
         discover_components(ctx, pattern, lines)
 
         # For auth-related keywords, also discover auth gems
@@ -370,7 +370,7 @@ module RailsAiContext
             end
           end
           found.uniq!
-          return found if found.empty?
+          return [ found, truncated ] if found.empty?
 
           header = "## Tests (#{found.size}#{truncated ? " - first #{MAX_SCAN_FILES} per glob scanned" : ""})"
           lines << header
@@ -383,16 +383,26 @@ module RailsAiContext
             lines << "- `#{relative}` (#{count_phrase(test_count, "test")})"
           end
           lines << ""
-          found
+          [ found, truncated ]
         rescue => e
           $stderr.puts "[rails-ai-context] discover_tests failed: #{e.message}" if ENV["DEBUG"]
-          []
+          [ [], false ]
         end
 
         # --- Test coverage gaps ---
-        def discover_test_gaps(root, pattern, matched_models, ctx, test_files, lines)
+        def discover_test_gaps(root, pattern, matched_models, ctx, test_files, lines, truncated: false)
+          # A gap is a claim that something has no test, and a scan that stopped
+          # at MAX_SCAN_FILES cannot make it: Discourse has 1,672 spec files, so
+          # the first 500 missed the ones that cover the feature and every
+          # controller was reported as untested.
+          return if truncated
+
           gaps = []
-          test_basenames = test_files.map { |f| File.basename(f, ".rb") }
+          # Paths, not basenames: a namespaced name underscores to admin/badges,
+          # which no basename can contain, so every namespaced controller was
+          # reported as having no test - Discourse's Admin::BadgesController
+          # against spec/requests/admin/badges_controller_spec.rb.
+          test_basenames = test_files.map { |f| f.to_s.sub(/\.rb\z/, "").sub("#{root}/", "") }
 
           # Check models
           matched_models&.each do |name, _data|
@@ -406,7 +416,7 @@ module RailsAiContext
           controllers = ctx[:controllers]&.dig(:controllers) || {}
           controllers.each_key do |ctrl_name|
             next unless feature_word_match?(ctrl_name, pattern)
-            snake = ctrl_name.underscore.delete_suffix("_controller")
+            snake = RailsAiContext::Payload.controller_route_key(ctx, ctrl_name)
             unless test_basenames.any? { |t| t.include?(snake) }
               gaps << "Controller `#{ctrl_name}` - no test file found"
             end

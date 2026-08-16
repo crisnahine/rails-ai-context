@@ -45,6 +45,31 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       expect(text).to include("Search:")
     end
 
+    # Turning search_extensions into a positive glob list on the ripgrep path
+    # made the two backends agree and cost the reach that makes the tool
+    # useful: a Gemfile, a Rakefile and a .md carry no listed extension. The
+    # Ruby fallback still globs by extension, so this is ripgrep's property.
+    it "finds a match in a file whose name carries no listed extension" do
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+
+      previous_root = RailsAiContext.configuration.app_root
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "Gemfile"), %(source "https://rubygems.org"\ngem "devise"\n))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post; end\n")
+        RailsAiContext.configuration.app_root = dir
+        allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+        text = described_class.call(pattern: "devise").content.first[:text]
+
+        expect(text).to include("Gemfile")
+      end
+    ensure
+      # app_root lives on the memoized configuration, so setting it without
+      # putting it back sends every later example at a deleted directory.
+      RailsAiContext.configuration.app_root = previous_root
+    end
+
     it "returns a not-found message for unmatched patterns" do
       result = described_class.call(pattern: "zzz_impossible_pattern_zzz_42")
       text = result.content.first[:text]

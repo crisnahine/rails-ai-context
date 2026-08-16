@@ -63,24 +63,58 @@ module RailsAiContext
         RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
           Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            next if relative == "application_record" || relative.start_with?("concerns/")
-
-            class_name = relative.camelize
-            next if result.key?(class_name)
-            next if config.excluded_models.include?(class_name)
+            next if relative == "application_record"
 
             begin
+              # SafeFile.read answers nil for both "too big" and "cannot read
+              # it", and those are different answers: a model the process
+              # cannot stat is an error entry rather than one that quietly is
+              # not there. The count is an answer too.
               next if File.size(path) > RailsAiContext.configuration.max_file_size
+
+              source = model_source(path)
+              next if source.nil? || mixin_path?(relative, source) || abstract_class?(source)
+
+              class_name = declared_model_name(source, relative.camelize)
+              next if result.key?(class_name)
+              next if config.excluded_models.include?(class_name)
 
               result[class_name] = static_model_details(path, class_name)
             rescue => e
-              result[class_name] = { error: e.message }
+              result[relative.camelize] = { error: e.message }
             end
           end
         end
       end
 
       private
+
+      # Zeitwerk resolves a path through the app's own inflector, which the
+      # static tier never loads, so camelizing invents `Activitypub::` for an
+      # app that declares `ActivityPub::`.
+      def declared_model_name(source, path_name)
+        DeclaredConstant.resolve(source, path_name)
+      end
+
+      # The booted tier rejects `abstract_class?`, and a namespaced base class -
+      # GitLab has Ci::ApplicationRecord, PackageMetadata::ApplicationRecord and
+      # SecApplicationRecord - is one. Excluding only the root
+      # application_record by path gave the same app two model counts.
+      def abstract_class?(source)
+        source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/)
+      end
+
+      # `concerns/` under app/models is the Zeitwerk root for mixins: it does
+      # not namespace its files, so the path is not their name. A nested
+      # concerns/ is an ordinary namespace - OpenProject fills one with mixins,
+      # but a class declared there is a model like any other.
+      def mixin_path?(relative, source)
+        segments = relative.split("/")
+        return false unless segments.include?("concerns")
+        return true if segments.first == "concerns"
+
+        !DeclaredConstant.declares_class?(source)
+      end
 
       def eager_load_models!
         return if Rails.application.config.eager_load
@@ -151,6 +185,7 @@ module RailsAiContext
 
         details = {
           table_name:       model.table_name,
+          file:             relative_to_root(model_source_path(model)),
           # Reflection-based (runtime, most accurate for these)
           associations:     extract_associations(model),
           validations:      extract_validations(model),
@@ -510,10 +545,19 @@ module RailsAiContext
 
       # ── Helpers ────────────────────────────────────────────────────
 
+      # Ruby knows where the class was defined, and the name does not: a model
+      # in a pack or engine does not live under app/models, and an inflected
+      # namespace does not underscore back to its own directory. The
+      # containment check keeps a gem-defined constant from being reported as
+      # the app's own file.
       def model_source_path(model)
         root = app.root.to_s
-        underscored = model.name.underscore
-        File.join(root, "app", "models", "#{underscored}.rb")
+        located = Object.const_source_location(model.name)&.first
+        return located if located && File.expand_path(located).start_with?("#{File.expand_path(root)}/")
+
+        File.join(root, "app", "models", "#{model.name.underscore}.rb")
+      rescue NameError, TypeError
+        File.join(root, "app", "models", "#{model.name.underscore}.rb")
       end
 
       DEVISE_CLASS_METHOD_PATTERNS = %w[
@@ -569,7 +613,11 @@ module RailsAiContext
         data = SourceIntrospector.call(path)
         {
           confidence: Confidence::STATIC,
-          table_name: class_name.demodulize.underscore.pluralize,
+          # Rails derives the table through its own inflector, and the file's
+          # name already carries that inflection - Zeitwerk resolved the
+          # constant from it. Underscoring the constant instead turns
+          # OAuthClientConfig into o_auth_client_configs, a table no app has.
+          table_name: File.basename(path, ".rb").pluralize,
           associations: data[:associations],
           validations: data[:validations],
           scopes: data[:scopes],
@@ -582,8 +630,17 @@ module RailsAiContext
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(data[:mixins]),
           macros: data[:macros],
-          methods: ActionResolver.own_methods(data[:methods], class_name)
+          methods: ActionResolver.own_methods(data[:methods], class_name),
+          file: relative_to_root(path)
         }
+      end
+
+      # Consumers used to turn a model name back into
+      # app/models/<underscored>.rb, which is wrong for a model in a pack or an
+      # engine and wrong wherever the app registers an inflection. The path
+      # travels with the model instead.
+      def relative_to_root(path)
+        path.to_s.sub(%r{\A#{Regexp.escape(app.root.to_s)}/}, "")
       end
 
       # This sees the model file alone, where the booted tier also walks what
@@ -600,35 +657,36 @@ module RailsAiContext
         RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
           Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            next if relative == "application_record" || relative.start_with?("concerns/")
-
-            class_name = relative.camelize
-            next if result.key?(class_name)
-            next if config.excluded_models.include?(class_name)
+            next if relative == "application_record"
 
             begin
               next if File.size(path) > RailsAiContext.configuration.max_file_size
 
-              result[class_name] = if mongoid_document_source?(path)
-                mongoid_model_details(path)
+              source = model_source(path)
+              next if source.nil? || mixin_path?(relative, source) || abstract_class?(source)
+
+              class_name = declared_model_name(source, relative.camelize)
+              next if result.key?(class_name)
+              next if config.excluded_models.include?(class_name)
+
+              result[class_name] = if source.include?("Mongoid::Document")
+                mongoid_model_details(path).merge(file: relative_to_root(path))
               else
                 static_model_details(path, class_name)
               end
             rescue => e
-              result[class_name] = { error: e.message }
+              result[relative.camelize] = { error: e.message }
             end
           end
         end
       end
 
-      # A hybrid app (ActiveRecord primary, Mongoid gem present) mixes
-      # AR-backed models in with actual Mongoid documents under the same
-      # model directories. Only files that really `include Mongoid::Document`
-      # get the Mongoid listener stack; everything else falls back to the
-      # regular AR-style static pass so it still gets a table_name.
-      def mongoid_document_source?(path)
-        content = RailsAiContext::SafeFile.read(path)
-        !!content&.include?("Mongoid::Document")
+      # The file's source, or nil when it is unreadable or over the size cap.
+      # One read feeds the name, the mixin test and - in a hybrid app, where
+      # AR-backed models sit under the same directories as real documents -
+      # the Mongoid::Document test that picks the listener stack.
+      def model_source(path)
+        RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_file_size)
       end
 
       def mongoid_model_details(path)

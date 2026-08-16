@@ -43,5 +43,71 @@ module RailsAiContext
     LISTS.each do |name, (section_key, key)|
       define_singleton_method(name) { |ctx| list(ctx, section_key, key) }
     end
+
+    # The file a controller was read from. Reconstructing it from the class
+    # name breaks wherever the app registers an inflection, so the
+    # introspector carries it - and one reader here means a rename of the key
+    # fails loudly rather than sending every consumer back to guessing.
+    def controller_file(ctx, name)
+      section(ctx, :controllers)&.dig(:controllers, name.to_s)&.dig(:file)
+    end
+
+    # The file a model was read from. `models` is a bare Hash of name =>
+    # details, not a section with its own wrapper.
+    #
+    # The derivation is the fallback for a model reflection found and no file
+    # was recorded for, and it lives here so there is one of it.
+    def model_file(ctx, name)
+      models = ctx.is_a?(Hash) ? ctx[:models] : nil
+      carried = models.dig(name.to_s, :file) if models.is_a?(Hash) && !models[:error]
+
+      carried || "app/models/#{name.to_s.underscore}.rb"
+    end
+
+    # The model a file declares, as [name, data].
+    #
+    # Camelizing the path is the wrong way back: `oauth_client_config.rb` is
+    # `OAuthClientConfig` wherever the app registers the acronym, and a checker
+    # walking the models directory has only the path to start from.
+    def model_for_file(ctx, file)
+      models = ctx.is_a?(Hash) ? ctx[:models] : nil
+      return nil unless models.is_a?(Hash) && !models[:error]
+
+      wanted = file.to_s
+      models.find { |_, data| data.is_a?(Hash) && data[:file].to_s == wanted }
+    end
+
+    # The controller Rails routes under a path, as [name, data].
+    #
+    # A view directory names the route key, not the constant: camelizing
+    # `app/views/activitypub/` back gives `Activitypub`, and the controllers
+    # hash is keyed by what the app declares.
+    # Indexed, not scanned: the only caller runs per view file, and deriving
+    # every controller's key again for each one is O(views x controllers).
+    def controller_for_route_key(ctx, key)
+      controllers = section(ctx, :controllers)&.dig(:controllers)
+      return nil unless controllers.is_a?(Hash)
+
+      # One slot, holding the hash it indexed: keeping the reference is what
+      # makes identity safe to compare on, and it drops as soon as the next
+      # context arrives.
+      unless @indexed_controllers.equal?(controllers)
+        @route_key_index = controllers.to_h { |name, _| [ controller_route_key(ctx, name), name ] }
+        @indexed_controllers = controllers
+      end
+
+      name = @route_key_index[key.to_s]
+      name ? [ name, controllers[name] ] : nil
+    end
+
+    # The key Rails routes a controller by: its path, minus the controllers
+    # root and the _controller suffix. Packs and in-repo engines put that root
+    # somewhere other than the start of the path.
+    def controller_route_key(ctx, name)
+      file = controller_file(ctx, name)
+      return name.to_s.underscore.delete_suffix("_controller") unless file
+
+      file.to_s.sub(%r{\A.*app/controllers/}, "").sub(/(?:_controller)?\.rb\z/, "")
+    end
   end
 end

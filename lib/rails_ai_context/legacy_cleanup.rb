@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+# The install path loads this file without the entry file - before Rails,
+# before Zeitwerk - so it requires its own stdlib. Set is not autoloaded on
+# Ruby 3.1, where `[...].to_set` raised NoMethodError.
+require "set"
+
 module RailsAiContext
   # One-time cleanup for files that were removed in a breaking release.
   # Handles v5.0.0's removal of design-system UI pattern rules and

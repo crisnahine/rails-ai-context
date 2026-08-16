@@ -189,7 +189,17 @@ module RailsAiContext
 
       private_class_method def self.find_test_file(name, type, detail = "full")
         # Normalize: accept "Admin::PostsController", "admin/posts", "Posts", "posts" (plural)
-        snake = name.to_s.tr("/", "::").underscore.sub(/_controller$/, "")
+        snake = case type
+        when :controller
+          RailsAiContext::Payload.controller_route_key(cached_context, name)
+        when :model
+          # The spec mirrors the model's own path, which a pack or an engine
+          # moves out from under app/models.
+          RailsAiContext::Payload.model_file(cached_context, name)
+            .sub(%r{\A.*app/models/}, "").sub(/\.rb\z/, "")
+        else
+          name.to_s.tr("/", "::").underscore.sub(/_controller$/, "")
+        end
         # For models, also try singular form (posts → post)
         snake_singular = snake.singularize
         candidates = case type

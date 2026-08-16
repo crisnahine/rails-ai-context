@@ -229,7 +229,7 @@ module RailsAiContext
       end
 
       private_class_method def self.extract_callback_source(model_name, method_name)
-        path = rails_app.root.join("app", "models", "#{model_name.underscore}.rb")
+        path = rails_app.root.join(RailsAiContext::Payload.model_file(cached_context, model_name))
         extract_method_source_from_file(path, method_name)
       end
 

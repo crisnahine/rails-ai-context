@@ -5,6 +5,192 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.24.0] - 2026-08-17
+
+### Fixed
+
+Defects found by a QA round against GitLab, OpenProject, Canvas LMS,
+Discourse and Mastodon. Every one of them exits 0.
+
+- **The commands that read the app degrade the way `tool` does.** `context`,
+  `inspect`, `facts`, `preset`, `watch` and `init` called a bare boot guard,
+  so on a repo you have just cloned - the case an agent most needs a
+  `CLAUDE.md` for, and the case least likely to boot - every tool answered
+  and the command that writes the files exited 1 having written nothing.
+  `init` was worse: it writes its config files first, so a boot failure left
+  the app half set up and called that a failure. They allow the static tier
+  now and each takes `--no-boot`; `doctor` still fails, because diagnosing
+  the boot is its job. Writing under `--no-boot` then exposed its own bug -
+  the context writer asked `Rails.application` for the output directory,
+  which raises `NameError` on the path where Rails is never loaded at all.
+- **`tool --list` reads the app's config when the app cannot boot.** Boot is
+  what normally loads `.rails-ai-context.yml`, so the listing fell back to
+  the gem's defaults: on Mastodon it advertised 45 tools while the MCP server
+  offered 43 and the CLI itself answered `Unknown tool 'query'` for one it
+  had just listed.
+- **`search_extensions` is documented as the fallback's list, which is what
+  it is.** Making ripgrep honour it did make the two backends agree, and it
+  cost the reach that makes the tool useful: on Mastodon `gem 'devise'` went
+  from 5 results to none, because a Gemfile carries no listed extension - and
+  the same for a Rakefile, a `.md`, a `.sql`. The docs, the attr comment and
+  the line the install generator writes now say plainly that the list is the
+  Ruby fallback's and that ripgrep searches every file.
+- **A table the replay cannot name is not reported.** Canvas has a migration
+  that calls `create_table table_name do |t|` with a local computed at run
+  time; the replay kept the entry under a nil key, and the first serializer
+  to sort the table names took the whole context run down. Reachable only
+  once `context` could enter the static tier at all.
+- **Coverage says nothing when there is nothing to measure against.** With a
+  `default_locale` the app configures but ships no file for, every locale
+  scored zero and all of them were named as untranslated.
+- **A mixin in a nested concerns directory is not a model.** The skip only saw
+  the top-level `concerns/` that Rails autoloads, so OpenProject's
+  `app/models/queries/operators/concerns` contributed four mixins to a model
+  count of 978 where the app has 974. A nested `concerns/` is an ordinary
+  namespace, though, so the directory name alone does not decide it: a file
+  there that declares a class is a model like any other.
+- **`docs/COMPATIBILITY.md` describes the static tier the gem actually has.**
+  It said 6 introspectors answer without a booted app and "the other 34 have
+  no static path", naming eight examples - all of which answer. The real
+  split is 23 files-only, 9 alternate-source and 8 runtime-only: 32 of 40.
+  A guard spec derives all three lists from `INTROSPECTOR_MAP`.
+
+- **A controller is named by the constant its source declares.** Zeitwerk
+  resolves a path through the app's own inflector, which the static tier
+  never loads, so camelizing the path invented `Activitypub::` for the 12
+  controllers Mastodon declares as `ActivityPub::` and `Oauth::` for the 4
+  it declares as `OAuth::` - names that appear nowhere in an app that
+  registers those acronyms, and a `NameError` for anyone who uses one. The
+  path stays the answer where the source does not carry the whole name
+  (`application_cable/channel.rb`) and where the declared name does not name
+  that file, since Prism recovers a syntax error into a partial tree.
+- **An interceptor is told from a mailer by its framework hook.**
+  `app/mailers` is also where ActionMailer interceptors live, and every `.rb`
+  under it counted: OpenProject's `Interceptors::DefaultHeaders` arrived as a
+  mailer with `delivering_email` - a hook the framework calls - listed as an
+  email an agent could send, 2 of its 11 entries. What an interceptor has and
+  a mailer does not is one of `delivering_email`, `previewing_email` or
+  `delivered_email`; requiring a class instead would have dropped GitLab's 20
+  `Emails::*` modules, which hold every notification it sends.
+- **Migration replay reads what a migration does, not what it undoes.** A
+  `def down` says how to reverse the change, so replaying it alongside `up`
+  cancelled the migration out. On a migrations-only app the ordinary
+  up-creates/down-drops pair erased two tables OpenProject really has (35
+  to 37), and the reverse pair would have invented one it dropped. The same
+  now holds for the block spellings, `reversible { |dir| dir.down { ... } }`
+  and `revert`, and for the `t.timestamps` inside them - those were found by
+  a separate walk over the whole file, so a down body's timestamps landed on
+  the last table created on the way up.
+- **i18n coverage groups the locales below its own rounding floor instead of
+  listing them.** A language-name lookup table under `config/locales`
+  contributes a top-level key per language, and Rails does load each as an
+  available locale. Scoring them produced a row each saying every key was
+  missing: on Discourse, 138 of 186 coverage rows described a translation
+  effort nobody had started. Those 138 are now summarised in one line, with a
+  shared key count stated once. The rows still exist - asking for one by name
+  answers with its numbers, so a translation genuinely started below the floor
+  is not written off as untranslated. The available list still matches a
+  booted Rails, and a locale's keys are read from its own file and any shared
+  file together, so one that lives outside the naming convention is scored.
+- **A recorded tool selection no longer switches off `.ai-context.json`.**
+  The install generator always records one, and every later `rails
+  ai:context` passed that list to the serializer. The machine artifact is
+  not an AI tool and no install menu offers it, so it silently stopped being
+  written on the one install path the docs describe - while the generator
+  went on adding it to `.gitignore`.
+- **`skip_tools` accepts the symbol spelling its neighbours use.** Every
+  other key in the generated initializer takes symbols, and `%i[]` here
+  skipped nothing at all: both readers compare against a tool name, which is
+  a String.
+
+- **A controller carries the file it was read from.** Reading the name from
+  the source fixed the name and broke every path derived from it:
+  `ActivityPub::CollectionsController`.underscore is `activity_pub/...` and
+  the file is under `activitypub/`, so `rails_get_context` answered "Could
+  not extract source code" for a file that exists and asked the routes for a
+  controller key Rails does not use. Both tiers emit `file:` - the booted one
+  asks Ruby where the class was defined - and the consumers read it through
+  `Payload`.
+- **The locale files are indexed once, not once per locale.** Asking every
+  file about every locale is O(locales x files): on Discourse, 187 over 108,
+  it took the i18n answer from 4.6 seconds to four and a half minutes. Each
+  entry also records the locales it serves, so asking for one by name finds
+  its files even when the filename spells the gem rather than the locale.
+
+- **Every consumer that turns a controller name back into a path reads the
+  file it was read from.** Carrying `file:` fixed six of them and left five
+  answering a confident negative, which is the answer an agent acts on
+  without checking. On Mastodon's 18 inflected controllers: `rails_test_info`
+  reported 16 specs that exist as missing, `rails_get_routes` reported 4
+  routes that exist as absent, `rails_get_view` 2 views, and
+  `rails_generate_test` wrote a spec whose body was `skip "no routes found"`
+  for a controller with a route. `rails_analyze_feature` listed them as
+  untested. `Payload.controller_route_key` is the one derivation now, and a
+  spec drives all five tools with an inflected name.
+- **The install path's files require their own stdlib.** `init` loads six
+  files before Rails and before the entry file, on purpose - so the entry
+  file's `require "set"` never runs for them. `legacy_cleanup`'s `[...].to_set`
+  raised `NoMethodError` on Ruby 3.1, where `Set` is not autoloaded, and 3.2+
+  hid it: only the CI matrix ever saw it.
+- **`rails_runtime_info` reports cache numbers, not the cache object.** The
+  MemoryStore branch passed `cache.inspect` straight through, so the answer
+  carried `#<ActiveSupport::Cache::MemoryStore entries=0, size=0, options={...}>`
+  - the shape this gem has shipped as a defect before. Entries and size are
+  now facts, and a store that answers `#stats` gets its hash rendered as pairs
+  rather than a Ruby literal.
+- **A model's table comes from its file, not from its name.** Naming a model by
+  the constant its source declares made `underscore` stop being the way back:
+  `OAuthClientConfig` underscores to `o_auth_client_config`, and the file is
+  `oauth_client_config.rb`. `rails_model_details` reported the table as
+  `o_auth_client_configs`, which no app has, so the columns section vanished
+  and the schema hint pointed at nothing - on Canvas that hit
+  `OAuthClientConfig`, `OAuthRequest`, `AuthenticationProvider::OAuth` and
+  `OAuth2`, on OpenProject `OAuthClient` and `OAuthClientToken`. The file's own
+  name already carries the inflection, because Zeitwerk resolved the constant
+  from it. `rails_generate_test`, `rails_get_callbacks`, `rails_test_info` and
+  the five `rails_validate` checks that key models by path read it too.
+- **An abstract base class is not a model in the static tier either.** A
+  booted Rails rejects `abstract_class?`, and a namespaced base class is one:
+  GitLab's `Ci::ApplicationRecord`, `PackageMetadata::ApplicationRecord` and
+  `SecApplicationRecord` were counted, so the same app answered 895 models
+  without a boot and 888 with one. OpenProject: 974 against 971.
+- **A model carries its file too, and is named by the constant its source
+  declares.** `rails_model_details` rebuilt `app/models/<underscored>.rb` from
+  the name in four places, so for a model in a pack or an engine the custom
+  validations, the source-defined methods, the method signatures and the class
+  structure all went quietly missing from an answer that otherwise looked
+  complete. The static tier also camelized the path into the name, so an app
+  registering an inflection got a constant it does not have - and one the
+  booted tier, which reads the real class, would never agree with.
+- **`rails_validate_semantics` checks the views under an inflected directory.**
+  A view directory names the route key, so camelizing `app/views/oauth/` back
+  gave a constant the app never declares and the undefined-ivar check stopped
+  running for that whole tree without saying so.
+- **A test-gap claim is not made from a scan that stopped early.**
+  `rails_analyze_feature` scans the first 500 files per glob; Discourse has
+  1,672 specs, so the scan never reached the ones covering the feature and
+  every controller in it was reported as having no test. The Tests section
+  disclosed the cap, the gaps section asserted through it.
+- **"Global before_actions" in the generated files means global.** The scan
+  matched `skip_before_action` too, and ignored `only:` / `except:` / `if:`.
+  Mastodon's `CLAUDE.md` listed five, of which three were false - including
+  `verify_authenticity_token`, which that controller skips.
+
+### Added
+
+- **`--no-boot` on `context`, `inspect`, `facts`, `preset`, `watch` and
+  `init`.** The static tier was reachable from `tool` and `serve` only.
+- **`--no-boot` reads a repo that has source but no `config/`.** An engine
+  keeps its dummy app under `spec/dummy`, so the guard against describing an
+  empty directory has to measure source, not boot files.
+
+### Changed
+
+- **The generated initializer has one indent from top to bottom.** The AI
+  Tools section was written at the configure body's indent and every section
+  after it flush, so the file an app commits changed indent two lines in and
+  stayed there.
+
 ## [5.23.0] - 2026-08-16
 
 ### Fixed

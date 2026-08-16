@@ -351,6 +351,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "#static_call" do
+    # The skip was `relative.start_with?("concerns/")`, which only sees the
+    # top-level directory Rails autoloads. A nested one - OpenProject has
+    # app/models/queries/operators/concerns - walked straight past it, and four
+    # mixins were reported as models of the app.
+    it "does not report a module in a nested concerns directory as a model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "queries", "operators", "concerns"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), <<~RUBY)
+          class Widget < ApplicationRecord
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "queries", "operators", "concerns", "contains.rb"), <<~RUBY)
+          module Queries
+            module Operators
+              module Concerns
+                module Contains
+                  def contains?(x) = true
+                end
+              end
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Widget")
+      end
+    end
+
     it "discovers and parses models from source without constantizing" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
@@ -599,6 +628,136 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(callbacks).to be_a(Hash)
         expect(callbacks["before_validation"]).to include("normalize_title")
         expect(callbacks["after_create_commit"]).to include("notify_subscribers")
+      end
+    end
+  end
+  # `concerns/` under app/models is the Zeitwerk root for mixins, and an app
+  # may also nest one anywhere - OpenProject has app/models/queries/operators/
+  # concerns. But a nested concerns/ is an ordinary namespace, so a class
+  # declared there is a model like any other and dropping it by directory name
+  # loses it.
+  describe "models under a concerns directory" do
+    def models_in(files)
+      Dir.mktmpdir do |dir|
+        files.each do |relative, body|
+          full = File.join(dir, "app", "models", relative)
+          FileUtils.mkdir_p(File.dirname(full))
+          File.write(full, body)
+        end
+        return described_class.new(RailsAiContext::StaticApp.new(dir)).static_call.keys
+      end
+    end
+
+    it "keeps a class declared in a nested concerns namespace" do
+      expect(models_in(
+        "billing/concerns/plan.rb" => "module Billing\n  module Concerns\n    class Plan < ApplicationRecord\n    end\n  end\nend\n"
+      )).to include("Billing::Concerns::Plan")
+    end
+
+    it "drops a mixin in a nested concerns namespace" do
+      expect(models_in(
+        "queries/operators/concerns/dateish.rb" => "module Queries\n  module Operators\n    module Concerns\n      module Dateish\n      end\n    end\n  end\nend\n"
+      )).to be_empty
+    end
+
+    # The autoload root does not namespace its files, so the path is not their
+    # name; keeping one would report a constant the app does not have.
+    it "drops everything under the top-level concerns root" do
+      expect(models_in(
+        "concerns/trashable.rb" => "module Trashable\nend\n",
+        "concerns/oddity.rb" => "class Oddity < ApplicationRecord\nend\n"
+      )).to be_empty
+    end
+  end
+  # Rails derives the table from the class name through its own inflector, so
+  # OAuthClientConfig is `oauth_client_configs`. The static tier has no
+  # inflector, and `"OAuthClientConfig".underscore` is `o_auth_client_config` -
+  # a table no app has. The file's own name is the reliable source: Zeitwerk
+  # resolved the constant from it, so it already carries the inflection.
+  describe "the table a model reads" do
+    it "reads it from the file, not from the inflected name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "oauth_client_config.rb"),
+                   "class OAuthClientConfig < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["OAuthClientConfig"][:table_name]).to eq("oauth_client_configs")
+      end
+    end
+
+    # A namespaced model's table is the demodulized name, the way Rails does it
+    # without an explicit table_name_prefix.
+    it "uses the basename for a namespaced model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
+        File.write(File.join(dir, "app", "models", "billing", "invoice.rb"),
+                   "module Billing\n  class Invoice < ApplicationRecord\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Billing::Invoice"][:table_name]).to eq("invoices")
+      end
+    end
+  end
+
+  # The booted tier rejects `abstract_class?`, so a namespaced base class is
+  # not a model there. GitLab has three - Ci::ApplicationRecord,
+  # PackageMetadata::ApplicationRecord, SecApplicationRecord - and the static
+  # tier counted all three, giving the same app two different model counts.
+  describe "an abstract base class" do
+    it "is not a model in the static tier either" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "ci"))
+        File.write(File.join(dir, "app", "models", "ci", "application_record.rb"), <<~RUBY)
+          module Ci
+            class ApplicationRecord < ::ApplicationRecord
+              self.abstract_class = true
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Widget")
+      end
+    end
+  end
+
+  # Rebuilding app/models/<underscored>.rb from the name is wrong for a model
+  # in a pack or an engine, and wrong wherever the app registers an inflection,
+  # so the file travels with the model the way it does with a controller.
+  describe "the file a model was read from" do
+    # The booted tier answers from the constant, so it must not fall back to
+    # rebuilding the path from the name either.
+    it "carries it in the booted tier" do
+      expect(described_class.new(Rails.application).call["Post"][:file]).to eq("app/models/post.rb")
+    end
+
+    it "carries it for a model outside app/models" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "packs", "billing", "app", "models", "invoice.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "class Invoice < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Invoice"][:file]).to eq("packs/billing/app/models/invoice.rb")
+      end
+    end
+
+    it "names a model by the constant its source declares" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app", "models", "activitypub", "activity.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "module ActivityPub\n  class Activity < ApplicationRecord\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to include("ActivityPub::Activity")
+        expect(result["ActivityPub::Activity"][:file]).to eq("app/models/activitypub/activity.rb")
       end
     end
   end
