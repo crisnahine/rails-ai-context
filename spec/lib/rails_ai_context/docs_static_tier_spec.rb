@@ -29,6 +29,16 @@ RSpec.describe "docs/COMPATIBILITY.md operating tiers" do
     end
   end
 
+  it "names exactly the alternate-source introspectors" do
+    alternate = keys_for(:alternate_source)
+    section = flat[/\*\*alternate-source\*\*.*?\*\*runtime-only\*\*/].to_s
+
+    expect(section).to include("(#{alternate.size})")
+    alternate.each do |key|
+      expect(section).to include("`#{key}`"), "the alternate-source table omits #{key}"
+    end
+  end
+
   it "names exactly the runtime-only introspectors as unavailable" do
     runtime = keys_for(:runtime_only)
     section = flat[/\*\*runtime-only\*\*.*?observability`\./].to_s

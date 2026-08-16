@@ -32,6 +32,14 @@ Discourse and Mastodon. Every one of them exits 0.
   the Ruby fallback, so the same configuration gave two different answers
   depending on whether ripgrep happened to be installed - and on the machines
   where it is, narrowing the list did nothing at all.
+- **A table the replay cannot name is not reported.** Canvas has a migration
+  that calls `create_table table_name do |t|` with a local computed at run
+  time; the replay kept the entry under a nil key, and the first serializer
+  to sort the table names took the whole context run down. Reachable only
+  once `context` could enter the static tier at all.
+- **Coverage says nothing when there is nothing to measure against.** With a
+  `default_locale` the app configures but ships no file for, every locale
+  scored zero and all of them were named as untranslated.
 - **A mixin in a nested concerns directory is not a model.** The skip only saw
   the top-level `concerns/` that Rails autoloads, so OpenProject's
   `app/models/queries/operators/concerns` contributed four mixins to a model

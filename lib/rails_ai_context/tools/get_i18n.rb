@@ -78,8 +78,8 @@ module RailsAiContext
           untranslated = i18n[:locales_without_translations] || []
           if untranslated.any?
             total = (i18n[:available_locales] || []).size
-            lines << "" << "_#{untranslated.size} of #{total} locales translate under 0.1% of " \
-                           "#{i18n[:default_locale]}'s keys and are left out of coverage: " \
+            lines << "" << "_#{untranslated.size} of #{total} locales round to 0.0% against " \
+                           "#{i18n[:default_locale]} and are left out of coverage: " \
                            "#{untranslated.sort.join(', ')}._"
           end
 
@@ -108,7 +108,7 @@ module RailsAiContext
             # Otherwise the coverage line every other locale carries is simply
             # missing here, and the reader cannot tell absent from zero.
             lines << ""
-            lines << "- **Coverage:** `#{locale}` translates under 0.1% of #{i18n[:default_locale]}'s keys."
+            lines << "- **Coverage:** `#{locale}` rounds to 0.0% against #{i18n[:default_locale]}."
           end
 
           fallbacks = i18n[:fallbacks] || {}
