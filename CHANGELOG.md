@@ -127,6 +127,11 @@ Discourse and Mastodon. Every one of them exits 0.
   for a controller with a route. `rails_analyze_feature` listed them as
   untested. `Payload.controller_route_key` is the one derivation now, and a
   spec drives all five tools with an inflected name.
+- **An abstract base class is not a model in the static tier either.** A
+  booted Rails rejects `abstract_class?`, and a namespaced base class is one:
+  GitLab's `Ci::ApplicationRecord`, `PackageMetadata::ApplicationRecord` and
+  `SecApplicationRecord` were counted, so the same app answered 895 models
+  without a boot and 888 with one. OpenProject: 974 against 971.
 - **A model carries its file too, and is named by the constant its source
   declares.** `rails_model_details` rebuilt `app/models/<underscored>.rb` from
   the name in four places, so for a model in a pack or an engine the custom
