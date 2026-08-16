@@ -39,6 +39,43 @@ RSpec.describe "E2E: boot resilience", type: :e2e do
       end
     end
 
+    # A repo you have just cloned is the case an agent most needs a CLAUDE.md
+    # for, and it is exactly the case that cannot boot. Every command that
+    # reads the app should degrade the way `tool` does; only doctor, whose job
+    # is diagnosing the boot, is entitled to fail.
+    it "context writes its files from static analysis instead of dying" do
+      with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING: REDIS_URL is not set"\n)) do
+        result = @cli.cli("context")
+        expect(result.exit_status).to eq(0), result.to_s
+        expect(result.stderr).to include("static tier active")
+        expect(File).to exist(File.join(@builder.app_path, "CLAUDE.md"))
+      end
+    end
+
+    %w[facts inspect].each do |command|
+      it "#{command} falls back to static analysis instead of dying" do
+        with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING"\n)) do
+          result = @cli.cli(command)
+          expect(result.exit_status).to eq(0), result.to_s
+          expect(result.stdout).not_to be_empty
+        end
+      end
+    end
+
+    it "preset falls back to static analysis instead of dying" do
+      with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING"\n)) do
+        result = @cli.cli("preset", "architecture")
+        expect(result.exit_status).to eq(0), result.to_s
+        expect(result.stdout).not_to be_empty
+      end
+    end
+
+    it "context honours --no-boot on an app that would boot fine" do
+      result = @cli.cli("context", "--no-boot")
+      expect(result.exit_status).to eq(0), result.to_s
+      expect(result.stderr).to include("static")
+    end
+
     it "doctor fails with the same friendly diagnostic" do
       with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING"\n)) do
         result = @cli.cli("doctor")

@@ -52,7 +52,11 @@ module RailsAiContext
         when Array            then format.empty? ? [] : format | [ :json ]
         else Array(format)
         end
-        output_dir = RailsAiContext.configuration.output_dir_for(Rails.application)
+        # `default_app` is the tier-aware handle: the booted application, or the
+        # filesystem-rooted stand-in. Reaching for `Rails.application` directly
+        # raises NameError under `--no-boot`, where Rails is never loaded at all
+        # - a different path from a boot that started and failed.
+        output_dir = RailsAiContext.configuration.output_dir_for(RailsAiContext.default_app)
         generate_root = RailsAiContext.configuration.generate_root_files
         written = []
         skipped = []
