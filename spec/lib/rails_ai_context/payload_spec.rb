@@ -108,6 +108,16 @@ RSpec.describe RailsAiContext::Payload do
     it "returns nil for a directory no controller serves" do
       expect(described_class.controller_for_route_key(context, "nope")).to be_nil
     end
+
+    # The index is one slot. A second context must not be answered from the
+    # first one's controllers.
+    it "reindexes when the context changes" do
+      described_class.controller_for_route_key(context, "admin/badges")
+      other = { controllers: { controllers: { "OrdersController" => { file: "app/controllers/orders_controller.rb" } } } }
+
+      expect(described_class.controller_for_route_key(other, "orders").first).to eq("OrdersController")
+      expect(described_class.controller_for_route_key(other, "admin/badges")).to be_nil
+    end
   end
   # A model's file is carried for the same reason a controller's is: rebuilding
   # app/models/<underscored>.rb misses a pack, an engine, and any inflection.
@@ -118,8 +128,8 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.model_file(context, "Invoice")).to eq("packs/billing/app/models/invoice.rb")
     end
 
-    it "is nil for a model that carried none" do
-      expect(described_class.model_file({ models: { "Order" => {} } }, "Order")).to be_nil
+    it "falls back to the conventional path for a model that carried none" do
+      expect(described_class.model_file({ models: { "Order" => {} } }, "Order")).to eq("app/models/order.rb")
     end
   end
 end

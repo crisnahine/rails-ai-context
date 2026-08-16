@@ -342,9 +342,9 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
-    # Six tools turn a controller name back into a path, and the name alone
-    # cannot carry it: the app's inflector decides the directory. `:file` is
-    # the answer they read through Payload, so it has to be here.
+    # Every tool that needs a path for a controller reads `:file` through
+    # Payload, because the name alone cannot carry it - the app's inflector
+    # decides the directory.
     it "carries the file each controller was read from" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "activitypub"))

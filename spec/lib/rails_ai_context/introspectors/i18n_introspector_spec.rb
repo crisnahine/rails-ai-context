@@ -181,8 +181,8 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     # A language-name lookup table is an ordinary thing to keep under
     # config/locales, and Rails really does load every one of its top-level
     # keys as an available locale. What it does not have is translations: on
-    # Discourse, 138 of 186 coverage rows read "0.0% - 0 unique keys - 11918
-    # missing" for languages nobody ever translated.
+    # Discourse, 138 of its 187 locales define 2 keys each and score 0.0%
+    # against an English locale with 11,918.
     describe "a locale-name table under config/locales" do
       let(:result) do
         static_result(

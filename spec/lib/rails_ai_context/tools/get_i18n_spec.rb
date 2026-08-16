@@ -64,15 +64,13 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       end
 
       # A language-name table gives every one of them the same key count, and
-      # repeating it per name ran to 138 copies of "(1 keys)".
+      # repeating it per name ran to 138 copies of "(2 keys)" on Discourse.
       it "states a shared key count once instead of per name" do
         text = described_class.call.content.first[:text]
         expect(text).to include("Each defines 1 key of its own: aa, zu")
         expect(text).not_to include("aa (1 key)")
       end
 
-      # Asking for one of them by name must not answer with a silent gap where
-      # the coverage line sits for every other locale.
       # Grouping them keeps 138 rows of zeroes off the overview.
       it "keeps their rows out of the coverage list" do
         text = described_class.call.content.first[:text]

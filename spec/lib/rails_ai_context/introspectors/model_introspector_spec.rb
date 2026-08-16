@@ -669,10 +669,33 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       )).to be_empty
     end
   end
-  # Six tools turn a model name back into app/models/<underscored>.rb. That is
-  # wrong for a model in a pack or engine, and wrong wherever the app registers
-  # an inflection, so the file travels with the model the way it does with a
-  # controller.
+  # The booted tier rejects `abstract_class?`, so a namespaced base class is
+  # not a model there. GitLab has three - Ci::ApplicationRecord,
+  # PackageMetadata::ApplicationRecord, SecApplicationRecord - and the static
+  # tier counted all three, giving the same app two different model counts.
+  describe "an abstract base class" do
+    it "is not a model in the static tier either" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "ci"))
+        File.write(File.join(dir, "app", "models", "ci", "application_record.rb"), <<~RUBY)
+          module Ci
+            class ApplicationRecord < ::ApplicationRecord
+              self.abstract_class = true
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Widget")
+      end
+    end
+  end
+
+  # Rebuilding app/models/<underscored>.rb from the name is wrong for a model
+  # in a pack or an engine, and wrong wherever the app registers an inflection,
+  # so the file travels with the model the way it does with a controller.
   describe "the file a model was read from" do
     # The booted tier answers from the constant, so it must not fall back to
     # rebuilding the path from the name either.

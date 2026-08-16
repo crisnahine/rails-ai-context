@@ -402,11 +402,9 @@ module RailsAiContext
 
       # The model's own file, not app/models/<underscored>.rb rebuilt from its
       # name - that misses a pack, an engine, and any inflection the app
-      # registers. The introspector carries it; the derivation is the fallback
-      # for a model reflection found and no file was recorded for.
+      # registers.
       private_class_method def self.relative_model_path(model_name)
-        RailsAiContext::Payload.model_file(cached_context, model_name) ||
-          "app/models/#{model_name.underscore}.rb"
+        RailsAiContext::Payload.model_file(cached_context, model_name)
       end
 
       private_class_method def self.model_source_path(model_name)
