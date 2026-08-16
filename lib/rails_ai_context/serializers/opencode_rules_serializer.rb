@@ -20,14 +20,19 @@ module RailsAiContext
 
       # @param output_dir [String] Rails root path
       # @return [Hash] { written: [paths], skipped: [paths] }
+      RENDERERS = {
+        "app/models/AGENTS.md" => :render_models_reference,
+        "app/controllers/AGENTS.md" => :render_controllers_reference
+      }.freeze
+
       def call(output_dir)
         files = {}
 
-        [ [ "app", "models", "AGENTS.md", :render_models_reference ],
-          [ "app", "controllers", "AGENTS.md", :render_controllers_reference ] ].each do |*parts, method|
-          filepath = File.join(output_dir, *parts)
+        # The split targets after the root file, per the table's convention.
+        Install::AiTool.find(:opencode).context_paths.drop(1).each do |relative|
+          filepath = File.join(output_dir, relative)
           next unless Dir.exist?(File.dirname(filepath))
-          files[filepath] = send(method)
+          files[filepath] = send(RENDERERS.fetch(relative))
         end
 
         write_rule_files(files)

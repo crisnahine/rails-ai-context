@@ -38,6 +38,15 @@ RSpec.describe "AI tool identity ownership" do
     expect(paths).to eq(RailsAiContext::Install::AiTool.all.to_h { |t| [ t.key, t.mcp_config[:path] ] })
   end
 
+  it "keeps every rules_dir inside the tool's own context paths" do
+    RailsAiContext::Install::AiTool.all.each do |tool|
+      next unless tool.rules_dir
+
+      expect(tool.context_paths).to include(tool.rules_dir),
+        "#{tool.key}: rules_dir #{tool.rules_dir} is not one of its context_paths"
+    end
+  end
+
   it "derives doctor's tool list from the table" do
     expect(RailsAiContext::Doctor::ALL_AI_TOOLS)
       .to eq(RailsAiContext::Install::AiTool.all.map(&:key))

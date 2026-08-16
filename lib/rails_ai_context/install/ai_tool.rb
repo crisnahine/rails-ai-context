@@ -10,7 +10,13 @@ module RailsAiContext
     #
     # Vocabulary per CONTEXT.md: "AI tool" for the assistant, "context files"
     # for what the gem generates for it.
-    AiTool = Struct.new(:number, :key, :name, :files, :context_paths, :mcp_config, :legacy_paths,
+    #
+    # context_paths lists the root file first; what follows are the
+    # split-rule targets. rules_dir is the gem-owned directory of split rule
+    # files, nil for tools whose split targets are files (the AGENTS.md
+    # pair). The writers derive from these, the same as doctor and cleanup -
+    # a moved path must change every surface at once.
+    AiTool = Struct.new(:number, :key, :name, :files, :context_paths, :rules_dir, :mcp_config, :legacy_paths,
                         keyword_init: true)
 
     class AiTool
@@ -19,6 +25,7 @@ module RailsAiContext
           number: "1", key: :claude, name: "Claude Code",
           files: "CLAUDE.md + .claude/rules/",
           context_paths: %w[CLAUDE.md .claude/rules],
+          rules_dir: ".claude/rules",
           mcp_config: { path: ".mcp.json", root_key: "mcpServers", format: :mcp_json },
           legacy_paths: [ ".claude/rules/rails-ui-patterns.md", ".claude/rules/rails-accessibility.md" ]
         ),
@@ -26,6 +33,7 @@ module RailsAiContext
           number: "2", key: :cursor, name: "Cursor",
           files: ".cursor/rules/ + .cursorrules (legacy fallback)",
           context_paths: %w[.cursor/rules .cursorrules],
+          rules_dir: ".cursor/rules",
           mcp_config: { path: ".cursor/mcp.json", root_key: "mcpServers", format: :mcp_json },
           legacy_paths: [ ".cursor/rules/rails-ui-patterns.mdc" ]
         ),
@@ -33,6 +41,7 @@ module RailsAiContext
           number: "3", key: :copilot, name: "GitHub Copilot",
           files: ".github/copilot-instructions.md + .github/instructions/",
           context_paths: %w[.github/copilot-instructions.md .github/instructions],
+          rules_dir: ".github/instructions",
           mcp_config: { path: ".vscode/mcp.json", root_key: "servers", format: :vscode_json },
           legacy_paths: [ ".github/instructions/rails-ui-patterns.instructions.md" ]
         ),

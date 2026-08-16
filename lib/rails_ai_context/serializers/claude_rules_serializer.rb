@@ -17,7 +17,7 @@ module RailsAiContext
       # @param output_dir [String] Rails root path
       # @return [Hash] { written: [paths], skipped: [paths] }
       def call(output_dir)
-        rules_dir = File.join(output_dir, ".claude", "rules")
+        rules_dir = File.join(output_dir, Install::AiTool.find(:claude).rules_dir)
 
         files = {
           File.join(rules_dir, "rails-context.md") => render_context_overview,

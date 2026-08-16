@@ -15,7 +15,7 @@ module RailsAiContext
       end
 
       def call(output_dir)
-        dir = File.join(output_dir, ".github", "instructions")
+        dir = File.join(output_dir, Install::AiTool.find(:copilot).rules_dir)
 
         files = {
           File.join(dir, "rails-context.instructions.md") => render_context_instructions,

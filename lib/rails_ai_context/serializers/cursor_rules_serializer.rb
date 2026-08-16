@@ -28,7 +28,7 @@ module RailsAiContext
       # @param output_dir [String] Rails root path
       # @return [Hash] { written: [paths], skipped: [paths] }
       def call(output_dir)
-        rules_dir = File.join(output_dir, ".cursor", "rules")
+        rules_dir = File.join(output_dir, Install::AiTool.find(:cursor).rules_dir)
 
         # Split rule files (.cursor/rules/*.mdc) are fully gem-owned.
         # written as-is with no markers (the gem manages every file in
