@@ -9,8 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-Six defects found by a QA round against GitLab, OpenProject, Canvas LMS,
+Defects found by a QA round against GitLab, OpenProject, Canvas LMS,
 Discourse and Mastodon. Every one of them exits 0.
+
+- **The commands that read the app degrade the way `tool` does.** `context`,
+  `inspect`, `facts`, `preset`, `watch` and `init` called a bare boot guard,
+  so on a repo you have just cloned - the case an agent most needs a
+  `CLAUDE.md` for, and the case least likely to boot - every tool answered
+  and the command that writes the files exited 1 having written nothing.
+  `init` was worse: it writes its config files first, so a boot failure left
+  the app half set up and called that a failure. They allow the static tier
+  now and each takes `--no-boot`; `doctor` still fails, because diagnosing
+  the boot is its job. Writing under `--no-boot` then exposed its own bug -
+  the context writer asked `Rails.application` for the output directory,
+  which raises `NameError` on the path where Rails is never loaded at all.
+- **`tool --list` reads the app's config when the app cannot boot.** Boot is
+  what normally loads `.rails-ai-context.yml`, so the listing fell back to
+  the gem's defaults: on Mastodon it advertised 45 tools while the MCP server
+  offered 43 and the CLI itself answered `Unknown tool 'query'` for one it
+  had just listed.
+- **`search_extensions` reaches the ripgrep path too.** It was read only by
+  the Ruby fallback, so the same configuration gave two different answers
+  depending on whether ripgrep happened to be installed - and on the machines
+  where it is, narrowing the list did nothing at all.
+- **A mixin in a nested concerns directory is not a model.** The skip only saw
+  the top-level `concerns/` that Rails autoloads, so OpenProject's
+  `app/models/queries/operators/concerns` contributed four mixins to a model
+  count of 978 where the app has 974.
+- **`docs/COMPATIBILITY.md` describes the static tier the gem actually has.**
+  It said 6 introspectors answer without a booted app and "the other 34 have
+  no static path", naming eight examples - all of which answer. The real
+  split is 23 files-only, 9 alternate-source and 8 runtime-only: 32 of 40.
+  A guard spec derives all three lists from `INTROSPECTOR_MAP`.
 
 - **A controller is named by the constant its source declares.** Zeitwerk
   resolves a path through the app's own inflector, which the static tier
