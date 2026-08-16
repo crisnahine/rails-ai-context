@@ -37,6 +37,7 @@ rails-ai-context serve --transport http --port 6029   # HTTP transport
 |:-------|:--------|:------------|
 | `--transport` | `stdio` | `stdio` or `http` |
 | `--port` | `6029` | HTTP listen port |
+| `--no-boot` | off | Skip booting the app; answer from source alone |
 
 ### `tool`
 
@@ -58,6 +59,28 @@ rails-ai-context tool model_details --model User
 |:-------|:------------|
 | `--list` | List all available tools |
 | `--json` | Output as JSON |
+| `--no-boot` | Skip booting the app; answer from source alone |
+
+### The static tier and `--no-boot`
+
+Every command that reads the app takes `--no-boot`: `tool`, `serve`, `context`,
+`inspect`, `facts`, `preset`, `watch` and `init`. It skips the boot and answers
+from source alone, which is what you want on a repo you have just cloned, on an
+app whose boot is broken, and in CI where booting costs more than the answer.
+
+The same tier is entered automatically when a boot fails, so you get an answer
+either way. Answers that need a running app are marked `[UNAVAILABLE: ...]`
+rather than guessed, and everything else is tagged `[STATIC]` instead of
+`[VERIFIED]`. `docs/COMPATIBILITY.md` lists which of the 40 introspectors answer
+in which tier.
+
+`doctor` is the exception: diagnosing the boot is its job, so it refuses
+`--no-boot` and still exits 1 when the app cannot start.
+
+```bash
+rails-ai-context tool models --no-boot        # no boot, no database, no Gemfile
+rails-ai-context context --no-boot            # writes CLAUDE.md from source
+```
 
 ### Tool name resolution
 
