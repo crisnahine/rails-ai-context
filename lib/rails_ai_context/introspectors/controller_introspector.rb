@@ -134,10 +134,8 @@ module RailsAiContext
         source = RailsAiContext::SafeFile.read(path)
         return { error: "unreadable" } unless source
 
-        # The name comes from the source and no longer round-trips back to the
-        # path - `ActivityPub::CollectionsController`.underscore is
-        # `activity_pub/...` and the file is under `activitypub/`. Carry the
-        # file that was read so no consumer has to guess it.
+        # Carry the file that was read: the declared name does not round-trip
+        # back to a path. See CONTEXT.md, "Declared constant".
         relative_file = path.to_s.sub("#{app.root}/", "")
         parent = extract_parent_class_ast(source)
         rate_limit = rate_limit_entry(source)
@@ -805,9 +803,8 @@ module RailsAiContext
       end
 
       # Ruby knows where the class was defined; the underscored name only
-      # agrees when the app registers no inflection for any of its segments.
-      # `ActivityPub::CollectionsController`.underscore is `activity_pub/...`
-      # and Mastodon's file is under `activitypub/`.
+      # agrees when the app registers no inflection. See CONTEXT.md,
+      # "Declared constant".
       def source_path(ctrl)
         # Contained under the app root: a constant defined by a gem - or by a
         # spec - is not this app's controller file.

@@ -43,21 +43,6 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-        # Rails keys a route by the controller's PATH, not by its class name,
-        # and the two diverge wherever the app registers an inflection:
-        # `ActivityPub::CollectionsController` lives at `activitypub/`. The
-        # introspector carries the file it read, so use that when it is there.
-        def self.route_key_for(controller_name)
-          file = begin
-            cached_context.dig(:controllers, :controllers, controller_name.to_s, :file)
-          rescue StandardError
-            nil
-          end
-          return controller_name.to_s.underscore.delete_suffix("_controller") unless file
-
-          file.to_s.sub(%r{\Aapp/controllers/}, "").sub(/_controller\.rb\z/, "")
-        end
-
       def self.call(controller: nil, action: nil, model: nil, feature: nil, include: nil, server_context: nil)
         base_text = if controller && action
           controller_action_context(controller, action)
@@ -242,7 +227,7 @@ module RailsAiContext
         ctrl_result = GetControllers.call(controller: controller_name)
         lines << ctrl_result.content.first[:text]
 
-        snake = route_key_for(controller_name)
+        snake = RailsAiContext::Payload.controller_route_key(cached_context, controller_name)
 
         # Routes for this controller
         route_result = GetRoutes.call(controller: snake)

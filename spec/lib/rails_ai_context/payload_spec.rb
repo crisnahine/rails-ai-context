@@ -48,4 +48,27 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.list({}, :turbo, :turbo_frames)).to eq([])
     end
   end
+  describe ".controller_route_key" do
+    def ctx(file)
+      { controllers: { controllers: { "InvoicesController" => { file: file } } } }
+    end
+
+    it "reads the route key from the file the controller was read from" do
+      expect(described_class.controller_route_key(ctx("app/controllers/admin/invoices_controller.rb"), "InvoicesController"))
+        .to eq("admin/invoices")
+    end
+
+    # A pack or an in-repo engine puts the controllers root somewhere other
+    # than the start of the path, and Rails still routes by what follows it.
+    it "strips a controllers root that is not at the start of the path" do
+      expect(described_class.controller_route_key(ctx("packs/billing/app/controllers/invoices_controller.rb"), "InvoicesController"))
+        .to eq("invoices")
+    end
+
+    # The name is all there is for a controller reflection found and the
+    # filesystem did not - and it is right whenever no inflection is involved.
+    it "falls back to the underscored name when no file was carried" do
+      expect(described_class.controller_route_key({}, "Admin::InvoicesController")).to eq("admin/invoices")
+    end
+  end
 end

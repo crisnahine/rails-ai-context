@@ -43,5 +43,23 @@ module RailsAiContext
     LISTS.each do |name, (section_key, key)|
       define_singleton_method(name) { |ctx| list(ctx, section_key, key) }
     end
+
+    # The file a controller was read from. Reconstructing it from the class
+    # name breaks wherever the app registers an inflection, so the
+    # introspector carries it - and one reader here means a rename of the key
+    # fails loudly rather than sending every consumer back to guessing.
+    def controller_file(ctx, name)
+      section(ctx, :controllers)&.dig(:controllers, name.to_s)&.dig(:file)
+    end
+
+    # The key Rails routes a controller by: its path, minus the controllers
+    # root and the _controller suffix. Packs and in-repo engines put that root
+    # somewhere other than the start of the path.
+    def controller_route_key(ctx, name)
+      file = controller_file(ctx, name)
+      return name.to_s.underscore.delete_suffix("_controller") unless file
+
+      file.to_s.sub(%r{\A.*app/controllers/}, "").sub(/_controller\.rb\z/, "")
+    end
   end
 end

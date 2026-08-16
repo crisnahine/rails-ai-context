@@ -173,14 +173,6 @@ module RailsAiContext
         end
       end
 
-      # The file the introspector read this controller from. Reconstructing it
-      # from the name breaks wherever the app registers an inflection:
-      # `ActivityPub::CollectionsController`.underscore is `activity_pub/...`
-      # and the file is under `activitypub/`.
-      private_class_method def self.controller_file(info)
-        (info || {})[:file]
-      end
-
       private_class_method def self.format_action_source(controller_name, info, action_name)
         actions = info[:actions] || []
         # Case-insensitive action lookup for consistency with other tools
@@ -201,7 +193,8 @@ module RailsAiContext
         end
 
         # Detect skip_before_action declarations in the child controller source
-        source_path = controller_file(info) ? rails_app.root.join(controller_file(info)) :
+        carried = RailsAiContext::Payload.controller_file(cached_context, controller_name)
+        source_path = carried ? rails_app.root.join(carried) :
           rails_app.root.join("app", "controllers", "#{controller_name.underscore}.rb")
         skipped_filters = detect_skipped_filters(source_path, action_name)
 
@@ -214,7 +207,7 @@ module RailsAiContext
         source_with_lines = extract_method_with_lines(source_path, action_name)
 
         lines = [ "# #{controller_name}##{action_name}", "" ]
-        lines << "**File:** `#{controller_file(info) || "app/controllers/#{controller_name.underscore}.rb"}`"
+        lines << "**File:** `#{carried || "app/controllers/#{controller_name.underscore}.rb"}`"
 
         if parent_filters.any? || filters.any? || skipped_filters.any?
           lines << "" << "## Applicable Filters"

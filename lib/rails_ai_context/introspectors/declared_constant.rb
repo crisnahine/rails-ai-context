@@ -25,30 +25,12 @@ module RailsAiContext
       # @param path_name [String] the name the file's path camelizes to
       # @return [String] the constant to call this file's class
       def resolve(source, path_name)
-        declarations(source)
-          .map { |d| d[:name] }
-          .find { |name| name.casecmp?(path_name) } || path_name
+        declared_names(source).find { |name| name.casecmp?(path_name) } || path_name
       end
 
-      # Whether the file declares, at its own level, a class that inherits
-      # something. A mailer and a channel always do; app/mailers is also where
-      # ActionMailer interceptors live, written as a module or as a bare class,
-      # and reporting one of those offers `delivering_email` - a hook the
-      # framework calls - as an email somebody can send.
-      #
-      # "At its own level" excludes a class nested deeper than the file's own
-      # constant, which belongs to whatever declares it rather than to the file.
-      def own_subclass?(source, path_name)
-        depth = path_name.split("::").size
-
-        declarations(source).any? do |d|
-          d[:superclass] && d[:name].split("::").size <= depth
-        end
-      end
-
-      # Every class the source declares: fully qualified name, module nesting
-      # included, and the superclass as written. Empty when nothing parses.
-      def declarations(source)
+      # Fully qualified name of every class the source declares, module
+      # nesting included. Empty when nothing parses.
+      def declared_names(source)
         return [] unless source
 
         root = AstCache.parse_string(source)&.value
@@ -63,7 +45,7 @@ module RailsAiContext
       def collect(node, scope, found)
         case node
         when Prism::ClassNode
-          found << { name: qualify(scope, node), superclass: node.superclass&.slice }
+          found << qualify(scope, node)
           descend(node, scope + [ segment(node) ], found)
         when Prism::ModuleNode
           descend(node, scope + [ segment(node) ], found)
@@ -86,7 +68,7 @@ module RailsAiContext
         node.constant_path.slice.delete_prefix("::")
       end
 
-      private_class_method :collect, :descend, :qualify, :segment
+      private_class_method :declared_names, :collect, :descend, :qualify, :segment
     end
   end
 end

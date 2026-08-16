@@ -159,10 +159,9 @@ module RailsAiContext
         untranslated = []
         default_keys = key_paths_for_locale(default)
 
-        # Coverage is the share of the default locale's keys another locale
-        # also defines. With no keys to measure against - a default_locale the
-        # app configures but ships no file for - every locale scores zero, and
-        # bucketing them all as untranslated says something false about each.
+        # With nothing to measure against - a default_locale the app
+        # configures but ships no file for - every locale scores zero, and
+        # bucketing them all says something false about each.
         return [ {}, [] ] if default_keys.empty?
         locales.reject { |l| l == default }.each do |locale|
           locale_keys = key_paths_for_locale(locale)
@@ -275,14 +274,14 @@ module RailsAiContext
         []
       end
 
-            def nested_key_paths(hash, prefix = nil, paths = [])
-              return paths unless hash.is_a?(Hash)
-              hash.each do |key, value|
-                path = prefix ? "#{prefix}.#{key}" : key.to_s
-                value.is_a?(Hash) ? nested_key_paths(value, path, paths) : paths << path
-              end
-              paths
-            end
+      def nested_key_paths(hash, prefix = nil, paths = [])
+        return paths unless hash.is_a?(Hash)
+        hash.each do |key, value|
+          path = prefix ? "#{prefix}.#{key}" : key.to_s
+          value.is_a?(Hash) ? nested_key_paths(value, path, paths) : paths << path
+        end
+        paths
+      end
     end
   end
 end
