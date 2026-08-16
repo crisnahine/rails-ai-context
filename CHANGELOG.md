@@ -127,6 +127,12 @@ Discourse and Mastodon. Every one of them exits 0.
   for a controller with a route. `rails_analyze_feature` listed them as
   untested. `Payload.controller_route_key` is the one derivation now, and a
   spec drives all five tools with an inflected name.
+- **`rails_runtime_info` reports cache numbers, not the cache object.** The
+  MemoryStore branch passed `cache.inspect` straight through, so the answer
+  carried `#<ActiveSupport::Cache::MemoryStore entries=0, size=0, options={...}>`
+  - the shape this gem has shipped as a defect before. Entries and size are
+  now facts, and a store that answers `#stats` gets its hash rendered as pairs
+  rather than a Ruby literal.
 - **An abstract base class is not a model in the static tier either.** A
   booted Rails rejects `abstract_class?`, and a namespaced base class is one:
   GitLab's `Ci::ApplicationRecord`, `PackageMetadata::ApplicationRecord` and
