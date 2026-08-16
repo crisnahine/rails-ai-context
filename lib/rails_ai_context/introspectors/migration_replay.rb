@@ -32,12 +32,22 @@ module RailsAiContext
         })
 
         current_table = nil
-        all_entries = (ast_data[:migration] + ast_data[:schema]).sort_by { |r| r[:location] }
+        root = AstCache.parse_string(content).value
+
+        # A `def down` says what to undo, not what the schema holds. Replaying
+        # it alongside `up` cancels the migration out: the ordinary
+        # up-creates/down-drops pair erased a table the app really has, and the
+        # reverse pair invented one it dropped.
+        down_ranges = []
+        find_down_bodies(root, down_ranges)
+        entries = (ast_data[:migration] + ast_data[:schema])
+          .reject { |r| down_ranges.any? { |range| range.cover?(r[:location]) } }
+        all_entries = entries.sort_by { |r| r[:location] }
 
         # t.timestamps has no column-name argument, so SchemaDslListener skips
         # it; a direct walk finds the call sites.
         timestamps_lines = Set.new
-        find_timestamps_calls(AstCache.parse_string(content).value, timestamps_lines)
+        find_timestamps_calls(root, timestamps_lines)
 
         all_entries.each do |entry|
           if entry.key?(:action)
@@ -67,6 +77,14 @@ module RailsAiContext
             tables[table_for_line][:columns].concat(SchemaConventions.timestamps_columns)
           end
         end
+      end
+
+      # Line ranges of every `def down` / `def self.down` in the file.
+      def find_down_bodies(node, ranges)
+        if node.is_a?(Prism::DefNode) && node.name == :down
+          ranges << (node.location.start_line..node.location.end_line)
+        end
+        node.child_nodes.compact.each { |child| find_down_bodies(child, ranges) }
       end
 
       def find_timestamps_calls(node, lines)

@@ -99,4 +99,64 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
 
     expect(tables["events"][:columns].map { |c| c[:name] }).to include("created_at", "updated_at")
   end
+
+  # `def up` creates, `def down` undoes it - the ordinary shape of an
+  # irreversible migration. Replaying both bodies cancels the table out, and
+  # the table the app really has disappears from the schema answer.
+  it "ignores a drop_table that only runs on the way down" do
+    tables = replay([ <<~RUBY ])
+      class CreateProjectTypes < ActiveRecord::Migration[7.1]
+        def up
+          create_table :project_types do |t|
+            t.string :name
+          end
+        end
+
+        def down
+          drop_table :project_types
+        end
+      end
+    RUBY
+
+    expect(tables.keys).to include("project_types")
+  end
+
+  it "ignores a create_table that only runs on the way down" do
+    tables = replay([ <<~RUBY ])
+      class DropLegacyThings < ActiveRecord::Migration[7.1]
+        def up
+          drop_table :legacy_things
+        end
+
+        def down
+          create_table :legacy_things do |t|
+            t.string :name
+          end
+        end
+      end
+    RUBY
+
+    expect(tables.keys).not_to include("legacy_things")
+  end
+
+  # The fix must not reach so far that it stops honouring a real drop.
+  it "still drops a table a later migration removes on the way up" do
+    tables = replay([ <<~RUBY, <<~RUBY2 ])
+      class CreateWidgets < ActiveRecord::Migration[7.1]
+        def change
+          create_table :widgets do |t|
+            t.string :name
+          end
+        end
+      end
+    RUBY
+      class DropWidgets < ActiveRecord::Migration[7.1]
+        def up
+          drop_table :widgets
+        end
+      end
+    RUBY2
+
+    expect(tables.keys).not_to include("widgets")
+  end
 end
