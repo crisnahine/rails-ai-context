@@ -119,6 +119,25 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.controller_for_route_key(other, "admin/badges")).to be_nil
     end
   end
+  # The reverse trip: a checker walking app/models/oauth_client_config.rb has
+  # to find the model it declares, and camelizing the path gives
+  # OauthClientConfig - a constant the app does not have.
+  describe ".model_for_file" do
+    let(:context) do
+      { models: { "OAuthClientConfig" => { file: "app/models/oauth_client_config.rb", table_name: "oauth_client_configs" } } }
+    end
+
+    it "finds the model a file declares" do
+      name, data = described_class.model_for_file(context, "app/models/oauth_client_config.rb")
+      expect(name).to eq("OAuthClientConfig")
+      expect(data[:table_name]).to eq("oauth_client_configs")
+    end
+
+    it "returns nil for a file no model was read from" do
+      expect(described_class.model_for_file(context, "app/models/nope.rb")).to be_nil
+    end
+  end
+
   # A model's file is carried for the same reason a controller's is: rebuilding
   # app/models/<underscored>.rb misses a pack, an engine, and any inflection.
   describe ".model_file" do

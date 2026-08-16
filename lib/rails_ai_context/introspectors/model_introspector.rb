@@ -613,7 +613,11 @@ module RailsAiContext
         data = SourceIntrospector.call(path)
         {
           confidence: Confidence::STATIC,
-          table_name: class_name.demodulize.underscore.pluralize,
+          # Rails derives the table through its own inflector, and the file's
+          # name already carries that inflection - Zeitwerk resolved the
+          # constant from it. Underscoring the constant instead turns
+          # OAuthClientConfig into o_auth_client_configs, a table no app has.
+          table_name: File.basename(path, ".rb").pluralize,
           associations: data[:associations],
           validations: data[:validations],
           scopes: data[:scopes],

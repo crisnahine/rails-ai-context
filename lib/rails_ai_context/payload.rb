@@ -64,6 +64,19 @@ module RailsAiContext
       carried || "app/models/#{name.to_s.underscore}.rb"
     end
 
+    # The model a file declares, as [name, data].
+    #
+    # Camelizing the path is the wrong way back: `oauth_client_config.rb` is
+    # `OAuthClientConfig` wherever the app registers the acronym, and a checker
+    # walking the models directory has only the path to start from.
+    def model_for_file(ctx, file)
+      models = ctx.is_a?(Hash) ? ctx[:models] : nil
+      return nil unless models.is_a?(Hash) && !models[:error]
+
+      wanted = file.to_s
+      models.find { |_, data| data.is_a?(Hash) && data[:file].to_s == wanted }
+    end
+
     # The controller Rails routes under a path, as [name, data].
     #
     # A view directory names the route key, not the constant: camelizing

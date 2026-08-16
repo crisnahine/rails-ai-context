@@ -669,6 +669,39 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       )).to be_empty
     end
   end
+  # Rails derives the table from the class name through its own inflector, so
+  # OAuthClientConfig is `oauth_client_configs`. The static tier has no
+  # inflector, and `"OAuthClientConfig".underscore` is `o_auth_client_config` -
+  # a table no app has. The file's own name is the reliable source: Zeitwerk
+  # resolved the constant from it, so it already carries the inflection.
+  describe "the table a model reads" do
+    it "reads it from the file, not from the inflected name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "oauth_client_config.rb"),
+                   "class OAuthClientConfig < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["OAuthClientConfig"][:table_name]).to eq("oauth_client_configs")
+      end
+    end
+
+    # A namespaced model's table is the demodulized name, the way Rails does it
+    # without an explicit table_name_prefix.
+    it "uses the basename for a namespaced model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
+        File.write(File.join(dir, "app", "models", "billing", "invoice.rb"),
+                   "module Billing\n  class Invoice < ApplicationRecord\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Billing::Invoice"][:table_name]).to eq("invoices")
+      end
+    end
+  end
+
   # The booted tier rejects `abstract_class?`, so a namespaced base class is
   # not a model there. GitLab has three - Ci::ApplicationRecord,
   # PackageMetadata::ApplicationRecord, SecApplicationRecord - and the static

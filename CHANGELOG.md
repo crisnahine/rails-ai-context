@@ -138,6 +138,17 @@ Discourse and Mastodon. Every one of them exits 0.
   - the shape this gem has shipped as a defect before. Entries and size are
   now facts, and a store that answers `#stats` gets its hash rendered as pairs
   rather than a Ruby literal.
+- **A model's table comes from its file, not from its name.** Naming a model by
+  the constant its source declares made `underscore` stop being the way back:
+  `OAuthClientConfig` underscores to `o_auth_client_config`, and the file is
+  `oauth_client_config.rb`. `rails_model_details` reported the table as
+  `o_auth_client_configs`, which no app has, so the columns section vanished
+  and the schema hint pointed at nothing - on Canvas that hit
+  `OAuthClientConfig`, `OAuthRequest`, `AuthenticationProvider::OAuth` and
+  `OAuth2`, on OpenProject `OAuthClient` and `OAuthClientToken`. The file's own
+  name already carries the inflection, because Zeitwerk resolved the constant
+  from it. `rails_generate_test`, `rails_get_callbacks`, `rails_test_info` and
+  the five `rails_validate` checks that key models by path read it too.
 - **An abstract base class is not a model in the static tier either.** A
   booted Rails rejects `abstract_class?`, and a namespaced base class is one:
   GitLab's `Ci::ApplicationRecord`, `PackageMetadata::ApplicationRecord` and
