@@ -66,24 +66,7 @@ def prompt_tool_mode
 end unless defined?(prompt_tool_mode)
 
 def save_tool_mode_to_initializer(mode)
-  init_path = Rails.root.join("config/initializers/rails_ai_context.rb")
-  return unless File.exist?(init_path)
-
-  content = File.read(init_path)
-  mode_line = "  config.tool_mode = :#{mode}"
-
-  if content.include?("config.tool_mode")
-    content.sub!(/^.*config\.tool_mode.*$/, mode_line)
-  elsif content.include?("config.ai_tools")
-    # Insert after ai_tools line
-    content.sub!(/^(.*config\.ai_tools.*)$/, "\\1\n#{mode_line}")
-  elsif content.include?("RailsAiContext.configure")
-    content.sub!(/RailsAiContext\.configure do \|config\|\n/, "RailsAiContext.configure do |config|\n#{mode_line}\n")
-  else
-    return
-  end
-
-  File.write(init_path, content)
+  RailsAiContext::Install::SelectionRecord.write_tool_mode(mode, root: Rails.root)
 rescue => e
   $stderr.puts "[rails-ai-context] save_tool_mode_to_initializer failed: #{e.message}" if ENV["DEBUG"]
   nil

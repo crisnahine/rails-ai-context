@@ -55,6 +55,40 @@ module RailsAiContext
         mode_from_initializer(root) || mode_from_yaml(root)
       end
 
+      # Rewrites (or inserts) the tool_mode line, the way `write` handles the
+      # tools line. The rake task carried its own three-branch rewriter with a
+      # duplicate of CONFIGURE_BLOCK; the file's shape belongs here. Only an
+      # uncommented line is rewritten - the generated initializer ships a
+      # commented-out default that must stay a comment.
+      #
+      # @return [Symbol] :updated, :inserted, :unchanged or :absent
+      def write_tool_mode(mode, root:)
+        path = File.join(root.to_s, INITIALIZER)
+        return :absent unless File.exist?(path)
+
+        content = File.read(path)
+        line = "  config.tool_mode = :#{mode}"
+
+        if content.match?(MODE_LINE)
+          updated = content.sub(/^[ \t]*config\.tool_mode\s*=.*$/, line)
+          return :unchanged if updated == content
+
+          File.write(path, updated)
+          :updated
+        elsif content.match?(SELECTION_LINE)
+          File.write(path, content.sub(/^([ \t]*config\.ai_tools\s*=[^\n]*)$/) { "#{Regexp.last_match(1)}\n#{line}" })
+          :inserted
+        elsif content.match?(CONFIGURE_BLOCK)
+          File.write(path, content.sub(CONFIGURE_BLOCK) { "#{Regexp.last_match(0)}#{line}\n" })
+          :inserted
+        else
+          :absent
+        end
+      rescue StandardError => e
+        RailsAiContext.log_warn "[rails-ai-context] could not write #{INITIALIZER}: #{e.message}"
+        :unchanged
+      end
+
       # Records the selection in both places and says what it did, because
       # every entry prints its own "Created / Updated / unchanged" line and
       # would otherwise keep its own copy of the writing just to know which.

@@ -241,7 +241,7 @@ module RailsAiContext
       return nil unless File.exist?(path)
 
       content = File.read(path)
-      return nil unless content.match?(/^[ \t]*if defined\?\(RailsAiContext\)$/)
+      return nil unless Install::InitializerFile.bare_guard?(content)
 
       Check.new(name: "Initializer guard", status: :warn,
         message: "config/initializers/rails_ai_context.rb guards on `defined?(RailsAiContext)` alone",
