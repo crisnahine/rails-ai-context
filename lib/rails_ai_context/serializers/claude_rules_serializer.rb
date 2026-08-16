@@ -194,12 +194,9 @@ module RailsAiContext
           line += " - #{count_phrase(assocs, "assoc")}, #{count_phrase(vals, "validation")}"
           lines << line
 
-          # Include app-specific concerns (filter out Rails/gem internals)
-          noise = %w[GeneratedAssociationMethods GeneratedAttributeMethods Kernel PP ObjectMixin
-                     GlobalID Bullet ActionText Turbo ActiveStorage JSON]
-          concerns = (data[:concerns] || []).select { |c|
-            !noise.any? { |n| c.include?(n) } && !c.start_with?("Devise") && !c.include?("::")
-          }
+          # The rules file names only the concerns the app itself defines; a
+          # gem capability module is the gem's story, not a file to read here.
+          concerns = ConcernMembership.app_owned(data[:concerns], project_root)
           lines << "  concerns: #{concerns.join(', ')}" if concerns.any?
 
           # Include scopes so agents know available query methods

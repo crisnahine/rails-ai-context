@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ApplicationMailer` arrived as a deliverable action; they subtract now, and
   static mailer actions apply the same underscore rule as controllers. (#149)
 
+- **Every surface answers "which concerns count" and "how many routes" the
+  same way.** Five renderers carried five concern filter sets:
+  `rails_get_callbacks` hid every namespaced concern unless it started with
+  "App", `rails_analyze_feature` hid all of them, and two ignored the
+  `excluded_concerns` config. `ConcernMembership` now decides the payload
+  sense once, at the introspector seam, for both tiers - the static
+  controller answer goes through `MixinsListener`, so `prepend` counts and a
+  singleton-class `include` does not, exactly as booted. Route populations
+  (app vs framework split, PUT/PATCH dedup) moved beside the coverage suffix
+  into `RouteCoverage`, replacing four hand-kept computations, one of them a
+  wholesale copy. CLAUDE.md's per-model concern list now names the concerns
+  the app defines, namespaced ones included.
 - **Mounted engines render again in `rails_onboard` and the context files.**
   `EngineIntrospector` emits `:mounted_engines`; the tool read `:engines` then
   `:mounted`, and the stack line read `:mounted`, so both fell back to "none"

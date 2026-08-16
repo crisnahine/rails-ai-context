@@ -72,7 +72,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       # The `debug` gem (default in Rails 7.0+ Gemfiles) prepends this onto
       # Kernel, so every model's ancestors include it even though it's not
       # something the app itself mixed in.
-      expect(introspector.send(:framework_concern?, "DEBUGGER__::TrapInterceptor")).to be true
+      expect(RailsAiContext::ConcernMembership.payload?("DEBUGGER__::TrapInterceptor")).to be false
       expect(result["User"][:concerns]).not_to include("DEBUGGER__::TrapInterceptor")
     end
 

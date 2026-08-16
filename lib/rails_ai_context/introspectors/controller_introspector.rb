@@ -335,35 +335,21 @@ module RailsAiContext
       end
 
       def extract_concerns(ctrl)
-        ctrl.ancestors
-          .select { |mod| mod.is_a?(Module) && !mod.is_a?(Class) }
-          .reject { |mod| mod.name&.start_with?("ActionController", "ActionDispatch", "ActiveSupport", "AbstractController") }
-          .map(&:name)
-          .compact
+        ConcernMembership.from_ancestors(ctrl)
       rescue => e
         $stderr.puts "[rails-ai-context] extract_concerns failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
+      # Through MixinsListener rather than a hand walk: the listener knows
+      # `prepend` reaches the ancestor chain and a singleton-class `include`
+      # does not, so this tier answers the same question the booted one does.
       def extract_concerns_from_source(source)
-        result = AstCache.parse_string(source)
-        concerns = []
-        find_include_calls(result.value, concerns)
-        concerns
+        walked = SourceIntrospector.walk_source(source, { mixins: Listeners::MixinsListener })
+        ConcernMembership.from_mixins(walked[:mixins])
       rescue => e
         $stderr.puts "[rails-ai-context] extract_concerns_from_source AST failed: #{e.message}" if ENV["DEBUG"]
         []
-      end
-
-      def find_include_calls(node, concerns)
-        return unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::CallNode) && node.receiver.nil? && node.name == :include
-          node.arguments&.arguments&.each do |arg|
-            name = constant_node_to_string(arg)
-            concerns << name unless name == "Unknown"
-          end
-        end
-        node.child_nodes.compact.each { |child| find_include_calls(child, concerns) }
       end
 
       def extract_strong_params(source)

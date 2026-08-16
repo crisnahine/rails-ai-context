@@ -237,11 +237,7 @@ module RailsAiContext
       end
 
       def extract_concerns(model)
-        model.ancestors
-          .select { |mod| mod.is_a?(Module) && !mod.is_a?(Class) }
-          .reject { |mod| framework_concern?(mod.name) }
-          .map(&:name)
-          .compact
+        ConcernMembership.from_ancestors(model)
       end
 
       def extract_sti_info(model)
@@ -521,13 +517,6 @@ module RailsAiContext
         File.join(root, "app", "models", "#{underscored}.rb")
       end
 
-      def framework_concern?(name)
-        return true if name.nil?
-        return true if %w[Kernel JSON PP Marshal MessagePack].any? { |prefix| name == prefix || name.start_with?("#{prefix}::") }
-        return true if name.start_with?("ActiveModel::", "ActiveRecord::", "ActiveSupport::")
-        RailsAiContext.configuration.excluded_concerns.any? { |pattern| name.match?(pattern) }
-      end
-
       DEVISE_CLASS_METHOD_PATTERNS = %w[
         authentication_keys= case_insensitive_keys= strip_whitespace_keys=
         reset_password_keys= confirmation_keys= unlock_keys=
@@ -598,15 +587,10 @@ module RailsAiContext
         }
       end
 
-      # Only the mixins reflection would report, so both tiers answer the same
-      # question. This sees the model file alone, where the booted tier also
-      # walks what its superclass and its concerns pulled in.
+      # This sees the model file alone, where the booted tier also walks what
+      # its superclass and its concerns pulled in.
       def static_concerns(mixins)
-        (mixins || [])
-          .select { |mixin| mixin[:ancestor] }
-          .map { |mixin| mixin[:name] }
-          .reject { |name| framework_concern?(name) }
-          .uniq
+        ConcernMembership.from_mixins(mixins)
       end
 
       # Mongoid documents are invisible to ActiveRecord reflection, so both

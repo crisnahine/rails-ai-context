@@ -35,4 +35,45 @@ RSpec.describe RailsAiContext::RouteCoverage do
       expect(described_class.suffix(total_routes: 723, by_controller: {})).to eq("")
     end
   end
+
+  describe "the app-route population" do
+    let(:routes) do
+      {
+        total_routes: 5,
+        by_controller: {
+          "posts" => [
+            { verb: "GET", path: "/posts", action: "index" },
+            { verb: "PUT", path: "/posts/:id", action: "update" },
+            { verb: "PATCH", path: "/posts/:id", action: "update" }
+          ],
+          "rails/conductor/inbound_emails" => [
+            { verb: "GET", path: "/conductor", action: "index" },
+            { verb: "PUT", path: "/conductor/:id", action: "update" },
+            { verb: "PATCH", path: "/conductor/:id", action: "update" }
+          ]
+        }
+      }
+    end
+
+    it "drops framework-engine controllers and merges PUT/PATCH pairs" do
+      app = described_class.app_controllers(routes)
+      expect(app.keys).to eq(%w[posts])
+      expect(app["posts"].map { |r| r[:verb] }).to eq([ "GET", "PATCH|PUT" ])
+    end
+
+    it "counts the app and framework shares from the same population" do
+      expect(described_class.app_route_count(routes)).to eq(2)
+      expect(described_class.framework_route_count(routes)).to eq(2)
+    end
+
+    it "answers the framework predicate from the config" do
+      expect(described_class.framework_controller?("rails/conductor/inbound_emails")).to be(true)
+      expect(described_class.framework_controller?("posts")).to be(false)
+    end
+
+    it "is empty for a failed or missing section" do
+      expect(described_class.app_controllers(nil)).to eq({})
+      expect(described_class.app_route_count({ error: "boom" })).to eq(0)
+    end
+  end
 end

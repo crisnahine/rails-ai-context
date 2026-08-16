@@ -240,10 +240,9 @@ module RailsAiContext
 
         concerns.each do |concern_name|
           next unless concern_name.is_a?(String)
-          # Skip framework concerns
-          next if concern_name.include?("::") && !concern_name.start_with?("App")
-          next if %w[Kernel JSON PP Marshal].include?(concern_name)
 
+          # Membership is decided at the introspector seam; a gem's concern
+          # has no file here, so find_file already narrows to the app's own.
           concern_path = ConcernPaths.find_file(rails_app.root.to_s, concern_name)
           next unless concern_path
           next if File.size(concern_path) > max_size

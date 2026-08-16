@@ -37,15 +37,8 @@ module RailsAiContext
 
         routes = context[:routes]
         if routes && !routes[:error]
-          # Same population as the compact serializers: app routes across app
-          # controllers, so every generated context file quotes one number.
-          # From config, like rails_get_routes and rails_onboard. Hardcoding it
-          # here made one documented option enough to reopen the count drift.
-          internal = RailsAiContext.configuration.excluded_route_prefixes
-          by_controller = routes[:by_controller] || {}
-          app_ctrls = by_controller.keys.reject { |k| internal.any? { |p| k.downcase.start_with?(p) } }
-          app_routes = app_ctrls.sum { |k| Tools::BaseTool.dedupe_put_patch_routes(Array(by_controller[k])).size }
-          lines << "- Routes: #{count_phrase(app_routes, "app route")} across " \
+          app_ctrls = RouteCoverage.app_controllers(routes)
+          lines << "- Routes: #{count_phrase(RouteCoverage.app_route_count(routes), "app route")} across " \
                    "#{count_phrase(app_ctrls.size, "controller")} " \
                    "(#{routes[:total_routes]} total incl. framework#{RouteCoverage.suffix(routes)})"
         end

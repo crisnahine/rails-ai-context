@@ -14,6 +14,35 @@ module RailsAiContext
   module RouteCoverage
     module_function
 
+    # A framework-engine controller per the excluded_route_prefixes config -
+    # the boundary between "the app's routes" and what Rails mounts on its own.
+    def framework_controller?(name)
+      RailsAiContext.configuration.excluded_route_prefixes.any? { |p| name.downcase.start_with?(p) }
+    end
+
+    # {controller => deduped routes} for the app's own controllers. One
+    # population for every surface that prints a route count, PUT/PATCH update
+    # pairs merged, so every generated file and tool quotes one number.
+    def app_controllers(routes)
+      by_controller(routes)
+        .reject { |name, _| framework_controller?(name) }
+        .transform_values { |entries| Tools::BaseTool.dedupe_put_patch_routes(Array(entries)) }
+    end
+
+    def app_route_count(routes)
+      app_controllers(routes).values.sum(&:size)
+    end
+
+    def framework_route_count(routes)
+      by_controller(routes)
+        .select { |name, _| framework_controller?(name) }
+        .sum { |_, entries| Tools::BaseTool.dedupe_put_patch_routes(Array(entries)).size }
+    end
+
+    def by_controller(routes)
+      routes.is_a?(Hash) ? routes[:by_controller] || {} : {}
+    end
+
     # A suffix rather than a predicate, so no call site needs a conditional of
     # its own - that shape is what let nine of them forget.
     #

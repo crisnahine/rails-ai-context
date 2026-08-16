@@ -502,7 +502,6 @@ module RailsAiContext
             next unless data.is_a?(Hash)
             (data[:concerns] || []).each do |c|
               next unless c.is_a?(String)
-              next if c.include?("::") || %w[Kernel JSON PP].include?(c)
               concerns[c] ||= 0
               concerns[c] += 1
             end

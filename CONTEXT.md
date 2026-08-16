@@ -44,7 +44,7 @@ An undeclared introspector fails the suite, and every files-only declaration is 
 
 Three senses inside the gem, and the payload one is wider than either everyday Rails reading.
 
-**Concern (as payload)** - a module in a class's ancestor chain, minus framework noise. Not only `ActiveSupport::Concern`, and not only files under a concerns directory: anything reached by `include` or `prepend` counts, which is why `extend` and a singleton-class `include` do not. This is what `:concerns` holds in model and controller data and what a "Concerns" section renders. The booted tier reads `ancestors`, so it also sees what the superclass and other concerns pulled in; the static tier sees the class's own file alone.
+**Concern (as payload)** - a module in a class's ancestor chain, minus framework noise. Not only `ActiveSupport::Concern`, and not only files under a concerns directory: anything reached by `include` or `prepend` counts, which is why `extend` and a singleton-class `include` do not. This is what `:concerns` holds in model and controller data and what a "Concerns" section renders. The booted tier reads `ancestors`, so it also sees what the superclass and other concerns pulled in; the static tier sees the class's own file alone. `ConcernMembership` decides membership for both tiers; renderers trust the payload rather than re-filtering.
 
 **Concerns directory** - `app/*/concerns` as a place, glob-derived the way Rails autoloads it, never a hardcoded list. `ConcernPaths` is the one answer to "where does this app keep its concerns" for every surface that lists or counts them.
 

@@ -339,13 +339,10 @@ module RailsAiContext
           end
         end
 
-        # Concerns - filter out framework/gem internal modules
+        # The payload is already membership-filtered at the introspector seam
+        # (ConcernMembership), so render it as-is.
         if data[:concerns]&.any?
-          excluded_patterns = RailsAiContext.configuration.excluded_concerns
-          app_concerns = data[:concerns].reject do |c|
-            %w[Kernel JSON PP Marshal MessagePack].include?(c) ||
-              excluded_patterns.any? { |pattern| c.match?(pattern) }
-          end
+          app_concerns = data[:concerns]
           if app_concerns.any?
             lines << "" << "## Concerns"
             app_concerns.each do |c|

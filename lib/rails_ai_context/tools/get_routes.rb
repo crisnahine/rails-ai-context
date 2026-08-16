@@ -35,11 +35,7 @@ module RailsAiContext
       )
 
       def self.framework_controller?(name)
-        route_prefixes.any? { |p| name.downcase.start_with?(p) }
-      end
-
-      def self.route_prefixes
-        RailsAiContext.configuration.excluded_route_prefixes
+        RailsAiContext::RouteCoverage.framework_controller?(name)
       end
 
       guide_row(
@@ -99,8 +95,8 @@ module RailsAiContext
           case detail
           when "summary"
             # Separate app routes from framework routes for cleaner output
-            app_routes = controller ? by_controller : by_controller.reject { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
-            framework_routes = controller ? {} : by_controller.select { |k, _| route_prefixes.any? { |p| k.downcase.start_with?(p) } }
+            app_routes = controller ? by_controller : by_controller.reject { |k, _| framework_controller?(k) }
+            framework_routes = controller ? {} : by_controller.select { |k, _| framework_controller?(k) }
 
             lines = [ "# Routes Summary (#{count_label})", "" ]
 

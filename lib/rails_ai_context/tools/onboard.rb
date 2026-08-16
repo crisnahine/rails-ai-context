@@ -259,14 +259,9 @@ module RailsAiContext
           return [] unless routes.is_a?(Hash) && !routes[:error]
 
           lines = [ "## Key Flows", "" ]
-          by_ctrl = routes[:by_controller] || {}
 
-          # Find controllers with most actions (most important flows). Uses the
-          # same excluded-prefix config and PUT/PATCH dedup as rails_get_routes
-          # so the route counts the two tools report agree with each other.
-          prefixes = RailsAiContext.configuration.excluded_route_prefixes
-          app_ctrls = by_ctrl.reject { |k, _| prefixes.any? { |p| k.downcase.start_with?(p) } }
-            .transform_values { |route_list| dedupe_put_patch_routes(route_list) }
+          # Controllers with the most actions carry the app's key flows.
+          app_ctrls = RouteCoverage.app_controllers(routes)
           top_ctrls = app_ctrls.sort_by { |_, routes_list| -routes_list.size }.first(5)
 
           top_ctrls.each do |ctrl, ctrl_routes|
@@ -278,12 +273,9 @@ module RailsAiContext
           lines << ""
           # A single "total" invites mismatches with `rails routes` (the router
           # also holds internal and controller-less routes we never report), so
-          # count app routes and framework-engine routes separately - both from
-          # the same by_controller data, with the same PUT/PATCH dedup.
-          app_route_count = app_ctrls.values.sum { |route_list| route_list.size }
-          framework_count = by_ctrl
-            .select { |k, _| prefixes.any? { |p| k.downcase.start_with?(p) } }
-            .values.sum { |route_list| dedupe_put_patch_routes(route_list).size }
+          # count app routes and framework-engine routes separately.
+          app_route_count = RouteCoverage.app_route_count(routes)
+          framework_count = RouteCoverage.framework_route_count(routes)
           framework_note = framework_count > 0 ? " (plus #{count_phrase(framework_count, 'framework route')})" : ""
           lines << "Total: #{count_phrase(app_route_count, 'app route')} across " \
                    "#{count_phrase(app_ctrls.size, 'controller')}#{framework_note}" \
