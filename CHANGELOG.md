@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ApplicationMailer` arrived as a deliverable action; they subtract now, and
   static mailer actions apply the same underscore rule as controllers. (#149)
 
+- **The interactive install is one program with three voices.** The
+  generator, the standalone binary and the rake task each held a full copy
+  of the prompts, the removed-tool cleanup, the gitignore append and the
+  MCP-config write - about 470 lines that had already drifted: two labels
+  for one mode, a menu with file lists in two entries and bare names in the
+  third, a byte-identical gitignore block three times. `Install::Program`
+  now owns the steps and the wording; each entry supplies its say/ask
+  surface and keeps only its closing instructions. The rake menu shows each
+  tool's files, and every entry uses one mode label.
 - **Configuration loads the same way on every entry point.** The engine now
   runs `auto_load!` at boot, so `.rails-ai-context.yml` works on the rake
   tasks, the middleware and the engine controller the way the docs always

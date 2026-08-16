@@ -220,7 +220,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
       expect { generator.select_ai_tools }.not_to raise_error
       expect(generator.instance_variable_get(:@selected_formats))
-        .to match_array(described_class::AI_TOOLS.values.map { |t| t[:format] })
+        .to match_array(RailsAiContext::Install::AiTool.all.map(&:key))
     end
   end
 

@@ -40,48 +40,29 @@ def apply_context_mode_override
   end
 end unless defined?(apply_context_mode_override)
 
-AI_TOOL_OPTIONS = RailsAiContext::Install::AiTool.all.to_h { |t| [ t.number, { key: t.key, name: t.name } ] }.freeze unless defined?(AI_TOOL_OPTIONS)
+# The install program's voice on this entry: plain puts, an emoji on the
+# outcomes the task has always marked.
+def install_surface
+  @rails_ai_context_install_surface ||= begin
+    surface = Object.new
+    def surface.say(text = "", level = :plain)
+      prefix = { ok: "✅ ", warn: "⚠️  " }[level]
+      puts "#{prefix}#{text}"
+    end
+    def surface.ask(prompt)
+      print "#{prompt} "
+      $stdin.gets&.strip
+    end
+    surface
+  end
+end unless defined?(install_surface)
 
 def prompt_ai_tools
-  puts ""
-  puts "Which AI tools do you use? (select all that apply)"
-  puts ""
-  AI_TOOL_OPTIONS.each { |num, info| puts "  #{num}. #{info[:name]}" }
-  puts "  a. All of the above"
-  puts ""
-  print "Enter numbers separated by commas (e.g. 1,2) or 'a' for all: "
-  input = $stdin.gets&.strip&.downcase || "a"
-
-  selected = if input == "a" || input == "all" || input.empty?
-    AI_TOOL_OPTIONS.values.map { |t| t[:key] }
-  else
-    input.split(/[\s,]+/).filter_map { |n| AI_TOOL_OPTIONS[n]&.dig(:key) }
-  end
-
-  if selected.empty?
-    puts "No tools selected - using all."
-    selected = AI_TOOL_OPTIONS.values.map { |t| t[:key] }
-  end
-
-  names = AI_TOOL_OPTIONS.values.select { |t| selected.include?(t[:key]) }.map { |t| t[:name] }
-  puts "Selected: #{names.join(', ')}"
-  selected
+  RailsAiContext::Install::Program.select_ai_tools(install_surface)
 end unless defined?(prompt_ai_tools)
 
 def prompt_tool_mode
-  puts ""
-  puts "Do you also want MCP server support?"
-  puts ""
-  puts "  1. Yes - MCP primary + CLI fallback (generates per-tool MCP config files)"
-  puts "  2. No  - CLI only (no server needed)"
-  puts ""
-  print "Enter number (default: 1): "
-  input = $stdin.gets&.strip || "1"
-
-  mode = input == "2" ? :cli : :mcp
-  label = mode == :mcp ? "MCP + CLI fallback" : "CLI only"
-  puts "Selected: #{label}"
-  mode
+  RailsAiContext::Install::Program.select_tool_mode(install_surface)
 end unless defined?(prompt_tool_mode)
 
 def save_tool_mode_to_initializer(mode)
@@ -110,16 +91,10 @@ end unless defined?(save_tool_mode_to_initializer)
 
 def ensure_mcp_configs(ai_tools = nil)
   tools = ai_tools || RailsAiContext.configuration.ai_tools || RailsAiContext::McpConfigGenerator::TOOL_CONFIGS.keys
-  # No explicit standalone: flag - the generator detects the install mode from
-  # Gemfile.lock, so this writes the same command form as the standalone CLI
-  # init for the same app (no config ping-pong between entry points).
-  generator = RailsAiContext::McpConfigGenerator.new(
-    tools: tools,
-    output_dir: Rails.root.to_s,
-    tool_mode: RailsAiContext.configuration.tool_mode
+  RailsAiContext::Install::Program.write_mcp_configs(
+    install_surface,
+    tools: tools, tool_mode: RailsAiContext.configuration.tool_mode, root: Rails.root
   )
-  result = generator.call
-  result[:written].each { |f| puts "✅ Created/Updated #{f}" }
 rescue => e
   puts "⚠️  Could not create MCP config files: #{e.message}"
 end unless defined?(ensure_mcp_configs)
@@ -156,70 +131,13 @@ def read_previous_ai_tools_from_config
 end unless defined?(read_previous_ai_tools_from_config)
 
 def cleanup_removed_ai_tools(previous, current)
-  removed = previous.map(&:to_sym) - current.map(&:to_sym)
-  return if removed.empty?
-
-  puts ""
-  puts "These AI tools were removed from your selection:"
-  removed.each_with_index do |fmt, idx|
-    tool = AI_TOOL_OPTIONS.values.find { |t| t[:key] == fmt }
-    puts "  #{idx + 1}. #{tool[:name]}" if tool
-  end
-  puts ""
-  puts "Remove their generated files?"
-  puts "  y - remove all listed above"
-  puts "  n - keep all (default)"
-  puts "  1,2 - remove only specific ones by number"
-  puts ""
-  print "Enter choice: "
-  input = $stdin.gets&.strip&.downcase || "n"
-  return if input.empty? || input == "n" || input == "no"
-
-  to_remove = if input == "y" || input == "yes" || input == "a"
-    removed
-  else
-    nums = input.split(/[\s,]+/).filter_map { |n| n.to_i - 1 }
-    nums.filter_map { |i| removed[i] if i >= 0 && i < removed.size }
-  end
-
-  return if to_remove.empty?
-
-  to_remove.each do |fmt|
-    tool = RailsAiContext::Install::AiTool.find(fmt)
-
-    removed_paths = RailsAiContext::Install::Cleanup.remove(
-      tools: [ fmt ], keeping: current.map(&:to_sym), root: Rails.root
-    )
-    removed_paths.each { |path| puts "  Removed #{path}" }
-
-    # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
-    cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Rails.root.to_s)
-    cleaned.each { |f| puts "  Removed MCP entry from #{Pathname.new(f).relative_path_from(Rails.root)}" }
-
-    puts "  ✅ #{tool.name} files removed" if tool
-  end
+  RailsAiContext::Install::Program.cleanup_removed_tools(
+    install_surface, previous: previous, selected: current, root: Rails.root
+  )
 end unless defined?(cleanup_removed_ai_tools)
 
 def add_ai_context_to_gitignore
-  gitignore = Rails.root.join(".gitignore")
-  return unless File.exist?(gitignore)
-
-  content = File.read(gitignore)
-  lines = []
-  unless content.include?(".ai-context.json")
-    lines << ""
-    lines << "# rails-ai-context (JSON cache - markdown files should be committed)"
-    lines << ".ai-context.json"
-  end
-  unless content.include?(".codex/config.toml")
-    lines << ""
-    lines << "# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)"
-    lines << ".codex/config.toml"
-  end
-  return if lines.empty?
-
-  File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
-  puts "✅ Updated .gitignore"
+  RailsAiContext::Install::Program.mark_gitignore(install_surface, root: Rails.root)
 end unless defined?(add_ai_context_to_gitignore)
 
 # Writing only the initializer here was the last hand-rolled record left: it

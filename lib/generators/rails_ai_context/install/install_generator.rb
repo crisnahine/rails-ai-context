@@ -38,11 +38,6 @@ module RailsAiContext
       class_option :defaults, type: :boolean, default: false,
         desc: "Skip all interactive prompts and use each prompt's documented default (for CI/non-interactive use)"
 
-      AI_TOOLS = RailsAiContext::Install::AiTool.all.to_h { |t|
-        [ t.number, { key: t.key, name: t.name, files: t.files, format: t.key } ]
-      }.freeze
-
-
       # The initializer guard written before this gem checked respond_to?(:configure).
       # A path:/git: gemspec is evaluated in-process by Bundler in every environment,
       # defining a VERSION-only stub `RailsAiContext` module even when the gem itself
@@ -51,123 +46,28 @@ module RailsAiContext
       BARE_GUARD_PATTERN = /^([ \t]*)if defined\?\(RailsAiContext\)$/
 
       def select_ai_tools
-        say ""
-        say "Which AI tools do you use? (select all that apply)", :yellow
-        say ""
-        AI_TOOLS.each do |num, info|
-          say "  #{num}. #{info[:name].ljust(16)} → #{info[:files]}"
-        end
-        say "  a. All of the above"
-        say ""
-
-        input = ask_safe("Enter numbers separated by commas (e.g. 1,2) or 'a' for all:").strip.downcase
-
-        @selected_formats = if input == "a" || input == "all"
-          AI_TOOLS.values.map { |t| t[:format] }
-        else
-          nums = input.split(/[\s,]+/)
-          nums.filter_map { |n| AI_TOOLS[n]&.dig(:format) }
-        end
-
-        if @selected_formats.empty?
-          say "No tools selected - defaulting to all.", :yellow
-          @selected_formats = AI_TOOLS.values.map { |t| t[:format] }
-        end
-
-        selected_names = AI_TOOLS.values.select { |t| @selected_formats.include?(t[:format]) }.map { |t| t[:name] }
-        say ""
-        say "Selected: #{selected_names.join(', ')}", :green
+        @selected_formats = RailsAiContext::Install::Program.select_ai_tools(program_surface)
       end
 
       def cleanup_removed_tools
         @previous_formats = read_previous_ai_tools
         return unless @previous_formats&.any?
 
-        removed = @previous_formats - @selected_formats
-        return if removed.empty?
-
-        say ""
-        say "These AI tools were removed from your selection:", :yellow
-        removed.each_with_index do |fmt, idx|
-          tool = AI_TOOLS.values.find { |t| t[:format] == fmt }
-          say "  #{idx + 1}. #{tool[:name]} (#{tool[:files]})" if tool
-        end
-        say ""
-
-        say "Remove their generated files?", :yellow
-        say "  y - remove all listed above"
-        say "  n - keep all (default)"
-        say "  1,2 - remove only specific ones by number"
-        say ""
-
-        input = ask_safe("Enter choice:").strip.downcase
-        return if input.empty? || input == "n" || input == "no"
-
-        to_remove = if input == "y" || input == "yes" || input == "a"
-          removed
-        else
-          nums = input.split(/[\s,]+/).filter_map { |n| n.to_i - 1 }
-          nums.filter_map { |i| removed[i] if i >= 0 && i < removed.size }
-        end
-
-        return if to_remove.empty?
-
-        to_remove.each do |fmt|
-          tool = RailsAiContext::Install::AiTool.find(fmt)
-
-          removed_paths = RailsAiContext::Install::Cleanup.remove(
-            tools: [ fmt ], keeping: @selected_formats, root: Rails.root
-          )
-          removed_paths.each { |path| say "  Removed #{path}", :red }
-
-          # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
-          cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Rails.root.to_s)
-          cleaned.each { |f| say "  Removed MCP entry from #{Pathname.new(f).relative_path_from(Rails.root)}", :red }
-
-          say "  ✓ #{tool.name} files removed", :green if tool
-        end
+        RailsAiContext::Install::Program.cleanup_removed_tools(
+          program_surface,
+          previous: @previous_formats, selected: @selected_formats, root: Rails.root
+        )
       end
 
       def select_tool_mode
-        say ""
-        say "Do you also want MCP server support?", :yellow
-        say ""
-        say "  1. Yes - MCP primary + CLI fallback (generates per-tool MCP config files)"
-        say "  2. No  - CLI only (no server needed)"
-        say ""
-
-        input = ask_safe("Enter number (default: 1):").strip
-
-        @tool_mode = case input
-        when "2" then :cli
-        else :mcp
-        end
-
-        mode_label = @tool_mode == :mcp ? "MCP + CLI fallback" : "CLI only"
-        say "Selected: #{mode_label}", :green
+        @tool_mode = RailsAiContext::Install::Program.select_tool_mode(program_surface)
       end
 
       def create_mcp_config
-        # No explicit standalone: flag - the generator detects the install
-        # mode from Gemfile.lock, so this writes the same command form as the
-        # standalone CLI init for the same app (no config ping-pong).
-        generator = RailsAiContext::McpConfigGenerator.new(
-          tools: @selected_formats,
-          output_dir: Rails.root.to_s,
-          tool_mode: @tool_mode
+        RailsAiContext::Install::Program.write_mcp_configs(
+          program_surface,
+          tools: @selected_formats, tool_mode: @tool_mode, root: Rails.root
         )
-        result = generator.call
-        result[:written].each do |f|
-          rel = Pathname.new(f).relative_path_from(Rails.root)
-          say "Created/Updated #{rel}", :green
-        end
-        result[:skipped].each do |f|
-          rel = Pathname.new(f).relative_path_from(Rails.root)
-          say "#{rel} unchanged - skipped", :yellow
-        end
-        if @tool_mode == :cli
-          say "Skipped MCP config files (CLI-only mode)", :yellow
-        end
       end
 
       # All config sections with their marker comment and content.
@@ -343,6 +243,23 @@ module RailsAiContext
       def ask_safe(statement, **opts)
         return "" if options[:defaults]
         ask(statement, **opts).to_s
+      end
+
+      # The install program's voice on this entry: Thor's say with colours,
+      # ask_safe so --defaults answers every prompt with its default.
+      def program_surface
+        @program_surface ||= begin
+          generator = self
+          surface = Object.new
+          surface.define_singleton_method(:say) do |text = "", level = :plain|
+            colour = { emph: :yellow, ok: :green, warn: :red, muted: :yellow }[level]
+            colour ? generator.say(text, colour) : generator.say(text)
+          end
+          surface.define_singleton_method(:ask) do |prompt|
+            generator.send(:ask_safe, prompt)
+          end
+          surface
+        end
       end
 
       def create_new_initializer(path)
@@ -533,26 +450,7 @@ module RailsAiContext
       end
 
       def add_to_gitignore
-        gitignore = Rails.root.join(".gitignore")
-        return unless File.exist?(gitignore)
-
-        content = File.read(gitignore)
-        lines = []
-        unless content.include?(".ai-context.json")
-          lines << ""
-          lines << "# rails-ai-context (JSON cache - markdown files should be committed)"
-          lines << ".ai-context.json"
-        end
-        unless content.include?(".codex/config.toml")
-          lines << ""
-          lines << "# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)"
-          lines << ".codex/config.toml"
-        end
-
-        if lines.any?
-          File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
-          say "Updated .gitignore", :green
-        end
+        RailsAiContext::Install::Program.mark_gitignore(program_surface, root: Rails.root)
       end
 
       def install_validation_hook
@@ -647,9 +545,9 @@ module RailsAiContext
         say "=" * 50, :cyan
         say ""
         say "Your setup:", :yellow
-        AI_TOOLS.each_value do |info|
-          next unless @selected_formats.include?(info[:format])
-          say "  ✅ #{info[:name].ljust(16)} → #{info[:files]}"
+        RailsAiContext::Install::AiTool.all.each do |tool|
+          next unless @selected_formats.include?(tool.key)
+          say "  ✅ #{tool.name.ljust(16)} -> #{tool.files}"
         end
         say ""
         say "Commands:", :yellow

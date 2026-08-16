@@ -100,10 +100,19 @@ RSpec.describe RailsAiContext::Install::AiTool do
   # The tables that used to live in four places are now views onto this one.
   # The golden values above are the pin; these only prove the wiring.
   describe "the views its consumers read" do
-    it "feeds the generator's prompt table" do
-      expect(RailsAiContext::Generators::InstallGenerator::AI_TOOLS.keys).to eq(%w[1 2 3 4 5])
-      expect(RailsAiContext::Generators::InstallGenerator::AI_TOOLS["2"])
-        .to eq(key: :cursor, name: "Cursor", files: ".cursor/rules/ + .cursorrules (legacy fallback)", format: :cursor)
+    it "feeds the install program's menu" do
+      surface = Class.new do
+        attr_reader :lines
+        def initialize = @lines = []
+        def say(text = "", _level = :plain) = @lines << text
+        def ask(_prompt) = "a"
+      end.new
+
+      RailsAiContext::Install::Program.select_ai_tools(surface)
+      menu = surface.lines.join("\n")
+      RailsAiContext::Install::AiTool.all.each do |tool|
+        expect(menu).to include("#{tool.number}. #{tool.name.ljust(16)} -> #{tool.files}")
+      end
     end
 
     it "feeds the MCP config table" do

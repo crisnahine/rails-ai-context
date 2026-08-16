@@ -348,124 +348,42 @@ class RailsAiContextCLI < Thor
 
     private
 
-    # A method, not a constant: this class body is evaluated before the gem
-    # is required, so the table has to be asked for after that.
-    def ai_tool_options
-      ::RailsAiContext::Install::AiTool.all.to_h { |t| [ t.number, { key: t.key, name: t.name, files: t.files } ] }
+    # The install program's voice on this entry: everything on stderr, so
+    # stdout stays a clean protocol channel.
+    def program_surface
+      @program_surface ||= begin
+        surface = Object.new
+        def surface.say(text = "", level = :plain)
+          $stderr.puts(level == :warn ? "Warning: #{text}" : text)
+        end
+        def surface.ask(prompt)
+          $stderr.print "#{prompt} "
+          $stdin.gets&.strip
+        end
+        surface
+      end
     end
 
     def prompt_ai_tools
-      $stderr.puts ""
-      $stderr.puts "Which AI tools do you use? (select all that apply)"
-      $stderr.puts ""
-      ai_tool_options.each { |num, info| $stderr.puts "  #{num}. #{info[:name].ljust(16)} -> #{info[:files]}" }
-      $stderr.puts "  a. All of the above"
-      $stderr.puts ""
-      $stderr.print "Enter numbers separated by commas (e.g. 1,2) or 'a' for all: "
-      input = $stdin.gets&.strip&.downcase || "a"
-
-      selected = if input == "a" || input == "all" || input.empty?
-        ai_tool_options.values.map { |t| t[:key] }
-      else
-        input.split(/[\s,]+/).filter_map { |n| ai_tool_options[n]&.dig(:key) }
-      end
-
-      if selected.empty?
-        $stderr.puts "No tools selected — using all."
-        selected = ai_tool_options.values.map { |t| t[:key] }
-      end
-
-      names = ai_tool_options.values.select { |t| selected.include?(t[:key]) }.map { |t| t[:name] }
-      $stderr.puts "Selected: #{names.join(', ')}"
-      selected
+      ::RailsAiContext::Install::Program.select_ai_tools(program_surface)
     end
 
     def prompt_tool_mode
-      $stderr.puts ""
-      $stderr.puts "Do you also want MCP server support?"
-      $stderr.puts ""
-      $stderr.puts "  1. Yes — MCP server (generates per-tool MCP config files)"
-      $stderr.puts "  2. No  — CLI only (no server needed)"
-      $stderr.puts ""
-      $stderr.print "Enter number (default: 1): "
-      input = $stdin.gets&.strip || "1"
-
-      mode = input == "2" ? :cli : :mcp
-      label = mode == :mcp ? "MCP server" : "CLI only"
-      $stderr.puts "Selected: #{label}"
-      mode
+      ::RailsAiContext::Install::Program.select_tool_mode(program_surface)
     end
-
 
     def read_previous_ai_tools
       ::RailsAiContext::Install::SelectionRecord.read(root: Dir.pwd)
     end
 
     def cleanup_removed_tools(previous, current)
-      removed = previous.map(&:to_sym) - current.map(&:to_sym)
-      return if removed.empty?
-
-      $stderr.puts ""
-      $stderr.puts "These AI tools were removed from your selection:"
-      removed.each_with_index do |fmt, idx|
-        tool = ai_tool_options.values.find { |t| t[:key] == fmt }
-        $stderr.puts "  #{idx + 1}. #{tool[:name]} (#{tool[:files]})" if tool
-      end
-      $stderr.puts ""
-      $stderr.puts "Remove their generated files?"
-      $stderr.puts "  y — remove all listed above"
-      $stderr.puts "  n — keep all (default)"
-      $stderr.puts "  1,2 — remove only specific ones by number"
-      $stderr.puts ""
-      $stderr.print "Enter choice: "
-      input = $stdin.gets&.strip&.downcase || "n"
-      return if input.empty? || input == "n" || input == "no"
-
-      to_remove = if input == "y" || input == "yes" || input == "a"
-        removed
-      else
-        nums = input.split(/[\s,]+/).filter_map { |n| n.to_i - 1 }
-        nums.filter_map { |i| removed[i] if i >= 0 && i < removed.size }
-      end
-
-      return if to_remove.empty?
-
-      to_remove.each do |fmt|
-        tool = ::RailsAiContext::Install::AiTool.find(fmt)
-
-        removed_paths = ::RailsAiContext::Install::Cleanup.remove(
-          tools: [ fmt ], keeping: current.map(&:to_sym), root: Dir.pwd
-        )
-        removed_paths.each { |path| $stderr.puts "  Removed #{path}" }
-
-        # Merge-safe MCP config cleanup — removes only the rails-ai-context entry
-        cleaned = ::RailsAiContext::McpConfigGenerator.remove(tools: [ fmt ], output_dir: Dir.pwd)
-        cleaned.each { |f| $stderr.puts "  Removed MCP entry from #{File.basename(f)}" }
-
-        $stderr.puts "  #{tool.name} files removed" if tool
-      end
+      ::RailsAiContext::Install::Program.cleanup_removed_tools(
+        program_surface, previous: previous, selected: current, root: Dir.pwd
+      )
     end
 
     def add_to_gitignore
-      gitignore = File.join(Dir.pwd, ".gitignore")
-      return unless File.exist?(gitignore)
-
-      content = File.read(gitignore)
-      lines = []
-      unless content.include?(".ai-context.json")
-        lines << ""
-        lines << "# rails-ai-context (JSON cache - markdown files should be committed)"
-        lines << ".ai-context.json"
-      end
-      unless content.include?(".codex/config.toml")
-        lines << ""
-        lines << "# rails-ai-context (embeds this machine's Ruby PATH/GEM_HOME - do not share)"
-        lines << ".codex/config.toml"
-      end
-      return if lines.empty?
-
-      File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
-      $stderr.puts "Updated .gitignore"
+      ::RailsAiContext::Install::Program.mark_gitignore(program_surface, root: Dir.pwd)
     end
 
     def record_selection(ai_tools, tool_mode)
@@ -480,17 +398,9 @@ class RailsAiContextCLI < Thor
 
     def write_mcp_configs(ai_tools, tool_mode)
       require_relative "../lib/rails_ai_context/mcp_config_generator"
-      # No explicit standalone: flag - the generator detects the install mode
-      # from Gemfile.lock, so this writes the same command form as the rake
-      # task and Rails generator for the same app (no config ping-pong).
-      generator = ::RailsAiContext::McpConfigGenerator.new(
-        tools: ai_tools,
-        output_dir: Dir.pwd,
-        tool_mode: tool_mode
+      ::RailsAiContext::Install::Program.write_mcp_configs(
+        program_surface, tools: ai_tools, tool_mode: tool_mode, root: Dir.pwd
       )
-      result = generator.call
-      result[:written].each { |f| $stderr.puts "  Created/Updated #{f}" }
-      result[:skipped].each { |f| $stderr.puts "  #{f} unchanged — skipped" }
     end
 
     def show_standalone_instructions(ai_tools, tool_mode)
@@ -500,9 +410,9 @@ class RailsAiContextCLI < Thor
       $stderr.puts "=" * 50
       $stderr.puts ""
       $stderr.puts "Your setup:"
-      ai_tool_options.each_value do |info|
-        next unless ai_tools.include?(info[:key])
-        $stderr.puts "  #{info[:name].ljust(16)} -> #{info[:files]}"
+      ::RailsAiContext::Install::AiTool.all.each do |tool|
+        next unless ai_tools.include?(tool.key)
+        $stderr.puts "  #{tool.name.ljust(16)} -> #{tool.files}"
       end
       $stderr.puts ""
       $stderr.puts "Commands:"
