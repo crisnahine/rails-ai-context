@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ApplicationMailer` arrived as a deliverable action; they subtract now, and
   static mailer actions apply the same underscore rule as controllers. (#149)
 
+- **Configuration loads the same way on every entry point.** The engine now
+  runs `auto_load!` at boot, so `.rails-ai-context.yml` works on the rake
+  tasks, the middleware and the engine controller the way the docs always
+  said - initializer first, the loader steps aside when a configure block
+  ran. `Configuration#ai_tools` answers from `SelectionRecord` when nothing
+  set it, so `rails ai:context` stops re-asking a question the record
+  already answers, and the recorded `tool_mode` reaches in-app surfaces
+  through the record's new reader. A bad YAML value now warns and keeps the
+  default the way bad syntax always did, instead of dying raw out of the
+  CLI. (#147, #148)
 - **The three static schema sources follow one set of conventions, and every
   schema question can be asked of any of them.** `SchemaReader.for(root)`
   chooses schema.rb, structure.sql or migration replay behind one

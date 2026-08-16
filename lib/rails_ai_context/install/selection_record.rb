@@ -33,6 +33,8 @@ module RailsAiContext
       # boot while `read` returns the fresh one.
       ANY_ASSIGNMENT = /^[ \t]*config\.ai_tools\s*=/
 
+      MODE_LINE = /^[ \t]*config\.tool_mode\s*=\s*:(\w+)/
+
       # Where a selection line goes when the initializer has none yet.
       CONFIGURE_BLOCK = /RailsAiContext\.configure do \|config\|\n/
 
@@ -41,6 +43,16 @@ module RailsAiContext
       # @return [Array<Symbol>, nil] the recorded tools, or nil if none.
       def read(root:)
         from_initializer(root) || from_yaml(root)
+      end
+
+      # The recorded tool mode, initializer first, same precedence as the
+      # tools. The record writes the mode into its YAML (`extra_yaml`), so
+      # this is the reader that stopped `rails-ai-context init`'s recorded
+      # mode from being inert on in-app surfaces.
+      #
+      # @return [Symbol, nil]
+      def tool_mode(root:)
+        mode_from_initializer(root) || mode_from_yaml(root)
       end
 
       # Records the selection in both places and says what it did, because
@@ -132,6 +144,28 @@ module RailsAiContext
 
         data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
         presence(normalize(data[YAML_KEY]))
+      rescue StandardError => e
+        RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      private_class_method def self.mode_from_initializer(root)
+        path = File.join(root.to_s, INITIALIZER)
+        return nil unless File.exist?(path)
+
+        File.read(path)[MODE_LINE, 1]&.to_sym
+      rescue StandardError => e
+        RailsAiContext.log_warn "[rails-ai-context] could not read #{INITIALIZER}: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      private_class_method def self.mode_from_yaml(root)
+        path = File.join(root.to_s, YAML_FILE)
+        return nil unless File.exist?(path)
+
+        data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
+        mode = data["tool_mode"]
+        mode&.to_sym
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
         nil

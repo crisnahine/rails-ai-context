@@ -430,4 +430,29 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
       expect(described_class.read(root: root)).to eq(%i[copilot codex])
     end
   end
+
+  describe ".tool_mode" do
+    it "is nil when nothing has been recorded" do
+      expect(described_class.tool_mode(root: root)).to be_nil
+    end
+
+    it "reads the YAML the installer wrote" do
+      write_yaml("ai_tools:\n- claude\ntool_mode: cli\n")
+
+      expect(described_class.tool_mode(root: root)).to eq(:cli)
+    end
+
+    it "lets the initializer line win over the YAML" do
+      write_yaml("tool_mode: mcp\n")
+      write_initializer("  config.tool_mode = :cli\n")
+
+      expect(described_class.tool_mode(root: root)).to eq(:cli)
+    end
+
+    it "ignores the commented-out default in the generated initializer" do
+      write_initializer("  # config.tool_mode = :cli\n")
+
+      expect(described_class.tool_mode(root: root)).to be_nil
+    end
+  end
 end

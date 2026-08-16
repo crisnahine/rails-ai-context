@@ -138,23 +138,43 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
       end
     end
 
-    it "validates values via existing setters" do
+    it "warns on a bad value and keeps the default, like bad syntax" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")
-        File.write(yaml_path, YAML.dump({ "http_port" => 0 }))
+        File.write(yaml_path, YAML.dump({ "http_port" => 0, "cache_ttl" => 120 }))
 
-        expect { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
-          .to raise_error(ArgumentError, /http_port must be between/)
+        captured = StringIO.new
+        orig_err = $stderr
+        begin
+          $stderr = captured
+          expect { RailsAiContext::Configuration.load_from_yaml(yaml_path) }.not_to raise_error
+        ensure
+          $stderr = orig_err
+        end
+
+        expect(captured.string).to include("http_port")
+        config = RailsAiContext.configuration
+        expect(config.http_port).not_to eq(0)
+        expect(config.cache_ttl).to eq(120)
       end
     end
 
-    it "validates query_row_limit" do
+    it "keeps the default on an out-of-range query_row_limit" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")
         File.write(yaml_path, YAML.dump({ "query_row_limit" => 5000 }))
 
-        expect { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
-          .to raise_error(ArgumentError, /query_row_limit must be between/)
+        captured = StringIO.new
+        orig_err = $stderr
+        begin
+          $stderr = captured
+          RailsAiContext::Configuration.load_from_yaml(yaml_path)
+        ensure
+          $stderr = orig_err
+        end
+
+        expect(captured.string).to include("query_row_limit")
+        expect(RailsAiContext.configuration.query_row_limit).not_to eq(5000)
       end
     end
 
@@ -344,6 +364,37 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
     it "returns true after configure block" do
       RailsAiContext.configure { |_c| }
       expect(RailsAiContext.configured_via_block?).to eq(true)
+    end
+  end
+
+  describe "#ai_tools record fallback" do
+    it "answers from SelectionRecord when the configure block did not set it" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "ai_tools" => %w[claude cursor] }))
+
+        config = RailsAiContext::Configuration.new
+        config.app_root = dir
+        expect(config.ai_tools).to eq(%i[claude cursor])
+      end
+    end
+
+    it "stays nil when nothing was recorded" do
+      Dir.mktmpdir do |dir|
+        config = RailsAiContext::Configuration.new
+        config.app_root = dir
+        expect(config.ai_tools).to be_nil
+      end
+    end
+
+    it "prefers the explicit assignment" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "ai_tools" => %w[claude] }))
+
+        config = RailsAiContext::Configuration.new
+        config.app_root = dir
+        config.ai_tools = %i[codex]
+        expect(config.ai_tools).to eq(%i[codex])
+      end
     end
   end
 end

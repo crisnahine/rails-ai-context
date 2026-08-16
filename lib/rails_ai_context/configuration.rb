@@ -40,8 +40,13 @@ module RailsAiContext
         next unless YAML_KEYS.include?(key_sym)
         next if value.nil?
 
-        value = coerce_value(key_sym, value)
-        config.public_send(:"#{key_sym}=", value)
+        begin
+          config.public_send(:"#{key_sym}=", coerce_value(key_sym, value))
+        rescue ArgumentError => e
+          # A bad value degrades the same way bad syntax does: warn, keep the
+          # default, and let the rest of the file apply.
+          $stderr.puts "[rails-ai-context] WARNING: #{path}: #{key}: #{e.message}. Keeping the default."
+        end
       end
 
       config
@@ -51,13 +56,18 @@ module RailsAiContext
     end
 
     # Auto-load config from .rails-ai-context.yml if no initializer configure block ran.
-    # Safe to call multiple times (idempotent).
+    # Safe to call multiple times (idempotent). Called by the engine on boot
+    # and by the standalone binary, so the documented precedence (initializer,
+    # then YAML, then defaults) holds on every entry point.
     def self.auto_load!(dir = nil)
       return if RailsAiContext.configured_via_block?
 
       dir ||= defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
       yaml_path = File.join(dir, CONFIG_FILENAME)
-      load_from_yaml(yaml_path) if File.exist?(yaml_path)
+      return unless File.exist?(yaml_path)
+
+      $stderr.puts "[rails-ai-context] Loading configuration from #{CONFIG_FILENAME}" if ENV["DEBUG"]
+      load_from_yaml(yaml_path)
     end
 
     def self.coerce_value(key, value)
@@ -178,10 +188,23 @@ module RailsAiContext
 
     # Which AI tools to generate context for (selected during install)
     # nil = all formats, or %i[claude cursor copilot opencode codex]
-    attr_accessor :ai_tools
+    attr_writer :ai_tools
+
+    # The configure block sets it; an app that recorded its selection without
+    # one - zero-config, or an initializer whose line is still commented out -
+    # answers from the record, so no surface re-asks a question already
+    # answered.
+    def ai_tools
+      @ai_tools ||= Install::SelectionRecord.read(root: selection_root)
+    end
 
     # Tool invocation mode: :mcp (MCP primary + CLI fallback) or :cli (CLI only)
     attr_accessor :tool_mode
+
+    def selection_root
+      app_root || (defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd)
+    end
+    private :selection_root
 
     DEFAULT_EXCLUDED_FILTERS = %w[
       verify_authenticity_token verify_same_origin_request

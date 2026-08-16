@@ -4,6 +4,11 @@ module RailsAiContext
   class Engine < ::Rails::Engine
     # Register the MCP server after Rails finishes loading
     initializer "rails_ai_context.setup", after: :load_config_initializers do |_app|
+      # The documented precedence - initializer, then YAML, then defaults -
+      # used to run only in the standalone binary; every in-Gemfile surface
+      # left the YAML inert. auto_load! no-ops when a configure block ran.
+      RailsAiContext::Configuration.auto_load!
+
       # Make introspection available via Rails console
       Rails.application.config.rails_ai_context = RailsAiContext.configuration
     end

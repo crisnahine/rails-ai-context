@@ -125,11 +125,7 @@ rescue => e
 end unless defined?(ensure_mcp_configs)
 
 def tool_mode_configured?
-  init_path = Rails.root.join("config/initializers/rails_ai_context.rb")
-  return false unless File.exist?(init_path)
-  content = File.read(init_path)
-  # Check for uncommented tool_mode line (not just a comment)
-  content.match?(/^\s*config\.tool_mode\s*=/)
+  !RailsAiContext::Install::SelectionRecord.tool_mode(root: Rails.root).nil?
 rescue => e
   $stderr.puts "[rails-ai-context] tool_mode_configured? failed: #{e.message}" if ENV["DEBUG"]
   false
@@ -287,10 +283,6 @@ namespace :ai do
   desc "Generate AI context files for configured AI tools (prompts on first run)"
   task context: :environment do
     require "rails_ai_context"
-
-    # Nothing else on the rake path loads .rails-ai-context.yml, so a
-    # YAML-configured app (no initializer) would re-prompt on every run.
-    RailsAiContext::Configuration.auto_load!
 
     apply_context_mode_override
 
