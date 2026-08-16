@@ -69,16 +69,15 @@ module RailsAiContext
 
           # Pagination
           total = all_controllers.size
-          offset_val = [ offset.to_i, 0 ].max
-          limit_val = limit.nil? ? 50 : [ limit.to_i, 1 ].max
           sorted_all = all_controllers.sort_by { |c| c[:name]&.to_s || "" }
-          controllers = sorted_all.drop(offset_val).first(limit_val)
+          page = paginate(sorted_all, offset: offset, limit: limit)
+          controllers = page[:items]
 
           if controllers.empty? && total > 0
-            return text_response("No controllers at offset #{offset_val}. Total: #{total}. Use `offset:0` to start over.")
+            return text_response("No controllers at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
           end
 
-          pagination_hint = offset_val + limit_val < total ? "\n_Showing #{controllers.size} of #{total}. Use `offset:#{offset_val + limit_val}` for more. cache_key: #{cache_key}_" : ""
+          pagination_hint = page[:offset] + page[:limit] < total ? "\n_Showing #{controllers.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more. cache_key: #{cache_key}_" : ""
 
           case detail
           when "summary"

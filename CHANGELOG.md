@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ApplicationMailer` arrived as a deliverable action; they subtract now, and
   static mailer actions apply the same underscore rule as controllers. (#149)
 
+- **Every generated context file states each fact through one renderer.**
+  `SectionFacts` owns the models line, the database line, the associations
+  list (eight copies, three of them in tools) and the warnings section -
+  which now renders in AGENTS.md and .github/copilot-instructions.md too, so
+  a half-failed run cannot look clean in two of four files. AGENTS.md stops
+  shadowing the shared architecture and footer renderers with poorer copies,
+  and its controller list goes through the shared renderer with named
+  actions as a depth choice rather than a fork. `Payload` is the reading
+  side of the introspection hash: list readers whose key pairs a spec pins
+  against the producing introspector's real output, so the next renamed key
+  fails a test instead of silently emptying a section. (#151)
+- **API-only apps are told "does not apply", not "not found".**
+  `rails_get_helper_methods` and `rails_get_frontend_stack` now consult the
+  api-only note like the other eleven call sites. The two hand-rolled
+  paginations (`rails_get_schema`, `rails_get_stimulus`) go through the
+  shared `paginate`, one offset/limit behavior across all fourteen paginated
+  surfaces. (#152)
 - **The interactive install is one program with three voices.** The
   generator, the standalone binary and the rake task each held a full copy
   of the prompts, the removed-tool cleanup, the gitignore append and the

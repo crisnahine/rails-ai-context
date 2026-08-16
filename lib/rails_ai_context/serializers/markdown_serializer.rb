@@ -100,7 +100,7 @@ module RailsAiContext
         lines = [ "## Models (#{models.size})" ]
         models.each do |name, data|
           next if data[:error]
-          assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }.join(", ")
+          assocs = SectionFacts.associations_list(data).join(", ")
           lines << "### #{escape_markdown(name)}"
           lines << "- Table: `#{data[:table_name]}`" if data[:table_name]
           lines << "- Associations: #{assocs}" if assocs.present?

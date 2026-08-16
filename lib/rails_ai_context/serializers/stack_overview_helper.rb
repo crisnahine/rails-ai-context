@@ -99,12 +99,21 @@ module RailsAiContext
 
       # Render a compact controllers listing: "- Name (N actions)" + "...X more".
       # Shared by cursor_rules and copilot_instructions serializers.
-      def render_compact_controllers_list(controllers_hash, limit: 25)
+      # `with_actions:` names the actions instead of counting them - the
+      # depth is the caller's choice, the rendering is not.
+      def render_compact_controllers_list(controllers_hash, limit: 25, with_actions: false)
         lines = []
         controllers_hash.keys.sort.first(limit).each do |name|
           info = controllers_hash[name]
-          action_count = info[:actions]&.size || 0
-          lines << "- #{name} (#{count_phrase(action_count, "action")})"
+          if with_actions
+            actions = (info[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
+            line = "- **#{name}**"
+            line += " - #{actions.join(', ')}" unless actions.empty?
+            lines << line
+          else
+            action_count = info[:actions]&.size || 0
+            lines << "- #{name} (#{count_phrase(action_count, "action")})"
+          end
         end
         lines << "- ...#{controllers_hash.size - limit} more" if controllers_hash.size > limit
         lines

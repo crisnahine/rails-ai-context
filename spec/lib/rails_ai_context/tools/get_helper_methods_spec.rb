@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Tools::GetHelperMethods do
   before { described_class.reset_cache! }
@@ -80,6 +81,19 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       text = result.content.first[:text]
       # PostsHelper has post_excerpt(post, length: 100)
       expect(text).to include("post_excerpt")
+    end
+
+    context "when an API-only app has no app/helpers directory" do
+      it "answers not applicable instead of not found" do
+        Dir.mktmpdir do |root|
+          allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+          allow(described_class).to receive(:cached_context).and_return(api: { api_only: true })
+
+          text = described_class.call.content.first[:text]
+          expect(text).to include("Not applicable")
+          expect(text).to include("API-only")
+        end
+      end
     end
   end
 end

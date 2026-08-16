@@ -23,15 +23,11 @@ module RailsAiContext
       def render_stack_overview
         lines = [ "## Stack" ]
 
-        schema = context[:schema]
-        if SectionGuard.usable?(schema)
-          tables = schema[:total_tables]
-          lines << "- Database: #{database_adapter_label(schema)} - #{count_phrase(tables, "table")}"
+        if (db_line = SectionFacts.database_line(context))
+          lines << db_line
         end
-
-        models = context[:models]
-        if models.is_a?(Hash) && !models[:error]
-          lines << "- Models: #{models.size}"
+        if (models_line = SectionFacts.models_line(context))
+          lines << models_line
         end
 
         routes = context[:routes]
@@ -76,7 +72,7 @@ module RailsAiContext
           data = models[name]
           assoc_count = (data[:associations] || []).size
           val_count = (data[:validations] || []).size
-          top_assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }.join(", ")
+          top_assocs = SectionFacts.associations_list(data).join(", ")
           line = "- **#{name}**"
           line += " (#{assoc_count}a, #{val_count}v)" if assoc_count > 0 || val_count > 0
           line += " - #{top_assocs}" if top_assocs && !top_assocs.empty?
@@ -117,14 +113,7 @@ module RailsAiContext
       end
 
       def render_warnings
-        warnings = context[:_warnings]
-        return [] if warnings.nil? || warnings.empty?
-
-        lines = [ "", "## Warnings", "" ]
-        warnings.each do |w|
-          lines << "- **#{w[:introspector]}** skipped: #{w[:error]}"
-        end
-        lines
+        SectionFacts.warnings(context)
       end
 
       def enforce_max_lines(lines)

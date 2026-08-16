@@ -174,7 +174,7 @@ module RailsAiContext
           top.each do |name|
             data = models[name]
             next unless data.is_a?(Hash) && !data[:error]
-            assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }
+            assocs = Serializers::SectionFacts.associations_list(data)
             validations = data[:validations] || []
             desc = "**#{name}**"
             desc += " (table: `#{data[:table_name]}`)" if data[:table_name]

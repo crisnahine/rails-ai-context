@@ -88,11 +88,10 @@ module RailsAiContext
 
           case detail
           when "summary"
-            limit ||= 50
-            limit = 50 if limit.to_i < 1
-            paginated = tables.keys.sort.drop(offset).first(limit)
+            page = paginate(tables.keys.sort, offset: offset, limit: limit, default_limit: 50)
+            paginated = page[:items]
             if paginated.empty? && total > 0
-              return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
+              return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
             lines = [ "# Schema Summary (#{count_phrase(total, "table")})", "" ]
             lines << "**Adapter:** #{adapter_label(schema)}" if schema[:adapter]
@@ -104,20 +103,19 @@ module RailsAiContext
               lines << "- **#{name}** - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
             end
             lines.concat(secondary_databases_lines(schema))
-            if offset + limit < total
-              lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more, or `table:\"name\"` for full detail._"
+            if page[:offset] + page[:limit] < total
+              lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more, or `table:\"name\"` for full detail._"
               lines << "_cache_key: #{cache_key}_"
             end
             text_response(lines.join("\n"))
 
           when "standard"
-            limit ||= 25
-            limit = 25 if limit.to_i < 1
             # Sort by column count (most complex first) - AI agents care about big tables first
             sorted = tables.keys.sort_by { |name| -(tables[name][:columns]&.size || 0) }
-            paginated = sorted.drop(offset).first(limit)
+            page = paginate(sorted, offset: offset, limit: limit, default_limit: 25)
+            paginated = page[:items]
             if paginated.empty?
-              return text_response("No tables at offset #{offset}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
+              return text_response("No tables at offset #{page[:offset]}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
             end
             lines = [ "# Schema (#{count_phrase(total, "table")}, showing #{paginated.size})", "" ]
             lines.concat(static_source_lines(schema))
@@ -181,15 +179,14 @@ module RailsAiContext
             end
 
             lines.concat(secondary_databases_lines(schema))
-            lines << "_Use `detail:\"summary\"` for all #{count_phrase(total, "table")}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > limit
+            lines << "_Use `detail:\"summary\"` for all #{count_phrase(total, "table")}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > page[:limit]
             text_response(lines.join("\n"))
 
           when "full"
-            limit ||= 10
-            limit = 10 if limit.to_i < 1
-            paginated = tables.keys.sort.drop(offset).first(limit)
+            page = paginate(tables.keys.sort, offset: offset, limit: limit, default_limit: 10)
+            paginated = page[:items]
             if paginated.empty? && total > 0
-              return text_response("No tables at offset #{offset}. Total: #{total}. Use `offset:0` to start over.")
+              return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
             lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
             paginated.each do |name|
@@ -197,8 +194,8 @@ module RailsAiContext
               lines << ""
             end
             lines.concat(secondary_databases_lines(schema))
-            if offset + limit < total
-              lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{offset + limit}` for more._"
+            if page[:offset] + page[:limit] < total
+              lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more._"
               lines << "_cache_key: #{cache_key}_"
             end
             text_response(lines.join("\n"))

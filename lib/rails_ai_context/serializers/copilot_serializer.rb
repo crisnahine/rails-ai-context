@@ -26,14 +26,13 @@ module RailsAiContext
 
         # Stack overview
         lines << "## Stack"
-        schema = context[:schema]
-        if SectionGuard.usable?(schema)
-          tables = schema[:total_tables]
-          lines << "- Database: #{database_adapter_label(schema)} - #{count_phrase(tables, "table")}"
+        if (db_line = SectionFacts.database_line(context))
+          lines << db_line
         end
-
         models = context[:models]
-        lines << "- Models: #{models.size}" if models.is_a?(Hash) && !models[:error]
+        if (models_line = SectionFacts.models_line(context))
+          lines << models_line
+        end
 
         routes = context[:routes]
         if routes && !routes[:error]
@@ -61,7 +60,7 @@ module RailsAiContext
           lines << "## Models (#{models.size})"
           models.keys.sort.first(25).each do |name|
             data = models[name]
-            assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }.join(", ")
+            assocs = SectionFacts.associations_list(data).join(", ")
             line = "- **#{name}**"
             line += " - #{assocs}" unless assocs.empty?
             lines << line
@@ -94,6 +93,8 @@ module RailsAiContext
         lines << "- Use the introspection tools to check schema before writing migrations"
         lines << "- Run `#{detect_test_command}` after changes"
         lines << ""
+
+        lines.concat(SectionFacts.warnings(context))
 
         lines.join("\n")
       end

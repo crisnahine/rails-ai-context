@@ -59,6 +59,11 @@ module RailsAiContext
         max_size = RailsAiContext.configuration.max_file_size
 
         unless Dir.exist?(helpers_dir)
+          # "not found" invites an agent to add helpers to an app that chose
+          # not to have any.
+          note = api_only_note("app/helpers")
+          return text_response(note) if note
+
           return text_response("No app/helpers/ directory found.")
         end
 

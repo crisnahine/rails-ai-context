@@ -49,7 +49,7 @@ module RailsAiContext
 
         models.keys.sort.first(30).each do |name|
           data = models[name]
-          assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }.join(", ")
+          assocs = SectionFacts.associations_list(data).join(", ")
           vals = (data[:validations] || []).size
           line = "- **#{name}**"
           line += " (table: #{data[:table_name]})" if data[:table_name]
@@ -91,15 +91,7 @@ module RailsAiContext
         before_actions = detect_before_actions
         lines << "**Global before_actions:** #{before_actions.join(', ')}" << "" if before_actions.any?
 
-        app_controllers.keys.sort.first(25).each do |name|
-          info = app_controllers[name]
-          actions = (info[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
-          line = "- **#{name}**"
-          line += " - #{actions.join(", ")}" unless actions.empty?
-          lines << line
-        end
-
-        lines << "- _...#{app_controllers.size - 25} more_" if app_controllers.size > 25
+        lines.concat(render_compact_controllers_list(app_controllers, limit: 25, with_actions: true))
 
         # List service objects
         services = detect_service_files

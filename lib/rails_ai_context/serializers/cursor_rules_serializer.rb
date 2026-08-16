@@ -72,13 +72,12 @@ module RailsAiContext
           ""
         ]
 
-        schema = context[:schema]
-        if SectionGuard.usable?(schema)
-          lines << "- Database: #{database_adapter_label(schema)} - #{count_phrase(schema[:total_tables], "table")}"
+        if (db_line = SectionFacts.database_line(context))
+          lines << db_line
         end
-
-        models = context[:models]
-        lines << "- Models: #{models.size}" if models.is_a?(Hash) && !models[:error]
+        if (models_line = SectionFacts.models_line(context))
+          lines << models_line
+        end
 
         routes = context[:routes]
         if routes && !routes[:error]

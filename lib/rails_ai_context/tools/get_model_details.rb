@@ -90,7 +90,7 @@ module RailsAiContext
             paginated.each do |name|
               data = models[name]
               next if data[:error]
-              assocs = (data[:associations] || []).map { |a| "#{a[:type]} :#{a[:name]}" }.join(", ")
+              assocs = Serializers::SectionFacts.associations_list(data).join(", ")
               line = "- **#{name}**"
               line += " (table: #{data[:table_name]})" if data[:table_name]
               line += " - #{assocs}" unless assocs.empty?

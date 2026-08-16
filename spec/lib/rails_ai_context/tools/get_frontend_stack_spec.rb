@@ -401,5 +401,20 @@ RSpec.describe RailsAiContext::Tools::GetFrontendStack do
         expect(text).not_to include("No frontend stack detected")
       end
     end
+
+    context "when an API-only app has no frontend at all" do
+      it "answers not applicable instead of not detected" do
+        allow(described_class).to receive(:cached_context).and_return(
+          api: { api_only: true },
+          frontend_frameworks: {},
+          stimulus: {},
+          gems: {}
+        )
+
+        text = described_class.call(detail: "summary").content.first[:text]
+        expect(text).to include("Not applicable")
+        expect(text).to include("API-only")
+      end
+    end
   end
 end

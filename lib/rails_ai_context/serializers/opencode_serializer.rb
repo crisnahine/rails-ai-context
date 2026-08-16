@@ -18,6 +18,10 @@ module RailsAiContext
         FullOpencodeSerializer
       end
 
+      # The shared architecture and footer renderers serve here too; the
+      # overrides this class used to carry dropped the Services/Jobs lines
+      # and the detected test command, and its composition skipped the
+      # warnings, so a half-failed run looked clean in AGENTS.md.
       def render_compact
         lines = []
         lines.concat(render_header)
@@ -27,38 +31,10 @@ module RailsAiContext
         lines.concat(render_architecture)
         lines.concat(render_commands)
         lines.concat(render_tools_guide_compact)
+        lines.concat(render_warnings)
         lines.concat(render_footer)
 
         enforce_max_lines(lines)
-      end
-
-      def render_architecture
-        conv = context[:conventions]
-        return [] unless conv.is_a?(Hash) && !conv[:error]
-
-        arch = conv[:architecture] || []
-        patterns = conv[:patterns] || []
-        return [] if arch.empty? && patterns.empty?
-
-        arch_labels = arch_labels_hash
-        pattern_labels = pattern_labels_hash
-
-        lines = [ "## Architecture" ]
-        arch.each { |p| lines << "- #{arch_labels[p] || p}" }
-        patterns.first(8).each { |p| lines << "- #{pattern_labels[p] || p}" }
-        lines << ""
-        lines
-      end
-
-      def render_footer
-        [
-          "## Rules",
-          "- Follow existing patterns and conventions",
-          "- Use the MCP tools to check schema before writing migrations",
-          "- Match existing code style",
-          "- Run tests after changes",
-          ""
-        ]
       end
     end
 

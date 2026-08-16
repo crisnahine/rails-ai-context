@@ -146,7 +146,7 @@ module RailsAiContext
               end
 
               if data[:associations].is_a?(Array) && data[:associations].any?
-                lines << "**Associations:** #{data[:associations].select { |a| a.is_a?(Hash) }.map { |a| "#{a[:type]} :#{a[:name]}" }.join(', ')}"
+                lines << "**Associations:** #{Serializers::SectionFacts.associations_list(data).join(', ')}"
               end
               if data[:validations].is_a?(Array) && data[:validations].any?
                 lines << "**Validations:** #{data[:validations].select { |v| v.is_a?(Hash) }.map { |v| "#{v[:kind]} on #{Array(v[:attributes]).join(', ')}" }.uniq.join('; ')}"

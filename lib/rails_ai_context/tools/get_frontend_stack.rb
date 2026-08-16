@@ -72,7 +72,9 @@ module RailsAiContext
             return hotwire if hotwire
           end
 
-          parts.any? ? parts.join(" + ") : "No frontend framework detected."
+          return parts.join(" + ") if parts.any?
+
+          api_only_note("a frontend") || "No frontend framework detected."
         end
 
         def build_hotwire_summary
