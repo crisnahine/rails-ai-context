@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "set"
 
 module RailsAiContext
   module Install

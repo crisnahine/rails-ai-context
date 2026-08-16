@@ -127,6 +127,11 @@ Discourse and Mastodon. Every one of them exits 0.
   for a controller with a route. `rails_analyze_feature` listed them as
   untested. `Payload.controller_route_key` is the one derivation now, and a
   spec drives all five tools with an inflected name.
+- **The install path's files require their own stdlib.** `init` loads six
+  files before Rails and before the entry file, on purpose - so the entry
+  file's `require "set"` never runs for them. `legacy_cleanup`'s `[...].to_set`
+  raised `NoMethodError` on Ruby 3.1, where `Set` is not autoloaded, and 3.2+
+  hid it: only the CI matrix ever saw it.
 - **`rails_runtime_info` reports cache numbers, not the cache object.** The
   MemoryStore branch passed `cache.inspect` straight through, so the answer
   carried `#<ActiveSupport::Cache::MemoryStore entries=0, size=0, options={...}>`
