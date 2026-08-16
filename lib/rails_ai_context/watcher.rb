@@ -1,32 +1,22 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # File system watcher that regenerates context files when key files change.
-  # Requires the `listen` gem (optional dependency).
+  # Regenerates context files when the app changes. The loop - watch list,
+  # fingerprint gate, code reload - is ChangeWatch's; this supplies the
+  # blocking foreground behavior and the regeneration reaction. Interactive
+  # by nature, so it also gets the one-time legacy-files prompt the
+  # server-side reload deliberately skips.
   class Watcher
-    DEBOUNCE_SECONDS = 2
-    WATCH_PATTERNS = %w[
-      app/models
-      app/controllers
-      app/jobs
-      app/mailers
-      app/javascript/controllers
-      config
-      db
-    ].freeze
-
     attr_reader :app
 
     def initialize(app = nil)
       @app = app || Rails.application
-      @last_fingerprint = Fingerprinter.compute(@app)
+      @watch = ChangeWatch.new(@app)
     end
 
     def start
-      require "listen"
-
       root = app.root.to_s
-      dirs = WATCH_PATTERNS.map { |p| File.join(root, p) }.select { |d| Dir.exist?(d) }
+      dirs = @watch.watched_dirs
 
       if dirs.empty?
         $stderr.puts "[rails-ai-context] No watchable directories found"
@@ -43,19 +33,15 @@ module RailsAiContext
       $stderr.puts "[rails-ai-context] Watching for changes..."
       $stderr.puts "[rails-ai-context] Directories: #{dirs.map { |d| d.sub("#{root}/", '') }.join(', ')}"
 
-      listener = Listen.to(*dirs) do |modified, added, removed|
-        next if (modified + added + removed).empty?
-        handle_change
-      end
-
-      listener.start
+      listener = @watch.start { |_paths, _reloaded| regenerate }
+      return unless listener
 
       # Keep the process alive
       loop do
         sleep 1
       rescue Interrupt
         $stderr.puts "\n[rails-ai-context] Stopping watcher..."
-        listener.stop
+        @watch.stop
         break
       end
     rescue LoadError
@@ -64,17 +50,16 @@ module RailsAiContext
       exit 1
     end
 
+    # Run one change batch through the shared gate. Public for testability -
+    # specs drive this instead of a real Listen thread.
+    def handle_change(paths = [])
+      @watch.gate(paths) { |_paths, _reloaded| regenerate }
+    end
+
     private
 
-    def handle_change
-      return unless Fingerprinter.changed?(app, @last_fingerprint)
-
-      @last_fingerprint = Fingerprinter.compute(app)
-
+    def regenerate
       $stderr.puts "[rails-ai-context] Changes detected, regenerating context files..."
-      # Without this the regenerated files describe the app as it was when the
-      # watcher started, not as it is now.
-      CodeReloader.reload!
       result = RailsAiContext.generate_context(format: :all)
       result[:written].each { |f| $stderr.puts "  Updated: #{f}" }
       result[:skipped].each { |f| $stderr.puts "  Unchanged: #{f}" }

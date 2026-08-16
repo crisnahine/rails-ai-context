@@ -6,20 +6,10 @@ RSpec.describe RailsAiContext::Watcher do
   let(:app) { Rails.application }
   let(:watcher) { described_class.new(app) }
 
-  describe "DEBOUNCE_SECONDS" do
-    it "is set to 2" do
-      expect(described_class::DEBOUNCE_SECONDS).to eq(2)
-    end
-  end
-
-  describe "WATCH_PATTERNS" do
-    it "is a frozen array" do
-      expect(described_class::WATCH_PATTERNS).to be_frozen
-      expect(described_class::WATCH_PATTERNS).to be_an(Array)
-    end
-
+  describe "the shared watch list" do
     it "includes key Rails directories" do
-      patterns = described_class::WATCH_PATTERNS
+      patterns = RailsAiContext::ChangeWatch::WATCH_DIRS
+      expect(patterns).to be_frozen
       expect(patterns).to include("app/models")
       expect(patterns).to include("app/controllers")
       expect(patterns).to include("config")
@@ -45,7 +35,7 @@ RSpec.describe RailsAiContext::Watcher do
   describe "#start" do
     context "when listen gem is not available" do
       before do
-        allow(watcher).to receive(:require).with("listen").and_raise(LoadError)
+        allow(watcher.instance_variable_get(:@watch)).to receive(:require).with("listen").and_raise(LoadError)
         allow($stderr).to receive(:puts)
       end
 

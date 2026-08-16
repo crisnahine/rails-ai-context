@@ -95,7 +95,7 @@ RSpec.describe RailsAiContext::LiveReload do
       end
 
       it "rescues and logs the error without crashing" do
-        expect($stderr).to receive(:puts).with("[rails-ai-context] Live reload error: disk error")
+        expect($stderr).to receive(:puts).with("[rails-ai-context] Change watch error: disk error")
         expect { live_reload.handle_change(changed_paths) }.not_to raise_error
       end
     end
@@ -174,7 +174,7 @@ RSpec.describe RailsAiContext::LiveReload do
 
     before do
       # Stub `require "listen"` so it doesn't raise LoadError in the test env
-      allow(live_reload).to receive(:require).with("listen").and_return(true)
+      allow(live_reload.instance_variable_get(:@watch)).to receive(:require).with("listen").and_return(true)
       stub_const("Listen", listen_mod)
       allow(listen_mod).to receive(:to).and_return(listener)
       allow(listener).to receive(:start)
@@ -212,7 +212,7 @@ RSpec.describe RailsAiContext::LiveReload do
     it "stops the listener when one is running" do
       listener = instance_double("Listen::Listener")
       allow(listener).to receive(:stop)
-      live_reload.instance_variable_set(:@listener, listener)
+      live_reload.instance_variable_get(:@watch).instance_variable_set(:@listener, listener)
 
       live_reload.stop
 
@@ -224,10 +224,14 @@ RSpec.describe RailsAiContext::LiveReload do
     end
   end
 
-  describe "WATCH_DIRS" do
-    it "is the union of Watcher::WATCH_PATTERNS and Fingerprinter::WATCHED_DIRS" do
-      expected = (RailsAiContext::Watcher::WATCH_PATTERNS | RailsAiContext::Fingerprinter::WATCHED_DIRS)
-      expect(described_class::WATCH_DIRS).to match_array(expected)
+  describe "the shared watch list" do
+    it "covers everything the fingerprint reads, so a change cannot be fingerprinted but unwatched" do
+      RailsAiContext::Fingerprinter::WATCHED_DIRS.each do |dir|
+        covered = RailsAiContext::ChangeWatch::WATCH_DIRS.any? do |watched|
+          dir == watched || dir.start_with?("#{watched}/")
+        end
+        expect(covered).to be(true), "#{dir} is fingerprinted but not watched"
+      end
     end
   end
 end
