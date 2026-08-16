@@ -532,6 +532,18 @@ class RailsAiContextCLI < Thor
       ENV["RAILS_ENV"] = environment_opt if environment_opt
 
       if allow_static && (no_boot || options[:no_boot])
+        # Still a Rails app, or the static tier describes a directory that is
+        # not one: in an empty folder this wrote a CLAUDE.md reporting
+        # "Migrations: 0 total" and exited 0. The static tier reads files, so
+        # config/application.rb is enough - environment.rb is the boot entry
+        # point and only the booting path needs it.
+        unless File.exist?(File.join(Dir.pwd, "config", "application.rb")) ||
+               File.exist?(File.join(Dir.pwd, "config", "environment.rb"))
+          $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
+          $stderr.puts "Run this command from your Rails app root directory (or pass --app-path)."
+          exit 1
+        end
+
         enter_static_tier!("static mode requested with --no-boot")
         return
       end
