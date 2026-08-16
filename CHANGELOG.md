@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.23.1] - 2026-08-16
+
+### Fixed
+
+Six defects found by a QA round against GitLab, OpenProject, Canvas LMS,
+Discourse and Mastodon. Every one of them exits 0.
+
+- **A controller is named by the constant its source declares.** Zeitwerk
+  resolves a path through the app's own inflector, which the static tier
+  never loads, so camelizing the path invented `Activitypub::` for the 12
+  controllers Mastodon declares as `ActivityPub::` and `Oauth::` for the 4
+  it declares as `OAuth::` - names that appear nowhere in an app that
+  registers those acronyms, and a `NameError` for anyone who uses one. The
+  path stays the answer where the source does not carry the whole name
+  (`application_cable/channel.rb`) and where the declared name does not name
+  that file, since Prism recovers a syntax error into a partial tree.
+- **Only a class names a mailer or a channel.** `app/mailers` is also where
+  ActionMailer interceptors live, and every `.rb` under it counted:
+  OpenProject's `Interceptors::DefaultHeaders` arrived as a mailer with
+  `delivering_email` - a hook the framework calls - listed as an email an
+  agent could send, 2 of its 11 entries.
+- **Migration replay reads what a migration does, not what it undoes.** A
+  `def down` says how to reverse the change, so replaying it alongside `up`
+  cancelled the migration out. On a migrations-only app the ordinary
+  up-creates/down-drops pair erased two tables OpenProject really has (35
+  to 37), and the reverse pair would have invented one it dropped.
+- **i18n coverage skips locales that carry no translations, and says so.** A
+  language-name lookup table under `config/locales` contributes a top-level
+  key per language, and Rails does load each as an available locale. Scoring
+  them produced a row each saying every key was missing: on Discourse, 138
+  of 186 coverage rows described a translation effort nobody had started.
+  The available list still matches a booted Rails.
+- **A recorded tool selection no longer switches off `.ai-context.json`.**
+  The install generator always records one, and every later `rails
+  ai:context` passed that list to the serializer. The machine artifact is
+  not an AI tool and no install menu offers it, so it silently stopped being
+  written on the one install path the docs describe - while the generator
+  went on adding it to `.gitignore`.
+- **`skip_tools` accepts the symbol spelling its neighbours use.** Every
+  other key in the generated initializer takes symbols, and `%i[]` here
+  skipped nothing at all: both readers compare against a tool name, which is
+  a String.
+
+### Changed
+
+- **The generated initializer has one indent from top to bottom.** The AI
+  Tools section was written at the configure body's indent and every section
+  after it flush, so the file an app commits changed indent two lines in and
+  stayed there.
+
 ## [5.23.0] - 2026-08-16
 
 ### Fixed
