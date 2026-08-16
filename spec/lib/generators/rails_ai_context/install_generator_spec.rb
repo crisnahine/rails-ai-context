@@ -43,6 +43,23 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content).to end_with("  end\nend\n")
     end
 
+    # This file lands in the app's repo and is read by whoever maintains it
+    # next, so its own Rubocop sees it. The AI Tools section was written at one
+    # indent and every section after it at another, and the guard wrap kept the
+    # gap by indenting both equally.
+    it "indents the whole configure body the same way" do
+      generator.create_initializer
+
+      body = File.read(initializer_path)
+        .lines
+        .drop_while { |l| !l.include?("RailsAiContext.configure do |config|") }
+        .drop(1)
+      body = body.take_while { |l| l !~ /\A  end$/ }
+      indents = body.reject { |l| l.strip.empty? }.map { |l| l[/\A */].size }
+
+      expect(indents.uniq).to eq([ 4 ])
+    end
+
     it "adds the guard when updating an existing unguarded initializer" do
       File.write(initializer_path, <<~RUBY)
         # frozen_string_literal: true
