@@ -145,9 +145,12 @@ RSpec.describe "E2E: static tier", type: :e2e do
 
   describe "tier key parity" do
     # ADR-0002 enforces the declaration contract; this enforces the shape
-    # contract: an alternate_source introspector answers the same keys from
-    # both tiers, so a key added to `call` cannot silently vanish statically.
-    it "answers the same keys from call and static_call for every alternate_source introspector" do
+    # contract: every key the booted tier answers must reach the static tier
+    # too, unless the static answer declares itself partial
+    # (unavailable_sections / unavailable). Static-only honesty extras -
+    # note, confidence, pending_migrations - are additive and fine; a booted
+    # key silently vanishing is the #137 class this exists to catch.
+    it "answers every booted key from static_call for every alternate_source introspector" do
       script = File.join(@builder.app_path, "tmp", "tier_parity_probe.rb")
       FileUtils.mkdir_p(File.dirname(script))
       File.write(script, <<~'RUBY')
@@ -173,9 +176,14 @@ RSpec.describe "E2E: static tier", type: :e2e do
         report = JSON.parse(result.stdout.lines.last)
         expect(report).not_to be_empty
 
-        mismatches = report.select { |_key, tiers| tiers["booted"] != tiers["static"] }
-        expect(mismatches).to be_empty, mismatches.map { |key, tiers|
-          "#{key}: booted=#{tiers['booted'].join(',')} static=#{tiers['static'].join(',')}"
+        mismatches = report.filter_map do |key, tiers|
+          next if tiers["static"].include?("unavailable") || tiers["static"].include?("unavailable_sections")
+
+          vanished = tiers["booted"] - tiers["static"]
+          [ key, vanished ] if vanished.any?
+        end
+        expect(mismatches).to be_empty, mismatches.map { |key, vanished|
+          "#{key}: booted keys missing statically: #{vanished.join(', ')}"
         }.join("\n")
       ensure
         File.delete(script) if File.exist?(script)

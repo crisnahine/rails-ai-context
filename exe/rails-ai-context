@@ -642,7 +642,7 @@ class RailsAiContextCLI < Thor
     def require_install_files!
       %w[
         install/ai_tool install/selection_record install/cleanup
-        mcp_config_generator legacy_cleanup
+        install/program mcp_config_generator legacy_cleanup
       ].each { |file| require_relative "../lib/rails_ai_context/#{file}" }
 
       return if ::RailsAiContext.respond_to?(:log_warn)

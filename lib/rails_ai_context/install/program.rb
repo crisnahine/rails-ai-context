@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+# Stdlib only: the standalone binary loads this before the gem entry, so it
+# must stand alone the way the other install files do.
+require "pathname"
+
 module RailsAiContext
   module Install
     # The interactive install program: which tools, which mode, what to clean

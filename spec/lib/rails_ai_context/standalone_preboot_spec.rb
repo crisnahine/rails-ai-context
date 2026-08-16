@@ -44,10 +44,14 @@ RSpec.describe "Standalone pre-boot load" do
   it "requires every stdlib constant it names" do
     missing = files.flat_map { |file|
       source = File.read(File.join(root, "lib/rails_ai_context", "#{file}.rb"))
-      code = source.lines.reject { |line| line.strip.start_with?("#") || line.include?("%w[") }.join
+      # From the AST, not a text match: prose in a written string ("JSON
+      # cache" in a gitignore comment) is not a constant reference, and an
+      # interpolated `"#{JSON.dump(x)}"` is - exactly the distinction the
+      # parser makes and a regex over quotes does not.
+      named = constant_reads(Prism.parse(source).value)
 
       STDLIB_CONSTANTS.filter_map { |constant, feature|
-        next unless code.match?(/\b#{constant}\b/)
+        next unless named.include?(constant)
         # Indented too: a require sitting with the one branch that uses the
         # constant is the file requiring what it names, just later.
         next if source.match?(/^\s*require "#{feature}"$/)
@@ -71,5 +75,11 @@ RSpec.describe "Standalone pre-boot load" do
 
     expect(output).to include("CLEAN"),
       "init's pre-boot files pull in a framework, which breaks the app's autoloader once it boots:\n#{output}"
+  end
+
+  def constant_reads(node, names = [])
+    names << node.name.to_s if node.is_a?(Prism::ConstantReadNode)
+    node.child_nodes.compact.each { |child| constant_reads(child, names) }
+    names
   end
 end

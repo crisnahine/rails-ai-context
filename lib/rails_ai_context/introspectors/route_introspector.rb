@@ -67,6 +67,9 @@ module RailsAiContext
           by_controller: group_by_controller(entries),
           api_namespaces: static_api_namespaces(entries),
           mounted_engines: mounts.map { |m| { engine: m[:engine], path: m[:path] } },
+          # Every mount parsed from routes.rb is controller-less by
+          # construction, so the booted tier's count has a static answer too.
+          unrouted_mounts: mounts.size,
           root_route: static_root_route(entries),
           note: "Parsed statically from #{static_sources_phrase(files)} (app not booted)",
           confidence: Confidence::STATIC
