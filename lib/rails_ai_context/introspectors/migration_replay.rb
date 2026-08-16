@@ -32,12 +32,7 @@ module RailsAiContext
         })
 
         current_table = nil
-        # parse_string returns nil for an oversize source, and a migration can
-        # sit between max_file_size and max_schema_file_size.
-        parsed = AstCache.parse_string(content)
-        return unless parsed
-
-        root = parsed.value
+        root = AstCache.parse_string(content).value
 
         # A `def down` says what to undo, not what the schema holds. Replaying
         # it alongside `up` cancels the migration out: the ordinary
@@ -87,9 +82,15 @@ module RailsAiContext
         end
       end
 
-      # Line ranges of every `def down` / `def self.down` in the file.
-      # Every way a migration spells "this part only runs on the way down":
-      # `def down`, `reversible { |dir| dir.down { ... } }`, and `revert`.
+      # Line ranges of the parts that only run on the way down: `def down`,
+      # `reversible { |dir| dir.down { ... } }`, and a `revert` block.
+      #
+      # `revert` is skipped rather than inverted. Inverting it properly means
+      # running each operation backwards, and the failure modes are not
+      # symmetric: skipping under-reports a table that reverting a drop would
+      # restore, while guessing over-reports one the app does not have. This
+      # gem would rather omit than invent. `revert SomeMigration`, the
+      # argument form, is not seen at all.
       def find_down_bodies(node, ranges)
         case node
         when Prism::DefNode

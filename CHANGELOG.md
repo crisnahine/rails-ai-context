@@ -28,10 +28,13 @@ Discourse and Mastodon. Every one of them exits 0.
   the gem's defaults: on Mastodon it advertised 45 tools while the MCP server
   offered 43 and the CLI itself answered `Unknown tool 'query'` for one it
   had just listed.
-- **`search_extensions` reaches the ripgrep path too.** It was read only by
-  the Ruby fallback, so the same configuration gave two different answers
-  depending on whether ripgrep happened to be installed - and on the machines
-  where it is, narrowing the list did nothing at all.
+- **`search_extensions` is documented as the fallback's list, which is what
+  it is.** Making ripgrep honour it did make the two backends agree, and it
+  cost the reach that makes the tool useful: on Mastodon `gem "devise"` went
+  from 9 results to none, because a Gemfile carries no listed extension - and
+  the same for a Rakefile, a `.md`, a `.sql`. The docs, the attr comment and
+  the line the install generator writes now say plainly that the list is the
+  Ruby fallback's and that ripgrep searches every file.
 - **A table the replay cannot name is not reported.** Canvas has a migration
   that calls `create_table table_name do |t|` with a local computed at run
   time; the replay kept the entry under a nil key, and the first serializer
@@ -59,11 +62,14 @@ Discourse and Mastodon. Every one of them exits 0.
   path stays the answer where the source does not carry the whole name
   (`application_cable/channel.rb`) and where the declared name does not name
   that file, since Prism recovers a syntax error into a partial tree.
-- **Only a class names a mailer or a channel.** `app/mailers` is also where
-  ActionMailer interceptors live, and every `.rb` under it counted:
-  OpenProject's `Interceptors::DefaultHeaders` arrived as a mailer with
-  `delivering_email` - a hook the framework calls - listed as an email an
-  agent could send, 2 of its 11 entries.
+- **An interceptor is told from a mailer by its framework hook.**
+  `app/mailers` is also where ActionMailer interceptors live, and every `.rb`
+  under it counted: OpenProject's `Interceptors::DefaultHeaders` arrived as a
+  mailer with `delivering_email` - a hook the framework calls - listed as an
+  email an agent could send, 2 of its 11 entries. What an interceptor has and
+  a mailer does not is one of `delivering_email`, `previewing_email` or
+  `delivered_email`; requiring a class instead would have dropped GitLab's 20
+  `Emails::*` modules, which hold every notification it sends.
 - **Migration replay reads what a migration does, not what it undoes.** A
   `def down` says how to reverse the change, so replaying it alongside `up`
   cancelled the migration out. On a migrations-only app the ordinary
@@ -92,6 +98,20 @@ Discourse and Mastodon. Every one of them exits 0.
   other key in the generated initializer takes symbols, and `%i[]` here
   skipped nothing at all: both readers compare against a tool name, which is
   a String.
+
+- **A controller carries the file it was read from.** Reading the name from
+  the source fixed the name and broke every path derived from it:
+  `ActivityPub::CollectionsController`.underscore is `activity_pub/...` and
+  the file is under `activitypub/`, so `rails_get_context` answered "Could
+  not extract source code" for a file that exists and asked the routes for a
+  controller key Rails does not use. Both tiers emit `file:` - the booted one
+  asks Ruby where the class was defined - and the consumers read it through
+  `Payload`.
+- **The locale files are indexed once, not once per locale.** Asking every
+  file about every locale is O(locales x files): on Discourse, 187 over 108,
+  it took the i18n answer from 4.6 seconds to four and a half minutes. Each
+  entry also records the locales it serves, so asking for one by name finds
+  its files even when the filename spells the gem rather than the locale.
 
 ### Changed
 
