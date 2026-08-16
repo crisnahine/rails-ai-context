@@ -89,6 +89,34 @@ RSpec.describe "E2E: boot resilience", type: :e2e do
       end
     end
 
+    # The listing is what an agent reads to learn which tools exist. When the
+    # app cannot boot it took the gem's defaults instead of the app's own
+    # .rails-ai-context.yml, so it advertised tools that the very next call
+    # refuses by name.
+    # YAML is the only way a standalone install configures the gem, so this is
+    # the shape that matters: no initializer, config in .rails-ai-context.yml.
+    # The initializer is moved aside because its configure block legitimately
+    # wins over the YAML, and with it in place there is nothing to load.
+    it "tool --list honours the app's config on an app that cannot boot" do
+      yml = File.join(@builder.app_path, ".rails-ai-context.yml")
+      init = File.join(@initializer_dir, "rails_ai_context.rb")
+      moved = "#{init}.qa-moved"
+      File.rename(init, moved) if File.exist?(init)
+      File.write(yml, "---\nskip_tools:\n  - rails_query\n  - rails_read_logs\n")
+
+      with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING"\n)) do
+        result = @cli.cli("tool", "--list")
+        expect(result.exit_status).to eq(0), result.to_s
+        expect(result.stdout).not_to match(/^\s+query\s/)
+        expect(result.stdout).not_to match(/^\s+read_logs\s/)
+      end
+    ensure
+      FileUtils.rm_f(File.join(@builder.app_path, ".rails-ai-context.yml"))
+      File.rename("#{File.join(@initializer_dir, 'rails_ai_context.rb')}.qa-moved",
+                  File.join(@initializer_dir, "rails_ai_context.rb")) if
+        File.exist?("#{File.join(@initializer_dir, 'rails_ai_context.rb')}.qa-moved")
+    end
+
     it "context honours --no-boot on an app that would boot fine" do
       result = @cli.cli("context", "--no-boot")
       expect(result.exit_status).to eq(0), result.to_s

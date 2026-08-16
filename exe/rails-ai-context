@@ -472,6 +472,10 @@ class RailsAiContextCLI < Thor
 
       begin
         require_gem_without_app!
+        # Boot is what normally loads .rails-ai-context.yml, so without it the
+        # listing took the gem's defaults and advertised tools the app has
+        # configured off - which the very next call then refuses by name.
+        ::RailsAiContext::Configuration.auto_load!(Dir.pwd)
         puts ::RailsAiContext::CLI::ToolRunner.tool_list
         puts ""
         puts "Run inside a Rails app to execute tools - static source analysis works even when the app can't boot (see --no-boot)."
