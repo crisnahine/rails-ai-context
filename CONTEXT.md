@@ -28,6 +28,12 @@ Two senses, one per module, and neither is bare "path" in a name.
 
 **How a path is written down** - `PortablePath` rewrites one so it means the same thing on another machine, because what it touches ends up in `.ai-context.json` and the app commits that file. App paths go app-relative, gem paths keep the gem and version and drop the install prefix. "Relativize" always means this.
 
+## Declared constant
+
+What a source file calls its own class, as opposed to the **path name** - the constant its path camelizes to. The two differ wherever the app registers an inflection, because Zeitwerk resolves a path through the app's own inflector and the static tier has never loaded it: `app/controllers/activitypub/` is `ActivityPub` in Mastodon, and `Oauth` is a constant nothing defines. `DeclaredConstant` reads the class the source declares, and since an inflection only ever changes case, the declaration that names a file is the one equal to the path name ignoring case. Anything else - a second class in the file, a nested error class, a tree Prism recovered from a syntax error - is not this file's class, and there the path name stays the answer: it is the only thing carrying the namespace when the source does not.
+
+Distinct from the **Static tier** sense of "declared": that one is about declaring a tier's capability up front rather than detecting it at runtime. This one is about a constant's spelling.
+
 ## Static tier
 
 The mode where the app did not boot, or `--no-boot` was passed. What an introspector answers here is what it declared, never what a runtime check happened to detect. Every introspector in `INTROSPECTOR_MAP` extends `StaticTier` and names one of three kinds:
