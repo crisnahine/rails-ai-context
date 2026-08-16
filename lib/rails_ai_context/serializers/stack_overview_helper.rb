@@ -12,8 +12,7 @@ module RailsAiContext
       def full_preset_stack_lines(ctx = context)
         lines = []
 
-        auth = ctx[:auth]
-        if auth.is_a?(Hash) && !auth[:error]
+        if (auth = Payload.section(ctx, :auth))
           parts = []
           parts << "Devise" if auth.dig(:authentication, :devise)&.any?
           parts << "Rails 8 auth" if auth.dig(:authentication, :rails_auth)
@@ -22,17 +21,15 @@ module RailsAiContext
           lines << "- Auth: #{parts.join(' + ')}" if parts.any?
         end
 
-        turbo = ctx[:turbo]
-        if turbo.is_a?(Hash) && !turbo[:error]
-          parts = []
-          parts << count_phrase((turbo[:turbo_frames] || []).size, "frame") if turbo[:turbo_frames]&.any?
-          parts << count_phrase((turbo[:turbo_streams] || []).size, "stream") if turbo[:turbo_streams]&.any?
-          parts << "broadcasts" if turbo[:model_broadcasts]&.any?
-          lines << "- Hotwire: #{parts.join(', ')}" if parts.any?
-        end
+        parts = []
+        frames = Payload.turbo_frames(ctx)
+        streams = Payload.turbo_streams(ctx)
+        parts << count_phrase(frames.size, "frame") if frames.any?
+        parts << count_phrase(streams.size, "stream") if streams.any?
+        parts << "broadcasts" if Payload.model_broadcasts(ctx).any?
+        lines << "- Hotwire: #{parts.join(', ')}" if parts.any?
 
-        api = ctx[:api]
-        if api.is_a?(Hash) && !api[:error]
+        if (api = Payload.section(ctx, :api))
           parts = []
           parts << "API-only" if api[:api_only]
           parts << count_phrase((api[:versions] || []).size, "version") if api[:versions]&.any?
@@ -41,24 +38,18 @@ module RailsAiContext
           lines << "- API: #{parts.join(', ')}" if parts.any?
         end
 
-        i18n_data = ctx[:i18n]
-        if i18n_data.is_a?(Hash) && !i18n_data[:error]
-          locales = i18n_data[:available_locales] || []
-          lines << "- I18n: #{count_phrase(locales.size, "locale")} (#{locales.first(5).join(', ')})" if locales.size > 1
+        locales = Payload.available_locales(ctx)
+        lines << "- I18n: #{count_phrase(locales.size, "locale")} (#{locales.first(5).join(', ')})" if locales.size > 1
+
+        attachments = Payload.storage_attachments(ctx)
+        if attachments.any?
+          lines << "- Storage: ActiveStorage (#{count_phrase(attachments.size, "model")} with attachments)"
         end
 
-        storage = ctx[:active_storage]
-        if storage.is_a?(Hash) && !storage[:error] && storage[:attachments]&.any?
-          lines << "- Storage: ActiveStorage (#{count_phrase(storage[:attachments].size, "model")} with attachments)"
-        end
+        rich_text = Payload.rich_text_fields(ctx)
+        lines << "- RichText: ActionText (#{count_phrase(rich_text.size, "field")})" if rich_text.any?
 
-        action_text = ctx[:action_text]
-        if action_text.is_a?(Hash) && !action_text[:error] && action_text[:rich_text_fields]&.any?
-          lines << "- RichText: ActionText (#{count_phrase(action_text[:rich_text_fields].size, "field")})"
-        end
-
-        assets = ctx[:assets]
-        if assets.is_a?(Hash) && !assets[:error]
+        if (assets = Payload.section(ctx, :assets))
           parts = []
           parts << assets[:pipeline] if assets[:pipeline]
           parts << assets[:js_bundler] if assets[:js_bundler]
@@ -66,20 +57,18 @@ module RailsAiContext
           lines << "- Assets: #{parts.join(', ')}" if parts.any?
         end
 
-        engines = ctx[:engines]
-        if engines.is_a?(Hash) && !engines[:error] && engines[:mounted_engines]&.any?
-          names = engines[:mounted_engines].map { |e| e[:engine] }.compact.first(5)
-          lines << "- Engines: #{names.join(', ')}" if names.any?
+        engine_names = Payload.mounted_engines(ctx).map { |e| e[:engine] }.compact.first(5)
+        lines << "- Engines: #{engine_names.join(', ')}" if engine_names.any?
+
+        raw_databases = Payload.section(ctx, :multi_database)&.dig(:databases)
+        db_list = raw_databases.is_a?(Hash) ? raw_databases.keys : Array(raw_databases)
+        if db_list.size > 1
+          db_names = db_list.map { |d| d.is_a?(Hash) ? d[:name] : d }
+          lines << "- Databases: #{db_list.size} (#{db_names.first(3).join(', ')})"
         end
 
-        multi_db = ctx[:multi_database]
-        if multi_db.is_a?(Hash) && !multi_db[:error] && multi_db[:databases]&.size.to_i > 1
-          db_names = multi_db[:databases].is_a?(Array) ? multi_db[:databases].map { |d| d[:name] } : multi_db[:databases].keys
-          lines << "- Databases: #{multi_db[:databases].size} (#{db_names.first(3).join(', ')})"
-        end
-
-        components = ctx[:components]
-        if components.is_a?(Hash) && !components[:error] && components.dig(:summary, :total).to_i > 0
+        components = Payload.section(ctx, :components)
+        if components && components.dig(:summary, :total).to_i > 0
           summary = components[:summary]
           parts = [ count_phrase(summary[:total], "component") ]
           parts << count_phrase(summary[:view_component].to_i, "ViewComponent") if summary[:view_component].to_i > 0
@@ -87,14 +76,13 @@ module RailsAiContext
           lines << "- Components: #{parts.join(', ')}"
         end
 
-        perf = ctx[:performance]
-        if perf.is_a?(Hash) && !perf[:error] && perf[:summary]
+        perf = Payload.section(ctx, :performance)
+        if perf && perf[:summary]
           total = perf.dig(:summary, :total_issues).to_i
           lines << "- Performance: #{count_phrase(total, "issue")} detected" if total > 0
         end
 
-        fe = ctx[:frontend_frameworks]
-        if fe.is_a?(Hash) && !fe[:error]
+        if (fe = Payload.section(ctx, :frontend_frameworks))
           parts = []
           parts << "#{fe[:framework]} #{fe[:version]}".strip if fe[:framework]
           parts << fe[:mounting] if fe[:mounting]

@@ -412,9 +412,7 @@ module RailsAiContext
         end
 
         def section_realtime(ctx)
-          turbo = ctx[:turbo]
-          jobs = ctx[:jobs]
-          channels = (jobs.is_a?(Hash) ? jobs[:channels] : nil) || []
+          channels = Payload.channels(ctx)
           has_content = false
 
           lines = [ "## Real-Time Features", "" ]
@@ -424,17 +422,15 @@ module RailsAiContext
             has_content = true
           end
 
-          if turbo.is_a?(Hash) && !turbo[:error]
-            broadcasts = turbo[:model_broadcasts] || []
-            if broadcasts.any?
-              lines << "Turbo Stream broadcasts: #{count_phrase(broadcasts.size, "broadcast point")}."
-              has_content = true
-            end
-            streams = turbo[:turbo_streams] || []
-            if streams.any?
-              lines << "Turbo Stream templates: #{streams.size}."
-              has_content = true
-            end
+          broadcasts = Payload.model_broadcasts(ctx)
+          if broadcasts.any?
+            lines << "Turbo Stream broadcasts: #{count_phrase(broadcasts.size, "broadcast point")}."
+            has_content = true
+          end
+          streams = Payload.turbo_streams(ctx)
+          if streams.any?
+            lines << "Turbo Stream templates: #{streams.size}."
+            has_content = true
           end
 
           # Fallback: check for turbo_stream usage in views
@@ -534,10 +530,7 @@ module RailsAiContext
         end
 
         def section_engines(ctx)
-          engines = ctx[:engines]
-          return [] unless engines.is_a?(Hash) && !engines[:error]
-
-          mounted = engines[:mounted_engines] || []
+          mounted = Payload.mounted_engines(ctx)
           return [] if mounted.empty?
 
           lines = [ "## Mounted Engines", "" ]
