@@ -182,6 +182,26 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     expect(tables.keys).to include("project_types")
   end
 
+  # Canvas has a migration that calls `create_table table_name do |t|`, where
+  # the name is a local computed at run time. A table the replay cannot name is
+  # a table it cannot report, and keeping it produced a nil key that took the
+  # whole context run down when a serializer sorted the table names.
+  it "skips a create_table whose name it cannot resolve" do
+    tables = replay([ <<~RUBY ])
+      class CreateComputed < ActiveRecord::Migration[7.1]
+        def change
+          table_name = "widgets_\#{Shard.current.id}"
+          create_table table_name do |t|
+            t.string :name
+          end
+        end
+      end
+    RUBY
+
+    expect(tables.keys).to all(be_a(String))
+    expect(tables.keys).not_to include(nil)
+  end
+
   # The fix must not reach so far that it stops honouring a real drop.
   it "still drops a table a later migration removes on the way up" do
     tables = replay([ <<~RUBY, <<~RUBY2 ])

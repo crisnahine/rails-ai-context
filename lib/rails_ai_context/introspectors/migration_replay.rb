@@ -116,7 +116,13 @@ module RailsAiContext
       # A replayed create_table implies its id column the way a dumped one
       # does; leaving it out gave the same app two answers depending on which
       # file it committed.
+      # A table the replay cannot name is a table it cannot report. Canvas
+      # calls `create_table table_name do |t|` with a local computed at run
+      # time, and keeping the entry put a nil key in the schema that took a
+      # whole context run down the moment a serializer sorted the names.
       def seed_table(tables, table, options, pk_type)
+        return if table.nil? || table.to_s.empty?
+
         tables[table] ||= {
           columns: implicit_pk_columns(options, pk_type),
           indexes: [],
