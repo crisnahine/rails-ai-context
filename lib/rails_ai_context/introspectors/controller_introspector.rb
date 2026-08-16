@@ -133,6 +133,12 @@ module RailsAiContext
       def extract_details_from_source(path, class_name)
         source = RailsAiContext::SafeFile.read(path)
         return { error: "unreadable" } unless source
+
+        # The name comes from the source and no longer round-trips back to the
+        # path - `ActivityPub::CollectionsController`.underscore is
+        # `activity_pub/...` and the file is under `activitypub/`. Carry the
+        # file that was read so no consumer has to guess it.
+        relative_file = path.to_s.sub("#{app.root}/", "")
         parent = extract_parent_class_ast(source)
         rate_limit = rate_limit_entry(source)
         details = {
@@ -146,7 +152,8 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source),
           rate_limit: extract_rate_limit(source, rate_limit),
           rate_limit_parsed: parse_rate_limit(rate_limit),
-          turbo_stream_actions: extract_turbo_stream_actions(source)
+          turbo_stream_actions: extract_turbo_stream_actions(source),
+          file: relative_file
         }.compact
         details
       rescue => e
@@ -168,8 +175,18 @@ module RailsAiContext
           rescue_from: extract_rescue_from(source),
           rate_limit: extract_rate_limit(source, rate_limit),
           rate_limit_parsed: parse_rate_limit(rate_limit),
-          turbo_stream_actions: extract_turbo_stream_actions(source)
+          turbo_stream_actions: extract_turbo_stream_actions(source),
+          file: relative_source_path(ctrl)
         }.compact
+      end
+
+      # App-relative path of the file the class was defined in, for consumers
+      # that would otherwise reconstruct it from the name.
+      def relative_source_path(ctrl)
+        path = source_path(ctrl)
+        return nil unless path && File.exist?(path)
+
+        path.to_s.sub("#{app.root}/", "")
       end
 
       def api_controller?(ctrl)
@@ -787,10 +804,21 @@ module RailsAiContext
         RailsAiContext::SafeFile.read(path)
       end
 
+      # Ruby knows where the class was defined; the underscored name only
+      # agrees when the app registers no inflection for any of its segments.
+      # `ActivityPub::CollectionsController`.underscore is `activity_pub/...`
+      # and Mastodon's file is under `activitypub/`.
       def source_path(ctrl)
-        root = app.root.to_s
-        underscored = ctrl.name.underscore
-        File.join(root, "app", "controllers", "#{underscored}.rb")
+        # Contained under the app root: a constant defined by a gem - or by a
+        # spec - is not this app's controller file.
+        located = Object.const_source_location(ctrl.name)&.first
+        if located && File.exist?(located) && located.to_s.start_with?("#{app.root}/")
+          return located
+        end
+
+        File.join(app.root.to_s, "app", "controllers", "#{ctrl.name.underscore}.rb")
+      rescue StandardError
+        File.join(app.root.to_s, "app", "controllers", "#{ctrl.name.underscore}.rb")
       end
     end
   end

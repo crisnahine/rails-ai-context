@@ -343,6 +343,26 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # Reading the name from the source means the name no longer round-trips
+    # back to the path: `ActivityPub::CollectionsController`.underscore is
+    # `activity_pub/collections_controller`, and the file is under
+    # `activitypub/`. Every consumer that wants the file must be handed it.
+    it "carries the file each controller was read from" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "activitypub"))
+        File.write(File.join(dir, "app", "controllers", "activitypub", "collections_controller.rb"), <<~RUBY)
+          class ActivityPub::CollectionsController < ApplicationController
+            def show; end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["ActivityPub::CollectionsController"][:file])
+          .to eq("app/controllers/activitypub/collections_controller.rb")
+      end
+    end
+
     # Zeitwerk resolves a path through the app's own inflections, so a
     # directory named `activitypub` is `ActivityPub` in an app that registers
     # that acronym - and camelizing the path alone invents `Activitypub`, a
