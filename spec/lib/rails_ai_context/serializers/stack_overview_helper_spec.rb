@@ -164,4 +164,58 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(host.new(context).database_adapter_label).not_to include("static_parse")
     end
   end
+
+  describe "the app-tree scans" do
+    require "tmpdir"
+
+    def app_tree
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "services"))
+        FileUtils.mkdir_p(File.join(root, "app", "jobs"))
+        FileUtils.mkdir_p(File.join(root, "app", "controllers"))
+        File.write(File.join(root, "app", "services", "application_service.rb"), "class ApplicationService; end\n")
+        File.write(File.join(root, "app", "services", "payment_service.rb"), "class PaymentService; end\n")
+        File.write(File.join(root, "app", "jobs", "cleanup_job.rb"), "class CleanupJob; end\n")
+        File.write(File.join(root, "app", "controllers", "application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\n  before_action :set_locale\n  before_action :authenticate_user!\nend\n")
+        yield root
+      end
+    end
+
+    it "names the app's services, jobs and global before_actions from the given root" do
+      app_tree do |root|
+        helper = test_class.new({})
+        expect(helper.detect_service_files(root)).to eq(%w[PaymentService])
+        expect(helper.detect_job_files(root)).to eq(%w[CleanupJob])
+        expect(helper.detect_before_actions(root)).to eq(%w[set_locale authenticate_user!])
+      end
+    end
+
+    it "answers empty for a tree without those directories" do
+      Dir.mktmpdir do |root|
+        helper = test_class.new({})
+        expect(helper.detect_service_files(root)).to eq([])
+        expect(helper.detect_job_files(root)).to eq([])
+        expect(helper.detect_before_actions(root)).to eq([])
+      end
+    end
+  end
+
+  describe "#write_rule_files" do
+    require "tmpdir"
+
+    it "writes through SafeFile.atomic_write and skips unchanged files" do
+      Dir.mktmpdir do |root|
+        helper = test_class.new({})
+        path = File.join(root, ".claude", "rules", "rails-context.md")
+
+        first = helper.write_rule_files({ path => "content" })
+        expect(first).to eq(written: [ path ], skipped: [])
+        expect(File.read(path)).to eq("content")
+
+        second = helper.write_rule_files({ path => "content" })
+        expect(second).to eq(written: [], skipped: [ path ])
+      end
+    end
+  end
 end

@@ -11,6 +11,7 @@ module RailsAiContext
       db/structure.sql
       config/routes.rb
       config/database.yml
+      Gemfile
       Gemfile.lock
       package.json
       tsconfig.json
@@ -24,11 +25,26 @@ module RailsAiContext
       app/mailers
       app/channels
       app/components
+      app/helpers
+      app/services
       app/javascript/controllers
       app/middleware
       config/initializers
+      config/locales
+      config/environments
       db/migrate
       lib/tasks
+    ].freeze
+
+    # The kinds whose homes PathResolver resolves beyond the conventional
+    # tree - packs/*, engines/* and configured extras. Derived at compute
+    # time so an edit in a pack invalidates the cache the way one in app/
+    # does; a stale answer that looks fresh is the failure this exists to
+    # prevent. WATCHED_DIRS stays a plain list because live_reload and the
+    # watcher consume it as relative patterns.
+    RESOLVED_KINDS = %w[
+      app/models app/controllers app/views app/jobs app/mailers
+      app/channels app/components app/helpers app/services
     ].freeze
 
     class << self
@@ -54,10 +70,7 @@ module RailsAiContext
           # File deleted between exist? check and mtime read - skip
         end
 
-        WATCHED_DIRS.each do |dir|
-          full_dir = File.join(root, dir)
-          next unless Dir.exist?(full_dir)
-
+        watched_dirs(root).each do |full_dir|
           Dir.glob(File.join(full_dir, "**/*.{rb,rake,js,ts,erb,haml,slim,yml}")).sort.each do |path|
             digest.update(File.mtime(path).to_f.to_s)
           rescue Errno::ENOENT
@@ -66,6 +79,16 @@ module RailsAiContext
         end
 
         digest.hexdigest
+      end
+
+      # Everything a change could hide in: the conventional dirs plus what
+      # the resolvers add for this app (packs, engines, extra_app_paths,
+      # concern homes such as app/serializers/concerns).
+      def watched_dirs(root)
+        conventional = WATCHED_DIRS.map { |dir| File.join(root, dir) }
+        resolved = RESOLVED_KINDS.flat_map { |kind| PathResolver.dirs_for(root, kind) }
+
+        (conventional + resolved + ConcernPaths.resolve(root)).uniq.select { |dir| Dir.exist?(dir) }
       end
 
       # Clear the memoized gem-lib fingerprint. Called by BaseTool.reset_cache!

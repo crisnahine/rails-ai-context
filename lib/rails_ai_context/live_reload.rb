@@ -1,82 +1,47 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # Watches for file changes and automatically invalidates MCP tool caches,
-  # sending notifications to connected AI clients so they re-query fresh data.
-  # Runs a background thread alongside the MCP server (stdio or HTTP).
+  # Keeps a long-lived MCP server truthful: when the app changes, drop the
+  # tool caches and tell connected clients to re-query. The loop - watch
+  # list, fingerprint gate, code reload - is ChangeWatch's; this supplies
+  # the non-blocking background behavior, the debounce, and the
+  # cache-and-notify reaction. A missing `listen` gem raises out of start;
+  # Server#maybe_start_live_reload owns that policy.
   class LiveReload
     include CountPhrase
-
-    WATCH_DIRS = (Watcher::WATCH_PATTERNS | Fingerprinter::WATCHED_DIRS).freeze
 
     attr_reader :app, :mcp_server
 
     def initialize(app, mcp_server)
       @app = app
       @mcp_server = mcp_server
-      @last_fingerprint = Fingerprinter.compute(app)
+      @watch = ChangeWatch.new(app)
     end
 
     # Start the file watcher in a background thread. Non-blocking.
     def start
-      require "listen"
-
-      root = app.root.to_s
-      debounce = RailsAiContext.configuration.live_reload_debounce
-      dirs = WATCH_DIRS.map { |p| File.join(root, p) }.select { |d| Dir.exist?(d) }
-
+      dirs = @watch.watched_dirs
       if dirs.empty?
         $stderr.puts "[rails-ai-context] Live reload: no watchable directories found"
         return
       end
 
+      debounce = RailsAiContext.configuration.live_reload_debounce
       $stderr.puts "[rails-ai-context] Live reload enabled (debounce: #{debounce}s)"
-      $stderr.puts "[rails-ai-context] Watching: #{dirs.map { |d| d.sub("#{root}/", "") }.join(", ")}"
+      $stderr.puts "[rails-ai-context] Watching: #{dirs.map { |d| d.sub("#{app.root}/", "") }.join(", ")}"
 
-      listener = Listen.to(*dirs, wait_for_delay: debounce) do |modified, added, removed|
-        all_changes = modified + added + removed
-        next if all_changes.empty?
-
-        handle_change(all_changes)
-      end
-
-      listener.start
-      @listener = listener
+      @watch.start(debounce: debounce) { |paths, reloaded| react(paths, reloaded) }
     end
 
     # Stop the background listener thread.
     def stop
-      @listener&.stop
+      @watch.stop
     end
 
-    # Process a batch of file changes. Public for testability.
+    # Run a batch of changed paths through the shared gate. Public for
+    # testability - specs drive this instead of a real Listen thread.
     def handle_change(changed_paths = [])
-      return unless Fingerprinter.changed?(app, @last_fingerprint)
-
-      @last_fingerprint = Fingerprinter.compute(app)
-
-      # Order matters: reload the app's code first, then drop the caches built
-      # from the old constants. Clearing caches alone left the server answering
-      # from whatever Rails autoloaded at boot.
-      reloaded = CodeReloader.reload!
-
-      # Invalidate all tool caches (includes AstCache.clear)
-      Tools::BaseTool.reset_all_caches!
-
-      # Build a human-readable change summary
-      message = format_change_message(categorize_changes(changed_paths))
-
-      # Notify connected MCP clients
-      mcp_server.notify_resources_list_changed
-      mcp_server.notify_log_message(
-        data: "#{message} Tool caches invalidated#{reloaded ? " and app code reloaded" : ""}.",
-        level: "info",
-        logger: "rails-ai-context"
-      )
-
-      $stderr.puts "[rails-ai-context] #{message} Tool caches invalidated#{reloaded ? " and app code reloaded" : ""}."
-    rescue => e
-      $stderr.puts "[rails-ai-context] Live reload error: #{e.message}"
+      @watch.gate(changed_paths) { |paths, reloaded| react(paths, reloaded) }
     end
 
     # Group changed file paths by category (model, controller, etc.)
@@ -109,6 +74,28 @@ module RailsAiContext
     def format_change_message(categories)
       parts = categories.map { |cat, count| count_phrase(count, cat) }
       "Files changed: #{parts.join(", ")}."
+    end
+
+    private
+
+    # The gate already reloaded the app's code; dropping the caches after
+    # that order is what keeps the server from answering with constants
+    # Rails autoloaded at boot.
+    def react(paths, reloaded)
+      Tools::BaseTool.reset_all_caches!
+
+      message = format_change_message(categorize_changes(paths))
+
+      mcp_server.notify_resources_list_changed
+      mcp_server.notify_log_message(
+        data: "#{message} Tool caches invalidated#{reloaded ? " and app code reloaded" : ""}.",
+        level: "info",
+        logger: "rails-ai-context"
+      )
+
+      $stderr.puts "[rails-ai-context] #{message} Tool caches invalidated#{reloaded ? " and app code reloaded" : ""}."
+    rescue => e
+      $stderr.puts "[rails-ai-context] Live reload error: #{e.message}"
     end
   end
 end

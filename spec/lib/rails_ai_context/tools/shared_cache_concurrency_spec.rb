@@ -231,7 +231,7 @@ RSpec.describe "BaseTool shared caches under concurrency" do
         [ 200, {}, [ "{}" ] ]
       end
 
-      app = RailsAiContext::Server.new(RailsAiContext.default_app).send(:build_rack_app, transport, "/mcp")
+      app = RailsAiContext::Server.new(RailsAiContext.default_app).send(:build_rack_app, transport)
       app.call(rack_request("standalone-7").env.merge("PATH_INFO" => "/mcp"))
 
       expect(seen).to eq("standalone-7")

@@ -455,4 +455,41 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
       expect(described_class.tool_mode(root: root)).to be_nil
     end
   end
+
+  describe ".write_tool_mode" do
+    it "rewrites an existing uncommented line" do
+      write_initializer("RailsAiContext.configure do |config|\n  config.tool_mode = :mcp\nend\n")
+
+      expect(described_class.write_tool_mode(:cli, root: root)).to eq(:updated)
+      expect(described_class.tool_mode(root: root)).to eq(:cli)
+    end
+
+    it "inserts beside the recorded tools line, leaving a commented default a comment" do
+      write_initializer(<<~RUBY)
+        RailsAiContext.configure do |config|
+          config.ai_tools = %i[claude]
+          # config.tool_mode = :cli
+        end
+      RUBY
+
+      expect(described_class.write_tool_mode(:mcp, root: root)).to eq(:inserted)
+      content = File.read(File.join(root, "config", "initializers", "rails_ai_context.rb"))
+      expect(content).to include("config.ai_tools = %i[claude]\n  config.tool_mode = :mcp")
+      expect(content).to include("# config.tool_mode = :cli")
+    end
+
+    it "inserts into a bare configure block" do
+      write_initializer("RailsAiContext.configure do |config|\nend\n")
+
+      expect(described_class.write_tool_mode(:cli, root: root)).to eq(:inserted)
+      expect(described_class.tool_mode(root: root)).to eq(:cli)
+    end
+
+    it "reports an unchanged line and an absent file honestly" do
+      expect(described_class.write_tool_mode(:cli, root: root)).to eq(:absent)
+
+      write_initializer("RailsAiContext.configure do |config|\n  config.tool_mode = :cli\nend\n")
+      expect(described_class.write_tool_mode(:cli, root: root)).to eq(:unchanged)
+    end
+  end
 end

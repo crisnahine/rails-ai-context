@@ -202,7 +202,7 @@ module RailsAiContext
       transport = MCP::Server::Transports::StreamableHTTPTransport.new(server)
 
       # Build a minimal Rack app that delegates to the MCP transport
-      rack_app = build_rack_app(transport, config.http_path)
+      rack_app = build_rack_app(transport)
 
       loopback = %w[127.0.0.1 ::1 localhost].freeze
       unless loopback.include?(config.http_bind)
@@ -274,19 +274,11 @@ module RailsAiContext
       end
     end
 
-    def build_rack_app(transport, path)
+    def build_rack_app(transport)
       lambda do |env|
-        # Only handle requests at the configured MCP path
-        unless env["PATH_INFO"] == path || env["PATH_INFO"] == "#{path}/"
-          return [ 404, { "Content-Type" => "application/json" }, [ '{"error":"Not found"}' ] ]
+        McpEdge.rack_call(env, transport: transport) do
+          [ 404, { "Content-Type" => "application/json" }, [ '{"error":"Not found"}' ] ]
         end
-
-        request = Rack::Request.new(env)
-        Tools::BaseTool.with_session_for(env) do
-          transport.handle_request(request)
-        end
-      rescue => e
-        McpEdge.internal_error_response(e)
       end
     end
   end
