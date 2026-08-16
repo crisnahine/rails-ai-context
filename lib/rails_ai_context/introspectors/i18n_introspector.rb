@@ -114,6 +114,9 @@ module RailsAiContext
             begin
               data = YAML.load_file(path, permitted_classes: [ Symbol ], aliases: true) || {}
               info[:key_count] = count_keys(data)
+              # Which locales this file actually serves. The filename is only a
+              # convention, and a gem-provided file is named for the gem.
+              info[:locales] = data.is_a?(Hash) ? data.keys.map(&:to_s) : []
             rescue => e
               $stderr.puts "[rails-ai-context] extract_locale_files failed: #{e.message}" if ENV["DEBUG"]
               info[:parse_error] = true
@@ -174,7 +177,11 @@ module RailsAiContext
           # nobody had started. Naming those locales is the honest form; a
           # screen of zeroes is not.
           if pct.zero?
-            untranslated << locale.to_s
+            # The key count travels with the name: a locale can define plenty and
+            # still share none with the default - GitLab's zh-CN has 109, all
+            # from gem-provided files - and a bare name reads as "not
+            # translated" when the truth is "translated something else".
+            untranslated << { locale: locale.to_s, keys: locale_keys.size }
             next
           end
 

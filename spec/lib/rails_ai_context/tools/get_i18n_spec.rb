@@ -50,7 +50,7 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       let(:i18n_data) do
         super().merge(
           available_locales: %w[en fr aa zu],
-          locales_without_translations: %w[aa zu]
+          locales_without_translations: [ { locale: "aa", keys: 1 }, { locale: "zu", keys: 1 } ]
         )
       end
 
@@ -99,6 +99,26 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       it "shows coverage for the filtered locale" do
         text = described_class.call(locale: "fr").content.first[:text]
         expect(text).to include("**Unique keys:** 80 (80.0% of en)")
+      end
+
+      # The filename convention is not the only way a file serves a locale:
+      # gem-provided files are named for the gem, and GitLab's zh-CN lives in
+      # devise.zh-cn.yml. The tool listed both and then said it had none.
+      it "finds a locale's files when the filename does not spell the locale" do
+        allow(described_class).to receive(:cached_context).and_return(
+          i18n: i18n_data.merge(
+            available_locales: %w[en zh-CN],
+            locale_files: [
+              { file: "en.yml", key_count: 100, locales: %w[en] },
+              { file: "devise.zh-cn.yml", key_count: 49, locales: %w[zh-CN] }
+            ]
+          )
+        )
+
+        text = described_class.call(locale: "zh-CN").content.first[:text]
+
+        expect(text).to include("devise.zh-cn.yml")
+        expect(text).not_to include("No locale files found")
       end
 
       it "returns not-found with suggestions for an unknown locale" do

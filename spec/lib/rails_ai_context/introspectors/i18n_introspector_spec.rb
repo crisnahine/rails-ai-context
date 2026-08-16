@@ -201,7 +201,15 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       end
 
       it "names the locales it left out of coverage" do
-        expect(result[:locales_without_translations]).to contain_exactly("aa", "zu")
+        expect(result[:locales_without_translations].map { |l| l[:locale] }).to contain_exactly("aa", "zu")
+      end
+
+      # A locale can define plenty of keys and still share none with the
+      # default - GitLab's zh-CN has 109, all from gem-provided files. Hiding
+      # it behind a bare name reads as "not translated"; the count says what
+      # it actually is.
+      it "carries each left-out locale's own key count" do
+        expect(result[:locales_without_translations]).to include(hash_including(locale: "aa", keys: 1))
       end
     end
 

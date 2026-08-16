@@ -78,9 +78,10 @@ module RailsAiContext
           untranslated = i18n[:locales_without_translations] || []
           if untranslated.any?
             total = (i18n[:available_locales] || []).size
+            named = untranslated.map { |u| u.is_a?(Hash) ? "#{u[:locale]} (#{u[:keys]} keys)" : u.to_s }.sort
             lines << "" << "_#{untranslated.size} of #{total} locales round to 0.0% against " \
-                           "#{i18n[:default_locale]} and are left out of coverage: " \
-                           "#{untranslated.sort.join(', ')}._"
+                           "#{i18n[:default_locale]} and are left out of coverage. Their own key " \
+                           "counts: #{named.join(', ')}._"
           end
 
           fallbacks = i18n[:fallbacks] || {}
@@ -96,7 +97,7 @@ module RailsAiContext
         end
 
         def render_locale(i18n, locale, offset:, limit:)
-          files = (i18n[:locale_files] || []).select { |f| locale_file_match?(f[:file], locale) }
+          files = (i18n[:locale_files] || []).select { |f| serves_locale?(f, locale) }
           page = paginate(files.sort_by { |f| f[:file] }, offset: offset, limit: limit, default_limit: 50)
 
           lines = [ "# I18n: #{locale}" ]
@@ -104,11 +105,12 @@ module RailsAiContext
           if coverage
             lines << ""
             lines << "- **Unique keys:** #{coverage[:keys]} (#{coverage[:coverage_pct]}% of #{i18n[:default_locale]})#{coverage_gap(coverage)}"
-          elsif Array(i18n[:locales_without_translations]).include?(locale)
+          elsif (left_out = Array(i18n[:locales_without_translations]).find { |u| (u.is_a?(Hash) ? u[:locale] : u).to_s == locale.to_s })
             # Otherwise the coverage line every other locale carries is simply
             # missing here, and the reader cannot tell absent from zero.
             lines << ""
-            lines << "- **Coverage:** `#{locale}` rounds to 0.0% against #{i18n[:default_locale]}."
+            own = left_out.is_a?(Hash) ? " It defines #{count_phrase(left_out[:keys], "key")} of its own." : ""
+            lines << "- **Coverage:** `#{locale}` rounds to 0.0% against #{i18n[:default_locale]}.#{own}"
           end
 
           fallbacks = i18n[:fallbacks] || {}
@@ -143,8 +145,16 @@ module RailsAiContext
           line
         end
 
-        # Mirrors the introspector's locale-file matching: en.yml, devise.en.yml,
-        # en/users.yml, admin/en.yml.
+        # A file serves a locale when it declares it. The filename convention
+        # is the fallback for a payload written before locales were recorded.
+        def serves_locale?(entry, locale)
+          declared = entry[:locales]
+          return declared.map(&:to_s).include?(locale.to_s) if declared
+
+          locale_file_match?(entry[:file], locale)
+        end
+
+        # en.yml, devise.en.yml, en/users.yml, admin/en.yml.
         def locale_file_match?(file, locale)
           name = File.basename(file, ".*")
           name == locale || name.end_with?(".#{locale}") ||
