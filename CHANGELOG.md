@@ -35,12 +35,15 @@ Discourse and Mastodon. Every one of them exits 0.
   and `revert`, and for the `t.timestamps` inside them - those were found by
   a separate walk over the whole file, so a down body's timestamps landed on
   the last table created on the way up.
-- **i18n coverage skips locales that carry no translations, and says so.** A
-  language-name lookup table under `config/locales` contributes a top-level
-  key per language, and Rails does load each as an available locale. Scoring
-  them produced a row each saying every key was missing: on Discourse, 138
-  of 186 coverage rows described a translation effort nobody had started.
-  The available list still matches a booted Rails.
+- **i18n coverage leaves out the locales below its own rounding floor, and
+  says which.** A language-name lookup table under `config/locales`
+  contributes a top-level key per language, and Rails does load each as an
+  available locale. Scoring them produced a row each saying every key was
+  missing: on Discourse, 138 of 186 coverage rows described a translation
+  effort nobody had started. Those 138 are now named in one line instead. The
+  available list still matches a booted Rails, and a locale's keys are read
+  from its own file and any shared file together, so one that lives outside
+  the naming convention is scored rather than written off.
 - **A recorded tool selection no longer switches off `.ai-context.json`.**
   The install generator always records one, and every later `rails
   ai:context` passed that list to the serializer. The machine artifact is
