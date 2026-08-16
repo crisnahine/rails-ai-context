@@ -105,7 +105,9 @@ module RailsAiContext
 
           # STI detection via AST: extract parent class from ClassNode, check schema
           app_model_names = model_files.filter_map { |f| File.basename(f, ".rb").camelize }
-          schema = SchemaReader.new(File.join(root, "db/schema.rb"))
+          # Source-choosing, so a structure.sql app answers these schema
+          # questions instead of falling to the looser source scans below.
+          schema = SchemaReader.for(root)
           schema_readable = schema.tables.any?
 
           has_sti_subclass = false

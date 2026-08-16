@@ -13,9 +13,60 @@ module RailsAiContext
     #
     # Callers keep their own output shapes: this reads the dump, it does not
     # decide how a table is reported.
+    #
+    # `SchemaReader.for(root)` answers the question-level API (tables,
+    # column?, any_column?, defaults_for) from whichever source the app
+    # committed - schema.rb, structure.sql, or a migration replay - so no
+    # caller has to name a file or go empty-handed on a structure.sql app.
     class SchemaReader
-      def initialize(path)
+      # The source-choosing entry. Mirrors the schema introspector's cascade:
+      # a dump that parses to zero tables falls through to the next source.
+      def self.for(root)
+        root = root.to_s
+
+        schema_rb = File.join(root, "db", "schema.rb")
+        if File.exist?(schema_rb)
+          reader = new(schema_rb, pk_type: SchemaConventions.implicit_pk_type(root, schema_rb))
+          return reader.with_source(:schema_rb) if reader.tables.any?
+        end
+
+        structure = File.join(root, "db", "structure.sql")
+        if File.exist?(structure)
+          content = RailsAiContext::SafeFile.read(structure, max_size: RailsAiContext.configuration.max_schema_file_size)
+          if content
+            parsed = StructureSqlReader.parse(content)
+            return from_tables(parsed[:tables], source: :structure_sql, path: structure) if parsed[:tables].any?
+          end
+        end
+
+        migrate_dir = File.join(root, "db", "migrate")
+        if Dir.exist?(migrate_dir) && Dir.glob(File.join(migrate_dir, "*.rb")).any?
+          pk_type = SchemaConventions.implicit_pk_type(root, schema_rb)
+          return from_tables(MigrationReplay.tables(migrate_dir, pk_type: pk_type), source: :migrations, path: migrate_dir)
+        end
+
+        from_tables({}, source: :none, path: nil)
+      end
+
+      # A reader over an already-parsed tables hash, for the sources that do
+      # not go through the schema.rb event fold.
+      def self.from_tables(tables, source:, path:)
+        reader = allocate
+        reader.send(:initialize_from_tables, tables, source, path)
+        reader
+      end
+
+      attr_reader :source
+
+      def initialize(path, pk_type: nil)
         @path = path
+        @pk_type = pk_type
+        @source = File.exist?(path.to_s) ? :schema_rb : :none
+      end
+
+      def with_source(source)
+        @source = source
+        self
       end
 
       # @return [Hash] table name => { options:, columns: [...], indexes: [...] }
@@ -57,6 +108,18 @@ module RailsAiContext
       private
 
       attr_reader :path
+
+      def initialize_from_tables(tables, source, path)
+        @path = path
+        @pk_type = nil
+        @source = source
+        @parse = {
+          tables: tables,
+          foreign_keys: tables.flat_map { |_name, t| t[:foreign_keys] || [] },
+          enums: [],
+          check_constraints: []
+        }
+      end
 
       def columns_for(table)
         tables.dig(table, :columns) || []
@@ -108,7 +171,11 @@ module RailsAiContext
       def absorb(event, schema, current)
         case event[:type]
         when :create_table
-          schema[:tables][event[:table]] ||= { options: event[:options] || {}, columns: [], indexes: [] }
+          options = event[:options] || {}
+          # With a pk_type, the implied id is a column like any other - the
+          # convention lives in SchemaConventions, shared with the replay.
+          implied = @pk_type ? SchemaConventions.implicit_primary_key(options, @pk_type) : []
+          schema[:tables][event[:table]] ||= { options: options, columns: implied, indexes: [] }
           return event[:table]
         when :column
           schema[:tables][current]&.dig(:columns)&.push(column_entry(event)) if current

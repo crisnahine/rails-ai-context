@@ -19,6 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ApplicationMailer` arrived as a deliverable action; they subtract now, and
   static mailer actions apply the same underscore rule as controllers. (#149)
 
+- **The three static schema sources follow one set of conventions, and every
+  schema question can be asked of any of them.** `SchemaReader.for(root)`
+  chooses schema.rb, structure.sql or migration replay behind one
+  question-level seam, so introspectors asking "does this table carry this
+  column" now get answers on structure.sql and migrations-only apps instead
+  of nothing. The migration replay is repaired: a replayed `create_table`
+  seeds its implicit `id`, `change_column_null` applies in both directions
+  (the listener now captures the positional boolean), and `t.references` is
+  typed per adapter instead of hardcoded bigint. The conventions live in
+  `SchemaConventions`, shared by all three sources the way #140's
+  foreign-key fix pioneered; the SQL parser and the replay engine moved to
+  `StructureSqlReader` and `MigrationReplay`, and the schema introspector
+  halves in size, keeping only presentation. (#150)
 - **Every surface answers "which concerns count" and "how many routes" the
   same way.** Five renderers carried five concern filter sets:
   `rails_get_callbacks` hid every namespaced concern unless it started with

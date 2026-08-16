@@ -244,8 +244,7 @@ module RailsAiContext
         has_type_column = if model.connected? && model.table_exists?
           model.columns_hash.key?("type")
         else
-          schema_path = File.join(app.root.to_s, "db", "schema.rb")
-          SchemaReader.new(schema_path).column?(model.table_name, "type") if File.exist?(schema_path)
+          SchemaReader.for(app.root).column?(model.table_name, "type")
         end
 
         return nil unless has_type_column

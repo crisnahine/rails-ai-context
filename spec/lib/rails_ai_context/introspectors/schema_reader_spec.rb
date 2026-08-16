@@ -292,4 +292,77 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
       expect(reader.any_column?("archived_at")).to be false
     end
   end
+
+  describe "pk_type" do
+    it "adds the implied id column when a pk type is given" do
+      path = File.join(Dir.tmpdir, "rac_schema_reader_pk_#{rand(1_000_000)}.rb")
+      File.write(path, <<~RUBY)
+        ActiveRecord::Schema[7.1].define(version: 1) do
+          create_table "users", force: :cascade do |t|
+            t.string "email"
+          end
+          create_table "posts_tags", id: false, force: :cascade do |t|
+            t.bigint "post_id"
+          end
+        end
+      RUBY
+
+      reader = described_class.new(path, pk_type: "bigint")
+      expect(reader.column?("users", "id")).to be true
+      expect(reader.column?("posts_tags", "id")).to be false
+    ensure
+      FileUtils.rm_f(path)
+    end
+  end
+
+  describe ".for" do
+    it "chooses schema.rb, then structure.sql, then migration replay" do
+      Dir.mktmpdir do |root|
+        db = File.join(root, "db")
+        FileUtils.mkdir_p(File.join(db, "migrate"))
+
+        File.write(File.join(db, "migrate", "20240101000000_create_posts.rb"), <<~RUBY)
+          class CreatePosts < ActiveRecord::Migration[7.1]
+            def change
+              create_table :posts do |t|
+                t.string :title
+              end
+            end
+          end
+        RUBY
+        expect(described_class.for(root).source).to eq(:migrations)
+        expect(described_class.for(root).column?("posts", "title")).to be true
+
+        File.write(File.join(db, "structure.sql"), <<~SQL)
+          CREATE TABLE public.articles (
+              id bigint NOT NULL,
+              headline character varying
+          );
+        SQL
+        expect(described_class.for(root).source).to eq(:structure_sql)
+        expect(described_class.for(root).column?("articles", "headline")).to be true
+
+        File.write(File.join(db, "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 1) do
+            create_table "users", force: :cascade do |t|
+              t.string "email"
+            end
+          end
+        RUBY
+        reader = described_class.for(root)
+        expect(reader.source).to eq(:schema_rb)
+        expect(reader.column?("users", "email")).to be true
+        expect(reader.column?("users", "id")).to be true
+      end
+    end
+
+    it "answers emptily when the app has no schema source" do
+      Dir.mktmpdir do |root|
+        reader = described_class.for(root)
+        expect(reader.source).to eq(:none)
+        expect(reader.tables).to eq({})
+        expect(reader.any_column?("id")).to be false
+      end
+    end
+  end
 end

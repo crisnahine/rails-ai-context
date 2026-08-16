@@ -44,7 +44,7 @@ module RailsAiContext
       end
 
       def load_schema_data
-        SchemaReader.new(File.join(root, "db/schema.rb")).tables
+        SchemaReader.for(root).tables
       end
 
       def active_record_class_name(classes)

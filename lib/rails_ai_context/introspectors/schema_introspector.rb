@@ -275,19 +275,6 @@ module RailsAiContext
         result
       end
 
-      # create_table implies an id primary key unless disabled; the runtime
-      # tier reports it, so the static parse must too. Composite primary keys
-      # (primary_key: [...]) dump their columns as explicit t.* lines -
-      # synthesizing an id there would invent a column that does not exist.
-      def implicit_primary_key(options, path)
-        pk_opt = options[:primary_key]
-        composite_pk = !pk_opt.nil? && !pk_opt.is_a?(String) && !pk_opt.is_a?(Symbol)
-        return [] if options[:id] == false || composite_pk
-
-        id_type = options[:id].is_a?(String) || options[:id].is_a?(Symbol) ? options[:id].to_s : implicit_pk_type(path)
-        [ { name: pk_opt ? pk_opt.to_s : "id", type: id_type, null: false, primary_key: true } ]
-      end
-
       def static_column(column)
         options = column[:options]
         entry = { name: column[:name], type: column[:type] }
@@ -295,18 +282,8 @@ module RailsAiContext
         entry[:default] = column[:default] unless column[:default].nil?
         entry[:array] = true if options[:array] == true
         entry[:comment] = options[:comment] if options[:comment].is_a?(String)
+        entry[:primary_key] = true if column[:primary_key]
         entry
-      end
-
-      # Rails omits column:/primary_key: only where the convention holds, so
-      # the fallback is what was declared rather than a guess. Both dump
-      # readers land here so the convention lives in one place.
-      def foreign_key_entry(from, to, column, primary_key)
-        {
-          from_table: from, to_table: to,
-          column: column&.to_s || "#{to.to_s.singularize}_id",
-          primary_key: primary_key&.to_s || "id"
-        }
       end
 
       def static_index(index)
@@ -327,14 +304,14 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "schema.rb too large (#{File.size(path)} bytes)" } unless content
 
-        schema = SchemaReader.new(path)
+        schema = SchemaReader.new(path, pk_type: SchemaConventions.implicit_pk_type(app.root.to_s, path))
 
         tables = {}
         schema.tables.each do |table_name, declared|
           next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
 
           tables[table_name] = {
-            columns: implicit_primary_key(declared[:options], path) + declared[:columns].map { |c| static_column(c) },
+            columns: declared[:columns].map { |c| static_column(c) },
             indexes: declared[:indexes].filter_map { |i| static_index(i) },
             foreign_keys: []
           }
@@ -342,7 +319,7 @@ module RailsAiContext
 
         schema.foreign_keys.each do |fk|
           tables[fk[:from]]&.dig(:foreign_keys)&.push(
-            foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key])
+            SchemaConventions.foreign_key_entry(fk[:from], fk[:to], fk[:column], fk[:primary_key])
           )
         end
 
@@ -372,49 +349,13 @@ module RailsAiContext
         }
       end
 
-      # Identifier quoting differs per dump tool: pg_dump uses bare or
-      # "quoted" names with a public. prefix, mysqldump uses `backticks` and
-      # terminates CREATE TABLE with ") ENGINE=...;", sqlite uses "quotes"
-      # and IF NOT EXISTS. The body is captured up to the closing paren at
-      # line start because MySQL's trailer means ");" alone never appears.
-      # The negative lookahead in the body keeps a single-line CREATE TABLE
-      # (e.g. sqlite's schema_migrations) from swallowing every table that
-      # follows it: without it, the lazy scan has no "\n)" to stop at inside
-      # that one-line statement, so it keeps consuming lines - including the
-      # next CREATE TABLE - until it finds one.
       def parse_structure_sql(path)
         content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
         return { error: "structure.sql too large (#{File.size(path)} bytes)" } unless content
 
-        dialect = detect_sql_dialect(content)
-        tables = {}
-
-        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(((?:(?!CREATE TABLE).)*?)^\)/m) do |table_name, body|
-          next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
-
-          tables[table_name] = parse_sql_table_body(body, table_name)
-        end
-
-        # Single-line CREATE TABLE statements (sqlite emits these for tiny
-        # tables) close with ");" on the same line and miss the multi-line
-        # scan above.
-        content.scan(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s*\(([^\n]*)\);/) do |table_name, body|
-          next if table_name.start_with?("ar_internal_metadata", "schema_migrations")
-
-          tables[table_name] ||= parse_sql_table_body(body, table_name)
-        end
-
-        content.scan(/CREATE (UNIQUE )?INDEX\s+(?:IF NOT EXISTS\s+)?[`"]?(\w+)[`"]?\s+ON\s+(?:public\.)?[`"]?(\w+)[`"]?.*?\((.+?)\)/m) do |unique, idx_name, table, cols|
-          col_list = cols.scan(/\w+/) - %w[btree gin gist hash]
-          tables[table]&.dig(:indexes)&.push({ name: idx_name, columns: col_list, unique: !!unique })
-        end
-
-        # [^;]*? keeps the match inside one statement: with .*? a pkey-only
-        # ADD CONSTRAINT would swallow up to the FOREIGN KEY of a LATER
-        # statement and attribute the FK to the wrong table.
-        content.scan(/ALTER TABLE\s+(?:ONLY\s+)?(?:public\.)?[`"]?(\w+)[`"]?\s+ADD CONSTRAINT[^;]*?FOREIGN KEY\s*\([`"]?(\w+)[`"]?\)\s*REFERENCES\s+(?:public\.)?[`"]?(\w+)[`"]?\s*\([`"]?(\w+)[`"]?\)/m) do |from, col, to, pk|
-          tables[from]&.dig(:foreign_keys)&.push({ from_table: from, to_table: to, column: col, primary_key: pk })
-        end
+        parsed = StructureSqlReader.parse(content)
+        dialect = parsed[:dialect]
+        tables = parsed[:tables]
 
         applied = RailsAiContext::SchemaVersion.applied_versions(content)
 
@@ -448,56 +389,6 @@ module RailsAiContext
         []
       end
 
-      # The implicit primary key's type is adapter-specific: bigint everywhere
-      # since Rails 5.1, except SQLite where it stays integer. schema.rb does
-      # not record it, but config/database.yml names the adapter - looked up
-      # per database, because a multi-db app can mix adapters (postgres
-      # primary, sqlite queue) and each dump must be typed by its own.
-      def implicit_pk_type(dump_path)
-        db_name = File.basename(dump_path).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "")
-        db_name = "primary" if db_name.empty?
-
-        @implicit_pk_types ||= {}
-        @implicit_pk_types[db_name] ||= begin
-          adapter = database_adapter_for(db_name)
-          adapter&.start_with?("sqlite") ? "integer" : "bigint"
-        end
-      end
-
-      # Best-effort adapter lookup from config/database.yml without booting:
-      # a keyed entry for this database name wins; a file with exactly one
-      # distinct adapter is unambiguous; anything else falls back to the
-      # first adapter (the primary comes first in generated configs).
-      def database_adapter_for(db_name)
-        content = database_yml_content
-        return nil if content.empty?
-
-        adapters = content.scan(/^\s*adapter:\s*(\w+)/).flatten
-        return adapters.first if adapters.uniq.size <= 1
-
-        # Mixed adapters: find the block keyed by this database's name and
-        # take the first adapter that follows at deeper indentation. The
-        # block ends at the first non-blank line at the key's indent or
-        # shallower; blank/whitespace-only lines don't end it (and must not
-        # let it bleed into a sibling block).
-        if (m = content.match(/^([ \t]*)#{Regexp.escape(db_name)}:[ \t]*\n((?:(?:[ \t]*|\1[ \t]+\S[^\n]*)\n)*)/))
-          block_adapter = m[2][/^[ \t]*adapter:[ \t]*(\w+)/, 1]
-          return block_adapter if block_adapter
-        end
-        adapters.first
-      end
-
-      # Read once per introspection run; normalize CRLF and guarantee a
-      # trailing newline so the line-anchored block regex above works on
-      # files with Windows endings or no final newline.
-      def database_yml_content
-        @database_yml_content ||= begin
-          db_yml = File.join(app.root.to_s, "config", "database.yml")
-          content = RailsAiContext::SafeFile.read(db_yml).to_s.gsub("\r\n", "\n")
-          content.empty? || content.end_with?("\n") ? content : "#{content}\n"
-        end
-      end
-
       # The parsers serve secondary dumps too (db/queue_schema.rb,
       # db/cache_structure.sql), and each secondary database keeps its own
       # migrations directory (db/queue_migrate) - comparing a secondary dump
@@ -509,118 +400,6 @@ module RailsAiContext
         File.join(app.root.to_s, "db", dir_name)
       end
 
-      # mysqldump always terminates CREATE TABLE with ") ENGINE=..." and
-      # quotes identifiers with backticks; pg_dump wraps FK updates in
-      # "ALTER TABLE ONLY", qualifies types with "::", and uses search_path /
-      # extension setup that the other two dialects never emit; sqlite
-      # marks autoincrementing primary keys and keeps its own sequence table.
-      # Order matters: check MySQL and PostgreSQL markers before sqlite's
-      # generic double-quoted CREATE TABLE, which would otherwise also match
-      # pg_dump's ANSI-quoted identifiers.
-      def detect_sql_dialect(content)
-        return :mysql if content.match?(/\)\s*ENGINE=/i) || content.match?(/CREATE TABLE\s+`/)
-        return :postgresql if content.match?(/SET search_path|CREATE EXTENSION|ALTER TABLE ONLY|::\w+/)
-        return :sqlite if content.match?(/sqlite_sequence|AUTOINCREMENT|CREATE TABLE\s+(?:IF NOT EXISTS\s+)?"/)
-
-        :unknown
-      end
-
-      # MySQL keeps indexes and foreign keys inside the CREATE TABLE body as
-      # KEY / UNIQUE KEY / CONSTRAINT lines; the other dialects emit separate
-      # statements, so those lines simply never match here.
-      def parse_sql_table_body(body, table_name)
-        # sqlite's .schema emits whole CREATE TABLE statements on one line;
-        # the per-line parsers below would then see a single "line" and keep
-        # only its first column. Split such bodies on top-level commas first.
-        body = split_single_line_sql_body(body) unless body.include?("\n")
-
-        table = { columns: parse_sql_columns(body), indexes: [], foreign_keys: [] }
-
-        body.each_line do |line|
-          line = line.strip.chomp(",")
-          case line
-          when /\ACONSTRAINT\s+[`"]?\w+[`"]?\s+FOREIGN KEY\s*\([`"]?(\w+)[`"]?\)\s*REFERENCES\s+[`"]?(\w+)[`"]?\s*\([`"]?(\w+)[`"]?\)/i
-            table[:foreign_keys] << { from_table: table_name, to_table: $2, column: $1, primary_key: $3 }
-          when /\A(UNIQUE\s+)?(?:KEY|INDEX)\s+[`"](\w+)[`"]\s*\(([^)]*)\)/i
-            # $1/$2/$3 must be captured to locals before any further regex
-            # call: String#scan below re-runs matching and would otherwise
-            # clobber $~ (and so $1) before the hash literal reads it.
-            unique = !$1.nil?
-            idx_name = $2
-            cols = $3.scan(/\w+/)
-            table[:indexes] << { name: idx_name, columns: cols, unique: unique }
-          end
-        end
-
-        table
-      end
-
-      # Rewrite a one-line CREATE TABLE body as one definition per line,
-      # splitting on commas that sit outside parentheses and quotes (so
-      # numeric(10,2) and quoted defaults survive intact).
-      def split_single_line_sql_body(body)
-        parts = []
-        current = +""
-        depth = 0
-        quote = nil
-        body.each_char do |ch|
-          if quote
-            quote = nil if ch == quote
-            current << ch
-          elsif ch == "'" || ch == '"' || ch == "`"
-            quote = ch
-            current << ch
-          elsif ch == "("
-            depth += 1
-            current << ch
-          elsif ch == ")"
-            depth -= 1
-            current << ch
-          elsif ch == "," && depth.zero?
-            parts << current
-            current = +""
-          else
-            current << ch
-          end
-        end
-        parts << current unless current.strip.empty?
-        parts.map(&:strip).join("\n")
-      end
-
-      # Parse column definitions from a CREATE TABLE body
-      def parse_sql_columns(body)
-        columns = []
-        body.each_line do |line|
-          line = line.strip.chomp(",").strip
-          next if line.empty?
-          next if line.match?(/\A(PRIMARY|CONSTRAINT|CHECK|UNIQUE|EXCLUDE|FOREIGN)\b/i)
-          # KEY/INDEX are non-reserved words in PostgreSQL, so pg_dump emits
-          # bare `key` or `index` columns unquoted. mysqldump always backticks
-          # inline index names ("KEY `name` (...)"), so a quoted name after
-          # KEY/INDEX is the reliable signal that this line is an index
-          # definition rather than a column named "key" or "index".
-          next if line.match?(/\A(?:UNIQUE\s+)?(?:KEY|INDEX)\s+[`"]/i)
-
-          # Match: column_name type_with_params [constraints]
-          if (match = line.match(/\A[`"]?(\w+)[`"]?\s+(.+)/))
-            col_name = match[1]
-            rest = match[2]
-            # Extract type: everything before NOT NULL, NULL, DEFAULT, etc.
-            col_type = rest.split(
-              /\s+(?:NOT\s+NULL|NULL|DEFAULT|PRIMARY|UNIQUE|CONSTRAINT|CHECK|AUTO_INCREMENT|AUTOINCREMENT|CHARACTER\s+SET|COLLATE|COMMENT|GENERATED|REFERENCES)\b/i
-            ).first&.strip&.downcase
-            next unless col_type && !col_type.empty?
-            # NOT NULL, and primary keys (implicitly NOT NULL), are the only
-            # dump-visible nullability signals.
-            nullable = !rest.match?(/\bNOT\s+NULL\b|\bPRIMARY\s+KEY\b/i)
-            columns << { name: col_name, type: normalize_sql_type(col_type), null: nullable }
-          end
-        end
-        columns
-      end
-
-      # Reads the dump it is given: a secondary database declares its own
-      # generated columns, which are not in the primary schema.rb.
       def generated_columns(schema)
         schema.tables.flat_map { |table, declared|
           declared[:columns].filter_map { |column|
@@ -640,17 +419,9 @@ module RailsAiContext
       # rename_table, drop_table, change_column, add_index, add_reference,
       # add_foreign_key, add_timestamps.
       def parse_migrations
-        tables = {}
         migration_files = Dir.glob(File.join(migrations_dir, "*.rb")).sort
-
-        migration_files.each do |path|
-          content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size) or next
-          replay_migration(content, tables)
-        end
-
-        # Remove internal Rails tables
-        tables.delete("ar_internal_metadata")
-        tables.delete("schema_migrations")
+        pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, schema_file_path)
+        tables = MigrationReplay.tables(migrations_dir, pk_type: pk_type)
 
         {
           adapter: "static_parse",
@@ -658,255 +429,6 @@ module RailsAiContext
           total_tables: tables.size,
           note: "Reconstructed from #{CountPhrase.call(migration_files.size, "migration file")} (no DB connection, no schema.rb)"
         }
-      end
-
-      def replay_migration(content, tables)
-        ast_data = SourceIntrospector.walk_source(content, {
-          migration: -> { Listeners::MigrationDslListener.new },
-          schema: -> { Listeners::SchemaDslListener.new }
-        })
-
-        current_table = nil
-        all_entries = (ast_data[:migration] + ast_data[:schema]).sort_by { |r| r[:location] }
-
-        # Also detect t.timestamps via direct AST walk (SchemaDslListener skips it
-        # because timestamps has no column name arg)
-        timestamps_lines = Set.new
-        find_timestamps_calls(AstCache.parse_string(content).value, timestamps_lines)
-
-        all_entries.each do |entry|
-          # MigrationDslListener entries
-          if entry.key?(:action)
-            if entry[:action] == :create_table
-              current_table = entry[:table]
-            elsif entry[:action] == :drop_table || entry[:action] == :rename_table
-              current_table = nil
-            end
-            apply_migration_action(entry, tables)
-          # SchemaDslListener entries (columns, indexes inside create_table blocks)
-          elsif entry[:type] == :create_table
-            current_table = entry[:table]
-            tables[current_table] ||= { columns: [], indexes: [], foreign_keys: [] }
-          elsif entry[:type] == :column && current_table
-            apply_schema_column(entry, current_table, tables)
-          elsif entry[:type] == :index && current_table
-            apply_schema_index(entry, current_table, tables)
-          end
-        end
-
-        # Apply timestamps where detected
-        timestamps_lines.each do |line_num|
-          # Find the enclosing create_table by checking which table's location range includes this line
-          table_for_line = nil
-          all_entries.select { |e| (e.key?(:action) && e[:action] == :create_table) || e[:type] == :create_table }
-            .each do |ct|
-              table_for_line = ct[:table] if ct[:location] < line_num
-            end
-          if table_for_line && tables[table_for_line]
-            tables[table_for_line][:columns] << { name: "created_at", type: "datetime", null: false }
-            tables[table_for_line][:columns] << { name: "updated_at", type: "datetime", null: false }
-          end
-        end
-      end
-
-      # Walk AST to find t.timestamps calls (not captured by SchemaDslListener).
-      def find_timestamps_calls(node, lines)
-        case node
-        when Prism::CallNode
-          if node.name == :timestamps && node.receiver
-            receiver = node.receiver
-            is_t = case receiver
-            when Prism::LocalVariableReadNode then receiver.name == :t
-            when Prism::CallNode then receiver.name == :t && receiver.receiver.nil?
-            else false
-            end
-            lines << node.location.start_line if is_t
-          end
-        end
-        node.child_nodes.compact.each { |child| find_timestamps_calls(child, lines) }
-      end
-
-      def apply_migration_action(entry, tables)
-        case entry[:action]
-        when :create_table
-          table = entry[:table]
-          tables[table] ||= { columns: [], indexes: [], foreign_keys: [] }
-
-        when :drop_table
-          tables.delete(entry[:table])
-
-        when :rename_table
-          old = entry[:table]
-          new_name = entry[:new_name]
-          tables[new_name] = tables.delete(old) if old && new_name && tables[old]
-
-        when :add_column
-          table = entry[:table]
-          return unless tables[table]
-          col_name = entry[:column]
-          col_type = entry[:column_type]
-          tables[table][:columns].reject! { |c| c[:name] == col_name }
-          col = { name: col_name, type: col_type }
-          opts = entry[:options] || {}
-          col[:null] = false if opts[:null] == false
-          col[:default] = format_default(opts[:default]) if opts.key?(:default)
-          tables[table][:columns] << col
-
-        when :remove_column
-          table = entry[:table]
-          tables[table][:columns]&.reject! { |c| c[:name] == entry[:column] } if tables[table]
-
-        when :rename_column
-          table = entry[:table]
-          if tables[table]
-            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
-            col[:name] = entry[:new_name] if col
-          end
-
-        when :change_column
-          table = entry[:table]
-          if tables[table]
-            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
-            col[:type] = entry[:column_type] if col && entry[:column_type]
-          end
-
-        when :change_column_default
-          table = entry[:table]
-          if tables[table]
-            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
-            if col
-              opts = entry[:options] || {}
-              if opts.key?(:to)
-                raw = opts[:to]
-                col[:default] = raw == nil ? nil : format_default(raw)
-              end
-            end
-          end
-
-        when :change_column_null
-          table = entry[:table]
-          if tables[table]
-            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
-            if col
-              opts = entry[:options] || {}
-              # The third positional arg is the nullable boolean
-              args = [ entry[:table], entry[:column] ]
-              # MigrationDslListener puts the nullable value in options or we check the raw AST
-              # For change_column_null, the third arg is a boolean (true/false)
-              # It's captured in options by MigrationDslListener if passed as keyword
-              # but it's typically a positional arg. Fall back to source inspection.
-            end
-          end
-
-        when :add_index
-          table = entry[:table]
-          return unless tables[table]
-          cols = entry[:columns]&.map(&:to_s) || []
-          opts = entry[:options] || {}
-          unique = opts[:unique] == true
-          idx_name = opts[:name]&.to_s
-          tables[table][:indexes] << { name: idx_name, columns: cols, unique: unique }.compact if cols.any?
-
-        when :add_reference, :add_belongs_to
-          table = entry[:table]
-          return unless tables[table]
-          ref_name = entry[:ref]
-          col_name = "#{ref_name}_id"
-          tables[table][:columns].reject! { |c| c[:name] == col_name }
-          col = { name: col_name, type: "bigint" }
-          opts = entry[:options] || {}
-          col[:null] = false if opts[:null] == false
-          tables[table][:columns] << col
-
-        when :add_foreign_key
-          from = entry[:table]
-          to = entry[:to_table]
-          return unless tables[from]
-          opts = entry[:options] || {}
-          tables[from][:foreign_keys] << foreign_key_entry(from, to, opts[:column], opts[:primary_key])
-        end
-      end
-
-      def apply_schema_column(entry, current_table, tables)
-        return unless tables[current_table]
-        col_type = entry[:column_type]
-
-        # Handle references/belongs_to
-        if %w[references belongs_to].include?(col_type)
-          ref_name = entry[:name]
-          col = { name: "#{ref_name}_id", type: "bigint" }
-          opts = entry[:options] || {}
-          col[:null] = false if opts[:null] == false
-          tables[current_table][:columns] << col
-          return
-        end
-
-        # Handle timestamps
-        if col_type == "timestamps"
-          tables[current_table][:columns] << { name: "created_at", type: "datetime", null: false }
-          tables[current_table][:columns] << { name: "updated_at", type: "datetime", null: false }
-          return
-        end
-
-        # Skip non-column types
-        return if %w[index check_constraint].include?(col_type)
-
-        col = { name: entry[:name], type: col_type }
-        opts = entry[:options] || {}
-        col[:null] = false if opts[:null] == false
-        col[:default] = format_default(opts[:default]) if opts.key?(:default) && opts[:default] != RailsAiContext::Confidence::INFERRED
-        col[:array] = true if opts[:array] == true
-        tables[current_table][:columns] << col
-      end
-
-      def apply_schema_index(entry, current_table, tables)
-        return unless tables[current_table]
-        cols = entry[:columns]&.map(&:to_s) || []
-        opts = entry[:options] || {}
-        unique = opts[:unique] == true
-        idx_name = opts[:name]&.to_s
-        tables[current_table][:indexes] << { name: idx_name, columns: cols, unique: unique }.compact if cols.any?
-      end
-
-      def format_default(value)
-        case value
-        when String then value
-        when Integer, Float then value.to_s
-        when TrueClass, FalseClass then value.to_s
-        when NilClass then nil
-        else value.to_s
-        end
-      end
-
-      def normalize_sql_type(type)
-        # MySQL's boolean columns are a sized tinyint. This has to run
-        # before the size-stripping below (and before the generic tinyint
-        # match) because bare tinyint is a real 1-byte integer column.
-        return "boolean" if type.start_with?("tinyint(1)")
-
-        base = type.sub(/\(.+\z/m, "").strip
-
-        case base
-        when /\Ainteger\z/i, /\Aint\z/i, /\Aint4\z/i, /\Atinyint\z/i, /\Amediumint\z/i then "integer"
-        when /\Abigint\z/i, /\Aint8\z/i then "bigint"
-        when /\Asmallint\z/i, /\Aint2\z/i then "smallint"
-        when /\Acharacter varying\z/i, /\Avarchar\z/i then "string"
-        when /\Atext\z/i, /\Alongtext\z/i, /\Amediumtext\z/i, /\Atinytext\z/i then "text"
-        when /\Aboolean\z/i, /\Abool\z/i then "boolean"
-        when /\Atimestamp/i, /\Adatetime\z/i then "datetime"
-        when /\Adate\z/i then "date"
-        when /\Atime\z/i then "time"
-        when /\Anumeric\z/i, /\Adecimal\z/i then "decimal"
-        when /\Afloat/i, /\Adouble/i then "float"
-        when /\Ajsonb?\z/i then "json"
-        when /\Auuid\z/i then "uuid"
-        when /\Ainet\z/i then "inet"
-        when /\Acitext\z/i then "citext"
-        when /\Aarray\z/i then "array"
-        when /\Ahstore\z/i then "hstore"
-        when /\Alongblob\z/i, /\Amediumblob\z/i, /\Ablob\z/i, /\Abinary\z/i, /\Avarbinary\z/i then "binary"
-        else type
-        end
       end
     end
   end

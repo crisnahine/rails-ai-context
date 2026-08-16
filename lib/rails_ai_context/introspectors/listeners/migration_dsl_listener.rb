@@ -84,6 +84,9 @@ module RailsAiContext
             result[:new_name] = string_or_symbol(args[2])
           when :change_column
             result[:column_type] = symbol_value(args[2])
+          when :change_column_null
+            # The nullability is the third positional, not a keyword.
+            result[:null] = boolean_value(args[2])
           end
 
           @results << result
@@ -140,6 +143,14 @@ module RailsAiContext
           case node
           when Prism::SymbolNode then node.value
           when Prism::StringNode then node.unescaped
+          else nil
+          end
+        end
+
+        def boolean_value(node)
+          case node
+          when Prism::TrueNode then true
+          when Prism::FalseNode then false
           else nil
           end
         end
