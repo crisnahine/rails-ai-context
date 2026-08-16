@@ -70,6 +70,25 @@ RSpec.describe "E2E: boot resilience", type: :e2e do
       end
     end
 
+    # init writes its config files before it boots, so a boot failure left the
+    # app half set up - .mcp.json and .rails-ai-context.yml on disk, no context
+    # files, and a non-zero exit reporting the whole thing as a failure.
+    it "init finishes its setup from static analysis instead of dying" do
+      with_initializer("zz_kaboom.rb", %(raise "FATAL_ENV_MISSING"\n)) do
+        result = @cli.cli("init")
+        expect(result.exit_status).to eq(0), result.to_s
+        expect(File).to exist(File.join(@builder.app_path, ".rails-ai-context.yml"))
+        expect(File).to exist(File.join(@builder.app_path, "CLAUDE.md"))
+      end
+    ensure
+      # init configures the app it runs in, and every later example in this
+      # file shares that app. Leaving the config behind changes what the MCP
+      # server loads for them.
+      %w[.rails-ai-context.yml .mcp.json].each do |f|
+        FileUtils.rm_f(File.join(@builder.app_path, f))
+      end
+    end
+
     it "context honours --no-boot on an app that would boot fine" do
       result = @cli.cli("context", "--no-boot")
       expect(result.exit_status).to eq(0), result.to_s

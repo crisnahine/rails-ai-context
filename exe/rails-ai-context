@@ -267,7 +267,10 @@ class RailsAiContextCLI < Thor
       add_to_gitignore
 
       # --- Boot Rails, load config, generate context ---
-      boot_rails!
+      # The config files are already on disk by now, so failing here leaves the
+      # app half set up and calls the whole thing a failure. Setup is exactly
+      # what you run on a repo you have just cloned.
+      boot_rails!(allow_static: true)
 
       $stderr.puts ""
       $stderr.puts "Generating AI context files..."
