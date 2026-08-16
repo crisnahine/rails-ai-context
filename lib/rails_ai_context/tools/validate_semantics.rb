@@ -221,6 +221,9 @@ module RailsAiContext
           else
             warnings.concat(check_route_helpers_regex(file, content, context))
             warnings.concat(check_column_references_regex(file, content, context))
+            # Three AST checks have no regex twin. Saying so keeps a partial
+            # answer from reading as "checked and clean".
+            warnings << "AST parse failed - strong_params, callback and partial checks skipped for this file"
           end
           # Cache-only checks (no AST needed)
           warnings.concat(check_has_many_dependent(file, context))
