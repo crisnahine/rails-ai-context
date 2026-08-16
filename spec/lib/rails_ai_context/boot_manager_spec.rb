@@ -68,4 +68,60 @@ RSpec.describe RailsAiContext::BootManager do
     expect(result).not_to be_booted
     expect(result.failure_summary).to include("No Rails app found")
   end
+
+  describe ".guard" do
+    it "returns a booted result when the block succeeds" do
+      result = described_class.guard { :ok }
+      expect(result).to be_booted
+    end
+
+    it "times out a hanging block with the friendly message" do
+      result = described_class.guard(timeout: 1) { sleep 5 }
+      expect(result).not_to be_booted
+      expect(result.error).to be_a(described_class::BootTimeoutError)
+      expect(result.failure_summary).to include("did not finish within 1s")
+    end
+
+    it "captures StandardError from the block" do
+      result = described_class.guard { raise "missing REDIS_URL" }
+      expect(result).not_to be_booted
+      expect(result.failure_summary).to eq("RuntimeError: missing REDIS_URL")
+    end
+  end
+
+  describe ".env_timeout" do
+    around do |example|
+      original = ENV["RAILS_AI_CONTEXT_BOOT_TIMEOUT"]
+      example.run
+    ensure
+      if original.nil?
+        ENV.delete("RAILS_AI_CONTEXT_BOOT_TIMEOUT")
+      else
+        ENV["RAILS_AI_CONTEXT_BOOT_TIMEOUT"] = original
+      end
+    end
+
+    it "returns the default when unset" do
+      ENV.delete("RAILS_AI_CONTEXT_BOOT_TIMEOUT")
+      expect(described_class.env_timeout).to eq(described_class::DEFAULT_TIMEOUT)
+    end
+
+    it "parses the variable" do
+      ENV["RAILS_AI_CONTEXT_BOOT_TIMEOUT"] = "7"
+      expect(described_class.env_timeout).to eq(7)
+    end
+
+    it "warns and falls back on a value that is not a number" do
+      ENV["RAILS_AI_CONTEXT_BOOT_TIMEOUT"] = "soon"
+      captured = StringIO.new
+      orig_err = $stderr
+      begin
+        $stderr = captured
+        expect(described_class.env_timeout).to eq(described_class::DEFAULT_TIMEOUT)
+      ensure
+        $stderr = orig_err
+      end
+      expect(captured.string).to include("not a number")
+    end
+  end
 end

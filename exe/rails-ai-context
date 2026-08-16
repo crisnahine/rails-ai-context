@@ -139,7 +139,7 @@ class RailsAiContextCLI < Thor
     end
 
     desc "context", "Generate AI context files"
-    option :format, type: :string, default: nil, desc: "Format: claude, cursor, copilot, json, all (default: from config)"
+    option :format, type: :string, default: nil, desc: "Format: claude, cursor, copilot, opencode, codex, json, all (default: from config)"
     def context
       boot_rails!
 
@@ -641,13 +641,7 @@ class RailsAiContextCLI < Thor
       # mode is unaffected.
       drop_conflicting_gem_activations!
 
-      timeout = begin
-        Integer(ENV.fetch("RAILS_AI_CONTEXT_BOOT_TIMEOUT",
-                          ::RailsAiContext::BootManager::DEFAULT_TIMEOUT))
-      rescue ArgumentError
-        $stderr.puts "[rails-ai-context] WARNING: RAILS_AI_CONTEXT_BOOT_TIMEOUT=#{ENV['RAILS_AI_CONTEXT_BOOT_TIMEOUT']} is not a number - using #{::RailsAiContext::BootManager::DEFAULT_TIMEOUT}s"
-        ::RailsAiContext::BootManager::DEFAULT_TIMEOUT
-      end
+      timeout = ::RailsAiContext::BootManager.env_timeout
       result = ::RailsAiContext::BootManager.boot!(app_root: Dir.pwd, timeout: timeout)
 
       unless result.booted?

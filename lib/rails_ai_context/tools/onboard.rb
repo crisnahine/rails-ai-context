@@ -341,8 +341,8 @@ module RailsAiContext
           end
 
           if turbo.is_a?(Hash) && !turbo[:error]
-            frames = turbo[:frames]&.size || 0
-            streams = turbo[:streams]&.size || 0
+            frames = turbo[:turbo_frames]&.size || 0
+            streams = turbo[:turbo_streams]&.size || 0
             if frames > 0 || streams > 0
               lines << "## Frontend" << "" unless has_content
               parts = []
@@ -433,14 +433,14 @@ module RailsAiContext
           end
 
           if turbo.is_a?(Hash) && !turbo[:error]
-            broadcasts = turbo[:broadcasts] || turbo[:explicit_broadcasts] || []
+            broadcasts = turbo[:model_broadcasts] || []
             if broadcasts.any?
               lines << "Turbo Stream broadcasts: #{count_phrase(broadcasts.size, "broadcast point")}."
               has_content = true
             end
-            streams = turbo[:stream_subscriptions] || turbo[:subscriptions] || []
+            streams = turbo[:turbo_streams] || []
             if streams.any?
-              lines << "Turbo Stream subscriptions: #{streams.size}."
+              lines << "Turbo Stream templates: #{streams.size}."
               has_content = true
             end
           end
@@ -545,13 +545,13 @@ module RailsAiContext
           engines = ctx[:engines]
           return [] unless engines.is_a?(Hash) && !engines[:error]
 
-          mounted = engines[:engines] || engines[:mounted] || []
+          mounted = engines[:mounted_engines] || []
           return [] if mounted.empty?
 
           lines = [ "## Mounted Engines", "" ]
           mounted.each do |e|
-            name = e[:name] || e[:engine]
-            path = e[:path] || e[:mount_path]
+            name = e[:engine]
+            path = e[:path]
             lines << "- **#{name}** at `#{path}`" if name
           end
           lines << ""

@@ -367,20 +367,6 @@ module RailsAiContext
               end
             end
 
-            # Check services
-            services = ctx[:services] || ctx[:service_objects]
-            if services.is_a?(Hash) && !services[:error]
-              service_list = services[:services] || []
-              related_svcs = service_list.select do |s|
-                s_name = (s[:name] || s[:file] || "").to_s
-                s_name.downcase.include?(feature_name.downcase) ||
-                  s_name.downcase.include?(feature_name.singularize.downcase)
-              end
-              if related_svcs.any?
-                lines << "" << "## Related Services (by name)"
-                related_svcs.each { |s| lines << "- `#{s[:file] || s[:name]}`" }
-              end
-            end
           end
         end
 

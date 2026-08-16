@@ -38,6 +38,23 @@ RSpec.describe "AI tool identity ownership" do
     expect(paths).to eq(RailsAiContext::Install::AiTool.all.to_h { |t| [ t.key, t.mcp_config[:path] ] })
   end
 
+  it "derives doctor's tool list from the table" do
+    expect(RailsAiContext::Doctor::ALL_AI_TOOLS)
+      .to eq(RailsAiContext::Install::AiTool.all.map(&:key))
+  end
+
+  # The Thor class body runs before the gem loads, so the binary cannot ask
+  # the table at definition time; this pins the hand-typed help text instead.
+  it "names every AI tool in the standalone binary's --format help" do
+    exe = File.read(File.join(File.dirname(lib_root), "exe", "rails-ai-context"))
+    desc_line = exe.lines.find { |l| l.include?("Format:") }
+
+    expect(desc_line).not_to be_nil
+    RailsAiContext::Install::AiTool.all.each do |tool|
+      expect(desc_line).to include(tool.key.to_s), "--format help is missing #{tool.key}"
+    end
+  end
+
   it "names every registered tool in doctor's MCP labels" do
     labels = RailsAiContext::Doctor.send(:mcp_config_checks).values.map { |c| c[:label] }
 

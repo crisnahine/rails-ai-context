@@ -37,7 +37,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
     end
 
     it "renders Hotwire line with frames and streams" do
-      ctx = { turbo: { frames: [ "user_frame" ], streams: [ "user_stream", "post_stream" ], broadcasts: [] } }
+      ctx = { turbo: { turbo_frames: [ "user_frame" ], turbo_streams: [ "user_stream", "post_stream" ], model_broadcasts: [] } }
       helper = test_class.new(ctx)
       text = helper.full_preset_stack_lines.join("\n")
       expect(text).to include("Hotwire")
@@ -119,7 +119,7 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
     end
 
     it "renders engines line when mounted engines exist" do
-      ctx = { engines: { mounted: [ { name: "Sidekiq::Web" }, { name: "Devise::Engine" } ] } }
+      ctx = { engines: { mounted_engines: [ { engine: "Sidekiq::Web" }, { engine: "Devise::Engine" } ] } }
       helper = test_class.new(ctx)
       text = helper.full_preset_stack_lines.join("\n")
       expect(text).to include("Engines: Sidekiq::Web, Devise::Engine")

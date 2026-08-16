@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Mounted engines render again in `rails_onboard` and the context files.**
+  `EngineIntrospector` emits `:mounted_engines`; the tool read `:engines` then
+  `:mounted`, and the stack line read `:mounted`, so both fell back to "none"
+  forever. Both now read the introspector's keys and the element's real
+  `engine:`/`path:` shape, and the spec fixtures use that shape instead of one
+  production never produced. (#144)
+- **The Hotwire stack line and `rails_onboard`'s Real-Time and Frontend
+  sections read turbo keys that exist.** `turbo[:frames]`, `[:streams]` and
+  `[:broadcasts]` were never emitted (`:turbo_frames`, `:turbo_streams` and
+  `:model_broadcasts` are), so the line was dead everywhere and Real-Time
+  always fell through to its view-scan fallback. (#145)
+- **`rails_get_context` no longer offers a Related Services section it could
+  never fill.** The `:services` key it read has no introspector behind it; the
+  dead branch is gone. (#146)
+- **`rails ai:context` stops re-prompting a YAML-configured app on every
+  run.** The rake path now loads `.rails-ai-context.yml` the way the
+  standalone binary always did; the initializer still wins when its configure
+  block ran. (#147)
+- **The standalone binary's `--format` help names opencode and codex.** A
+  guard spec pins the help text to `Install::AiTool`, which the Thor class
+  body cannot ask at definition time. (#153)
+- **`rails ai:serve` and `rails ai:serve_http` boot under the same timeout
+  and rescue as the binary.** A hanging initializer used to hang the task
+  forever where `rails-ai-context serve` gives up at 60s; both tasks now boot
+  through `BootManager.guard`, and `RAILS_AI_CONTEXT_BOOT_TIMEOUT` is parsed
+  in one place. (#154)
+- **doctor's tool list and `rails_search_code`'s exclusion list derive from
+  `Install::AiTool`.** Both were hand-typed restatements sitting below the
+  ownership spec's detection floor; the search exclusions now also cover the
+  generated `app/models/AGENTS.md` pair they previously missed. (#155)
+- **An e2e example asserts `call` and `static_call` answer the same keys.**
+  The declaration contract was already enforced (ADR-0002); the shape contract
+  was not, so a key added to the booted tier could silently vanish from the
+  static one. (#156)
+
 ## [5.21.3] - 2026-08-12
 
 ### Fixed

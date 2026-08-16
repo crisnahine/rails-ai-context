@@ -51,6 +51,33 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).not_to include("error")
     end
 
+    it "renders mounted engines from the introspector's own keys" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: "3.4",
+        engines: { mounted_engines: [ { engine: "Sidekiq::Web", path: "/sidekiq" } ] }
+      })
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).to include("## Mounted Engines")
+      expect(text).to include("Sidekiq::Web")
+    end
+
+    it "renders real-time features from the introspector's own keys" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: "3.4",
+        turbo: {
+          model_broadcasts: [ { model: "Post" } ],
+          turbo_streams: [ "posts/create.turbo_stream.erb" ]
+        }
+      })
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).to include("Turbo Stream broadcasts: 1 broadcast point.")
+      expect(text).to include("Turbo Stream templates: 1.")
+    end
+
     context "quick mode purpose inference" do
       it "infers news aggregation from article/site models and RSS jobs" do
         allow(described_class).to receive(:cached_context).and_return({

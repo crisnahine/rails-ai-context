@@ -143,6 +143,46 @@ RSpec.describe "E2E: static tier", type: :e2e do
     end
   end
 
+  describe "tier key parity" do
+    # ADR-0002 enforces the declaration contract; this enforces the shape
+    # contract: an alternate_source introspector answers the same keys from
+    # both tiers, so a key added to `call` cannot silently vanish statically.
+    it "answers the same keys from call and static_call for every alternate_source introspector" do
+      script = File.join(@builder.app_path, "tmp", "tier_parity_probe.rb")
+      FileUtils.mkdir_p(File.dirname(script))
+      File.write(script, <<~'RUBY')
+        require "json"
+        require "rails_ai_context"
+
+        static = RailsAiContext::StaticApp.new(Rails.root.to_s)
+        report = {}
+        RailsAiContext::Introspector::INTROSPECTOR_MAP.each do |key, klass|
+          next unless klass.static_tier == RailsAiContext::Introspectors::StaticTier::ALTERNATE_SOURCE
+
+          booted_keys = klass.new(Rails.application).call.keys.map(&:to_s).sort
+          static_keys = klass.new(static).send(:static_call).keys.map(&:to_s).sort
+          report[key] = { "booted" => booted_keys, "static" => static_keys }
+        end
+        puts JSON.generate(report)
+      RUBY
+
+      begin
+        result = @cli.run([ "bin/rails", "runner", script ])
+        expect(result.exit_status).to eq(0), result.to_s
+
+        report = JSON.parse(result.stdout.lines.last)
+        expect(report).not_to be_empty
+
+        mismatches = report.select { |_key, tiers| tiers["booted"] != tiers["static"] }
+        expect(mismatches).to be_empty, mismatches.map { |key, tiers|
+          "#{key}: booted=#{tiers['booted'].join(',')} static=#{tiers['static'].join(',')}"
+        }.join("\n")
+      ensure
+        File.delete(script) if File.exist?(script)
+      end
+    end
+  end
+
   describe "--app-path from outside the app directory" do
     it "resolves the app root from a foreign cwd" do
       # CliRunner#run always chdirs into the app directory before running a

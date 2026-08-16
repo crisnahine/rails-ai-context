@@ -55,8 +55,8 @@ module RailsAiContext
 
     private
 
-    # All configured AI tools, defaulting to all 5 when nil (unconfigured).
-    ALL_AI_TOOLS = %i[claude cursor copilot opencode codex].freeze
+    # All configured AI tools; nil (unconfigured) means every tool in the table.
+    ALL_AI_TOOLS = Install::AiTool.all.map(&:key).freeze
 
     def configured_ai_tools
       RailsAiContext.configuration.ai_tools || ALL_AI_TOOLS

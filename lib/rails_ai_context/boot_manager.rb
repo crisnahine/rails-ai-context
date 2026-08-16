@@ -52,8 +52,15 @@ module RailsAiContext
         )
       end
 
+      guard(timeout: timeout) { require environment_rb }
+    end
+
+    # The same three protections for callers that boot through their own
+    # mechanism - the rake tasks go through Rake's environment task so app
+    # hooks on it still run.
+    def self.guard(timeout: DEFAULT_TIMEOUT)
       OutputGuard.quarantine_stdout do
-        Timeout.timeout(timeout) { require environment_rb }
+        Timeout.timeout(timeout) { yield }
       end
       Result.new(status: :booted)
     rescue Timeout::Error
@@ -63,6 +70,15 @@ module RailsAiContext
       Result.new(status: :failed, error: BootTimeoutError.new("Boot did not finish within #{timeout}s"))
     rescue StandardError, ScriptError => e
       Result.new(status: :failed, error: e)
+    end
+
+    # One parse of RAILS_AI_CONTEXT_BOOT_TIMEOUT for every boot surface, so a
+    # bad value degrades the same way everywhere.
+    def self.env_timeout
+      Integer(ENV.fetch("RAILS_AI_CONTEXT_BOOT_TIMEOUT", DEFAULT_TIMEOUT))
+    rescue ArgumentError
+      $stderr.puts "[rails-ai-context] WARNING: RAILS_AI_CONTEXT_BOOT_TIMEOUT=#{ENV['RAILS_AI_CONTEXT_BOOT_TIMEOUT']} is not a number - using #{DEFAULT_TIMEOUT}s"
+      DEFAULT_TIMEOUT
     end
   end
 end

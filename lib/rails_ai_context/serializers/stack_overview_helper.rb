@@ -25,9 +25,9 @@ module RailsAiContext
         turbo = ctx[:turbo]
         if turbo.is_a?(Hash) && !turbo[:error]
           parts = []
-          parts << count_phrase((turbo[:frames] || []).size, "frame") if turbo[:frames]&.any?
-          parts << count_phrase((turbo[:streams] || []).size, "stream") if turbo[:streams]&.any?
-          parts << "broadcasts" if turbo[:broadcasts]&.any?
+          parts << count_phrase((turbo[:turbo_frames] || []).size, "frame") if turbo[:turbo_frames]&.any?
+          parts << count_phrase((turbo[:turbo_streams] || []).size, "stream") if turbo[:turbo_streams]&.any?
+          parts << "broadcasts" if turbo[:model_broadcasts]&.any?
           lines << "- Hotwire: #{parts.join(', ')}" if parts.any?
         end
 
@@ -67,8 +67,8 @@ module RailsAiContext
         end
 
         engines = ctx[:engines]
-        if engines.is_a?(Hash) && !engines[:error] && engines[:mounted]&.any?
-          names = engines[:mounted].map { |e| e[:name] || e[:engine] }.compact.first(5)
+        if engines.is_a?(Hash) && !engines[:error] && engines[:mounted_engines]&.any?
+          names = engines[:mounted_engines].map { |e| e[:engine] }.compact.first(5)
           lines << "- Engines: #{names.join(', ')}" if names.any?
         end
 

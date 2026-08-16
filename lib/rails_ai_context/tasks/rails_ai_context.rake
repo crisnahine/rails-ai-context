@@ -24,6 +24,14 @@ def print_result(result)
   result[:skipped].each { |f| puts "  ⏭️  #{f} (unchanged)" }
 end unless defined?(print_result)
 
+def abort_boot_failure(result, timeout)
+  $stderr.puts "Error: Rails app failed to boot: #{result.failure_summary}"
+  if result.error.is_a?(RailsAiContext::BootManager::BootTimeoutError)
+    $stderr.puts "  If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
+  end
+  exit 1
+end
+
 def apply_context_mode_override
   if ENV["CONTEXT_MODE"]
     mode = ENV["CONTEXT_MODE"].to_sym
@@ -280,6 +288,10 @@ namespace :ai do
   task context: :environment do
     require "rails_ai_context"
 
+    # Nothing else on the rake path loads .rails-ai-context.yml, so a
+    # YAML-configured app (no initializer) would re-prompt on every run.
+    RailsAiContext::Configuration.auto_load!
+
     apply_context_mode_override
 
     ai_tools = RailsAiContext.configuration.ai_tools
@@ -408,16 +420,25 @@ namespace :ai do
   task :serve do
     # Boot inside the task so app boot output (initializer puts, deprecation
     # warnings) is quarantined to stderr - stdout carries the JSON-RPC stream.
-    RailsAiContext::OutputGuard.quarantine_stdout do
+    # Through Rake's environment task, not BootManager.boot!, so app hooks on
+    # that task still run; the guard adds the timeout and the rescue.
+    timeout = RailsAiContext::BootManager.env_timeout
+    result = RailsAiContext::BootManager.guard(timeout: timeout) do
       Rake::Task["environment"].invoke
     end
+    abort_boot_failure(result, timeout) unless result.booted?
     require "rails_ai_context"
 
     RailsAiContext.start_mcp_server(transport: :stdio)
   end
 
   desc "Start the MCP server with HTTP transport"
-  task serve_http: :environment do
+  task :serve_http do
+    timeout = RailsAiContext::BootManager.env_timeout
+    result = RailsAiContext::BootManager.guard(timeout: timeout) do
+      Rake::Task["environment"].invoke
+    end
+    abort_boot_failure(result, timeout) unless result.booted?
     require "rails_ai_context"
 
     RailsAiContext.start_mcp_server(transport: :http)

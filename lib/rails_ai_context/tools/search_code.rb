@@ -291,13 +291,17 @@ module RailsAiContext
         glob = file_type ? "**/*.#{file_type}" : "**/*.{#{extensions}}"
         excluded = RailsAiContext.configuration.excluded_paths
         test_dirs = %w[test/ spec/ features/]
-        ai_context_files = %w[CLAUDE.md AGENTS.md .claude/ .cursor/ .cursorrules .github/copilot-instructions.md .github/instructions/ .vscode/mcp.json .codex/ .mcp.json opencode.json .ai-context.json]
+        # Derived from Install::AiTool so a moved context or MCP path stays
+        # excluded without this list learning about it.
+        ai_context_files = Install::AiTool.all.flat_map { |t|
+          t.context_paths + [ t.mcp_config[:path] ]
+        }.uniq + %w[.ai-context.json]
         real_root = File.realpath(root).to_s
 
         safe_glob(search_path, glob, real_root).each do |file|
           relative = file.sub("#{real_root}/", "")
           next if excluded.any? { |ex| relative.start_with?(ex) }
-          next if ai_context_files.any? { |p| relative.start_with?(p) || relative == p }
+          next if ai_context_files.any? { |p| relative == p || relative.start_with?("#{p}/") }
           next if exclude_tests && test_dirs.any? { |td| relative.start_with?(td) }
 
           (RailsAiContext::SafeFile.read(file) || "").lines.each_with_index do |line, idx|
