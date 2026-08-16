@@ -22,34 +22,32 @@ module RailsAiContext
       module_function
 
       # @param source [String] the file's source
-      # @param path_name [String] the name derived from the file's path
+      # @param path_name [String] the name the file's path camelizes to
       # @return [String] the constant to call this file's class
       def resolve(source, path_name)
-        name_for(declared_classes(source), path_name)
+        declarations(source)
+          .map { |d| d[:name] }
+          .find { |name| name.casecmp?(path_name) } || path_name
       end
 
-      # Whether the file declares a class of its own, as opposed to a module
-      # that happens to hold one. app/mailers is where ActionMailer
-      # interceptors live, and reporting one as a mailer offers
-      # `delivering_email` - a hook the framework calls - as an email to send.
-      def declares_own_class?(source, path_name)
-        own_class?(declared_classes(source), path_name)
+      # Whether the file declares, at its own level, a class that inherits
+      # something. A mailer and a channel always do; app/mailers is also where
+      # ActionMailer interceptors live, written as a module or as a bare class,
+      # and reporting one of those offers `delivering_email` - a hook the
+      # framework calls - as an email somebody can send.
+      #
+      # "At its own level" excludes a class nested deeper than the file's own
+      # constant, which belongs to whatever declares it rather than to the file.
+      def own_subclass?(source, path_name)
+        depth = path_name.split("::").size
+
+        declarations(source).any? do |d|
+          d[:superclass] && d[:name].split("::").size <= depth
+        end
       end
 
-      # Fully qualified names of every class the source declares, module
-      # nesting included, in source order. Empty when nothing parses.
-      def declared_classes(source)
-        declarations(source).map { |d| d[:name] }
-      end
-
-      # The same list narrowed to classes that inherit something. A mailer or a
-      # channel always does; an interceptor written as a bare class does not,
-      # and app/mailers is where interceptors live.
-      def declared_subclasses(source)
-        declarations(source).select { |d| d[:superclass] }.map { |d| d[:name] }
-      end
-
-      # @return [Array<Hash>] { name:, superclass: } per declared class
+      # Every class the source declares: fully qualified name, module nesting
+      # included, and the superclass as written. Empty when nothing parses.
       def declarations(source)
         return [] unless source
 
@@ -61,21 +59,6 @@ module RailsAiContext
         $stderr.puts "[rails-ai-context] DeclaredConstant failed: #{e.message}" if ENV["DEBUG"]
         []
       end
-
-      # --- decisions over an already-collected list ---
-
-      def name_for(declared, path_name)
-        declared.find { |name| name.casecmp?(path_name) } || path_name
-      end
-
-      # A class nested deeper than the file's own constant belongs to whatever
-      # declares it, not to the file.
-      def own_class?(declared, path_name)
-        depth = path_name.split("::").size
-        declared.any? { |name| name.split("::").size <= depth }
-      end
-
-      # --- walking ---
 
       def collect(node, scope, found)
         case node
@@ -102,6 +85,8 @@ module RailsAiContext
       def segment(node)
         node.constant_path.slice.delete_prefix("::")
       end
+
+      private_class_method :collect, :descend, :qualify, :segment
     end
   end
 end

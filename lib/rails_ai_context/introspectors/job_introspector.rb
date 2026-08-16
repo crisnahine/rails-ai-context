@@ -334,12 +334,10 @@ module RailsAiContext
           # `delivering_email` - a hook the framework calls - as an email
           # somebody can send.
           path_name = path_name_for(path, dir)
-          declarations = DeclaredConstant.declarations(source)
-          subclasses = declarations.select { |d| d[:superclass] }.map { |d| d[:name] }
-          next unless DeclaredConstant.own_class?(subclasses, path_name)
+          next unless DeclaredConstant.own_subclass?(source, path_name)
 
           walked = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })
-          [ DeclaredConstant.name_for(declarations.map { |d| d[:name] }, path_name), walked[:methods] || [] ]
+          [ DeclaredConstant.resolve(source, path_name), walked[:methods] || [] ]
         rescue StandardError, ScriptError => e
           $stderr.puts "[rails-ai-context] source_classes failed for #{path}: #{e.message}" if ENV["DEBUG"]
           nil

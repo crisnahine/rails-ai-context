@@ -78,11 +78,11 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
   # "Does this file's own subject exist as a class" is a different question
   # from "what is it called", and app/mailers needs the first one: a module
   # holding a nested error class declares a class, but not its own.
-  describe ".declares_own_class?" do
+  describe ".own_subclass?" do
     it "is true for a class at the file's own level" do
       source = "module OAuth\n  class TokenMailer < ApplicationMailer\n  end\nend\n"
 
-      expect(described_class.declares_own_class?(source, "Oauth::TokenMailer")).to be(true)
+      expect(described_class.own_subclass?(source, "Oauth::TokenMailer")).to be(true)
     end
 
     it "is false for a module whose only class is nested deeper" do
@@ -97,17 +97,17 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
         end
       RUBY
 
-      expect(described_class.declares_own_class?(source, "Interceptors::DefaultHeaders")).to be(false)
+      expect(described_class.own_subclass?(source, "Interceptors::DefaultHeaders")).to be(false)
     end
 
     it "is true for a bare class in a namespaced directory" do
       source = "class Channel < ActionCable::Channel::Base\nend\n"
 
-      expect(described_class.declares_own_class?(source, "ApplicationCable::Channel")).to be(true)
+      expect(described_class.own_subclass?(source, "ApplicationCable::Channel")).to be(true)
     end
 
     it "is false when nothing is declared" do
-      expect(described_class.declares_own_class?("X = 1\n", "Widgets")).to be(false)
+      expect(described_class.own_subclass?("X = 1\n", "Widgets")).to be(false)
     end
   end
 end
