@@ -32,7 +32,12 @@ module RailsAiContext
         })
 
         current_table = nil
-        root = AstCache.parse_string(content).value
+        # parse_string returns nil for an oversize source, and a migration can
+        # sit between max_file_size and max_schema_file_size.
+        parsed = AstCache.parse_string(content)
+        return unless parsed
+
+        root = parsed.value
 
         # A `def down` says what to undo, not what the schema holds. Replaying
         # it alongside `up` cancels the migration out: the ordinary
@@ -115,10 +120,9 @@ module RailsAiContext
 
       # A replayed create_table implies its id column the way a dumped one
       # does; leaving it out gave the same app two answers depending on which
-      # file it committed.
-      # A table the replay cannot name is a table it cannot report. Canvas
-      # calls `create_table table_name do |t|` with a local computed at run
-      # time, and keeping the entry put a nil key in the schema that took a
+      # file it committed. A table the replay cannot name it cannot report -
+      # Canvas calls `create_table table_name do |t|` with a local computed at
+      # run time, and keeping the entry put a nil key in the schema that took a
       # whole context run down the moment a serializer sorted the names.
       def seed_table(tables, table, options, pk_type)
         return if table.nil? || table.to_s.empty?
