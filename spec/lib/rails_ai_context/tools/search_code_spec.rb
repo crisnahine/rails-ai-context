@@ -45,17 +45,25 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       expect(text).to include("Search:")
     end
 
-    # search_extensions reached the Ruby fallback and not the ripgrep path, so
-    # the same config gave two different answers depending on whether rg
-    # happened to be installed - and on the machines where it is, which is most
-    # of them, narrowing the list did nothing at all.
-    it "honours search_extensions whichever search backend runs" do
-      RailsAiContext.configuration.search_extensions = %w[md]
-      text = described_class.call(pattern: "class").content.first[:text]
+    # Turning search_extensions into a positive glob list on the ripgrep path
+    # made the two backends agree and cost the reach that makes the tool
+    # useful: a Gemfile, a Rakefile and a .md carry no listed extension.
+    it "finds a match in a file whose name carries no listed extension" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "Gemfile"), %(source "https://rubygems.org"\ngem "devise"\n))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post; end\n")
 
-      expect(text).not_to match(/\.rb[:\s]/)
-    ensure
-      RailsAiContext.configuration.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
+        allow(RailsAiContext).to receive(:configuration).and_wrap_original do |orig|
+          orig.call.tap { |c| c.app_root = dir }
+        end
+        allow(RailsAiContext).to receive(:tier).and_return(:static)
+        described_class.reset_cache! if described_class.respond_to?(:reset_cache!)
+
+        text = described_class.call(pattern: "devise").content.first[:text]
+
+        expect(text).to include("Gemfile")
+      end
     end
 
     it "returns a not-found message for unmatched patterns" do

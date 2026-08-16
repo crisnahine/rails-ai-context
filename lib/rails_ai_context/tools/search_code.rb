@@ -266,14 +266,14 @@ module RailsAiContext
 
         if file_type
           cmd.push("--type-add", "custom:*.#{file_type}", "--type", "custom")
-        else
-          # Without this, `search_extensions` reached the Ruby fallback only,
-          # and the same configuration gave two different answers depending on
-          # whether ripgrep happened to be installed.
-          RailsAiContext.configuration.search_extensions.each do |ext|
-            cmd << "--glob=*.#{ext.to_s.delete_prefix('.')}"
-          end
         end
+        # `search_extensions` is deliberately NOT applied here. Turning it into
+        # a positive glob list makes ripgrep agree with the Ruby fallback and
+        # costs the reach that makes the tool useful: `gem "devise"` in a
+        # Gemfile, a TODO in a .md, a task in a Rakefile all stop being
+        # findable, because none of those names carry a listed extension. The
+        # fallback keeps the list because scanning every file in Ruby is the
+        # expensive path; ripgrep does not need the help.
 
         cmd << "--" # Prevent pattern from being parsed as flags
         cmd << pattern
