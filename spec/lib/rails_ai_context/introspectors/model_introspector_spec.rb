@@ -351,6 +351,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "#static_call" do
+    # The skip was `relative.start_with?("concerns/")`, which only sees the
+    # top-level directory Rails autoloads. A nested one - OpenProject has
+    # app/models/queries/operators/concerns - walked straight past it, and four
+    # mixins were reported as models of the app.
+    it "does not report a module in a nested concerns directory as a model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "queries", "operators", "concerns"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), <<~RUBY)
+          class Widget < ApplicationRecord
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "queries", "operators", "concerns", "contains.rb"), <<~RUBY)
+          module Queries
+            module Operators
+              module Concerns
+                module Contains
+                  def contains?(x) = true
+                end
+              end
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Widget")
+      end
+    end
+
     it "discovers and parses models from source without constantizing" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))

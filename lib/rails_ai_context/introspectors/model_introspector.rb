@@ -63,7 +63,10 @@ module RailsAiContext
         RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
           Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            next if relative == "application_record" || relative.start_with?("concerns/")
+            # `concerns/` is the directory Rails autoloads, but an app may nest
+            # one anywhere - OpenProject has app/models/queries/operators/
+            # concerns - and a mixin there is not a model of the app.
+            next if relative == "application_record" || relative.split("/").include?("concerns")
 
             class_name = relative.camelize
             next if result.key?(class_name)
@@ -600,7 +603,10 @@ module RailsAiContext
         RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
           Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            next if relative == "application_record" || relative.start_with?("concerns/")
+            # `concerns/` is the directory Rails autoloads, but an app may nest
+            # one anywhere - OpenProject has app/models/queries/operators/
+            # concerns - and a mixin there is not a model of the app.
+            next if relative == "application_record" || relative.split("/").include?("concerns")
 
             class_name = relative.camelize
             next if result.key?(class_name)
