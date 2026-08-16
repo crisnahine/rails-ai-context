@@ -32,10 +32,28 @@ Two senses, one per module, and neither is bare "path" in a name.
 
 The mode where the app did not boot, or `--no-boot` was passed. What an introspector answers here is what it declared, never what a runtime check happened to detect. Every introspector in `INTROSPECTOR_MAP` extends `StaticTier` and names one of three kinds:
 
-**files-only** - `call` runs unchanged against the static app handle, because it only ever read files. Most of the map.
+**files-only** - `call` runs unchanged against the static app handle (`StaticApp`), because it only ever read files. Most of the map.
 
 **alternate-source** - `static_call` answers from a different source than `call` does: `db/schema.rb` instead of the connection, `config/routes.rb` instead of the route set.
 
 **runtime-only** - needs `app.config`, `app.routes` or a live database, and refuses honestly.
 
 An undeclared introspector fails the suite, and every files-only declaration is proven against `spec/fixtures/static_app` with nothing booted. Declaring files-only while defining `static_call` (or the reverse) is also a spec failure.
+
+## Concern
+
+Three senses inside the gem, and the payload one is wider than either everyday Rails reading.
+
+**Concern (as payload)** - a module in a class's ancestor chain, minus framework noise. Not only `ActiveSupport::Concern`, and not only files under a concerns directory: anything reached by `include` or `prepend` counts, which is why `extend` and a singleton-class `include` do not. This is what `:concerns` holds in model and controller data and what a "Concerns" section renders. The booted tier reads `ancestors`, so it also sees what the superclass and other concerns pulled in; the static tier sees the class's own file alone.
+
+**Concerns directory** - `app/*/concerns` as a place, glob-derived the way Rails autoloads it, never a hardcoded list. `ConcernPaths` is the one answer to "where does this app keep its concerns" for every surface that lists or counts them.
+
+**Mixin** - the static detection feeding the payload: any `include`, `prepend` or `extend` with a constant argument, as `MixinsListener` reports it. Named mixin because it captures more than concerns; its `ancestor` flag marks the subset that becomes one.
+
+## Standalone
+
+Two senses on different axes. Qualify it; the bare word does not say which.
+
+**Standalone install** - how the gem got installed: `gem install rails-ai-context`, driven through its own binary, never in the host app's Gemfile, so the `rails ai:*` rake tasks do not exist. `InstallMode.standalone?` is the decider, and the `standalone:` flag on `McpConfigGenerator` means this - it picks whether the written MCP command is the bare binary or a bundled invocation. `docs/STANDALONE.md` documents this sense only.
+
+**Standalone server** - how MCP is served: the entry point that is its own process, `rails ai:serve_http` starting `Server` with `transport: :http`, serving MCP and nothing else. The middleware and the engine controller answer the same requests from inside the app's web server; the standalone server does not need one running. It says nothing about the install - an in-Gemfile app starts it from a rake task. ADR-0003 and `McpEdge` use this sense.
