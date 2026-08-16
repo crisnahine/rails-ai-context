@@ -191,6 +191,26 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       end
     end
 
+    # The generated files call these "Global before_actions", so a filter that
+    # is skipped or carries a condition does not belong in the list. Mastodon's
+    # ApplicationController skips verify_authenticity_token, and the file said
+    # it ran on every request.
+    it "leaves out filters that are skipped or conditional" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "controllers"))
+        File.write(File.join(root, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :set_locale
+            skip_before_action :verify_authenticity_token
+            before_action :store_referrer, except: [ :create ], if: :devise_controller?
+            before_action :require_functional!, if: :user_signed_in?
+          end
+        RUBY
+
+        expect(test_class.new({}).detect_before_actions(root)).to eq(%w[set_locale])
+      end
+    end
+
     it "answers empty for a tree without those directories" do
       Dir.mktmpdir do |root|
         helper = test_class.new({})

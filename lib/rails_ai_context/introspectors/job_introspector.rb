@@ -346,6 +346,10 @@ module RailsAiContext
           # see MAILER_FRAMEWORK_HOOKS - because a mailer's actions are as
           # often written as modules mixed into one class as they are methods
           # on it. Reading the file is only about naming it.
+          #
+          # The methods are the file's, not one class's, which is what lets a
+          # mixin's actions count. The cost: a file declaring both a mailer and
+          # an interceptor is read as one, and the hook drops both.
           path_name = path_name_for(path, dir)
           walked = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })
           [ DeclaredConstant.resolve(source, path_name), walked[:methods] || [] ]

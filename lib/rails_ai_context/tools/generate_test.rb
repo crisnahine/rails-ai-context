@@ -403,7 +403,7 @@ module RailsAiContext
           ctrl_name = ctrl_name.strip
           # Normalize: "posts" → "PostsController", "PostsController" stays
           ctrl_class = ctrl_name.end_with?("Controller") ? ctrl_name : "#{ctrl_name.camelize}Controller"
-          snake = ctrl_class.underscore.delete_suffix("_controller")
+          snake = RailsAiContext::Payload.controller_route_key(cached_context, ctrl_class)
 
           routes = cached_context[:routes] || {}
           by_ctrl = routes[:by_controller] || {}

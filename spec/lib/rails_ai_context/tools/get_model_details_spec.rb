@@ -253,4 +253,35 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("# User")
     end
   end
+  # A model in a pack does not live under app/models, so rebuilding the path
+  # from the name found nothing and every source-read section went quietly
+  # missing from an answer that otherwise looked complete.
+  describe "a model whose file is not under app/models" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "packs", "billing", "app", "models", "invoice.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, <<~RUBY)
+          class Invoice < ApplicationRecord
+            def overdue_by(days)
+            end
+          end
+        RUBY
+        @root = dir
+        example.run
+      end
+    end
+
+    it "reads the source from the file the model carries" do
+      described_class.reset_cache!
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Invoice" => { table_name: "invoices", file: "packs/billing/app/models/invoice.rb" } }
+      )
+
+      text = described_class.call(model: "Invoice", detail: "full").content.first[:text]
+
+      expect(text).to include("overdue_by")
+    end
+  end
 end

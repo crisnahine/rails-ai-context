@@ -87,8 +87,15 @@ module RailsAiContext
       # Rails' own default is :en, so "en" is the right answer when the app
       # never says otherwise - not a guess.
       def default_locale_from_config
+        # config/environments/*.rb arrive in glob order, so whichever file
+        # carried an assignment first won whatever environment it belonged to -
+        # and development.rb sorts ahead of production.rb.
+        env = ENV["RAILS_ENV"] || "development"
+        environments = Dir.glob(File.join(root, "config", "environments", "*.rb"))
+          .partition { |path| File.basename(path, ".rb") == env }.flatten
+
         candidates = [ File.join(root, "config", "application.rb") ] +
-                     Dir.glob(File.join(root, "config", "environments", "*.rb")) +
+                     environments +
                      Dir.glob(File.join(root, "config", "initializers", "*.rb"))
 
         candidates.each do |path|
@@ -176,16 +183,16 @@ module RailsAiContext
           # lookup table under config/locales, and such a table shares a key or
           # two with the default by coincidence - on Discourse that produced
           # 138 rows reading "0.0% - 11918 missing", a translation effort
-          # nobody had started. Naming those locales is the honest form; a
-          # screen of zeroes is not.
-          if pct.zero?
-            # The key count travels with the name: a locale can define plenty and
-            # still share none with the default - GitLab's zh-CN has 109, all
-            # from gem-provided files - and a bare name reads as "not
-            # translated" when the truth is "translated something else".
-            untranslated << { locale: locale.to_s, keys: locale_keys.size }
-            next
-          end
+          # nobody had started.
+          #
+          # The key count travels with the name: a locale can define plenty and
+          # still share none with the default, and a bare name reads as "not
+          # translated" when the truth is "translated something else".
+          #
+          # The row is written either way. Naming a locale here only asks the
+          # renderer to group it; deleting its numbers would leave a
+          # translation genuinely started below the floor with nothing to read.
+          untranslated << { locale: locale.to_s, keys: locale_keys.size } if pct.zero?
 
           coverage[locale.to_s] = {
             keys: locale_keys.size,

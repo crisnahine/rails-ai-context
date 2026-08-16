@@ -52,6 +52,27 @@ module RailsAiContext
       section(ctx, :controllers)&.dig(:controllers, name.to_s)&.dig(:file)
     end
 
+    # The file a model was read from. `models` is a bare Hash of name =>
+    # details, not a section with its own wrapper.
+    def model_file(ctx, name)
+      models = ctx.is_a?(Hash) ? ctx[:models] : nil
+      return nil unless models.is_a?(Hash) && !models[:error]
+
+      models.dig(name.to_s, :file)
+    end
+
+    # The controller Rails routes under a path, as [name, data].
+    #
+    # A view directory names the route key, not the constant: camelizing
+    # `app/views/activitypub/` back gives `Activitypub`, and the controllers
+    # hash is keyed by what the app declares.
+    def controller_for_route_key(ctx, key)
+      controllers = section(ctx, :controllers)&.dig(:controllers)
+      return nil unless controllers.is_a?(Hash)
+
+      controllers.find { |name, _| controller_route_key(ctx, name) == key.to_s }
+    end
+
     # The key Rails routes a controller by: its path, minus the controllers
     # root and the _controller suffix. Packs and in-repo engines put that root
     # somewhere other than the start of the path.
@@ -59,7 +80,7 @@ module RailsAiContext
       file = controller_file(ctx, name)
       return name.to_s.underscore.delete_suffix("_controller") unless file
 
-      file.to_s.sub(%r{\A.*app/controllers/}, "").sub(/_controller\.rb\z/, "")
+      file.to_s.sub(%r{\A.*app/controllers/}, "").sub(/(?:_controller)?\.rb\z/, "")
     end
   end
 end

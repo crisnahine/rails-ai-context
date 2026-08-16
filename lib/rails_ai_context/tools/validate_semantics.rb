@@ -701,14 +701,18 @@ module RailsAiContext
         parts = file.sub("app/views/", "").split("/")
         return warnings if parts.size < 2
 
+        # A view directory names the route key, not the constant: camelizing
+        # app/views/activitypub/ back gives Activitypub, which is not what the
+        # app declares, and the check then stops running for that whole tree.
         ctrl_dir = parts[0..-2].join("/")
-        ctrl_class = "#{ctrl_dir.camelize}Controller"
-        controllers = context.dig(:controllers, :controllers) || {}
-        ctrl_data = controllers[ctrl_class]
+        ctrl_class, ctrl_data = RailsAiContext::Payload.controller_for_route_key(context, ctrl_dir)
         return warnings unless ctrl_data
 
         # Get all instance variables set across all actions
-        source_path = rails_app.root.join("app", "controllers", "#{ctrl_class.underscore}.rb")
+        ctrl_file = RailsAiContext::Payload.controller_file(context, ctrl_class)
+        return warnings unless ctrl_file
+
+        source_path = rails_app.root.join(ctrl_file)
         return warnings unless File.exist?(source_path)
 
         ctrl_source = RailsAiContext::SafeFile.read(source_path)

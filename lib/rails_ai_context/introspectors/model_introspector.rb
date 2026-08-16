@@ -63,12 +63,9 @@ module RailsAiContext
         RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
           Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            # `concerns/` is the directory Rails autoloads, but an app may nest
-            # one anywhere - OpenProject has app/models/queries/operators/
-            # concerns - and a mixin there is not a model of the app.
-            next if relative == "application_record" || relative.split("/").include?("concerns")
+            next if relative == "application_record" || mixin_path?(relative, path)
 
-            class_name = relative.camelize
+            class_name = declared_model_name(path, relative.camelize)
             next if result.key?(class_name)
             next if config.excluded_models.include?(class_name)
 
@@ -84,6 +81,27 @@ module RailsAiContext
       end
 
       private
+
+      # Zeitwerk resolves a path through the app's own inflector, which the
+      # static tier never loads, so camelizing invents `Activitypub::` for an
+      # app that declares `ActivityPub::`.
+      def declared_model_name(path, path_name)
+        source = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_file_size)
+        DeclaredConstant.resolve(source, path_name)
+      end
+
+      # `concerns/` under app/models is the Zeitwerk root for mixins: it does
+      # not namespace its files, so the path is not their name. A nested
+      # concerns/ is an ordinary namespace - OpenProject fills one with mixins,
+      # but a class declared there is a model like any other.
+      def mixin_path?(relative, path)
+        segments = relative.split("/")
+        return false unless segments.include?("concerns")
+        return true if segments.first == "concerns"
+
+        source = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_file_size)
+        !DeclaredConstant.declares_class?(source)
+      end
 
       def eager_load_models!
         return if Rails.application.config.eager_load
@@ -154,6 +172,7 @@ module RailsAiContext
 
         details = {
           table_name:       model.table_name,
+          file:             relative_to_root(model_source_path(model)),
           # Reflection-based (runtime, most accurate for these)
           associations:     extract_associations(model),
           validations:      extract_validations(model),
@@ -513,10 +532,19 @@ module RailsAiContext
 
       # ── Helpers ────────────────────────────────────────────────────
 
+      # Ruby knows where the class was defined, and the name does not: a model
+      # in a pack or engine does not live under app/models, and an inflected
+      # namespace does not underscore back to its own directory. The
+      # containment check keeps a gem-defined constant from being reported as
+      # the app's own file.
       def model_source_path(model)
         root = app.root.to_s
-        underscored = model.name.underscore
-        File.join(root, "app", "models", "#{underscored}.rb")
+        located = Object.const_source_location(model.name)&.first
+        return located if located && File.expand_path(located).start_with?("#{File.expand_path(root)}/")
+
+        File.join(root, "app", "models", "#{model.name.underscore}.rb")
+      rescue NameError, TypeError
+        File.join(root, "app", "models", "#{model.name.underscore}.rb")
       end
 
       DEVISE_CLASS_METHOD_PATTERNS = %w[
@@ -585,8 +613,16 @@ module RailsAiContext
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(data[:mixins]),
           macros: data[:macros],
-          methods: ActionResolver.own_methods(data[:methods], class_name)
+          methods: ActionResolver.own_methods(data[:methods], class_name),
+          file: relative_to_root(path)
         }
+      end
+
+      # Six tools turn a model name back into app/models/<underscored>.rb,
+      # which is wrong for a model in a pack or engine and wrong wherever the
+      # app registers an inflection. The path travels with the model instead.
+      def relative_to_root(path)
+        path.to_s.sub(%r{\A#{Regexp.escape(app.root.to_s)}/}, "")
       end
 
       # This sees the model file alone, where the booted tier also walks what
@@ -603,10 +639,7 @@ module RailsAiContext
         RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
           Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
             relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            # `concerns/` is the directory Rails autoloads, but an app may nest
-            # one anywhere - OpenProject has app/models/queries/operators/
-            # concerns - and a mixin there is not a model of the app.
-            next if relative == "application_record" || relative.split("/").include?("concerns")
+            next if relative == "application_record" || mixin_path?(relative, path)
 
             class_name = relative.camelize
             next if result.key?(class_name)

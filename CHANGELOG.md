@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.23.1] - 2026-08-16
+## [5.24.0] - 2026-08-17
 
 ### Fixed
 
@@ -30,8 +30,8 @@ Discourse and Mastodon. Every one of them exits 0.
   had just listed.
 - **`search_extensions` is documented as the fallback's list, which is what
   it is.** Making ripgrep honour it did make the two backends agree, and it
-  cost the reach that makes the tool useful: on Mastodon `gem "devise"` went
-  from 9 results to none, because a Gemfile carries no listed extension - and
+  cost the reach that makes the tool useful: on Mastodon `gem 'devise'` went
+  from 5 results to none, because a Gemfile carries no listed extension - and
   the same for a Rakefile, a `.md`, a `.sql`. The docs, the attr comment and
   the line the install generator writes now say plainly that the list is the
   Ruby fallback's and that ripgrep searches every file.
@@ -46,7 +46,9 @@ Discourse and Mastodon. Every one of them exits 0.
 - **A mixin in a nested concerns directory is not a model.** The skip only saw
   the top-level `concerns/` that Rails autoloads, so OpenProject's
   `app/models/queries/operators/concerns` contributed four mixins to a model
-  count of 978 where the app has 974.
+  count of 978 where the app has 974. A nested `concerns/` is an ordinary
+  namespace, though, so the directory name alone does not decide it: a file
+  there that declares a class is a model like any other.
 - **`docs/COMPATIBILITY.md` describes the static tier the gem actually has.**
   It said 6 introspectors answer without a booted app and "the other 34 have
   no static path", naming eight examples - all of which answer. The real
@@ -79,15 +81,17 @@ Discourse and Mastodon. Every one of them exits 0.
   and `revert`, and for the `t.timestamps` inside them - those were found by
   a separate walk over the whole file, so a down body's timestamps landed on
   the last table created on the way up.
-- **i18n coverage leaves out the locales below its own rounding floor, and
-  says which.** A language-name lookup table under `config/locales`
+- **i18n coverage groups the locales below its own rounding floor instead of
+  listing them.** A language-name lookup table under `config/locales`
   contributes a top-level key per language, and Rails does load each as an
   available locale. Scoring them produced a row each saying every key was
   missing: on Discourse, 138 of 186 coverage rows described a translation
-  effort nobody had started. Those 138 are now named in one line instead. The
-  available list still matches a booted Rails, and a locale's keys are read
-  from its own file and any shared file together, so one that lives outside
-  the naming convention is scored rather than written off.
+  effort nobody had started. Those 138 are now summarised in one line, with a
+  shared key count stated once. The rows still exist - asking for one by name
+  answers with its numbers, so a translation genuinely started below the floor
+  is not written off as untranslated. The available list still matches a
+  booted Rails, and a locale's keys are read from its own file and any shared
+  file together, so one that lives outside the naming convention is scored.
 - **A recorded tool selection no longer switches off `.ai-context.json`.**
   The install generator always records one, and every later `rails
   ai:context` passed that list to the serializer. The machine artifact is
@@ -112,6 +116,46 @@ Discourse and Mastodon. Every one of them exits 0.
   it took the i18n answer from 4.6 seconds to four and a half minutes. Each
   entry also records the locales it serves, so asking for one by name finds
   its files even when the filename spells the gem rather than the locale.
+
+- **Every consumer that turns a controller name back into a path reads the
+  file it was read from.** Carrying `file:` fixed six of them and left five
+  answering a confident negative, which is the answer an agent acts on
+  without checking. On Mastodon's 18 inflected controllers: `rails_test_info`
+  reported 16 specs that exist as missing, `rails_get_routes` reported 4
+  routes that exist as absent, `rails_get_view` 2 views, and
+  `rails_generate_test` wrote a spec whose body was `skip "no routes found"`
+  for a controller with a route. `rails_analyze_feature` listed them as
+  untested. `Payload.controller_route_key` is the one derivation now, and a
+  spec drives all five tools with an inflected name.
+- **A model carries its file too, and is named by the constant its source
+  declares.** `rails_model_details` rebuilt `app/models/<underscored>.rb` from
+  the name in four places, so for a model in a pack or an engine the custom
+  validations, the source-defined methods, the method signatures and the class
+  structure all went quietly missing from an answer that otherwise looked
+  complete. The static tier also camelized the path into the name, so an app
+  registering an inflection got a constant it does not have - and one the
+  booted tier, which reads the real class, would never agree with.
+- **`rails_validate_semantics` checks the views under an inflected directory.**
+  A view directory names the route key, so camelizing `app/views/oauth/` back
+  gave a constant the app never declares and the undefined-ivar check stopped
+  running for that whole tree without saying so.
+- **A test-gap claim is not made from a scan that stopped early.**
+  `rails_analyze_feature` scans the first 500 files per glob; Discourse has
+  1,672 specs, so the scan never reached the ones covering the feature and
+  every controller in it was reported as having no test. The Tests section
+  disclosed the cap, the gaps section asserted through it.
+- **"Global before_actions" in the generated files means global.** The scan
+  matched `skip_before_action` too, and ignored `only:` / `except:` / `if:`.
+  Mastodon's `CLAUDE.md` listed five, of which three were false - including
+  `verify_authenticity_token`, which that controller skips.
+
+### Added
+
+- **`--no-boot` on `context`, `inspect`, `facts`, `preset`, `watch` and
+  `init`.** The static tier was reachable from `tool` and `serve` only.
+- **`--no-boot` reads a repo that has source but no `config/`.** An engine
+  keeps its dummy app under `spec/dummy`, so the guard against describing an
+  empty directory has to measure source, not boot files.
 
 ### Changed
 

@@ -22,6 +22,12 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:controllers]).to have_key("PostsController")
     end
 
+    # The consumers read :file through Payload in both tiers, so a booted app
+    # that answered without it would send them all back to guessing the path.
+    it "carries the file each controller was read from" do
+      expect(result[:controllers]["PostsController"][:file]).to eq("app/controllers/posts_controller.rb")
+    end
+
     it "extracts all CRUD actions from PostsController" do
       actions = result[:controllers]["PostsController"][:actions]
       expect(actions).to include("index", "show", "new", "create", "edit", "update", "destroy")
@@ -333,6 +339,22 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(widgets[:parent_class]).to eq("ApplicationController")
         expect(widgets[:confidence]).to eq("[STATIC]")
         expect(result[:controllers]["Api::PingsController"][:api_controller]).to be(true)
+      end
+    end
+
+    # Six tools turn a controller name back into a path, and the name alone
+    # cannot carry it: the app's inflector decides the directory. `:file` is
+    # the answer they read through Payload, so it has to be here.
+    it "carries the file each controller was read from" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "activitypub"))
+        File.write(File.join(dir, "app", "controllers", "activitypub", "inboxes_controller.rb"),
+                   "class ActivityPub::InboxesController < ApplicationController\n  def create; end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["ActivityPub::InboxesController"][:file])
+          .to eq("app/controllers/activitypub/inboxes_controller.rb")
       end
     end
 

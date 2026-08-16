@@ -28,6 +28,12 @@ module RailsAiContext
         declared_names(source).find { |name| name.casecmp?(path_name) } || path_name
       end
 
+      # @return [Boolean] whether the source declares a class at all. A file
+      #   that declares only modules is a mixin, whatever directory it sits in.
+      def declares_class?(source)
+        declared_names(source).any?
+      end
+
       # Fully qualified name of every class the source declares, module
       # nesting included. Empty when nothing parses.
       def declared_names(source)

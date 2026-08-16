@@ -196,8 +196,13 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
         expect(result[:available_locales]).to include("aa", "zu")
       end
 
-      it "reports no coverage for a locale with no translations of its own" do
-        expect(result[:locale_coverage].keys).to contain_exactly("es")
+      # Naming them keeps 138 rows of zeroes off the screen, but the row
+      # itself is the only place the numbers live - a translation genuinely
+      # started below the rounding floor still has to be able to read its own
+      # missing count.
+      it "still carries a coverage row for a locale that rounds to zero" do
+        expect(result[:locale_coverage].keys).to contain_exactly("es", "aa", "zu")
+        expect(result[:locale_coverage]["aa"]).to include(coverage_pct: 0.0, missing: 2)
       end
 
       it "names the locales it left out of coverage" do
@@ -205,9 +210,8 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       end
 
       # A locale can define plenty of keys and still share none with the
-      # default - GitLab's zh-CN has 109, all from gem-provided files. Hiding
-      # it behind a bare name reads as "not translated"; the count says what
-      # it actually is.
+      # default. Naming it without the count reads as "not translated"; the
+      # count says what it actually is.
       it "carries each left-out locale's own key count" do
         expect(result[:locales_without_translations]).to include(hash_including(locale: "aa", keys: 1))
       end
@@ -295,6 +299,22 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
         File.write(File.join(dir, "config", "initializers", "locale.rb"), "I18n.default_locale = :de\n")
       end
       expect(result[:default_locale]).to eq("de")
+    end
+
+    # config/environments/*.rb arrive in glob order, so the first file to
+    # carry an assignment won whatever environment it belonged to - and
+    # development.rb sorts ahead of production.rb.
+    it "prefers the running environment's file over the other environments" do
+      original = ENV["RAILS_ENV"]
+      ENV["RAILS_ENV"] = "production"
+      result = static_result("en.yml" => "en:\n  hello: Hello\n", "ja.yml" => "ja:\n  hello: Konnichiwa\n") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "environments"))
+        File.write(File.join(dir, "config", "environments", "development.rb"), "config.i18n.default_locale = :ja\n")
+        File.write(File.join(dir, "config", "environments", "production.rb"), "config.i18n.default_locale = :en\n")
+      end
+      expect(result[:default_locale]).to eq("en")
+    ensure
+      ENV["RAILS_ENV"] = original
     end
   end
 end

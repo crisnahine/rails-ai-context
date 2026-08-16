@@ -198,11 +198,22 @@ module RailsAiContext
         []
       end
 
-      # Extract before_action names from ApplicationController source.
+      # The filters ApplicationController runs on every request.
+      #
+      # "Global" is the claim the generated files make, so two shapes are not
+      # it: `skip_before_action`, which says the opposite, and a filter carrying
+      # only:/except:/if:/unless:, which runs on some requests.
       def detect_before_actions(root = project_root)
         app_ctrl_file = File.join(root, "app", "controllers", "application_controller.rb")
         return [] unless File.exist?(app_ctrl_file)
-        File.read(app_ctrl_file).scan(/before_action\s+:([\w!?]+)/).flatten
+
+        File.read(app_ctrl_file).lines.filter_map do |line|
+          match = line.match(/(?<!skip_)\bbefore_action\s+:(?<name>[\w!?]+)(?<rest>.*)/)
+          next unless match
+          next if match[:rest].match?(/\b(only|except|if|unless):/)
+
+          match[:name]
+        end
       rescue => e
         $stderr.puts "[rails-ai-context] Before actions scan skipped: #{e.message}" if ENV["DEBUG"]
         []

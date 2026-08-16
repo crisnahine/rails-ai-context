@@ -34,6 +34,8 @@ What a source file calls its own class, as opposed to the **path name** - the co
 
 Distinct from the **Static tier** sense of "declared": that one is about declaring a tier's capability up front rather than detecting it at runtime. This one is about a constant's spelling.
 
+The other half of the same problem is the reverse trip. Once a name is the declared one, no consumer can rebuild the path from it - and a pack or an in-repo engine breaks that derivation too, inflection or not. So controllers and models carry `file:` from whichever tier found them, and consumers read it through `Payload` (`controller_file`, `controller_route_key`, `controller_for_route_key`, `model_file`). The rule: a tool that needs a path for a name reads it, never underscores it.
+
 ## Static tier
 
 The mode where the app did not boot, or `--no-boot` was passed. What an introspector answers here is what it declared, never what a runtime check happened to detect. Every introspector in `INTROSPECTOR_MAP` extends `StaticTier` and names one of three kinds:

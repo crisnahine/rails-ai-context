@@ -189,7 +189,11 @@ module RailsAiContext
 
       private_class_method def self.find_test_file(name, type, detail = "full")
         # Normalize: accept "Admin::PostsController", "admin/posts", "Posts", "posts" (plural)
-        snake = name.to_s.tr("/", "::").underscore.sub(/_controller$/, "")
+        snake = if type == :controller
+          RailsAiContext::Payload.controller_route_key(cached_context, name)
+        else
+          name.to_s.tr("/", "::").underscore.sub(/_controller$/, "")
+        end
         # For models, also try singular form (posts → post)
         snake_singular = snake.singularize
         candidates = case type

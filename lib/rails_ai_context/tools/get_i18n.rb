@@ -64,24 +64,27 @@ module RailsAiContext
           lines << "- **Available locales:** #{available_list(i18n)}"
           lines << "- **Locale files:** #{i18n[:total_locale_files] || files.size}"
 
+          # A language-name table under config/locales makes Rails list a
+          # locale per language, and on Discourse that is 138 rows of zeroes.
+          # They are summarised as a group rather than listed - and rows for
+          # them still exist, so asking for one by name answers with numbers.
+          untranslated = i18n[:locales_without_translations] || []
+          grouped = untranslated.map { |u| (u.is_a?(Hash) ? u[:locale] : u).to_s }.to_set
+
           coverage = i18n[:locale_coverage] || {}
-          if coverage.any?
+          listed = coverage.reject { |loc, _| grouped.include?(loc.to_s) }
+          if listed.any?
             lines << "" << "## Coverage (vs #{i18n[:default_locale]})"
-            coverage.sort.each do |loc, data|
+            listed.sort.each do |loc, data|
               lines << "- **#{loc}**: #{data[:coverage_pct]}% - #{count_phrase(data[:keys], "unique key")}#{coverage_gap(data)}"
             end
           end
 
-          # A language-name table under config/locales makes Rails list a
-          # locale per language. Saying so is what keeps the available count
-          # and the shorter coverage list from reading as a contradiction.
-          untranslated = i18n[:locales_without_translations] || []
           if untranslated.any?
             total = (i18n[:available_locales] || []).size
-            named = untranslated.map { |u| u.is_a?(Hash) ? "#{u[:locale]} (#{u[:keys]} keys)" : u.to_s }.sort
             lines << "" << "_#{untranslated.size} of #{total} locales round to 0.0% against " \
-                           "#{i18n[:default_locale]} and are left out of coverage. Their own key " \
-                           "counts: #{named.join(', ')}._"
+                           "#{i18n[:default_locale]} and are grouped here instead of listed above. " \
+                           "Ask for one by name for its numbers. #{own_key_counts(untranslated)}_"
           end
 
           fallbacks = i18n[:fallbacks] || {}
@@ -118,6 +121,22 @@ module RailsAiContext
 
           render_file_list(lines, page, "Files for #{locale}", "_No locale files found for '#{locale}'._")
           text_response(lines.join("\n"))
+        end
+
+        # A language-name table gives every locale in it the same key count,
+        # and repeating it per name ran to 138 copies of "(2 keys)".
+        def own_key_counts(untranslated)
+          named = untranslated.map { |u| u.is_a?(Hash) ? u : { locale: u.to_s } }
+          counts = named.map { |u| u[:keys] }.uniq
+          locales = named.map { |u| u[:locale].to_s }.sort
+
+          if counts.size == 1 && counts.first
+            "Each defines #{count_phrase(counts.first, "key")} of its own: #{locales.join(', ')}."
+          else
+            listed = named.sort_by { |u| u[:locale].to_s }
+              .map { |u| u[:keys] ? "#{u[:locale]} (#{count_phrase(u[:keys], "key")})" : u[:locale].to_s }
+            "Their own key counts: #{listed.join(', ')}."
+          end
         end
 
         def coverage_gap(data)

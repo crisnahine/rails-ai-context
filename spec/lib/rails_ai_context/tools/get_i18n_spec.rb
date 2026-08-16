@@ -50,6 +50,10 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       let(:i18n_data) do
         super().merge(
           available_locales: %w[en fr aa zu],
+          locale_coverage: super()[:locale_coverage].merge(
+            "aa" => { keys: 1, coverage_pct: 0.0, missing: 100, extra: 1 },
+            "zu" => { keys: 1, coverage_pct: 0.0, missing: 100, extra: 1 }
+          ),
           locales_without_translations: [ { locale: "aa", keys: 1 }, { locale: "zu", keys: 1 } ]
         )
       end
@@ -59,11 +63,28 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
         expect(text).to include("2 of 4 locales round to 0.0% against en")
       end
 
+      # A language-name table gives every one of them the same key count, and
+      # repeating it per name ran to 138 copies of "(1 keys)".
+      it "states a shared key count once instead of per name" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("Each defines 1 key of its own: aa, zu")
+        expect(text).not_to include("aa (1 key)")
+      end
+
       # Asking for one of them by name must not answer with a silent gap where
       # the coverage line sits for every other locale.
-      it "says why the detail view has no coverage line" do
+      # Grouping them keeps 138 rows of zeroes off the overview.
+      it "keeps their rows out of the coverage list" do
+        text = described_class.call.content.first[:text]
+        expect(text).not_to include("**aa**: 0.0%")
+      end
+
+      # The group is a summary, not a deletion: asking for one by name still
+      # has to answer with its numbers.
+      it "still answers with the numbers when asked for one by name" do
         text = described_class.call(locale: "aa").content.first[:text]
-        expect(text).to include("rounds to 0.0% against en")
+        expect(text).to include("**Unique keys:** 1 (0.0% of en)")
+        expect(text).to include("100 missing")
       end
     end
 

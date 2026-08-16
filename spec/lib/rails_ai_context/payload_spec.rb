@@ -65,10 +65,61 @@ RSpec.describe RailsAiContext::Payload do
         .to eq("invoices")
     end
 
+    # Rails does not require the _controller suffix on the filename, and
+    # leaving .rb on the key sent every path derived from it one directory
+    # deep into a file.
+    it "strips a plain .rb from a file that does not carry the suffix" do
+      expect(described_class.controller_route_key(ctx("app/controllers/invoices.rb"), "InvoicesController"))
+        .to eq("invoices")
+    end
+
     # The name is all there is for a controller reflection found and the
     # filesystem did not - and it is right whenever no inflection is involved.
     it "falls back to the underscored name when no file was carried" do
       expect(described_class.controller_route_key({}, "Admin::InvoicesController")).to eq("admin/invoices")
+    end
+  end
+  # A view directory is the route key: app/views/activitypub/ is rendered by
+  # whatever controller Rails routes as activitypub, and camelizing that back
+  # gives Activitypub, which is not the name Mastodon declares.
+  describe ".controller_for_route_key" do
+    let(:context) do
+      {
+        controllers: {
+          controllers: {
+            "ActivityPub::InboxesController" => { file: "app/controllers/activitypub/inboxes_controller.rb" },
+            "Admin::BadgesController" => { file: "app/controllers/admin/badges_controller.rb" }
+          }
+        }
+      }
+    end
+
+    it "finds a controller whose declared name does not camelize from its path" do
+      name, data = described_class.controller_for_route_key(context, "activitypub/inboxes")
+      expect(name).to eq("ActivityPub::InboxesController")
+      expect(data[:file]).to eq("app/controllers/activitypub/inboxes_controller.rb")
+    end
+
+    it "finds a namespaced controller by its path" do
+      expect(described_class.controller_for_route_key(context, "admin/badges").first)
+        .to eq("Admin::BadgesController")
+    end
+
+    it "returns nil for a directory no controller serves" do
+      expect(described_class.controller_for_route_key(context, "nope")).to be_nil
+    end
+  end
+  # A model's file is carried for the same reason a controller's is: rebuilding
+  # app/models/<underscored>.rb misses a pack, an engine, and any inflection.
+  describe ".model_file" do
+    let(:context) { { models: { "Invoice" => { file: "packs/billing/app/models/invoice.rb" } } } }
+
+    it "reads the file the model was read from" do
+      expect(described_class.model_file(context, "Invoice")).to eq("packs/billing/app/models/invoice.rb")
+    end
+
+    it "is nil for a model that carried none" do
+      expect(described_class.model_file({ models: { "Order" => {} } }, "Order")).to be_nil
     end
   end
 end

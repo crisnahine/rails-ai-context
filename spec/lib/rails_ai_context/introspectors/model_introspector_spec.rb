@@ -631,4 +631,78 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
+  # `concerns/` under app/models is the Zeitwerk root for mixins, and an app
+  # may also nest one anywhere - OpenProject has app/models/queries/operators/
+  # concerns. But a nested concerns/ is an ordinary namespace, so a class
+  # declared there is a model like any other and dropping it by directory name
+  # loses it.
+  describe "models under a concerns directory" do
+    def models_in(files)
+      Dir.mktmpdir do |dir|
+        files.each do |relative, body|
+          full = File.join(dir, "app", "models", relative)
+          FileUtils.mkdir_p(File.dirname(full))
+          File.write(full, body)
+        end
+        return described_class.new(RailsAiContext::StaticApp.new(dir)).static_call.keys
+      end
+    end
+
+    it "keeps a class declared in a nested concerns namespace" do
+      expect(models_in(
+        "billing/concerns/plan.rb" => "module Billing\n  module Concerns\n    class Plan < ApplicationRecord\n    end\n  end\nend\n"
+      )).to include("Billing::Concerns::Plan")
+    end
+
+    it "drops a mixin in a nested concerns namespace" do
+      expect(models_in(
+        "queries/operators/concerns/dateish.rb" => "module Queries\n  module Operators\n    module Concerns\n      module Dateish\n      end\n    end\n  end\nend\n"
+      )).to be_empty
+    end
+
+    # The autoload root does not namespace its files, so the path is not their
+    # name; keeping one would report a constant the app does not have.
+    it "drops everything under the top-level concerns root" do
+      expect(models_in(
+        "concerns/trashable.rb" => "module Trashable\nend\n",
+        "concerns/oddity.rb" => "class Oddity < ApplicationRecord\nend\n"
+      )).to be_empty
+    end
+  end
+  # Six tools turn a model name back into app/models/<underscored>.rb. That is
+  # wrong for a model in a pack or engine, and wrong wherever the app registers
+  # an inflection, so the file travels with the model the way it does with a
+  # controller.
+  describe "the file a model was read from" do
+    # The booted tier answers from the constant, so it must not fall back to
+    # rebuilding the path from the name either.
+    it "carries it in the booted tier" do
+      expect(described_class.new(Rails.application).call["Post"][:file]).to eq("app/models/post.rb")
+    end
+
+    it "carries it for a model outside app/models" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "packs", "billing", "app", "models", "invoice.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "class Invoice < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Invoice"][:file]).to eq("packs/billing/app/models/invoice.rb")
+      end
+    end
+
+    it "names a model by the constant its source declares" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "app", "models", "activitypub", "activity.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "module ActivityPub\n  class Activity < ApplicationRecord\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to include("ActivityPub::Activity")
+        expect(result["ActivityPub::Activity"][:file]).to eq("app/models/activitypub/activity.rb")
+      end
+    end
+  end
 end
