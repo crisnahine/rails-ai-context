@@ -343,6 +343,59 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # Zeitwerk resolves a path through the app's own inflections, so a
+    # directory named `activitypub` is `ActivityPub` in an app that registers
+    # that acronym - and camelizing the path alone invents `Activitypub`, a
+    # constant Mastodon does not define anywhere in 818 references.
+    it "names a controller from the constant its source declares" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "activitypub"))
+        File.write(File.join(dir, "app", "controllers", "activitypub", "collections_controller.rb"), <<~RUBY)
+          class ActivityPub::CollectionsController < ApplicationController
+            def show; end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers].keys).to contain_exactly("ActivityPub::CollectionsController")
+      end
+    end
+
+    it "names a controller declared inside a module block" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "oauth"))
+        File.write(File.join(dir, "app", "controllers", "oauth", "tokens_controller.rb"), <<~RUBY)
+          module OAuth
+            class TokensController < ApplicationController
+              def create; end
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers].keys).to contain_exactly("OAuth::TokensController")
+      end
+    end
+
+    # The path is the only thing carrying the namespace when the source does
+    # not, so it stays the answer there.
+    it "falls back to the path when the source declares a bare name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "admin"))
+        File.write(File.join(dir, "app", "controllers", "admin", "widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            def index; end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers].keys).to contain_exactly("Admin::WidgetsController")
+      end
+    end
+
     it "discovers controllers in packs and engines directories" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers"))

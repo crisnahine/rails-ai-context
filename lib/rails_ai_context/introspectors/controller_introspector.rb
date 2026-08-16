@@ -107,7 +107,8 @@ module RailsAiContext
         RailsAiContext::PathResolver.controller_dirs(app.root).each_with_object({}) do |controllers_dir, result|
           Dir.glob(File.join(controllers_dir, "**", "*_controller.rb")).sort.each do |path|
             relative = path.sub("#{controllers_dir}/", "")
-            class_name = relative.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
+            path_name = relative.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
+            class_name = DeclaredConstant.resolve(RailsAiContext::SafeFile.read(path), path_name)
             next if class_name == "ApplicationController"
             next if class_name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
             result[class_name] ||= path
