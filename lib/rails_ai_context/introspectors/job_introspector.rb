@@ -323,8 +323,16 @@ module RailsAiContext
           # the path would invent a `Concerns::` namespace that never exists.
           next if path.sub("#{dir}/", "").start_with?("concerns/")
 
-          walked = SourceIntrospector.walk(path, { methods: Listeners::MethodsListener })
-          [ constant_name_for(path, dir), walked[:methods] || [] ]
+          source = RailsAiContext::SafeFile.read(path)
+          next unless source
+
+          # Only a class names a mailer or a channel. app/mailers is also where
+          # ActionMailer interceptors live, and reporting one of those offers
+          # `delivering_email` - a hook - as an email somebody can send.
+          next unless DeclaredConstant.first_declared(source)
+
+          walked = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })
+          [ DeclaredConstant.resolve(source, constant_name_for(path, dir)), walked[:methods] || [] ]
         rescue StandardError, ScriptError => e
           $stderr.puts "[rails-ai-context] source_classes failed for #{path}: #{e.message}" if ENV["DEBUG"]
           nil
