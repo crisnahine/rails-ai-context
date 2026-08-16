@@ -159,11 +159,7 @@ module RailsAiContext
           if File.exist?(filepath) && File.read(filepath) == content
             skipped << filepath
           else
-            dir = File.dirname(filepath)
-            FileUtils.mkdir_p(dir)
-            tmp = File.join(dir, ".#{File.basename(filepath)}.#{SecureRandom.hex(4)}.tmp")
-            File.write(tmp, content)
-            File.rename(tmp, filepath)
+            SafeFile.atomic_write(filepath, content)
             written << filepath
           end
         end
@@ -177,9 +173,10 @@ module RailsAiContext
         defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
       end
 
-      # Scan app/services/ for service object class names.
-      def detect_service_files
-        dir = File.join(project_root, "app", "services")
+      # Scan app/services/ for service object class names. The root
+      # parameter is the test seam - specs point it at a fixture tree.
+      def detect_service_files(root = project_root)
+        dir = File.join(root, "app", "services")
         return [] unless Dir.exist?(dir)
         Dir.glob(File.join(dir, "*.rb"))
           .map { |f| File.basename(f, ".rb").camelize }
@@ -190,8 +187,8 @@ module RailsAiContext
       end
 
       # Scan app/jobs/ for job class names.
-      def detect_job_files
-        dir = File.join(project_root, "app", "jobs")
+      def detect_job_files(root = project_root)
+        dir = File.join(root, "app", "jobs")
         return [] unless Dir.exist?(dir)
         Dir.glob(File.join(dir, "*.rb"))
           .map { |f| File.basename(f, ".rb").camelize }
@@ -202,8 +199,8 @@ module RailsAiContext
       end
 
       # Extract before_action names from ApplicationController source.
-      def detect_before_actions
-        app_ctrl_file = File.join(project_root, "app", "controllers", "application_controller.rb")
+      def detect_before_actions(root = project_root)
+        app_ctrl_file = File.join(root, "app", "controllers", "application_controller.rb")
         return [] unless File.exist?(app_ctrl_file)
         File.read(app_ctrl_file).scan(/before_action\s+:([\w!?]+)/).flatten
       rescue => e
