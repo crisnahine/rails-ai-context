@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`AstCache.parse_string` caches, as its name always said.** Keyed by
+  content digest, sharing the store and its eviction; oversize sources
+  bypass instead of raising. A controller was parsed up to ten times per
+  static run because every extractor received the text and re-parsed it.
+- **`rails_validate` says which checks it skipped.** When the AST parse
+  fails, the three rules with no regex twin used to vanish silently and a
+  partially-checked file read as clean; the response now names them. The
+  tool also gains its first spec file.
+- **A downstream app exception is the app's again.** The middleware's
+  rescue used to convert any error from the app behind it - non-MCP
+  requests included - into an MCP error frame. `McpEdge.rack_call` now owns
+  the whole Rack-shaped request (path match, session scope, dispatch,
+  containment) for the middleware and the standalone server, and the
+  pass-through branch runs outside the rescue.
+
+### Changed
+
+- **The cache fingerprint watches what the resolvers read.** Packs,
+  engines, `extra_app_paths`, every concern home, the `Gemfile`,
+  `config/locales` and `config/environments` now feed the fingerprint, so
+  an edit there cannot serve a stale answer that looks fresh.
+- **One change-detection loop.** `ChangeWatch` owns the watch list, the
+  Listen wiring, the fingerprint gate and the code reload; `Watcher` and
+  `LiveReload` keep only their reactions (regenerate files; refresh caches
+  and notify clients) and their own missing-`listen` policy.
+- **The initializer guard and the `tool_mode` line each have one home.**
+  `Install::InitializerFile` holds the guard patterns the generator writes
+  and the doctor diagnoses; `SelectionRecord.write_tool_mode` replaces the
+  rake task's hand-rolled three-branch rewriter, and only rewrites an
+  uncommented line, so the generated commented-out default stays a comment.
+- **Split-rule targets derive from the `Install::AiTool` table.** The
+  rules serializers read `rules_dir` (and the AGENTS.md pair) from the
+  table doctor and cleanup already read, so a moved path changes every
+  surface at once.
+- **The stack helper writes through `SafeFile.atomic_write`** instead of a
+  private copy of it, and its app-tree scans take a root, so they are
+  covered by specs for the first time.
+- **Every serializer is proven against a context real introspectors
+  produced** (`IntrospectedFixture`), so no serializer can read a shape
+  production does not make - the class of defect that kept the engines and
+  turbo sections dead while hand-built fixtures stayed green.
+
 ## [5.22.0] - 2026-08-16
 
 ### Fixed
