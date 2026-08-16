@@ -76,7 +76,7 @@ module RailsAiContext
         lines << ctrl_result.content.first[:text]
 
         # Infer model from controller
-        snake = controller_name.to_s.underscore.delete_suffix("_controller")
+        snake = RailsAiContext::Payload.controller_route_key(cached_context, controller_name)
         model_name = snake.split("/").last.singularize.camelize
 
         # Model details

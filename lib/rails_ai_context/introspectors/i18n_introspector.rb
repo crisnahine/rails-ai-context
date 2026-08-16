@@ -12,7 +12,10 @@ module RailsAiContext
       # Both spellings apps use: `config.i18n.default_locale = :es` in
       # application.rb or an environment file, and a bare
       # `I18n.default_locale = :es` in an initializer.
-      DEFAULT_LOCALE_ASSIGNMENT = /(?:config\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
+      # Anchored past the line start so a commented example does not win:
+      # GitLab ships `# config.i18n.default_locale = :de` and every coverage
+      # line then measured an English app against German.
+      DEFAULT_LOCALE_ASSIGNMENT = /^[^\S\n]*(?:config\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
 
       attr_reader :app
 

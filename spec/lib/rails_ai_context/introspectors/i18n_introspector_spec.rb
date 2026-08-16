@@ -257,6 +257,24 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(reads).to be < 100
     end
 
+    # GitLab's config/application.rb carries `# config.i18n.default_locale =
+    # :de` as a commented example, and an unanchored match took it as the
+    # app's choice: every coverage line then read "against de" for an app that
+    # runs in English.
+    it "ignores a default_locale that is commented out" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n") do |dir|
+        File.write(File.join(dir, "config", "application.rb"), <<~RUBY)
+          module Dummy
+            class Application < Rails::Application
+              # config.i18n.default_locale = :de
+            end
+          end
+        RUBY
+      end
+
+      expect(result[:default_locale]).to eq("en")
+    end
+
     # Coverage is measured against the default locale's keys. With none to
     # measure against, every locale scores zero - and calling them all
     # untranslated says something false about each one.

@@ -551,14 +551,17 @@ module RailsAiContext
 
         # Hydrate with schema hints for models referenced in this controller
         if RailsAiContext.configuration.hydration_enabled
-          source_path = rails_app.root.join("app", "controllers", "#{name.underscore}.rb")
+          carried = RailsAiContext::Payload.controller_file(cached_context, name)
+          source_path = carried ? rails_app.root.join(carried) :
+            rails_app.root.join("app", "controllers", "#{name.underscore}.rb")
           hydration = Hydrators::ControllerHydrator.call(source_path.to_s, context: cached_context)
           hydration_text = Hydrators::HydrationFormatter.format(hydration)
           lines << "" << hydration_text unless hydration_text.empty?
         end
 
-        # Cross-reference hints
-        ctrl_path = name.underscore.delete_suffix("_controller")
+        # Cross-reference hints. The route key is the controller's path, which
+        # the class name does not reproduce wherever an inflection is in play.
+        ctrl_path = RailsAiContext::Payload.controller_route_key(cached_context, name)
         model_name = ctrl_path.split("/").last.singularize.camelize
         lines << ""
         lines << "_Next: `rails_get_routes(controller:\"#{ctrl_path}\")` for routes"
