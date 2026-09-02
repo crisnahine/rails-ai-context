@@ -89,6 +89,34 @@ jobs:
       - name: Run specs
         run: bundle exec rspec
 
+  # The gemspec's mcp floor is a claim too, and the locked bundle resolves
+  # well above it. The trimmed gemfile keeps a dev dependency from resolving
+  # mcp upward and turning this into a test of whatever won.
+  mcp-floor:
+    runs-on: ubuntu-latest
+    name: mcp floor (0.13.0)
+
+    env:
+      BUNDLE_GEMFILE: gemfiles/mcp_floor.gemfile
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: Confirm the pin took
+        run: |
+          resolved=$(bundle exec ruby -rmcp -e 'print Gem.loaded_specs["mcp"].version.to_s')
+          echo "mcp $resolved"
+          test "$resolved" = "0.13.0" || { echo "expected mcp 0.13.0, got $resolved"; exit 1; }
+
+      - name: Run specs
+        run: bundle exec rspec
+
   # Allowed to fail: it exists so a removal in prism's main branch surfaces
   # here rather than in a user's bundle after the next release.
   prism-head:
