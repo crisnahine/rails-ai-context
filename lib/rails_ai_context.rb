@@ -84,6 +84,10 @@ module RailsAiContext
     # summary, or a note that --no-boot was requested). Nil in runtime tier.
     attr_accessor :static_reason
 
+    # Why the static tier is active: :requested (--no-boot), :source_only
+    # (no config/environment.rb) or :boot_failed. Nil in runtime tier.
+    attr_accessor :static_kind
+
     # Quick access to introspect the current Rails app
     # Returns a hash of all discovered context
     def introspect(app = nil)

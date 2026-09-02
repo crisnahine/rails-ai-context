@@ -10,8 +10,10 @@ module RailsAiContext
     # this is the file that decides whether the gem entry may load, so it
     # cannot depend on it.
     module EntryBoot
-      # tier is :booted, :static or :absent.
-      Outcome = Struct.new(:tier, :reason, :messages, keyword_init: true)
+      # tier is :booted, :static or :absent. kind names why the static tier
+      # is active - :requested, :source_only or :boot_failed - so consumers
+      # branch on a fact instead of parsing the reason text.
+      Outcome = Struct.new(:tier, :reason, :kind, :messages, keyword_init: true)
 
       # The MCP SDK reads these from Gem.loaded_specs at tool-call time
       # (Gem.loaded_specs["json-schema"].full_gem_path); Bundler.setup strips
@@ -45,7 +47,7 @@ module RailsAiContext
         if allow_static && no_boot
           return absent(root, messages, context) unless app_present?(root, allow_source_only: true)
 
-          return enter_static("static mode requested with --no-boot", root, messages)
+          return enter_static("static mode requested with --no-boot", :requested, root, messages)
         end
 
         return absent(root, messages, context) unless app_present?(root, allow_source_only: allow_source_only)
@@ -55,7 +57,7 @@ module RailsAiContext
         unless app_present?(root)
           return absent(root, messages, context) unless allow_static
 
-          return enter_static("no config/environment.rb in #{root}", root, messages)
+          return enter_static("no config/environment.rb in #{root}", :source_only, root, messages)
         end
 
         # Bundler.setup (in config/boot.rb) strips $LOAD_PATH and the spec
@@ -78,7 +80,7 @@ module RailsAiContext
           messages << "[rails-ai-context] Serving static analysis; runtime-only data is marked [UNAVAILABLE]."
           messages << "[rails-ai-context] Run `rails-ai-context doctor` for boot diagnostics."
           restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
-          return enter_static(result.failure_summary, root, messages, after_boot_failure: true)
+          return enter_static(result.failure_summary, :boot_failed, root, messages)
         end
 
         restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
@@ -146,20 +148,21 @@ module RailsAiContext
       # against the filesystem, and every tool response carries the tier banner.
       # A broken install cannot load the gem either; the lines collected so
       # far still go out with the error.
-      def self.enter_static(reason, root, messages, after_boot_failure: false)
+      def self.enter_static(reason, kind, root, messages)
         require_gem_without_app!
         RailsAiContext.tier = :static
         RailsAiContext.static_reason = reason
+        RailsAiContext.static_kind = kind
         RailsAiContext.configuration.app_root = root
         Configuration.auto_load!(root)
         messages << "[rails-ai-context] static tier active: #{reason}"
-        Outcome.new(tier: :static, reason: reason, messages: messages)
+        Outcome.new(tier: :static, reason: reason, kind: kind, messages: messages)
       rescue StandardError, ScriptError => e
         messages << "Error: #{e.message}"
         # `reason` on an :absent outcome means the app's own boot failed, which
         # is what the binary hangs the doctor hint on. A --no-boot run booted
         # nothing, so its failure here carries none.
-        Outcome.new(tier: :absent, reason: after_boot_failure ? reason : nil, messages: messages)
+        Outcome.new(tier: :absent, reason: kind == :boot_failed ? reason : nil, messages: messages)
       end
       private_class_method :enter_static
 

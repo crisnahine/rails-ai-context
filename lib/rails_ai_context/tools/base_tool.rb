@@ -432,14 +432,11 @@ module RailsAiContext
           return nil unless RailsAiContext.static_tier?
 
           reason = RailsAiContext.static_reason
-          # A tree with no config/environment.rb never attempted a boot, so
-          # its reason is a description of the tree, not an error.
-          headline = if reason.to_s.include?("--no-boot") || reason.to_s.start_with?("no config/environment.rb")
-            "Static mode (#{reason})"
-          elsif reason
-            "App boot failed (#{reason})"
-          else
-            "Static mode"
+          # Only a boot that actually ran can be called a failure; the other
+          # kinds describe the tree or the flag they were asked for.
+          headline = case RailsAiContext.static_kind
+          when :requested, :source_only then "Static mode (#{reason})"
+          else reason ? "App boot failed (#{reason})" : "Static mode"
           end
           "\n\n---\n_[STATIC] #{headline}. Serving static analysis; runtime-only data is marked " \
             "[UNAVAILABLE]. Run `rails-ai-context doctor` for details._"
@@ -453,10 +450,14 @@ module RailsAiContext
           return nil unless RailsAiContext.static_tier?
 
           reason = RailsAiContext.static_reason
+          remedy = case RailsAiContext.static_kind
+          when :requested then "Rerun without `--no-boot`."
+          when :source_only then "This tree has no `config/environment.rb`; add one (or run from the app root) for runtime data."
+          else "Fix the boot failure (see `rails-ai-context doctor`)."
+          end
           text_response(
             "[UNAVAILABLE: static tier] #{capability} requires a booted Rails app" \
-            "#{reason ? " (static tier active: #{reason})" : ""}. " \
-            "Fix the boot failure (see `rails-ai-context doctor`) or rerun without `--no-boot`."
+            "#{reason ? " (static tier active: #{reason})" : ""}. #{remedy}"
           )
         end
 
