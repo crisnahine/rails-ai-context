@@ -287,4 +287,19 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
       end
     end
   end
+
+  describe "frontend roots" do
+    it "does not count a frontend root that resolves outside the app root" do
+      Dir.mktmpdir("frontend") do |dir|
+        dir = File.realpath(dir)
+        app_root = File.join(dir, "app")
+        FileUtils.mkdir_p(File.join(app_root, "app"))
+        FileUtils.mkdir_p(File.join(dir, "app_backup", "javascript"))
+        File.symlink(File.join(dir, "app_backup", "javascript"), File.join(app_root, "app", "javascript"))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(app_root)).call
+        expect(result[:frontend_roots].to_s).not_to include("javascript")
+      end
+    end
+  end
 end

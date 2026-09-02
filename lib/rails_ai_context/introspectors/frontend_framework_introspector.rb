@@ -415,9 +415,8 @@ module RailsAiContext
       end
 
       def safe_path?(full_path)
-        real = File.realpath(full_path)
-        real.start_with?(root)
-      rescue Errno::ENOENT, Errno::EACCES
+        SafePath.contained?(File.realpath(full_path), File.realpath(root))
+      rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
         false
       end
 
