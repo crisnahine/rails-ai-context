@@ -65,8 +65,8 @@ module RailsAiContext
       end
 
       def render_schema_reference
-        schema = context[:schema]
-        return nil unless SectionGuard.usable?(schema)
+        schema = Payload.section(context, :schema)
+        return nil unless schema
         tables = schema[:tables] || {}
         return nil if tables.empty?
 
