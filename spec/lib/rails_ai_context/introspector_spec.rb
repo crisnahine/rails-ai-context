@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -207,11 +208,21 @@ RSpec.describe RailsAiContext::Introspector do
     end
 
     it "builds base fields without Rails" do
-      result = RailsAiContext::Introspector.new(static_app).call
-      expect(result[:app_name]).to eq(File.basename(Dir.pwd))
-      expect(result[:rails_version]).to include("UNAVAILABLE")
-      expect(result[:environment]).to be_a(String)
-      expect(result[:generated_at]).to match(/\d{4}-\d{2}-\d{2}T/)
+      Dir.mktmpdir do |dir|
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+        expect(result[:app_name]).to eq(File.basename(dir))
+        expect(result[:rails_version]).to include("UNAVAILABLE")
+        expect(result[:environment]).to be_a(String)
+        expect(result[:generated_at]).to match(/\d{4}-\d{2}-\d{2}T/)
+      end
+    end
+
+    it "answers the Rails version from a lockfile beside the app" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n    rails (7.2.2)\n")
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+        expect(result[:rails_version]).to eq("7.2.2")
+      end
     end
   end
 

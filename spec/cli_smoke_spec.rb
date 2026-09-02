@@ -51,6 +51,23 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     end
   end
 
+  # The static tier is exactly what a source-only tree gets with --no-boot,
+  # so a command that can serve it must not refuse the same tree without it.
+  it "serves a source-only tree without --no-boot" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+      out = `cd #{dir} && ruby -I #{lib} #{exe} tool model_details 2>&1`
+
+      expect($?.exitstatus).to eq(0), out
+      expect(out).to include("Widget")
+    end
+  end
+
   it "documents the static-tier flags" do
     help = `ruby #{File.expand_path('../exe/rails-ai-context', __dir__)} help serve 2>&1`
     expect(help).to include("--no-boot")

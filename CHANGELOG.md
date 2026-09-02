@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Defects found by a second survey round over the whole surface, and the
 duplicated mechanisms behind them.
 
+- **`init` refused a tree with app source but no `config/environment.rb`
+  after it had already written the config files**, leaving it half set up
+  with no `CLAUDE.md`. Every command that can serve the static tier now
+  reads such a tree, the way `--no-boot` already did.
 - **A source path was contained without a separator and against an
   unresolved root.** The frontend framework introspector's own containment
   check let `/app-old` pass for `/app`. The pre-v5.8.1 bug, still in one
@@ -96,10 +100,11 @@ duplicated mechanisms behind them.
 - **`rails_get_turbo_map` printed a Turbo Stream response as a Ruby hash.**
   It renders `PostsController#create`, the way the file's other sections name
   a controller action.
-- **A second `context` run rewrote `.ai-context.json`** for its timestamp
+- **A second `context` run rewrote the generated files** for their timestamp
   alone, so a repo that commits the context files saw a diff from a run that
-  found nothing new. A JSON file that differs only in `generated_at` is
-  skipped like the others.
+  found nothing new. One rule now covers them all: a file that differs only
+  in its `generated_at` key, or in the full-mode header's `> Generated:`
+  line, is skipped.
 - **The schema listing named one model per table.** A table an STI child or a
   namespaced second model shares listed whichever came first in the payload,
   which could be the emptier one. Every model on the table is listed now,

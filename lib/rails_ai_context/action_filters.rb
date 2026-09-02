@@ -44,7 +44,7 @@ module RailsAiContext
       applicable = declared.select { |f| applies?(f, action) }
         .reject { |f| skipped.include?(f[:name].to_s) }
 
-      parent = parent_filters(ctx, info[:parent_class], action, skipped, root)
+      parent = parent_filters(ctx, info[:parent_class], action, skipped, root: root)
       declared_on = parent.to_h { |f| [ f[:name].to_s, f[:from] ] }
       declared_names = declared.map { |f| f[:name].to_s }.to_set
 
@@ -79,7 +79,7 @@ module RailsAiContext
     # a filter an intermediate ancestor skipped never reaches the child. An
     # ancestor the payload does not carry ends it: reconstructing a path from
     # a class name breaks on every app inflection.
-    def parent_filters(ctx, parent_class, action, skipped, root)
+    def parent_filters(ctx, parent_class, action, skipped, root:)
       controllers = Payload.controllers(ctx)
       seen = Set.new
       found = {}

@@ -16,6 +16,10 @@ module RailsAiContext
       BEGIN_MARKER = "<!-- BEGIN rails-ai-context -->"
       END_MARKER   = "<!-- END rails-ai-context -->"
 
+      # The full-mode header carries the run's own clock, so a run that found
+      # nothing new still put a diff in a repo that commits its context files.
+      GENERATED_LINE = /^> Generated: .*\n/
+
       module_function
 
       # Write `content` to `filepath` wrapped in markers. If the file already
@@ -41,13 +45,19 @@ module RailsAiContext
             "#{marked_content}\n#{existing}"
           end
 
-          return :skipped if new_content == existing
+          return :skipped if same_but_for_timestamp?(existing, new_content)
+
           atomic_write(filepath, new_content)
           :written
         else
           atomic_write(filepath, marked_content)
           :written
         end
+      end
+
+      def same_but_for_timestamp?(existing, candidate)
+        existing == candidate ||
+          existing.gsub(GENERATED_LINE, "") == candidate.gsub(GENERATED_LINE, "")
       end
 
       def atomic_write(filepath, content)

@@ -471,8 +471,12 @@ class RailsAiContextCLI < Thor
       Dir.chdir(app_root) if app_path_opt
       ENV["RAILS_ENV"] = environment_opt if environment_opt
 
+      # A command that can serve the static tier can read a source-only tree,
+      # so it lets the boot attempt fail on the missing config/environment.rb
+      # and falls through, rather than refusing the tree up front.
+      context ||= current_command_chain.first&.to_s
       outcome = entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot],
-                                allow_source_only: context == "doctor", context: context)
+                                allow_source_only: allow_static || context == "doctor", context: context)
       outcome.messages.each { |line| $stderr.puts line }
       return unless outcome.tier == :absent
 

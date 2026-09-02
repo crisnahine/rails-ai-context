@@ -73,6 +73,20 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       end
     end
 
+    # A source-only tree is what the static tier exists for: the boot attempt
+    # fails on the missing file and the tier takes over, rather than refusing.
+    it "falls through to the static tier for a source-only tree" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), "")
+
+        outcome = described_class.call(root: dir, allow_static: true, allow_source_only: true, context: "init")
+
+        expect(outcome.tier).to eq(:static)
+        expect(outcome.reason).to include("config/environment.rb")
+      end
+    end
+
     it "answers :static without booting when --no-boot is passed to a readable app" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/models"))

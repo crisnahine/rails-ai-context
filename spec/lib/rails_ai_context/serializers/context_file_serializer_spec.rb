@@ -41,6 +41,21 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
+    # Only the full-mode header carries the run's own clock; the compact one
+    # never did, which is why it was already skipped.
+    it "skips a markdown file when only its timestamp would change" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        allow(RailsAiContext.configuration).to receive(:context_mode).and_return(:full)
+        described_class.new(context, format: :claude).call
+        later = context.merge(generated_at: (Time.now.utc + 60).iso8601)
+        result = described_class.new(later, format: :claude).call
+
+        expect(result[:written]).to be_empty
+        expect(result[:skipped].map { |f| File.basename(f) }).to include("CLAUDE.md")
+      end
+    end
+
     it "writes a single format with split rules" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
