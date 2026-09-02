@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -168,6 +169,36 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
           expect(tools).to include("openapi-typescript", "@graphql-codegen/cli", "orval")
         end
       end
+    end
+  end
+
+  describe "#detect_pagination" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def pagination_for(lock)
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      described_class.new(double("app", root: @root)).send(:detect_pagination)
+    end
+
+    it "sees pagy in the GIT section" do
+      lock = <<~LOCK
+        GIT
+          remote: https://github.com/ddnexus/pagy.git
+          revision: 0123456789abcdef0123456789abcdef01234567
+          specs:
+            pagy (9.3.3)
+      LOCK
+      expect(pagination_for(lock)).to eq([ "pagy" ])
+    end
+
+    it "does not report kaminari for kaminari-actionview alone" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            kaminari-actionview (1.2.2)
+      LOCK
+      expect(pagination_for(lock)).to be_nil
     end
   end
 end

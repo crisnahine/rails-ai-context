@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -253,6 +254,35 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       it "does NOT detect async_queries (comments are not real usage)" do
         expect(result[:patterns]).not_to include("async_queries")
       end
+    end
+  end
+
+  describe "#gem_present?" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def introspect(lock)
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      described_class.new(double("app", root: @root))
+    end
+
+    it "sees a gem in the PATH section" do
+      lock = <<~LOCK
+        PATH
+          remote: engines/billing
+          specs:
+            dry-monads (1.6.0)
+      LOCK
+      expect(introspect(lock).send(:gem_present?, "dry-monads")).to be(true)
+    end
+
+    it "does not match a gem whose name merely starts with the query" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            dry-monads-extras (1.0.0)
+      LOCK
+      expect(introspect(lock).send(:gem_present?, "dry-monads")).to be(false)
     end
   end
 end

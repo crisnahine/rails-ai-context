@@ -77,7 +77,7 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       let(:tmpdir) { Dir.mktmpdir }
 
       before do
-        File.write(File.join(tmpdir, "Gemfile.lock"), "    rails (7.1.0)\n")
+        File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
         allow(Bundler).to receive(:root).and_return(Pathname.new(tmpdir))
       end
 
@@ -323,7 +323,7 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     after  { FileUtils.remove_entry(tmpdir) }
 
     it "is false when the Gemfile.lock lists rails-ai-context" do
-      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails-ai-context (5.13.0)\n")
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")
       expect(helper.standalone_install?).to be(false)
     end
 

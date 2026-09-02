@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::ConfigIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -72,6 +73,35 @@ RSpec.describe RailsAiContext::Introspectors::ConfigIntrospector do
       it "detects CurrentAttributes classes" do
         expect(result[:current_attributes]).to include("Current")
       end
+    end
+  end
+
+  describe "#detect_error_monitoring" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def monitoring_for(lock)
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      described_class.new(double("app", root: @root)).send(:detect_error_monitoring)
+    end
+
+    it "does not report bugsnag for bugsnag-capistrano" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            bugsnag-capistrano (2.1.0)
+      LOCK
+      expect(monitoring_for(lock)).to be_nil
+    end
+
+    it "reports bugsnag for the bugsnag gem itself" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            bugsnag (6.27.0)
+      LOCK
+      expect(monitoring_for(lock)).to eq([ "bugsnag" ])
     end
   end
 end

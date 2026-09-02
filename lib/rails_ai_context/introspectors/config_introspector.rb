@@ -170,19 +170,21 @@ module RailsAiContext
         end
       end
 
-      def detect_error_monitoring
-        gemfile_lock = File.join(app.root, "Gemfile.lock")
-        return nil unless File.exist?(gemfile_lock)
-        content = RailsAiContext::SafeFile.read(gemfile_lock)
-        return nil unless content
+      ERROR_MONITORS = {
+        "sentry" => %w[sentry-ruby sentry-rails],
+        "bugsnag" => %w[bugsnag],
+        "honeybadger" => %w[honeybadger],
+        "rollbar" => %w[rollbar],
+        "airbrake" => %w[airbrake],
+        "appsignal" => %w[appsignal]
+      }.freeze
+      private_constant :ERROR_MONITORS
 
-        tools = []
-        tools << "sentry" if content.include?("sentry-ruby") || content.include?("sentry-rails")
-        tools << "bugsnag" if content.include?("bugsnag")
-        tools << "honeybadger" if content.include?("honeybadger")
-        tools << "rollbar" if content.include?("rollbar")
-        tools << "airbrake" if content.include?("airbrake")
-        tools << "appsignal" if content.include?("appsignal")
+      def detect_error_monitoring
+        lock = RailsAiContext::GemLock.for(app.root)
+        return nil if lock.missing?
+
+        tools = ERROR_MONITORS.filter_map { |tool, gems| tool if lock.any?(*gems) }
         tools.empty? ? nil : tools
       rescue => e
         $stderr.puts "[rails-ai-context] detect_error_monitoring failed: #{e.message}" if ENV["DEBUG"]

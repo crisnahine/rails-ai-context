@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -174,6 +175,66 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       it "counts _test.rb files and skips support files" do
         expect(result[:test_count_by_category]["models"]).to eq(1)
       end
+    end
+  end
+
+  describe "#detect_database_cleaner" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def cleaner_for(lock)
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      described_class.new(double("app", root: @root)).send(:detect_database_cleaner)
+    end
+
+    it "reports database_cleaner for database_cleaner-active_record" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            database_cleaner-active_record (2.2.0)
+      LOCK
+      expect(cleaner_for(lock)).to eq({ detected: true })
+    end
+
+    it "does not report database_cleaner for database_cleaner-redis alone" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            database_cleaner-redis (2.0.0)
+      LOCK
+      expect(cleaner_for(lock)).to be_nil
+    end
+  end
+
+  describe "#detect_coverage" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    it "does not report simplecov for simplecov-cobertura alone" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            simplecov-cobertura (2.1.0)
+      LOCK
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      expect(described_class.new(double("app", root: @root)).send(:detect_coverage)).to be_nil
+    end
+  end
+
+  describe "#detect_framework_from_lockfile" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    it "sees rspec-rails in the GIT section" do
+      lock = <<~LOCK
+        GIT
+          remote: https://github.com/rspec/rspec-rails.git
+          revision: 0123456789abcdef0123456789abcdef01234567
+          specs:
+            rspec-rails (7.1.0)
+      LOCK
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      expect(described_class.new(double("app", root: @root)).send(:detect_framework_from_lockfile)).to eq("rspec")
     end
   end
 end

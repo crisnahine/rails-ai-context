@@ -53,7 +53,11 @@ module RailsAiContext
 
     def for(root)
       path = File.join(root.to_s, "Gemfile.lock")
-      stamp = File.exist?(path) ? File.mtime(path) : nil
+      stamp = begin
+        File.mtime(path)
+      rescue SystemCallError
+        nil
+      end
 
       MUTEX.synchronize do
         cached = CACHE[path]

@@ -157,16 +157,14 @@ module RailsAiContext
       end
 
       def detect_pagination
-        gemfile_lock = File.join(app.root, "Gemfile.lock")
-        return nil unless File.exist?(gemfile_lock)
-        content = RailsAiContext::SafeFile.read(gemfile_lock)
-        return nil unless content
+        lock = RailsAiContext::GemLock.for(app.root)
+        return nil if lock.missing?
 
         strategies = []
-        strategies << "pagy" if content.match?(/^    pagy \(/)
-        strategies << "kaminari" if content.match?(/^    kaminari \(/)
-        strategies << "will_paginate" if content.match?(/^    will_paginate \(/)
-        strategies << "cursor" if content.match?(/^    graphql-pro \(/) # cursor-based pagination
+        strategies << "pagy" if lock.present?("pagy")
+        strategies << "kaminari" if lock.present?("kaminari")
+        strategies << "will_paginate" if lock.present?("will_paginate")
+        strategies << "cursor" if lock.present?("graphql-pro") # cursor-based pagination
         strategies.empty? ? nil : strategies
       rescue => e
         $stderr.puts "[rails-ai-context] detect_pagination failed: #{e.message}" if ENV["DEBUG"]
