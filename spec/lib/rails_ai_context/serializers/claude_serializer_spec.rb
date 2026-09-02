@@ -38,6 +38,21 @@ RSpec.describe RailsAiContext::Serializers::ClaudeSerializer do
       expect(output).to include("rails_diagnose")
     end
 
+    it "counts pending migrations only when the payload says what is applied" do
+      base = {
+        app_name: "App", rails_version: "8.0", ruby_version: "3.4",
+        generated_at: Time.now.iso8601, schema: {}, models: {},
+        routes: {}, gems: {}, conventions: {}
+      }
+
+      known = described_class.new(base.merge(migrations: { total: 4, pending: [] })).call
+      unknown = described_class.new(base.merge(migrations: { total: 4 })).call
+
+      expect(known).to include("- Migrations: 4 total, 0 pending")
+      expect(unknown).to include("- Migrations: 4 total\n")
+      expect(unknown).not_to include("4 total,")
+    end
+
     it "includes key models capped at 15" do
       models = 30.times.each_with_object({}) do |i, h|
         h["Model#{i.to_s.rjust(2, '0')}"] = { associations: [], validations: [] }

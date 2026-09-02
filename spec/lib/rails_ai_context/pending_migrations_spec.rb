@@ -39,8 +39,26 @@ RSpec.describe RailsAiContext::PendingMigrations do
       expect(described_class.for(migrate_dir: @migrate, applied: %w[1 20240101000000 20240201000000 20240301000000])).to eq([])
     end
 
-    it "answers everything pending when applied is unknown and the directory is empty otherwise" do
-      Dir.mktmpdir { |empty| expect(described_class.for(migrate_dir: empty, applied: nil)).to eq([]) }
+    it "answers nil when nothing is known about the applied set" do
+      expect(described_class.for(migrate_dir: @migrate, applied: nil)).to be_nil
+    end
+
+    it "answers every file when the applied set is known to be empty" do
+      expect(described_class.for(migrate_dir: @migrate, applied: []).size).to eq(3)
+      Dir.mktmpdir { |empty| expect(described_class.for(migrate_dir: empty, applied: [])).to eq([]) }
+    end
+  end
+
+  describe ".migration_files" do
+    it "skips a file with no version prefix" do
+      File.write(File.join(@migrate, "add_index.rb"), "class AddIndex; end\n")
+      expect(described_class.migration_files(@migrate).map { |m| m[:version] })
+        .to eq(%w[20240101000000 20240201000000 20240301000000])
+    end
+
+    it "carries the path of each file it counted" do
+      expect(described_class.migration_files(@migrate).map { |m| File.basename(m[:path]) })
+        .to include("20240201000000_add_index.rb")
     end
   end
 
@@ -49,6 +67,7 @@ RSpec.describe RailsAiContext::PendingMigrations do
       expect(described_class.migrate_dir_for("/app", "/app/db/queue_schema.rb")).to eq("/app/db/queue_migrate")
       expect(described_class.migrate_dir_for("/app", "/app/db/schema.rb")).to eq("/app/db/migrate")
       expect(described_class.migrate_dir_for("/app")).to eq("/app/db/migrate")
+      expect(described_class.migrate_dir_for("/app", "/app/db/schema.sql")).to eq("/app/db/migrate")
     end
   end
 end

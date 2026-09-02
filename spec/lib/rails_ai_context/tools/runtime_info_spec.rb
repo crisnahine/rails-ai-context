@@ -24,6 +24,18 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       expect(text).to include("Pool size")
     end
 
+    # PendingMigrations.live is stubbed here: the suite's own database has no
+    # pending migrations, so the rendering is otherwise unreachable.
+    it "renders each pending migration as a version and a name" do
+      allow(RailsAiContext::PendingMigrations).to receive(:live)
+        .and_return([ { version: "20240201000000", name: "Add index" } ])
+
+      text = described_class.call(section: "database").content.first[:text]
+
+      expect(text).to include("**Pending migrations:** 1")
+      expect(text).to include("- 20240201000000 Add index")
+    end
+
     it "shows database section" do
       result = described_class.call(section: "database")
       text = result.content.first[:text]

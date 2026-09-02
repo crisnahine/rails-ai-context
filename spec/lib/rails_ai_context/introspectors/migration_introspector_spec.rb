@@ -106,6 +106,61 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
       end
     end
 
+    it "omits pending entirely when the schema records no version" do
+      hide_const("ActiveRecord")
+
+      Dir.mktmpdir do |dir|
+        migrate = File.join(dir, "db", "migrate")
+        FileUtils.mkdir_p(migrate)
+        File.write(File.join(migrate, "20240101000000_create_users.rb"), "class X; end\n")
+        File.write(File.join(dir, "db", "schema.rb"), "ActiveRecord::Schema.define do\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result).not_to have_key(:pending)
+        expect(result[:total]).to eq(1)
+      end
+    end
+
+    it "reads every applied version from structure.sql so an out-of-order merge is pending" do
+      hide_const("ActiveRecord")
+
+      Dir.mktmpdir do |dir|
+        migrate = File.join(dir, "db", "migrate")
+        FileUtils.mkdir_p(migrate)
+        %w[20240101000000_create_users 20240201000000_add_index 20240301000000_create_posts].each do |name|
+          File.write(File.join(migrate, "#{name}.rb"), "class X; end\n")
+        end
+        File.write(File.join(dir, "db", "structure.sql"), <<~SQL)
+          CREATE TABLE public.users (id bigint NOT NULL);
+
+          INSERT INTO schema_migrations (version) VALUES ('20240101000000'), ('20240301000000');
+        SQL
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:pending]).to eq([ { version: "20240201000000", name: "Add index" } ])
+      end
+    end
+
+    it "counts only versioned files in both the total and the pending list" do
+      hide_const("ActiveRecord")
+
+      Dir.mktmpdir do |dir|
+        migrate = File.join(dir, "db", "migrate")
+        FileUtils.mkdir_p(migrate)
+        File.write(File.join(migrate, "20240101000000_create_users.rb"), "class X; end\n")
+        File.write(File.join(migrate, "add_index.rb"), "class AddIndex; end\n")
+        File.write(File.join(dir, "db", "schema.rb"), "ActiveRecord::Schema[7.1].define(version: 1) do\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:total]).to eq(1)
+        expect(result[:recent].map { |m| m[:filename] }).to eq([ "20240101000000_create_users.rb" ])
+        expect(result[:pending].map { |m| m[:version] }).to eq([ "20240101000000" ])
+      end
+    end
+
     it "reports files newer than the schema version as pending" do
       hide_const("ActiveRecord")
 

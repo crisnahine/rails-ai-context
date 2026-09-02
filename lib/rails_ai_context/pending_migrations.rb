@@ -9,19 +9,20 @@ module RailsAiContext
     module_function
 
     # applied: the applied versions, a single newest version, or nil when
-    # nothing is known (every file is then pending).
+    # nothing is known. Unknown answers nil - an empty Array is the different
+    # claim that nothing has been applied, and every file is then pending.
     def for(migrate_dir:, applied: nil)
+      return nil if applied.nil?
+
       files = migration_files(migrate_dir)
-      case applied
-      when Array
+      unapplied = if applied.is_a?(Array)
         known = applied.map(&:to_i)
         files.reject { |m| known.include?(m[:version].to_i) }
-      when String, Integer
+      else
         newest = applied.to_i
         files.select { |m| m[:version].to_i > newest }
-      else
-        files
       end
+      unapplied.map { |m| { version: m[:version], name: m[:name] } }
     end
 
     # The connection's answer; nil when there is no database to ask.
@@ -32,19 +33,25 @@ module RailsAiContext
     # Each secondary database keeps its own migrate directory, so a secondary
     # dump compared against db/migrate would report the primary's files.
     def migrate_dir_for(root, dump_path = nil)
-      base = dump_path ? File.basename(dump_path.to_s).sub(/_?schema\.rb\z|_?structure\.sql\z/, "") : ""
+      base = if dump_path
+        File.basename(dump_path.to_s).sub(/\.(rb|sql)\z/, "").sub(/_?(schema|structure)\z/, "")
+      else
+        ""
+      end
       File.join(root.to_s, "db", base.empty? ? "migrate" : "#{base}_migrate")
     end
 
+    # Every versioned migration file in the directory. One file scan behind
+    # both the pending derivation and the migrations listing, so the two
+    # cannot disagree on which files count.
     def migration_files(migrate_dir)
       return [] unless migrate_dir && Dir.exist?(migrate_dir)
 
       Dir.glob(File.join(migrate_dir, "*.rb")).sort.filter_map do |path|
         base = File.basename(path, ".rb")
         version = base[/\A\d+/] or next
-        { version: version, name: base.sub(/\A\d+_/, "").tr("_", " ").capitalize }
+        { version: version, name: base.sub(/\A\d+_/, "").tr("_", " ").capitalize, path: path }
       end
     end
-    private_class_method :migration_files
   end
 end

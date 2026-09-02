@@ -327,27 +327,26 @@ module RailsAiContext
         enum_types = schema.enums
 
         version = schema_version_for(path)
-        # schema.rb records only the max applied version, so pending here
-        # means "migration files newer than the schema version" - exact for
-        # linear histories, best-effort for out-of-order merges.
-        pending = if version
-          migrate_dir = RailsAiContext::PendingMigrations.migrate_dir_for(app.root, path)
-          RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version)
-        else
-          []
-        end
 
-        {
+        result = {
           adapter: "static_parse",
           tables: tables,
           total_tables: tables.size,
           schema_version: version,
-          pending_migrations: pending,
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: generated_columns(schema),
           note: "Parsed from db/schema.rb (no DB connection)"
         }
+        # schema.rb records only the max applied version, so pending here
+        # means "migration files newer than the schema version" - exact for
+        # linear histories, best-effort for out-of-order merges. With no
+        # version recorded there is no answer, so the key stays absent.
+        if version
+          migrate_dir = RailsAiContext::PendingMigrations.migrate_dir_for(app.root, path)
+          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version)
+        end
+        result
       end
 
       def parse_structure_sql(path)

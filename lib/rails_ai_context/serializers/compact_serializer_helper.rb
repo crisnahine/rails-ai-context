@@ -52,7 +52,9 @@ module RailsAiContext
 
         migrations = Payload.section(context, :migrations)
         if migrations
-          lines << "- Migrations: #{migrations[:total]} total, #{Payload.pending_migrations(context).size} pending"
+          line = "- Migrations: #{migrations[:total]} total"
+          line += ", #{Payload.pending_migrations(context).size} pending" if migrations.key?(:pending)
+          lines << line
         end
 
         lines.concat(full_preset_stack_lines)

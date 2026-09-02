@@ -861,37 +861,56 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
   end
 
   describe "pending migrations" do
+    def static_parse(dir)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+    end
+
+    def write_migrations(dir, names)
+      migrate = File.join(dir, "db", "migrate")
+      FileUtils.mkdir_p(migrate)
+      names.each { |name| File.write(File.join(migrate, "#{name}.rb"), "class X < ActiveRecord::Migration[7.1]; end\n") }
+    end
+
     it "reports an out-of-order migration the structure.sql dump has not recorded" do
       Dir.mktmpdir do |dir|
-        migrate = File.join(dir, "db", "migrate")
-        FileUtils.mkdir_p(migrate)
-        %w[20240101000000_create_users 20240201000000_add_index 20240301000000_create_posts].each do |name|
-          File.write(File.join(migrate, "#{name}.rb"), "class X < ActiveRecord::Migration[7.1]; end\n")
-        end
-        path = File.join(dir, "db", "structure.sql")
-        File.write(path, <<~SQL)
+        write_migrations(dir, %w[20240101000000_create_users 20240201000000_add_index 20240301000000_create_posts])
+        File.write(File.join(dir, "db", "structure.sql"), <<~SQL)
           CREATE TABLE public.users (id bigint NOT NULL);
 
           INSERT INTO schema_migrations (version) VALUES ('20240101000000'), ('20240301000000');
         SQL
 
-        result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:parse_structure_sql, path)
-
-        expect(result[:pending_migrations]).to eq([ { version: "20240201000000", name: "Add index" } ])
+        expect(static_parse(dir)[:pending_migrations]).to eq([ { version: "20240201000000", name: "Add index" } ])
       end
     end
 
     it "reports files newer than a schema.rb version as entries" do
       Dir.mktmpdir do |dir|
-        migrate = File.join(dir, "db", "migrate")
-        FileUtils.mkdir_p(migrate)
-        File.write(File.join(migrate, "20240301000000_create_posts.rb"), "class X < ActiveRecord::Migration[7.1]; end\n")
-        path = File.join(dir, "db", "schema.rb")
-        File.write(path, "ActiveRecord::Schema[7.1].define(version: 2024_02_01_000000) do\nend\n")
+        write_migrations(dir, %w[20240301000000_create_posts])
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 2024_02_01_000000) do
+            create_table "users", force: :cascade do |t|
+              t.string "email"
+            end
+          end
+        RUBY
 
-        result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:parse_schema_rb, path)
+        expect(static_parse(dir)[:pending_migrations]).to eq([ { version: "20240301000000", name: "Create posts" } ])
+      end
+    end
 
-        expect(result[:pending_migrations]).to eq([ { version: "20240301000000", name: "Create posts" } ])
+    it "omits the key when the schema.rb records no version" do
+      Dir.mktmpdir do |dir|
+        write_migrations(dir, %w[20240301000000_create_posts])
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema.define do
+            create_table "users", force: :cascade do |t|
+              t.string "email"
+            end
+          end
+        RUBY
+
+        expect(static_parse(dir)).not_to have_key(:pending_migrations)
       end
     end
   end
