@@ -80,6 +80,7 @@ module RailsAiContext
 
         relative = "#{name.to_s.underscore}.rb"
         file_path = nil
+        relative_path = nil
         concern_type = nil
 
         concern_dirs.each do |dir|
@@ -94,6 +95,7 @@ module RailsAiContext
           end
 
           file_path = located.realpath
+          relative_path = located.relative
           concern_type = ConcernPaths.type_for(dir)
           break
         end
@@ -107,8 +109,6 @@ module RailsAiContext
 
         source = RailsAiContext::SafeFile.read(file_path)
         return text_response("Could not read concern file: #{file_path}") unless source
-        relative_path = file_path.sub("#{File.realpath(root)}/", "")
-
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
         lines << "**Type:** #{concern_type} concern"
