@@ -91,9 +91,14 @@ module RailsAiContext
       Introspector.new(app).call
     end
 
-    # Generate context files (CLAUDE.md, .cursor/rules/, etc.)
-    def generate_context(app = nil, format: :all)
+    # Generate context files (CLAUDE.md, .cursor/rules/, etc.).
+    # format: nil means the recorded selection; all when nothing is recorded.
+    # Always one serializer call for every format: opencode and codex share
+    # AGENTS.md, and generating one format at a time defeats that dedup.
+    def generate_context(app = nil, format: nil)
       app ||= default_app
+      selected = configuration.ai_tools
+      format ||= selected.nil? || selected.empty? ? :all : selected
       context = introspect(app)
       Serializers::ContextFileSerializer.new(context, format: format).call
     end

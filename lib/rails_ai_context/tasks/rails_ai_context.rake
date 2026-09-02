@@ -193,7 +193,10 @@ namespace :ai do
     # First time - no tools configured, ask the user. The record is written
     # once below, so the selection reaches both files together.
     prompted = ai_tools.nil?
-    ai_tools = prompt_ai_tools if prompted
+    if prompted
+      ai_tools = prompt_ai_tools
+      RailsAiContext.configuration.ai_tools = ai_tools
+    end
 
     # Prompt for tool_mode if not yet configured in initializer
     unless tool_mode_configured?
@@ -224,17 +227,10 @@ namespace :ai do
 
     if ai_tools.nil? || ai_tools.empty?
       puts "📝 Writing context files for all AI tools..."
-      result = RailsAiContext.generate_context(format: :all)
-      print_result(result)
     else
       puts "📝 Writing context files for: #{ai_tools.map(&:to_s).join(', ')}..."
-      # One call for every selected format so ContextFileSerializer's
-      # cross-format dedup applies (opencode and codex share AGENTS.md and
-      # its split rules - generating one format at a time defeats that dedup
-      # and reports the same file as both written and unchanged).
-      result = RailsAiContext.generate_context(format: ai_tools)
-      print_result(result)
     end
+    print_result(RailsAiContext.generate_context)
 
     puts ""
     if Array(ai_tools).include?(:codex)

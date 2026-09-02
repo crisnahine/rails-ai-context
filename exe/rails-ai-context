@@ -157,26 +157,9 @@ class RailsAiContextCLI < Thor
 
       $stderr.puts "Introspecting Rails app..."
 
-      if options[:format]
-        # Explicit --format flag overrides config
-        result = ::RailsAiContext.generate_context(format: options[:format].to_sym)
-        print_context_result(result)
-      else
-        # Use ai_tools from config (.rails-ai-context.yml or initializer)
-        ai_tools = ::RailsAiContext.configuration.ai_tools
-        if ai_tools.nil? || ai_tools.empty?
-          result = ::RailsAiContext.generate_context(format: :all)
-          print_context_result(result)
-        else
-          # One call for every selected format so ContextFileSerializer's
-          # cross-format dedup applies (opencode and codex share AGENTS.md
-          # and its split rules - generating one format at a time defeats
-          # that dedup and reports the same file as both written and
-          # unchanged).
-          result = ::RailsAiContext.generate_context(format: ai_tools)
-          print_context_result(result)
-        end
-      end
+      # An explicit --format overrides the recorded selection.
+      result = ::RailsAiContext.generate_context(format: options[:format]&.to_sym)
+      print_context_result(result)
     rescue SystemExit
       raise
     rescue StandardError, ScriptError => e
@@ -274,13 +257,7 @@ class RailsAiContextCLI < Thor
 
       $stderr.puts ""
       $stderr.puts "Generating AI context files..."
-      # One call for every selected format so ContextFileSerializer's
-      # cross-format dedup applies (opencode and codex share AGENTS.md and
-      # its split rules - generating one format at a time defeats that
-      # dedup and reports the same file as both written and unchanged).
-      result = ::RailsAiContext.generate_context(format: ai_tools)
-      (result[:written] || []).each { |f| $stderr.puts "  Written: #{f}" }
-      (result[:skipped] || []).each { |f| $stderr.puts "  Skipped: #{f} (unchanged)" }
+      print_context_result(::RailsAiContext.generate_context(format: ai_tools))
 
       # --- Instructions ---
       show_standalone_instructions(ai_tools, tool_mode)
@@ -502,8 +479,7 @@ class RailsAiContextCLI < Thor
       exit 1
     end
 
-    # Loaded on first use, never at file top: the boot path must not touch the
-    # gem before the app decides its own gem versions.
+    # Stdlib only, so it is safe to load before the app boots.
     def entry_boot
       @entry_boot ||= begin
         require_relative "../lib/rails_ai_context/cli/entry_boot"

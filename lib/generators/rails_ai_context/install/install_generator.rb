@@ -520,10 +520,6 @@ module RailsAiContext
           @selected_formats, root: Rails.root
         )
 
-        # Generate every selected format in ONE call so ContextFileSerializer's
-        # cross-format dedup applies (opencode and codex share AGENTS.md and
-        # its split rules - generating them one format at a time defeats that
-        # dedup and reports the same file as both written and unchanged).
         begin
           result = RailsAiContext.generate_context(format: @selected_formats)
           (result[:written] || []).each { |f| say "  ✅ #{f}", :green }
