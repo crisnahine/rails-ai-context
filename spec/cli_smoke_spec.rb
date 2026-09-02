@@ -81,10 +81,14 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       FileUtils.mkdir_p(File.join(dir, "app", "models"))
       File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
 
-      # serve and watch are left out: both run until interrupted.
-      %w[inspect facts context preset init tool doctor].each do |command|
+      # Bare `preset` lists and returns before the boot path, so the loop
+      # runs a real one. Only serve and watch are left out: both run until
+      # interrupted.
+      [ "inspect", "facts", "context", "preset architecture", "init", "tool", "doctor" ].each do |command|
         out = `cd #{dir} && ruby -I #{lib} #{exe} #{command} 2>&1`
         expect(out).not_to include("ArgumentError"), "#{command}: #{out}"
+        # preset rescues StandardError, so only the message reaches stderr.
+        expect(out).not_to include("missing keyword"), "#{command}: #{out}"
       end
 
       doctor = `cd #{dir} && ruby -I #{lib} #{exe} doctor 2>&1`
