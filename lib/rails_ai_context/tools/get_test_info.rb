@@ -229,8 +229,10 @@ module RailsAiContext
           ]
         end
 
+        contained = []
         candidates.each do |rel|
-          content, = RailsAiContext::SafePath.read(rel, under: rails_app.root.to_s, max_size: max_test_file_size)
+          content, resolution = RailsAiContext::SafePath.read(rel, under: rails_app.root.to_s, max_size: max_test_file_size)
+          contained << rel unless ESCAPING_REFUSALS.include?(resolution.refusal)
           next unless content
 
           # Summary/standard: return just test names (saves 2000+ tokens vs full source)
@@ -248,13 +250,31 @@ module RailsAiContext
           return text_response("# #{rel}\n\n```ruby\n#{content}\n```")
         end
 
-        # List nearby test files to help the agent find the right one
-        test_dirs = candidates.map { |c| File.dirname(rails_app.root.join(c)) }.uniq
-        nearby = test_dirs.flat_map do |dir|
-          Dir.exist?(dir) ? Dir.glob(File.join(dir, "*")).map { |f| f.sub("#{rails_app.root}/", "") }.first(10) : []
+        empty_response("No test file found for #{name}. Searched: #{candidates.join(', ')}#{nearby_tests_hint(contained)}")
+      end
+
+      # A candidate whose own resolution left the app root must not have its
+      # directory globbed either, or the miss lists a tree outside the app.
+      ESCAPING_REFUSALS = %i[traversal outside sensitive].freeze
+
+      # Nearby test files, to help the agent find the right one. The glob base
+      # is the realpath, so a symlinked test directory cannot widen it.
+      private_class_method def self.nearby_tests_hint(candidates)
+        root = rails_app.root.to_s
+        real_root = File.realpath(root)
+
+        nearby = candidates.map { |rel| File.dirname(File.join(root, rel)) }.uniq.flat_map do |dir|
+          next [] unless File.directory?(dir)
+
+          real_dir = File.realpath(dir)
+          next [] unless RailsAiContext::SafePath.contained?(real_dir, real_root)
+
+          Dir.glob(File.join(real_dir, "*")).map { |f| f.delete_prefix("#{real_root}/") }.first(10)
         end
-        hint = nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
-        empty_response("No test file found for #{name}. Searched: #{candidates.join(', ')}#{hint}")
+
+        nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
+      rescue SystemCallError
+        ""
       end
 
       # Generate a test template based on the app's actual test patterns

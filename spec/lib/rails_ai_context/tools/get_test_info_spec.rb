@@ -129,6 +129,21 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("Searched:")
     end
 
+    it "does not name a directory outside the app root when it finds nothing" do
+      Dir.mktmpdir do |parent|
+        root = File.join(parent, "app")
+        FileUtils.mkdir_p(File.join(root, "spec", "models"))
+        File.write(File.join(parent, "outside_marker.txt"), "x\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+
+        text = described_class.call(model: "../../outside", detail: "full").content.first[:text]
+
+        expect(text).to include("No test file found")
+        expect(text).not_to include("outside_marker.txt")
+        expect(text).not_to include("Files in test directory")
+      end
+    end
+
     it "does not read a test file that resolves outside the app root or to a sensitive file" do
       Dir.mktmpdir do |parent|
         root = File.join(parent, "app")
