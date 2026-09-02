@@ -38,7 +38,10 @@ module RailsAiContext
         assets = Payload.section(ctx, :assets)
         return nil unless assets
 
+        # The pipeline introspector says "none" rather than nil, which reads as
+        # a pipeline named none once it is joined with the rest.
         parts = [ assets[:pipeline], assets[:js_bundler], assets[:css_framework] ].compact
+        parts.delete("none")
         parts.any? ? "- Assets: #{parts.join(', ')}" : nil
       end
 
