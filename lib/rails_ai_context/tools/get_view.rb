@@ -87,7 +87,7 @@ module RailsAiContext
             suggestion = find_closest_match(ctrl_lower, all_dirs)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
             dirs_note = all_dirs.any? ? " Directories with views: #{all_dirs.join(', ')}" : " No view directories found (API-only apps typically have none)."
-            return text_response("No views for '#{controller}'.#{hint}#{dirs_note}")
+            return empty_response("No views for '#{controller}'.#{hint}#{dirs_note}")
           end
 
           templates = filtered_templates
@@ -265,7 +265,7 @@ module RailsAiContext
           views_dir = rails_app.root.join("app", "views")
           siblings = Dir.glob(File.join(views_dir, dir, "*")).map { |f| "#{dir}/#{File.basename(f)}" }.sort.first(10)
           hint = siblings.any? ? " Files in #{dir}/: #{siblings.join(', ')}" : ""
-          return text_response("View not found: #{path}.#{hint}")
+          return empty_response("View not found: #{path}.#{hint}")
         end
         return text_response("Could not read file: #{path}") unless content
 

@@ -73,7 +73,7 @@ module RailsAiContext
 
         # Controller + action source + private methods + instance vars
         ctrl_result = GetControllers.call(controller: controller_name, action: action_name)
-        lines << ctrl_result.content.first[:text]
+        lines << response_text(ctrl_result)
 
         # Infer model from controller
         snake = RailsAiContext::Payload.controller_route_key(cached_context, controller_name)
@@ -81,31 +81,29 @@ module RailsAiContext
 
         # Model details
         model_result = GetModelDetails.call(model: model_name)
-        model_text = model_result.content.first[:text]
-        unless model_text.include?("not found")
-          lines << "" << "---" << "" << model_text
+        unless empty?(model_result)
+          lines << "" << "---" << "" << response_text(model_result)
         end
 
         # Routes for this controller
         route_result = GetRoutes.call(controller: snake)
-        route_text = route_result.content.first[:text]
-        unless route_text.include?("not found") || route_text.include?("No routes")
+        unless empty?(route_result)
           lines << "" << "---" << ""
-          lines << route_text
+          lines << response_text(route_result)
         end
 
         # Views for this controller
         view_ctrl = snake.split("/").last
         view_result = GetView.call(controller: view_ctrl, detail: "standard")
-        view_text = view_result.content.first[:text]
-        unless view_text.include?("No views")
+        unless empty?(view_result)
           lines << "" << "---" << ""
-          lines << view_text
+          lines << response_text(view_result)
         end
 
         # Cross-reference: controller ivars vs view ivars
         # Also check templates rendered by the action (e.g., create renders :new on failure)
-        ctrl_text = ctrl_result.content.first[:text]
+        ctrl_text = response_text(ctrl_result)
+        view_text = response_text(view_result)
         ctrl_ivars = extract_ivars_from_text(ctrl_text)
         view_ivars = extract_ivars_from_view_text(view_text, action: action_name)
         # Detect "render :other_template" and include those templates' ivars too
@@ -225,23 +223,21 @@ module RailsAiContext
         lines = []
 
         ctrl_result = GetControllers.call(controller: controller_name)
-        lines << ctrl_result.content.first[:text]
+        lines << response_text(ctrl_result)
 
         snake = RailsAiContext::Payload.controller_route_key(cached_context, controller_name)
 
         # Routes for this controller
         route_result = GetRoutes.call(controller: snake)
-        route_text = route_result.content.first[:text]
-        unless route_text.include?("not found") || route_text.include?("No routes")
-          lines << "" << "---" << "" << route_text
+        unless empty?(route_result)
+          lines << "" << "---" << "" << response_text(route_result)
         end
 
         # Views for this controller
         view_ctrl = snake.split("/").last
         view_result = GetView.call(controller: view_ctrl, detail: "standard")
-        view_text = view_result.content.first[:text]
-        unless view_text.include?("No views")
-          lines << "" << "---" << "" << view_text
+        unless empty?(view_result)
+          lines << "" << "---" << "" << response_text(view_result)
         end
 
         lines.join("\n")
@@ -260,29 +256,23 @@ module RailsAiContext
         resolved_name = key || model_name
 
         model_result = GetModelDetails.call(model: resolved_name)
-        model_text = model_result.content.first[:text]
 
         # If model not found, fail fast - don't leak partial results from sub-tools
-        if model_text.include?("not found")
-          return model_result.content.first[:text]
-        end
+        return response_text(model_result) if empty?(model_result)
 
-        lines << model_text
+        lines << response_text(model_result)
 
         if key && models[key][:table_name]
           schema_result = GetSchema.call(table: models[key][:table_name])
-          schema_text = schema_result.content.first[:text]
-          # Only append schema if it actually has useful data (not "not found")
-          unless schema_text.include?("not found") || schema_text.include?("Available:")
-            lines << "" << "---" << "" << schema_text
+          unless empty?(schema_result)
+            lines << "" << "---" << "" << response_text(schema_result)
           end
         end
 
         # Tests for this model
         test_result = GetTestInfo.call(model: resolved_name, detail: "standard")
-        test_text = test_result.content.first[:text]
-        unless test_text.include?("No test file found")
-          lines << "" << "---" << "" << test_text
+        unless empty?(test_result)
+          lines << "" << "---" << "" << response_text(test_result)
         end
 
         lines.join("\n")
@@ -311,9 +301,7 @@ module RailsAiContext
           handler = INCLUDE_MAP[key.to_s.downcase]
           next unless handler
           begin
-            result = handler.call
-            text = result.content.first[:text]
-            extra << "\n\n---\n\n" << text
+            extra << "\n\n---\n\n" << response_text(handler.call)
           rescue => e
             extra << "\n\n---\n\n_Error loading #{key}: #{e.message}_"
           end
@@ -338,9 +326,8 @@ module RailsAiContext
             next unless table_name
             matched_tables << table_name
             schema_result = GetSchema.call(table: table_name)
-            schema_text = schema_result.content.first[:text]
-            unless schema_text.include?("not found")
-              lines << "" << "---" << "" << schema_text
+            unless empty?(schema_result)
+              lines << "" << "---" << "" << response_text(schema_result)
             end
           end
 

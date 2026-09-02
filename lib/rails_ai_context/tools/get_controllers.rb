@@ -71,7 +71,7 @@ module RailsAiContext
 
             # Specific action - return source code
             if action
-              return text_response(format_action_source(key, info, action))
+              return format_action_source(key, info, action)
             end
 
             return text_response(format_controller(key, info))
@@ -176,7 +176,7 @@ module RailsAiContext
         # Case-insensitive action lookup for consistency with other tools
         action_name = actions.find { |a| a.to_s.downcase == action_name.to_s.downcase }&.to_s || action_name.to_s
         unless actions.map(&:to_s).include?(action_name)
-          return "Action '#{action_name}' not found in #{controller_name}. Available: #{actions.join(', ')}"
+          return empty_response("Action '#{action_name}' not found in #{controller_name}. Available: #{actions.join(', ')}")
         end
 
         # Find applicable filters from this controller
@@ -303,7 +303,7 @@ module RailsAiContext
           lines << "" << hydration_text unless hydration_text.empty?
         end
 
-        lines.join("\n")
+        text_response(lines.join("\n"))
       end
 
       # Detect private methods called within an action's source

@@ -71,7 +71,7 @@ module RailsAiContext
             normalized = RailsAiContext::Payload.controller_route_key(cached_context, controller)
             normalized_alt = controller.downcase.delete_suffix("_controller").delete_suffix("controller")
             filtered = by_controller.select { |k, _| k.downcase.include?(normalized) || k.downcase.include?(normalized_alt) }
-            return text_response("No routes for '#{controller}'. Controllers: #{by_controller.keys.sort.join(', ')}") if filtered.empty?
+            return empty_response("No routes for '#{controller}'. Controllers: #{by_controller.keys.sort.join(', ')}") if filtered.empty?
             by_controller = filtered
           end
 

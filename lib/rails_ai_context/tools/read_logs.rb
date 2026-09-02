@@ -82,13 +82,13 @@ module RailsAiContext
           else
             "No log files found in log/. Your app may log to stdout (common in Docker/container environments)."
           end
-          return text_response(msg)
+          return empty_response(msg)
         end
 
         # Tail the file
         raw_lines = tail_file(path, lines)
         if raw_lines.empty?
-          return text_response("# Log: #{File.basename(path)}\nLog file is empty.\n\n---\nAvailable log files: #{available.join(', ')}")
+          return empty_response("# Log: #{File.basename(path)}\nLog file is empty.\n\n---\nAvailable log files: #{available.join(', ')}")
         end
 
         # Detect format and filter by level
@@ -98,7 +98,7 @@ module RailsAiContext
         redacted = RailsAiContext::Redaction.redact_log_lines(filtered, search: search)
 
         if redacted.empty?
-          return text_response("# Log: #{File.basename(path)}\nNo entries matching level:#{level}#{" search:\"#{search}\"" if search}.\n\n---\nAvailable log files: #{available.join(', ')}")
+          return empty_response("# Log: #{File.basename(path)}\nNo entries matching level:#{level}#{" search:\"#{search}\"" if search}.\n\n---\nAvailable log files: #{available.join(', ')}")
         end
 
         # Format output

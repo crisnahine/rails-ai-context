@@ -39,12 +39,12 @@ module RailsAiContext
         fetch_section(:tests, subject: "Test introspection") do |data|
           # Specific model tests
           if model
-            return text_response(find_test_file(model, :model, detail))
+            return find_test_file(model, :model, detail)
           end
 
           # Specific controller tests
           if controller
-            return text_response(find_test_file(controller, :controller, detail))
+            return find_test_file(controller, :controller, detail)
           end
 
           case detail
@@ -253,10 +253,10 @@ module RailsAiContext
                 "- #{line.strip}"
               end
             end
-            return "# #{rel} (#{count_phrase(test_names.size, "test")})\n\n#{test_names.join("\n")}"
+            return text_response("# #{rel} (#{count_phrase(test_names.size, "test")})\n\n#{test_names.join("\n")}")
           end
 
-          return "# #{rel}\n\n```ruby\n#{content}\n```"
+          return text_response("# #{rel}\n\n```ruby\n#{content}\n```")
         end
 
         # List nearby test files to help the agent find the right one
@@ -265,7 +265,7 @@ module RailsAiContext
           Dir.exist?(dir) ? Dir.glob(File.join(dir, "*")).map { |f| f.sub("#{rails_app.root}/", "") }.first(10) : []
         end
         hint = nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
-        "No test file found for #{name}. Searched: #{candidates.join(', ')}#{hint}"
+        empty_response("No test file found for #{name}. Searched: #{candidates.join(', ')}#{hint}")
       end
 
       # Generate a test template based on the app's actual test patterns

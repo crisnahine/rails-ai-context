@@ -344,10 +344,9 @@ module RailsAiContext
               begin
                 ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
                 result = GetControllers.call(controller: ctrl_class, action: act)
-                text = result.content.first[:text]
-                unless text.include?("not found")
+                unless empty?(result)
                   lines << "## Controller Context"
-                  lines << text
+                  lines << response_text(result)
                   lines << ""
                 end
               rescue => e
@@ -362,10 +361,9 @@ module RailsAiContext
           if file && line
             begin
               result = GetEditContext.call(file: file, near: parsed[:method_name] || line.to_s)
-              text = result.content.first[:text]
-              unless text.include?("not found") || text.include?("not allowed")
+              unless empty?(result)
                 lines << "## Code Context"
-                lines << text
+                lines << response_text(result)
                 lines << ""
               end
             rescue => e
@@ -382,10 +380,9 @@ module RailsAiContext
             if table
               begin
                 result = GetSchema.call(table: table)
-                text = result.content.first[:text]
-                unless text.include?("not found")
+                unless empty?(result)
                   lines << "## Schema Context"
-                  lines << text
+                  lines << response_text(result)
                   lines << ""
                 end
               rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
@@ -401,10 +398,9 @@ module RailsAiContext
             if model_name
               begin
                 result = GetModelDetails.call(model: model_name)
-                text = result.content.first[:text]
-                unless text.include?("not found")
+                unless empty?(result)
                   lines << "## Model Context"
-                  lines << text
+                  lines << response_text(result)
                   lines << ""
                 end
               rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
@@ -510,10 +506,9 @@ module RailsAiContext
 
           begin
             result = ReadLogs.call(level: "ERROR", lines: 15, search: exception_class)
-            text = result.content.first[:text]
-            return [] if text.include?("Log file is empty") || text.include?("not found") || text.include?("No entries")
+            return [] if empty?(result)
 
-            [ "## Recent Error Logs", text, "" ]
+            [ "## Recent Error Logs", response_text(result), "" ]
           rescue => e
             $stderr.puts "[rails-ai-context] gather_log_context failed: #{e.message}" if ENV["DEBUG"]
             []
