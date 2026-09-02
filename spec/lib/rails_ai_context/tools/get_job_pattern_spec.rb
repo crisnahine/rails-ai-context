@@ -138,6 +138,68 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       end
     end
 
+    context "with a job whose retry configuration is parenthesised and spans lines" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        jobs_dir = File.join(tmpdir, "app", "jobs")
+        FileUtils.mkdir_p(jobs_dir)
+        File.write(File.join(jobs_dir, "sync_job.rb"), <<~RUBY)
+          class SyncJob < ApplicationJob
+            # retry_on Net::OpenTimeout, attempts: 9 was flaky
+            retry_on(
+              Net::OpenTimeout, Timeout::Error,
+              wait: :polynomially_longer,
+              attempts: 3
+            )
+            discard_on ActiveJob::DeserializationError, ActiveRecord::RecordNotFound
+            sidekiq_options retry: 5
+
+            def perform; end
+          end
+        RUBY
+
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "renders a perform whose parameters span lines on one line, with only its own guards" do
+        File.write(File.join(tmpdir, "app", "jobs", "wide_job.rb"), <<~RUBY)
+          class WideJob < ApplicationJob
+            def perform(user_id,
+                        message:, urgent: false)
+              return if user_id.nil?
+              User.find(user_id)
+            end
+
+            def helper
+              return unless ready?
+            end
+          end
+        RUBY
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+        text = described_class.call(job: "WideJob").content.first[:text]
+
+        expect(text).to include("**Perform:** `perform(user_id, message:, urgent: false)`")
+        expect(text).to include("- `return if user_id.nil?`")
+        expect(text).not_to include("return unless ready?")
+      end
+
+      it "reads every retry, discard and sidekiq option as written, and none from a comment" do
+        text = described_class.call(job: "SyncJob").content.first[:text]
+
+        expect(text).to include("- retry_on Net::OpenTimeout, Timeout::Error, attempts: 3, wait: :polynomially_longer")
+        expect(text).to include("- discard_on ActiveJob::DeserializationError, ActiveRecord::RecordNotFound")
+        expect(text).to include("- sidekiq retry: 5")
+        expect(text).not_to include("attempts: 9")
+      end
+    end
+
     context "with channel data in cached context" do
       let(:channel_payload) do
         {

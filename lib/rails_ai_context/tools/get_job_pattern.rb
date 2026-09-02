@@ -318,78 +318,52 @@ module RailsAiContext
         match[1] if match
       end
 
+      # Options are read off the call, so `wait:` and `attempts:` come back in
+      # one order however they were written, and a `retry_on` in a comment or
+      # a string never counts.
       private_class_method def self.extract_retry_config(source)
-        config = []
+        ast = Introspectors::SourceIntrospector.walk_source(source, {
+          retries: -> { Introspectors::Listeners::GenericMacroListener.new(:retry_on, :discard_on, :sidekiq_options) }
+        })
 
-        # Comments are stripped BEFORE the statement-spanning scan: a trailing
-        # comment after a continuation comma (`retry_on X, wait: 5, # flaky`)
-        # would otherwise end the statement one line early, and comment text
-        # (`# attempts: 3 was flaky`) must never read as real options. The
-        # stripper is string-aware with literal state carried across lines,
-        # so `wait: -> { "#{n}s" }` and multi-line strings survive.
-        stripped = RailsAiContext::SourceLine.strip_comments(source)
-
-        # wait: and attempts: appear in either order in real code, so they are
-        # scanned independently within the retry_on statement rather than with
-        # one ordered pattern (which silently drops whichever comes first).
-        # A statement spans continuation lines while each line ends with a
-        # comma (`retry_on X, wait: :polynomially_longer,\n  attempts: 10`).
-        stripped.scan(/retry_on\s+([\w:]+)((?:[^\n]*,[ \t]*\n)*[^\n]*)/).each do |klass, rest|
-          entry = "retry_on #{klass}"
-          entry += ", attempts: #{Regexp.last_match(1)}" if rest =~ /\battempts:\s*(\d+)/
-          entry += ", wait: #{Regexp.last_match(1).strip}" if rest =~ /\bwait:\s*([^,\n]+)/
-          config << entry
+        ast[:retries].filter_map do |hit|
+          options = hit[:option_nodes]
+          case hit[:macro]
+          when :retry_on
+            entry = "retry_on #{hit[:values].join(', ')}"
+            entry += ", attempts: #{option_source(options[:attempts])}" if options[:attempts]
+            entry += ", wait: #{option_source(options[:wait])}" if options[:wait]
+            entry
+          when :discard_on
+            "discard_on #{hit[:values].join(', ')}"
+          when :sidekiq_options
+            "sidekiq retry: #{option_source(options[:retry])}" if options[:retry]
+          end
         end
+      end
 
-        stripped.scan(/discard_on\s+([\w:]+(?:\s*,\s*[\w:]+)*)/).each do |match|
-          config << "discard_on #{match[0].strip}"
-        end
+      private_class_method def self.option_source(node)
+        node.slice.gsub(/\s+/, " ")
+      end
 
-        # Sidekiq retry count
-        if (match = stripped.match(/sidekiq_options\s+.*retry:\s*(\w+)/))
-          config << "sidekiq retry: #{match[1]}"
-        end
-
-        config
+      private_class_method def self.perform_method(source)
+        Introspectors::ActionResolver.methods_in(source).find { |m| m[:name] == "perform" && m[:scope] == :instance }
       end
 
       private_class_method def self.extract_perform_signature(source)
-        match = source.match(/def perform\(([^)]*)\)/m)
-        return "perform(#{match[1].strip})" if match
-
-        # No-arg perform
-        return "perform" if source.match?(/def perform\s*$/)
-
-        nil
+        perform = perform_method(source)
+        Introspectors::ActionResolver.signature(perform) if perform
       end
 
+      # The `return` lines inside perform's own body, first ten.
       private_class_method def self.extract_guard_clauses(source)
-        guards = []
-        in_perform = false
-        perform_indent = nil
+        perform = perform_method(source)
+        return [] unless perform
 
-        source.each_line do |line|
-          if line.match?(/\A\s*def perform/)
-            in_perform = true
-            perform_indent = line[/\A\s*/].length
-            next
-          end
-
-          if in_perform
-            # Stop at next method or end of perform
-            break if line.match?(/\A\s{#{perform_indent}}end\b/) && perform_indent
-            break if line.match?(/\A\s{0,#{perform_indent.to_i}}def\s/) && !line.match?(/\A\s*def perform/)
-
-            stripped = line.strip
-            if stripped.match?(/\Areturn\s+(if|unless)\b/)
-              guards << stripped
-            elsif stripped.match?(/\Areturn\b/) && stripped.length < 120
-              guards << stripped
-            end
-          end
-        end
-
-        guards.first(10)
+        body = source.lines[perform[:location]...(perform[:end_location] - 1)] || []
+        body.map(&:strip).select { |line|
+          line.match?(/\Areturn\s+(if|unless)\b/) || (line.match?(/\Areturn\b/) && line.length < 120)
+        }.first(10)
       end
 
       private_class_method def self.extract_dependencies(source, own_class_name)

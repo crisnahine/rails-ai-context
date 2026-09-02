@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetControllers do
   before { described_class.reset_cache! }
@@ -195,6 +197,38 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("## UsersController")
       expect(text).to include("Filters:")
       expect(text).to include("authenticate_user!")
+    end
+  end
+
+  describe "an action calling a protected method" do
+    it "inlines it under Private Methods Called" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "controllers"))
+        File.write(File.join(root, "app", "controllers", "widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            def show
+              load_widget
+            end
+
+            protected
+
+            def load_widget
+              @widget = Widget.find(params[:id])
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "WidgetsController" => {
+            actions: %w[show], filters: [], parent_class: "ApplicationController", file: "app/controllers/widgets_controller.rb"
+          } } }
+        )
+
+        text = described_class.call(controller: "WidgetsController", action: "show").content.first[:text]
+
+        expect(text).to include("## Private Methods Called")
+        expect(text).to include("### load_widget")
+      end
     end
   end
 end

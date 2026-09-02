@@ -314,20 +314,10 @@ module RailsAiContext
         # Find all method-like calls in the action (word followed by optional parens)
         candidates = action_code.scan(/\b([a-z_]\w*[!?]?)(?:\s*[\(,]|\s*$)/).flatten.uniq
 
-        # Read the full file to find private methods
-        full_source = (RailsAiContext::SafeFile.read(source_path) || "").lines
-        in_private = false
-        private_methods = Set.new
+        full_source = RailsAiContext::SafeFile.read(source_path) || ""
+        private_methods = Introspectors::ActionResolver.private_methods_from_source(full_source).map { |m| m.split("(").first }
 
-        full_source.each do |line|
-          in_private = true if line.match?(/\A\s*private\s*$/)
-          if in_private && (m = line.match(/\A\s*def\s+(\w+[!?]?)/))
-            private_methods << m[1]
-          end
-        end
-
-        # Extract source of private methods that are called
-        called = candidates & private_methods.to_a
+        called = candidates & private_methods
         called.filter_map do |method_name|
           body = extract_method_with_lines(source_path, method_name)
           next unless body

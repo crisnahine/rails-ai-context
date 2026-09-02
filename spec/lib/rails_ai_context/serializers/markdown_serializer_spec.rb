@@ -5,6 +5,14 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
   let(:context) { RailsAiContext.introspect }
 
+  describe "the Hotwire section against the static fixture" do
+    it "names each model's broadcast macros" do
+      output = described_class.new(IntrospectedFixture.context).call
+
+      expect(output).to include("- `Comment`: broadcasts_to")
+    end
+  end
+
   describe "#call" do
     subject(:output) { described_class.new(context).call }
 

@@ -18,6 +18,8 @@ module RailsAiContext
       turbo_frames: %i[turbo turbo_frames],
       turbo_streams: %i[turbo turbo_streams],
       model_broadcasts: %i[turbo model_broadcasts],
+      explicit_broadcasts: %i[turbo explicit_broadcasts],
+      stream_subscriptions: %i[turbo stream_subscriptions],
       jobs: %i[jobs jobs],
       channels: %i[jobs channels],
       mailers: %i[jobs mailers],

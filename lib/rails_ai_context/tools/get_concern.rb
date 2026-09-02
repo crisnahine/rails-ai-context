@@ -130,7 +130,7 @@ module RailsAiContext
         end
 
         # Parse public methods with signatures
-        public_methods = parse_public_methods(source)
+        public_methods = Introspectors::ActionResolver.public_methods_from_source(source)
         if public_methods.any?
           lines << "" << "## Public Methods"
           if RailsAiContext::DetailLevel.full?(detail)
@@ -153,7 +153,7 @@ module RailsAiContext
         end
 
         # Parse class methods (inside class_methods block or def self.)
-        class_methods = parse_class_methods(source)
+        class_methods = Introspectors::ActionResolver.class_methods_from_source(source)
         if class_methods.any?
           lines << "" << "## Class Methods"
           if RailsAiContext::DetailLevel.full?(detail)
@@ -237,8 +237,8 @@ module RailsAiContext
             if File.size(real) <= max_size
               source = RailsAiContext::SafeFile.read(real)
               if source
-                public_methods = parse_public_methods(source)
-                class_methods = parse_class_methods(source)
+                public_methods = Introspectors::ActionResolver.public_methods_from_source(source)
+                class_methods = Introspectors::ActionResolver.class_methods_from_source(source)
                 method_count = public_methods.size + class_methods.size
               end
             end
@@ -284,90 +284,6 @@ module RailsAiContext
             file_path.sub("#{dir}/", "").sub(/\.rb$/, "").camelize
           end
         end.sort
-      end
-
-      private_class_method def self.parse_public_methods(source)
-        methods = []
-        in_private = false
-        in_class_methods = false
-        class_methods_depth = 0
-
-        source.each_line do |line|
-          # Track class_methods block
-          if line.match?(/\A\s*class_methods\s+do/)
-            in_class_methods = true
-            class_methods_depth = line[/\A\s*/].length
-          end
-          if in_class_methods && line.match?(/\A\s{#{class_methods_depth}}end\b/)
-            in_class_methods = false
-          end
-          next if in_class_methods
-
-          in_private = true if line.match?(/\A\s*(private|protected)\s*$/)
-          in_private = false if line.match?(/\A\s*public\s*$/)
-          # Reset private on included/class_methods blocks
-          if line.match?(/\A\s*included\s+do/)
-            in_private = false
-          end
-
-          next if in_private
-
-          if (match = line.match(/\A\s*def\s+((?!self\.)[\w?!]+(?:\([^)]*\))?)/))
-            method_sig = match[1]
-            methods << method_sig unless method_sig.start_with?("_")
-          end
-        end
-
-        methods
-      rescue => e
-        $stderr.puts "[rails-ai-context] parse_public_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      private_class_method def self.parse_class_methods(source)
-        methods = []
-
-        # Methods inside class_methods do ... end block
-        in_class_methods = false
-        in_private = false
-
-        class_methods_indent = 0
-
-        source.each_line do |line|
-          if line.match?(/\A\s*class_methods\s+do/)
-            in_class_methods = true
-            in_private = false
-            class_methods_indent = line[/\A\s*/].length
-            next
-          end
-
-          if in_class_methods
-            in_private = true if line.match?(/\A\s*(private|protected)\s*$/)
-
-            if line.match?(/\A\s*end\s*$/)
-              current_indent = line[/\A\s*/].length
-              if current_indent <= class_methods_indent
-                in_class_methods = false
-                in_private = false
-                next
-              end
-            end
-
-            if !in_private && (match = line.match(/\A\s*def\s+([\w?!]+(?:\([^)]*\))?)/))
-              methods << match[1]
-            end
-          end
-
-          # Also catch def self.method_name outside class_methods blocks
-          if !in_class_methods && (match = line.match(/\A\s*def\s+self\.([\w?!]+(?:\([^)]*\))?)/))
-            methods << match[1]
-          end
-        end
-
-        methods
-      rescue => e
-        $stderr.puts "[rails-ai-context] parse_class_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
       end
 
       private_class_method def self.parse_concern_macros(source)

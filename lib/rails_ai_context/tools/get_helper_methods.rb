@@ -128,7 +128,7 @@ module RailsAiContext
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
 
         # Parse method signatures
-        methods = parse_helper_methods(source)
+        methods = Introspectors::ActionResolver.public_methods_from_source(source)
         if methods.any?
           lines << "" << "## Methods (#{methods.size})"
           methods.each { |m| lines << "- `#{m}`" }
@@ -179,7 +179,7 @@ module RailsAiContext
 
           if File.size(file_path) <= max_size
             source = RailsAiContext::SafeFile.read(file_path)
-            methods = source ? parse_helper_methods(source) : []
+            methods = source ? Introspectors::ActionResolver.public_methods_from_source(source) : []
           else
             methods = []
           end
@@ -243,27 +243,6 @@ module RailsAiContext
 
         lines << "" << page[:hint] unless page[:hint].empty?
         text_response(lines.join("\n"))
-      end
-
-      private_class_method def self.parse_helper_methods(source)
-        methods = []
-        in_private = false
-
-        source.each_line do |line|
-          in_private = true if line.match?(/\A\s*(private|protected)\s*$/)
-          in_private = false if line.match?(/\A\s*public\s*$/)
-          next if in_private
-
-          if (match = line.match(/\A\s*def\s+([\w?!]+(?:\([^)]*\))?)/))
-            method_sig = match[1]
-            methods << method_sig unless method_sig.start_with?("_")
-          end
-        end
-
-        methods
-      rescue => e
-        $stderr.puts "[rails-ai-context] parse_helper_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
       end
 
       private_class_method def self.find_view_references(method_names, real_root)

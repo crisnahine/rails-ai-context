@@ -272,6 +272,33 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       end
     end
 
+    context "a def inside a heredoc or behind an inline private" do
+      before do
+        File.write(File.join(model_concerns_dir, "documented.rb"), <<~RUBY)
+          module Documented
+            extend ActiveSupport::Concern
+
+            USAGE = <<~USAGE
+              def example_usage
+              end
+            USAGE
+
+            def visible; end
+
+            private def hidden_helper; end
+          end
+        RUBY
+      end
+
+      it "lists only the methods the module really defines as public" do
+        text = described_class.call(name: "Documented", detail: "standard").content.first[:text]
+
+        expect(text).to include("- `visible`")
+        expect(text).not_to include("example_usage")
+        expect(text).not_to include("hidden_helper")
+      end
+    end
+
     context "class_methods block closing" do
       before do
         File.write(File.join(model_concerns_dir, "mixed_methods.rb"), <<~RUBY)
