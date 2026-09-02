@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "fileutils"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Tools::GetTurboMap do
   before { described_class.reset_cache! }
@@ -116,14 +117,38 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
     end
   end
 
+  # The Turbo section of an app with no views at all: the introspector run
+  # over an empty root, so the shape is the real one.
+  def turbo_section_of_an_empty_app
+    Dir.mktmpdir { |dir| RailsAiContext::Introspectors::TurboIntrospector.new(RailsAiContext::StaticApp.new(dir)).call }
+  end
+
   describe ".call for an API-only app" do
     it "reports API-only apps as not applicable instead of an empty listing" do
-      allow(described_class).to receive(:cached_context).and_return(api: { api_only: true })
+      allow(described_class).to receive(:cached_context).and_return(api: { api_only: true }, turbo: turbo_section_of_an_empty_app)
 
       result = described_class.call(controller: "nonexistent_controller_xyz", detail: "standard")
       text = result.content.first[:text]
       expect(text).to include("Not applicable")
       expect(text).to include("API-only")
+    end
+  end
+
+  describe ".call when nothing is found" do
+    before { allow(described_class).to receive(:cached_context).and_return(turbo: turbo_section_of_an_empty_app) }
+
+    it "marks the answer empty so a composing tool can read it" do
+      result = described_class.call(detail: "standard")
+
+      expect(described_class.send(:empty?, result)).to be true
+      expect(result.content.first[:text]).to include("No Turbo Streams or Frames detected")
+    end
+
+    it "marks a filtered miss empty too" do
+      result = described_class.call(controller: "nonexistent_controller_xyz", detail: "full")
+
+      expect(described_class.send(:empty?, result)).to be true
+      expect(result.content.first[:text]).to include("No Turbo usage matching")
     end
   end
 
@@ -201,8 +226,8 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         - `turbo_stream_from` `@post` (`app/views/posts/index.html.erb:1`)
 
         ## Turbo Frames (3)
-        - `turbo_frame_tag` `dom_id(@post` (`app/views/posts/edit.html.erb:1`)
-        - `turbo_frame_tag` `dom_id(@post` (`app/views/posts/index.html.erb:2`)
+        - `turbo_frame_tag` `dom_id(@post, :edit)` (`app/views/posts/edit.html.erb:1`)
+        - `turbo_frame_tag` `dom_id(@post, :edit)` (`app/views/posts/index.html.erb:2`)
         - `turbo_frame_tag` `post` (`app/views/posts/show.html.erb:1`)
 
         _Use `detail:"full"` for DOM IDs and inline templates, or `stream:"name"` to filter._
@@ -239,11 +264,11 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
           ```
 
         ## Turbo Frames (3)
-        ### `turbo_frame_tag` `dom_id(@post`
+        ### `turbo_frame_tag` `dom_id(@post, :edit)`
         - **File:** `app/views/posts/edit.html.erb:1`
         - **Snippet:** `<%= turbo_frame_tag dom_id(@post, :edit) do %>`
 
-        ### `turbo_frame_tag` `dom_id(@post`
+        ### `turbo_frame_tag` `dom_id(@post, :edit)`
         - **File:** `app/views/posts/index.html.erb:2`
         - **Snippet:** `<%= turbo_frame_tag dom_id(@post, :edit) %>`
 
@@ -286,11 +311,11 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         - **Snippet:** `broadcasts_to ->(comment) { [comment.post, :comments] }`
 
         ## Turbo Frames (3)
-        ### `turbo_frame_tag` `dom_id(@post`
+        ### `turbo_frame_tag` `dom_id(@post, :edit)`
         - **File:** `app/views/posts/edit.html.erb:1`
         - **Snippet:** `<%= turbo_frame_tag dom_id(@post, :edit) do %>`
 
-        ### `turbo_frame_tag` `dom_id(@post`
+        ### `turbo_frame_tag` `dom_id(@post, :edit)`
         - **File:** `app/views/posts/index.html.erb:2`
         - **Snippet:** `<%= turbo_frame_tag dom_id(@post, :edit) %>`
 
