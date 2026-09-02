@@ -356,6 +356,7 @@ module RailsAiContext
         def marked?(response, key)
           response_meta(response)[key] ? true : false
         end
+        private :marked_response, :marked?
 
         def response_meta(response)
           meta = response.meta if response.respond_to?(:meta)
