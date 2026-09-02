@@ -33,6 +33,8 @@ module RailsAiContext
           rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
             next
           end
+        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
+          next
         end
       end
 
