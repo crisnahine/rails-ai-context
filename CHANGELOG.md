@@ -23,6 +23,10 @@ duplicated mechanisms behind them.
   after it had already written the config files**, leaving it half set up
   with no `CLAUDE.md`. Every command that can serve the static tier now
   reads such a tree, the way `--no-boot` already did.
+- **A tree with app source but no `config/environment.rb` printed a boot
+  failure before falling back to static analysis.** No boot can succeed
+  without that file, so the static tier now takes over at once and its banner
+  names the missing file; `doctor` refuses the same tree with that reason.
 - **A source path was contained without a separator and against an
   unresolved root.** The frontend framework introspector's own containment
   check let `/app-old` pass for `/app`. The pre-v5.8.1 bug, still in one

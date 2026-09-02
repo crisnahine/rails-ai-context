@@ -73,9 +73,12 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       end
     end
 
-    # A source-only tree is what the static tier exists for: the boot attempt
-    # fails on the missing file and the tier takes over, rather than refusing.
-    it "falls through to the static tier for a source-only tree" do
+    # A source-only tree is what the static tier exists for: nothing can boot
+    # without config/environment.rb, so the tier takes over rather than
+    # printing a boot failure the reader cannot act on.
+    it "falls through to the static tier for a source-only tree, without booting" do
+      allow(RailsAiContext::BootManager).to receive(:boot!).and_raise("boot attempted")
+
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config/application.rb"), "")
@@ -84,6 +87,23 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
 
         expect(outcome.tier).to eq(:static)
         expect(outcome.reason).to include("config/environment.rb")
+        expect(outcome.messages).not_to include(a_string_starting_with("[rails-ai-context] App boot failed:"))
+      end
+    end
+
+    # doctor reads a source-only tree to diagnose it, and the diagnosis is the
+    # missing file itself - not a boot failure downstream of it.
+    it "refuses a source-only tree without booting when static is not allowed" do
+      allow(RailsAiContext::BootManager).to receive(:boot!).and_raise("boot attempted")
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), "")
+
+        outcome = described_class.call(root: dir, allow_static: false, allow_source_only: true, context: "doctor")
+
+        expect(outcome.tier).to eq(:absent)
+        expect(outcome.messages.first).to eq("Error: doctor needs a bootable app: no config/environment.rb in #{dir}")
       end
     end
 
