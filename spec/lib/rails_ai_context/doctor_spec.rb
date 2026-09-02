@@ -641,4 +641,13 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
   end
+
+  describe "model count" do
+    it "is what SourceScan.paths resolves for the fixture, concerns included" do
+      root = IntrospectedFixture::ROOT
+      expected = RailsAiContext::Introspectors::SourceScan.paths(root, kind: "app/models", skip_concerns: false).count
+      check = described_class.new(RailsAiContext::StaticApp.new(root)).run[:checks].find { |c| c.name == "Models" }
+      expect(check.message).to eq("#{expected} model files found")
+    end
+  end
 end

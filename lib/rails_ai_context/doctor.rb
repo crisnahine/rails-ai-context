@@ -94,7 +94,7 @@ module RailsAiContext
     end
 
     def check_models
-      count = Introspectors::SourceScan.each(app.root, kind: "app/models", skip_concerns: false).count
+      count = Introspectors::SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).count
       if count > 0
         Check.new(name: "Models", status: :pass, message: "#{count_phrase(count, "model file")} found", fix: nil)
       else
@@ -121,7 +121,7 @@ module RailsAiContext
     end
 
     def check_controllers
-      count = Introspectors::SourceScan.each(app.root, kind: "app/controllers", skip_concerns: false).count
+      count = Introspectors::SourceScan.paths(app.root, kind: "app/controllers", skip_concerns: false).count
       if count > 0
         Check.new(name: "Controllers", status: :pass, message: "#{count_phrase(count, "controller file")} found", fix: nil)
       else

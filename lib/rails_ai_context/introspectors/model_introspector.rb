@@ -60,29 +60,26 @@ module RailsAiContext
       def static_call
         return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
 
-        RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
-          Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
-            relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            next if relative == "application_record"
+        # The stat-only walk: SafeFile.read answers nil for both "too big" and
+        # "cannot read it", and those are different answers. A model the
+        # process cannot stat is an error entry rather than one that quietly
+        # is not there. The count is an answer too.
+        SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each_with_object({}) do |record, result|
+          next if record.path_name == "ApplicationRecord"
 
-            begin
-              # SafeFile.read answers nil for both "too big" and "cannot read
-              # it", and those are different answers: a model the process
-              # cannot stat is an error entry rather than one that quietly is
-              # not there. The count is an answer too.
-              next if File.size(path) > RailsAiContext.configuration.max_file_size
+          begin
+            next if File.size(record.path) > RailsAiContext.configuration.max_file_size
 
-              source = model_source(path)
-              next if source.nil? || mixin_path?(relative, source) || abstract_class?(source)
+            source = model_source(record.path)
+            next if source.nil? || mixin_path?(record.path_name.underscore, source) || abstract_class?(source)
 
-              class_name = declared_model_name(source, relative.camelize)
-              next if result.key?(class_name)
-              next if config.excluded_models.include?(class_name)
+            class_name = declared_model_name(source, record.path_name)
+            next if result.key?(class_name)
+            next if config.excluded_models.include?(class_name)
 
-              result[class_name] = static_model_details(path, class_name)
-            rescue => e
-              result[relative.camelize] = { error: e.message }
-            end
+            result[class_name] = static_model_details(record.path, class_name, file: record.file)
+          rescue => e
+            result[record.path_name] = { error: e.message }
           end
         end
       end
@@ -575,7 +572,7 @@ module RailsAiContext
                .transform_values(&:to_s)
       end
 
-      def static_model_details(path, class_name)
+      def static_model_details(path, class_name, file: relative_to_root(path))
         data = SourceIntrospector.call(path)
         {
           confidence: Confidence::STATIC,
@@ -597,7 +594,7 @@ module RailsAiContext
           concerns: static_concerns(data[:mixins]),
           macros: data[:macros],
           methods: ActionResolver.own_methods(data[:methods], class_name),
-          file: relative_to_root(path)
+          file: file
         }
       end
 

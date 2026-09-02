@@ -201,7 +201,7 @@ module RailsAiContext
         ]
 
         important_dirs.each_with_object({}) do |dir, hash|
-          count = SourceScan.each(root, kind: dir, skip_concerns: false).count
+          count = SourceScan.paths(root, kind: dir, skip_concerns: false).count
           count += Dir.glob(File.join(root, dir, "**/*.js")).size if dir.include?("javascript")
 
           hash[dir] = count if count > 0

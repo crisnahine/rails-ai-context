@@ -41,4 +41,30 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
   it "answers nothing for a kind the app does not have" do
     expect(described_class.each(root, kind: "app/channels").to_a).to eq([])
   end
+
+  describe ".paths" do
+    it "answers the resolved records without reading a file" do
+      allow(RailsAiContext::SafeFile).to receive(:read).and_raise("paths must not read")
+      records = described_class.paths(root, kind: "app/models").to_a
+      expect(records.map(&:file)).to include("app/models/post.rb", "packs/billing/app/models/invoice.rb")
+      expect(records.map(&:source).uniq).to eq([ nil ])
+    end
+  end
+
+  it "relativizes a file under a pack directory that is a symlink out of the root" do
+    Dir.mktmpdir do |root|
+      Dir.mktmpdir do |elsewhere|
+        FileUtils.mkdir_p(File.join(elsewhere, "app", "models"))
+        File.write(File.join(elsewhere, "app", "models", "invoice.rb"), "class Invoice; end\n")
+        FileUtils.mkdir_p(File.join(root, "packs"))
+        File.symlink(elsewhere, File.join(root, "packs", "billing"))
+
+        expect(described_class.each(root, kind: "app/models").map(&:file)).to eq([ "packs/billing/app/models/invoice.rb" ])
+      end
+    end
+  end
+
+  it "answers nothing for a root that does not exist" do
+    expect(described_class.each("/nonexistent/rails-ai-context-root", kind: "app/models").to_a).to eq([])
+  end
 end
