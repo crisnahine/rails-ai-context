@@ -432,7 +432,9 @@ module RailsAiContext
           return nil unless RailsAiContext.static_tier?
 
           reason = RailsAiContext.static_reason
-          headline = if reason.to_s.include?("--no-boot")
+          # A tree with no config/environment.rb never attempted a boot, so
+          # its reason is a description of the tree, not an error.
+          headline = if reason.to_s.include?("--no-boot") || reason.to_s.start_with?("no config/environment.rb")
             "Static mode (#{reason})"
           elsif reason
             "App boot failed (#{reason})"

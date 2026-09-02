@@ -27,6 +27,8 @@ duplicated mechanisms behind them.
   failure before falling back to static analysis.** No boot can succeed
   without that file, so the static tier now takes over at once and its banner
   names the missing file; `doctor` refuses the same tree with that reason.
+  The banner calls that tree static mode rather than a boot failure, since
+  no boot ran.
 - **A source path was contained without a separator and against an
   unresolved root.** The frontend framework introspector's own containment
   check let `/app-old` pass for `/app`. The pre-v5.8.1 bug, still in one
