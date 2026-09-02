@@ -129,14 +129,19 @@ module RailsAiContext
 
       # Static tier: the gem loads with no app constants, introspection runs
       # against the filesystem, and every tool response carries the tier banner.
+      # A broken install cannot load the gem either; the lines collected so
+      # far still go out with the error.
       def self.enter_static(reason, root, messages)
         require_gem_without_app!
         RailsAiContext.tier = :static
         RailsAiContext.static_reason = reason
         RailsAiContext.configuration.app_root = root
-        Configuration.auto_load!
+        Configuration.auto_load!(root)
         messages << "[rails-ai-context] static tier active: #{reason}"
         Outcome.new(tier: :static, reason: reason, messages: messages)
+      rescue StandardError, ScriptError => e
+        messages << "Error: #{e.message}"
+        Outcome.new(tier: :absent, reason: reason, messages: messages)
       end
       private_class_method :enter_static
 
