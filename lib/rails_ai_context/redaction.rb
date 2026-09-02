@@ -62,8 +62,6 @@ module RailsAiContext
     # A config value longer than this is a credential by size alone.
     VALUE_LIMIT = 40
 
-    PLACEHOLDER = /\Ayour_|\Aexample_|xxx|changeme|TODO|REPLACE/i
-
     ANSI_ESCAPE = /\e\[[0-9;]*[mGKHF]/
     EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/i
     DOTENV_LINE = /\[dotenv\]\s+Set\s+.*/i
@@ -189,9 +187,9 @@ module RailsAiContext
         return nil if value.nil?
 
         stripped = value.to_s.strip.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
-        return stripped if placeholder_ok && (stripped.empty? || stripped.match?(PLACEHOLDER))
         return FILTERED if stripped.length > VALUE_LIMIT || credential_shaped?(stripped)
-        return FILTERED if !placeholder_ok && (secret_name?(name) || secret_value?(stripped))
+        return stripped if placeholder_ok
+        return FILTERED if secret_name?(name) || secret_value?(stripped)
 
         stripped
       end

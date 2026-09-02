@@ -19,10 +19,16 @@ module RailsAiContext
       # read it there. Leaving this section wholly unavailable meant one
       # process answering "this is an API-only app" from get_stimulus and
       # "cannot say" from get_api.
+      # Everything `call` answers except api_only itself.
+      STATIC_UNAVAILABLE = %w[
+        serializers graphql api_versioning rate_limiting openapi_spec
+        cors_config api_client_generation graphql_details pagination
+      ].freeze
+
       def static_call
         {
           api_only: AppKind.api_only?(app.root),
-          unavailable_sections: StaticTier.unavailable_reason
+          unavailable_sections: STATIC_UNAVAILABLE
         }
       rescue StandardError
         { unavailable: StaticTier.unavailable_reason }

@@ -46,6 +46,12 @@ module RailsAiContext
 
         concern_dirs = resolve_concern_dirs(root, type)
 
+        # The name is refused on its own terms. Deciding this inside the
+        # directory loop meant an app with no concern directory answered
+        # "not found" for a traversal.
+        refused = refuse_name(name, root)
+        return refused if refused
+
         if concern_dirs.empty?
           return text_response("No concern directories found. Searched: #{searched_dirs(type).join(', ')}")
         end
@@ -57,6 +63,20 @@ module RailsAiContext
 
         # List all concerns
         list_concerns(concern_dirs, root, max_size)
+      end
+
+      private_class_method def self.refuse_name(name, root)
+        return nil if name.nil? || name.to_s.empty?
+
+        located = RailsAiContext::SafePath.locate(concern_relative(name), under: root, root: root)
+        case located.refusal
+        when :traversal then text_response("Path not allowed: #{name}")
+        when :sensitive then text_response("Path not allowed: #{name} (sensitive file)")
+        end
+      end
+
+      private_class_method def self.concern_relative(name)
+        "#{name.to_s.underscore}.rb"
       end
 
       private_class_method def self.resolve_concern_dirs(root, type)
@@ -78,7 +98,7 @@ module RailsAiContext
           return text_response("The `name` parameter is required.")
         end
 
-        relative = "#{name.to_s.underscore}.rb"
+        relative = concern_relative(name)
         file_path = nil
         relative_path = nil
         concern_type = nil
@@ -86,8 +106,6 @@ module RailsAiContext
         concern_dirs.each do |dir|
           located = RailsAiContext::SafePath.locate(relative, under: dir, root: root, max_size: max_size)
           case located.refusal
-          when :traversal then return text_response("Path not allowed: #{name}")
-          when :sensitive then return text_response("Path not allowed: #{name} (sensitive file)")
           when :too_large
             return text_response("Concern file too large: #{located.realpath} (#{File.size(located.realpath)} bytes, max: #{max_size})")
           when :missing, :outside then next

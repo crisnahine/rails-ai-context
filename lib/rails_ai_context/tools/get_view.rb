@@ -324,8 +324,7 @@ module RailsAiContext
         content = read_view_content(relative_path)
         return { ivars: [], turbo: [], components: [], helpers: [] } if content.nil? || content.include?("(file not found)")
 
-        # Instance variables used in template
-        ivars = content.scan(/@(\w+)/).flatten.uniq.reject { |v| %w[output_buffer virtual_path _request].include?(v) }.sort
+        ivars = Introspectors::ViewTemplateIntrospector.ivars_in(content)
 
         # Turbo Frame IDs and turbo_stream_from channels
         turbo = []

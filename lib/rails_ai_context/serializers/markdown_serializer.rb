@@ -26,7 +26,7 @@ module RailsAiContext
         sections << routes_section if context[:routes]
         sections << jobs_section if context[:jobs]
         sections << gems_section if context[:gems]
-        sections << conventions_section if context[:conventions]
+        sections << conventions_section if Payload.section(context, :conventions)
         sections << controllers_section if context[:controllers]
         sections << views_section if context[:views]
         sections << turbo_section if context[:turbo]
@@ -67,9 +67,8 @@ module RailsAiContext
       end
 
       def app_overview
-        conv = context[:conventions] || {}
-        arch = conv[:architecture] || []
-        patterns = conv[:patterns] || []
+        arch = Payload.architecture(context)
+        patterns = Payload.patterns(context)
 
         arch_labels = arch_labels_hash
         pattern_labels = pattern_labels_hash
@@ -162,8 +161,8 @@ module RailsAiContext
       end
 
       def conventions_section
-        conv = context[:conventions]
-        return unless conv[:directory_structure]&.any?
+        conv = Payload.section(context, :conventions)
+        return unless conv && conv[:directory_structure]&.any?
 
         lines = [ "## Project Structure" ]
         conv[:directory_structure].sort.each do |dir, count|
@@ -548,8 +547,8 @@ module RailsAiContext
       end
 
       def architecture_summary
-        arch = context.dig(:conventions, :architecture)
-        arch&.any? ? arch.join(", ") : nil
+        arch = Payload.architecture(context)
+        arch.any? ? arch.join(", ") : nil
       end
     end
   end

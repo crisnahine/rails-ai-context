@@ -331,12 +331,28 @@ module RailsAiContext
           MCP::Tool::Response.new(answered.content, error: answered.error?, meta: { empty: true })
         end
 
-        # The only thing a composing tool may ask about a sub-tool's answer,
-        # instead of scraping its prose - a controller that rescues
-        # RecordNotFound used to drop its own section.
+        # The mark is the contract between a sub-tool and a composer: the
+        # answer says whether it found anything, and no composer decides that
+        # by matching the sentence the sub-tool happened to render.
         def empty?(response)
+          response_meta(response)[:empty] ? true : false
+        end
+
+        # A trace that found call sites but no `def`. The answer is real, so
+        # it is not empty; the fact rides in `_meta` beside `empty` so a
+        # composer asks instead of matching the sentence this tool renders.
+        def definition_missing_response(text)
+          answered = text_response(text)
+          MCP::Tool::Response.new(answered.content, error: answered.error?, meta: { definition_missing: true })
+        end
+
+        def definition_missing?(response)
+          response_meta(response)[:definition_missing] ? true : false
+        end
+
+        def response_meta(response)
           meta = response.meta if response.respond_to?(:meta)
-          meta.is_a?(Hash) && !!meta[:empty]
+          meta.is_a?(Hash) ? meta : {}
         end
 
         # A sub-tool's text. A response can carry no text content at all, so

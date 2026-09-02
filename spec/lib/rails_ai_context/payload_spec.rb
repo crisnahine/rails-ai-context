@@ -16,11 +16,15 @@ RSpec.describe RailsAiContext::Payload do
       described_class::LISTS.each do |reader, (section_key, key)|
         emitted[section_key] ||= begin
           klass = RailsAiContext::Introspector::INTROSPECTOR_MAP.fetch(section_key)
-          instance = klass.new(static_app)
-          result = if klass.static_tier == RailsAiContext::Introspectors::StaticTier::ALTERNATE_SOURCE
-            instance.send(:static_call)
+          result = case klass.static_tier
+          when RailsAiContext::Introspectors::StaticTier::ALTERNATE_SOURCE
+            klass.new(static_app).send(:static_call)
+          when RailsAiContext::Introspectors::StaticTier::RUNTIME_ONLY
+            # No static answer to walk, so the walk stays honest by asking
+            # the booted app instead of skipping the row.
+            klass.new(Rails.application).call
           else
-            instance.call
+            klass.new(static_app).call
           end
           result.keys
         end
@@ -28,6 +32,21 @@ RSpec.describe RailsAiContext::Payload do
         expect(emitted[section_key]).to include(key),
           "Payload.#{reader} reads #{section_key}[:#{key}], but the introspector emits: #{emitted[section_key].join(', ')}"
       end
+    end
+  end
+
+  describe ".architecture and .patterns" do
+    it "answer the conventions lists the booted app emits" do
+      conventions = RailsAiContext::Introspectors::ConventionIntrospector.new(Rails.application).call
+      ctx = { conventions: conventions }
+
+      expect(described_class.architecture(ctx)).to eq(conventions[:architecture])
+      expect(described_class.patterns(ctx)).to eq(conventions[:patterns])
+    end
+
+    it "answer an empty list for a failed conventions section" do
+      expect(described_class.architecture({ conventions: { error: "boom" } })).to eq([])
+      expect(described_class.patterns({ conventions: { error: "boom" } })).to eq([])
     end
   end
 
@@ -125,6 +144,29 @@ RSpec.describe RailsAiContext::Payload do
 
       expect(described_class.controller_for_route_key(other, "orders").first).to eq("OrdersController")
       expect(described_class.controller_for_route_key(other, "admin/badges")).to be_nil
+    end
+
+    # Two ivars checked and read apart let a thread pass the identity check
+    # and then read an index another thread had already rebuilt.
+    it "holds the hash it indexed and the index in a single slot" do
+      described_class.controller_for_route_key(context, "admin/badges")
+
+      expect(described_class.instance_variables.grep(/route_key|indexed/))
+        .to contain_exactly(:@route_key_memo)
+    end
+
+    it "never answers a name from a context it was not asked about" do
+      other = { controllers: { controllers: { "OrdersController" => { file: "app/controllers/orders_controller.rb" } } } }
+      answers = Queue.new
+
+      threads = [
+        Thread.new { 200.times { answers << described_class.controller_for_route_key(context, "admin/badges")&.first } },
+        Thread.new { 200.times { answers << described_class.controller_for_route_key(other, "orders")&.first } }
+      ]
+      threads.each(&:join)
+
+      expect(Array.new(answers.size) { answers.pop }.uniq.sort)
+        .to eq([ "Admin::BadgesController", "OrdersController" ])
     end
   end
   # The reverse trip: a checker walking app/models/oauth_client_config.rb has

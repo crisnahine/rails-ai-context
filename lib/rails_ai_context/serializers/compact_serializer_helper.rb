@@ -134,8 +134,8 @@ module RailsAiContext
         conv = Payload.section(context, :conventions)
         return [] unless conv
 
-        arch = conv[:architecture] || []
-        patterns = conv[:patterns] || []
+        arch = Payload.architecture(context)
+        patterns = Payload.patterns(context)
         return [] if arch.empty? && patterns.empty?
 
         arch_labels = arch_labels_hash
@@ -168,11 +168,10 @@ module RailsAiContext
         lines << "- Run `#{test_cmd}` after changes"
         lines << "- Do NOT re-read files to verify edits - trust your Edit, validate syntax only"
 
-        conv = Payload.section(context, :conventions)
-        if conv
-          arch = conv[:architecture] || []
+        if Payload.section(context, :conventions)
+          arch = Payload.architecture(context)
           lines << "- Follow #{arch.join(' + ')} architecture" if arch.any?
-          patterns = conv[:patterns] || []
+          patterns = Payload.patterns(context)
           lines << "- Use service objects for business logic" if patterns.include?("service_objects")
           lines << "- Use form objects for complex forms" if patterns.include?("form_objects")
           lines << "- Use query objects for complex queries" if patterns.include?("query_objects")

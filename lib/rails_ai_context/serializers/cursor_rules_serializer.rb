@@ -92,10 +92,9 @@ module RailsAiContext
           end
         end
 
-        conv = Payload.section(context, :conventions)
-        if conv
+        if Payload.section(context, :conventions)
           arch_labels = arch_labels_hash
-          (conv[:architecture] || []).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
+          Payload.architecture(context).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
         end
 
         lines.concat(full_preset_stack_lines)

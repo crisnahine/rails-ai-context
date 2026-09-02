@@ -265,6 +265,20 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to match(/not allowed/)
       end
 
+      # The refusal belongs to the name, not to any directory, so an app with
+      # no concern directory to loop over must still answer with it.
+      it "rejects a traversal even with no concern directories to search" do
+        empty_dir = Dir.mktmpdir
+        allow(described_class).to receive(:rails_app).and_return(
+          double("app", root: Pathname.new(empty_dir))
+        )
+
+        text = described_class.call(name: "../../config/master.key").content.first[:text]
+        expect(text).to match(/not allowed/)
+      ensure
+        FileUtils.remove_entry(empty_dir) if empty_dir
+      end
+
       it "rejects null bytes in the name parameter" do
         result = described_class.call(name: "searchable\0.rb")
         text = result.content.first[:text]

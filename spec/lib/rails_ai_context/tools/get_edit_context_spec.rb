@@ -53,6 +53,14 @@ RSpec.describe RailsAiContext::Tools::GetEditContext do
       expect(text).to match(/not (found|allowed)/)
     end
 
+    # A refusal is not "ran and found nothing", so a composer must not drop
+    # it the way it drops an empty answer.
+    it "marks a refused path as an answer, not an empty result" do
+      refused = described_class.call(file: "../../etc/passwd", near: "root")
+
+      expect(described_class.send(:empty?, refused)).to be false
+    end
+
     it "requires the file parameter" do
       result = described_class.call(file: "", near: "test")
       text = result.content.first[:text]

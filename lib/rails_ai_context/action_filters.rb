@@ -61,18 +61,32 @@ module RailsAiContext
       true
     end
 
-    # The parent's own filters, for the entries the child's list is missing.
-    # A parent the payload does not carry answers none: reconstructing its
-    # path from the class name breaks on every app inflection.
+    # Every ancestor's filters, closest first, deduped by name. The runtime
+    # tier's list already carries the whole chain, so the dedupe is what
+    # keeps it correct; the static tier's holds one class's declarations
+    # only, so the walk is what completes it. An ancestor the payload does
+    # not carry ends it: reconstructing a path from a class name breaks on
+    # every app inflection.
     def parent_filters(ctx, parent_class, action, skipped)
-      return [] unless parent_class
+      controllers = Payload.controllers(ctx)
+      seen = Set.new
+      found = {}
+      name = parent_class&.to_s
 
-      info = Payload.controllers(ctx)[parent_class.to_s]
-      return [] unless info.is_a?(Hash)
+      while name && !seen.include?(name)
+        seen << name
+        info = controllers[name]
+        break unless info.is_a?(Hash)
 
-      Array(info[:filters]).grep(Hash)
-        .select { |f| applies?(f, action) }
-        .reject { |f| skipped.include?(f[:name].to_s) }
+        Array(info[:filters]).grep(Hash)
+          .select { |f| applies?(f, action) }
+          .reject { |f| skipped.include?(f[:name].to_s) }
+          .each { |f| found[f[:name].to_s] ||= f }
+
+        name = info[:parent_class]&.to_s
+      end
+
+      found.values
     end
 
     # Skips live only in the class body, so they are read from the file the

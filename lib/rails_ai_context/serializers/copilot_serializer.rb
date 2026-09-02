@@ -69,10 +69,9 @@ module RailsAiContext
         end
 
         # Architecture
-        conv = Payload.section(context, :conventions)
-        if conv
-          arch = conv[:architecture] || []
-          patterns = conv[:patterns] || []
+        if Payload.section(context, :conventions)
+          arch = Payload.architecture(context)
+          patterns = Payload.patterns(context)
           if arch.any? || patterns.any?
             arch_labels = arch_labels_hash
             pattern_labels = pattern_labels_hash

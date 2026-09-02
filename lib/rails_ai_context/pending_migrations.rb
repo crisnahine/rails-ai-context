@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # Which migration files have not been applied. Three derivations gave two
-  # answers: one compared each file against the newest applied version, so a
-  # migration merged out of order was never pending in the generated context
-  # while the schema tool counted it.
+  # Which migration files have not been applied, decided by membership in the
+  # applied set rather than by comparison against the newest applied version.
+  # A migration merged out of order is older than the newest and still
+  # pending, so only the set answers it.
   module PendingMigrations
     module_function
 

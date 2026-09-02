@@ -191,6 +191,10 @@ module RailsAiContext
                 label
               end
               lines << "- **Filters:** #{filters.join('; ')}" if filters.any?
+
+              if split[:skipped].any?
+                lines << "- **Skipped filters:** #{split[:skipped].map { |n| "~~#{n}~~" }.join(', ')}"
+              end
             end
           end
           lines << ""
