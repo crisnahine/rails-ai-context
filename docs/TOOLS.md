@@ -534,7 +534,7 @@ In addition to tools, AI clients can read structured data through **resource tem
 | `rails-ai-context://controllers/{name}/{action}` | Action source with applicable filters |
 | `rails-ai-context://views/{path}` | View template content |
 | `rails-ai-context://routes/{controller}` | Live route map for controller |
-| `rails://models/{name}` | Model details: associations, validations, schema |
+| `rails-ai-context://models/{name}` | Model details: associations, validations, schema |
 
 Plus 9 static resources (schema, routes, conventions, gems, controllers, config, tests, migrations, engines).
 

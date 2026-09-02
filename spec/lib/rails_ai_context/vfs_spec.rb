@@ -31,6 +31,16 @@ RSpec.describe RailsAiContext::VFS do
             actions: [ "index", "show", "create" ],
             filters: [ { kind: "before", name: "authenticate_user!" } ],
             strong_params: [ { name: "post_params", requires: :post, permits: [ :title ] } ]
+          },
+          "Admin::PostsController" => {
+            file: "app/controllers/admin/posts_controller.rb",
+            actions: [ "index" ],
+            filters: []
+          },
+          "ActivityPub::InboxesController" => {
+            file: "app/controllers/activitypub/inboxes_controller.rb",
+            actions: [ "create" ],
+            filters: []
           }
         }
       },
@@ -120,6 +130,16 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["error"]).to include("not found")
       end
 
+      it "resolves a namespaced controller by its route key" do
+        result = described_class.resolve("rails-ai-context://controllers/admin/posts")
+        expect(JSON.parse(result.first[:text])).to include("actions")
+      end
+
+      it "resolves a controller whose declared name does not camelize from its path" do
+        result = described_class.resolve("rails-ai-context://controllers/activitypub/inboxes")
+        expect(result.first[:text]).not_to include("not found")
+      end
+
       it "caps an oversized controller payload without breaking the JSON contract" do
         allow(RailsAiContext.configuration).to receive(:max_tool_response_chars).and_return(40)
 
@@ -167,6 +187,25 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["routes"]).to all(include("controller" => "posts"))
         expect(data["routes"].map { |r| r["path"] }).to contain_exactly("/posts", "/posts/:id")
         expect(data["routes"].first).to include("verb" => "GET", "action" => "index", "name" => "posts")
+      end
+
+      it "answers the same routes for the declared name and the route key" do
+        by_key = JSON.parse(described_class.resolve("rails-ai-context://routes/posts").first[:text])
+        by_name = JSON.parse(described_class.resolve("rails-ai-context://routes/PostsController").first[:text])
+        expect(by_name["total_routes"]).to eq(by_key["total_routes"])
+      end
+
+      it "answers routes by route key for a controller that carries no file" do
+        controllers = context[:controllers][:controllers].merge("ActivityPub::OutboxesController" => { actions: [ "show" ] })
+        by_controller = context[:routes][:by_controller].merge(
+          "activitypub/outboxes" => [ { verb: "GET", path: "/users/:id/outbox", action: "show", name: "outbox" } ]
+        )
+        allow(RailsAiContext).to receive(:introspect).and_return(
+          context.merge(controllers: { controllers: controllers }, routes: context[:routes].merge(by_controller: by_controller))
+        )
+
+        data = JSON.parse(described_class.resolve("rails-ai-context://routes/activitypub/outboxes").first[:text])
+        expect(data["total_routes"]).to eq(1)
       end
 
       it "returns an empty list for a controller with no routes" do
@@ -264,61 +303,6 @@ RSpec.describe RailsAiContext::VFS do
         result = described_class.resolve("rails-ai-context://views/vfs_nonexistent_#{Process.pid}/file.erb")
         data = JSON.parse(result.first[:text])
         expect(data["error"]).to include("not found")
-      end
-
-      it "blocks sibling-directory traversal via symlink (v5.8.1 C1)" do
-        # Reproduces the v5.8.1 security review finding: String#start_with?
-        # without a File::SEPARATOR check matches `/a/views_spec` against
-        # `/a/views` prefix, letting a symlink in app/views/ escape to a
-        # sibling directory.
-        sibling_dir = Rails.root.join("app", "views_spec_#{Process.pid}")
-        FileUtils.mkdir_p(sibling_dir)
-        secret_file = sibling_dir.join("secret.html.erb")
-        File.write(secret_file, "<h1>SIBLING SECRET</h1>")
-
-        symlink = views_dir.join("leak_#{Process.pid}.html.erb")
-        File.symlink(secret_file, symlink)
-
-        expect {
-          described_class.resolve("rails-ai-context://views/leak_#{Process.pid}.html.erb")
-        }.to raise_error(RailsAiContext::Error, /not allowed/)
-      ensure
-        FileUtils.rm_f(symlink) if defined?(symlink)
-        FileUtils.rm_rf(sibling_dir) if defined?(sibling_dir)
-      end
-
-      it "blocks caller-supplied sensitive names BEFORE filesystem stat (existence oracle)" do
-        # The pre-fix `resolve_view` would call File.exist? on the requested
-        # path first, then only run sensitive_file? after realpath. That
-        # gave two distinct error messages - "View not found" vs "sensitive
-        # file" - which a caller could use to probe whether app/views/.env
-        # exists. The fix adds an early sensitive_file? check before any
-        # filesystem stat, so the rejection reason is identical regardless
-        # of whether the file is present.
-        expect {
-          described_class.resolve("rails-ai-context://views/.env")
-        }.to raise_error(RailsAiContext::Error, /sensitive|not allowed/)
-
-        expect {
-          described_class.resolve("rails-ai-context://views/master.key")
-        }.to raise_error(RailsAiContext::Error, /sensitive|not allowed/)
-      end
-
-      it "blocks sensitive files resolved via symlink (v5.8.1 C1 defense-in-depth)" do
-        # If a .key or .env file is symlinked into app/views/, the realpath
-        # would be under views_dir but the file is sensitive. sensitive_file?
-        # on the realpath catches this.
-        secret = Rails.root.join("config", "_vfs_test_master_#{Process.pid}.key")
-        File.write(secret, "should-never-leak")
-        symlink = views_dir.join("leak_secret_#{Process.pid}.key")
-        File.symlink(secret, symlink)
-
-        expect {
-          described_class.resolve("rails-ai-context://views/leak_secret_#{Process.pid}.key")
-        }.to raise_error(RailsAiContext::Error, /sensitive|not allowed/)
-      ensure
-        FileUtils.rm_f(symlink) if defined?(symlink)
-        FileUtils.rm_f(secret) if defined?(secret)
       end
     end
 

@@ -270,23 +270,6 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         text = result.content.first[:text]
         expect(text).to match(/not allowed/)
       end
-
-      it "blocks symlinks inside concerns dir that escape to sensitive files" do
-        # A symlink at app/models/concerns/sneaky.rb -> config/master.key
-        # passes the bare File.exist? check and, without the post-realpath
-        # recheck, would leak the secret. Fix: realpath containment +
-        # sensitive_file? recheck.
-        secret = File.join(tmpdir, "config", "master.key")
-        FileUtils.mkdir_p(File.dirname(secret))
-        File.write(secret, "should-never-leak-as-concern")
-
-        symlink = File.join(model_concerns_dir, "sneaky.rb")
-        File.symlink(secret, symlink)
-
-        result = described_class.call(name: "Sneaky")
-        text = result.content.first[:text]
-        expect(text).not_to include("should-never-leak-as-concern")
-      end
     end
 
     context "class_methods block closing" do

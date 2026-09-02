@@ -39,7 +39,7 @@ RSpec.describe RailsAiContext::Resources do
     end
 
     it "has a URI template for models" do
-      expect(described_class::MODEL_TEMPLATE.uri_template).to eq("rails://models/{name}")
+      expect(described_class::MODEL_TEMPLATE.uri_template).to eq("rails-ai-context://models/{name}")
     end
   end
 
@@ -152,6 +152,13 @@ RSpec.describe RailsAiContext::Resources do
       result = read_handler.call(uri: "rails://models/User")
       expect(result).to be_an(Array)
       expect(result.first[:uri]).to eq("rails://models/User")
+      parsed = JSON.parse(result.first[:text])
+      expect(parsed["columns"]).to eq([ "id", "name" ])
+    end
+
+    it "resolves a lower-case model name under the legacy scheme" do
+      result = read_handler.call(uri: "rails://models/user")
+      expect(result.first[:uri]).to eq("rails://models/user")
       parsed = JSON.parse(result.first[:text])
       expect(parsed["columns"]).to eq([ "id", "name" ])
     end
