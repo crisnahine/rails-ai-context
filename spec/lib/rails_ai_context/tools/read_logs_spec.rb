@@ -64,6 +64,15 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       expect(text).not_to include("Cache miss")
     end
 
+    it "does not let the search term match text that redaction hides" do
+      File.write(File.join(log_dir, "test.log"), "INFO Bearer sk_live_abcdef0123456789abcdef used\nINFO done\n")
+      hit = described_class.call(search: "sk_live_abcdef").content.first[:text]
+      miss = described_class.call(search: "sk_live_zzzzzz").content.first[:text]
+
+      expect(hit).to include("No entries matching")
+      expect(hit).to eq(miss.sub("sk_live_zzzzzz", "sk_live_abcdef"))
+    end
+
     it "respects the lines parameter" do
       result = described_class.call(lines: 3)
       text = result.content.first[:text]
