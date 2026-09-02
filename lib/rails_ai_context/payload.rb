@@ -125,15 +125,17 @@ module RailsAiContext
       controllers = section(ctx, :controllers)&.dig(:controllers)
       return nil unless controllers.is_a?(Hash)
 
-      # One slot, holding the hash it indexed: keeping the reference is what
-      # makes identity safe to compare on, and it drops as soon as the next
-      # context arrives.
-      unless @indexed_controllers.equal?(controllers)
-        @route_key_index = controllers.to_h { |name, _| [ controller_route_key(ctx, name), name ] }
-        @indexed_controllers = controllers
+      # One slot holding the hash and the index built from it, read into a
+      # local once and swapped as a single reference. Two threads serving two
+      # contexts then cost at most a rebuild, never an index belonging to the
+      # other one's controllers.
+      memo = @route_key_memo
+      unless memo && memo[0].equal?(controllers)
+        memo = [ controllers, controllers.to_h { |name, _| [ controller_route_key(ctx, name), name ] } ].freeze
+        @route_key_memo = memo
       end
 
-      name = @route_key_index[key.to_s]
+      name = memo[1][key.to_s]
       name ? [ name, controllers[name] ] : nil
     end
 

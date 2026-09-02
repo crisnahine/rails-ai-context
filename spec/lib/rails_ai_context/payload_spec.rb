@@ -126,6 +126,29 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.controller_for_route_key(other, "orders").first).to eq("OrdersController")
       expect(described_class.controller_for_route_key(other, "admin/badges")).to be_nil
     end
+
+    # Two ivars checked and read apart let a thread pass the identity check
+    # and then read an index another thread had already rebuilt.
+    it "holds the hash it indexed and the index in a single slot" do
+      described_class.controller_for_route_key(context, "admin/badges")
+
+      expect(described_class.instance_variables.grep(/route_key|indexed/))
+        .to contain_exactly(:@route_key_memo)
+    end
+
+    it "never answers a name from a context it was not asked about" do
+      other = { controllers: { controllers: { "OrdersController" => { file: "app/controllers/orders_controller.rb" } } } }
+      answers = Queue.new
+
+      threads = [
+        Thread.new { 200.times { answers << described_class.controller_for_route_key(context, "admin/badges")&.first } },
+        Thread.new { 200.times { answers << described_class.controller_for_route_key(other, "orders")&.first } }
+      ]
+      threads.each(&:join)
+
+      expect(Array.new(answers.size) { answers.pop }.uniq.sort)
+        .to eq([ "Admin::BadgesController", "OrdersController" ])
+    end
   end
   # The reverse trip: a checker walking app/models/oauth_client_config.rb has
   # to find the model it declares, and camelizing the path gives
