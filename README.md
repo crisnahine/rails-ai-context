@@ -197,7 +197,7 @@ MCP clients can also read structured data as resources. Templates introspect fre
 
 | URI | Returns |
 |:---|:---|
-| `rails://models/{name}` | Associations, validations, schema for one model |
+| `rails-ai-context://models/{name}` | Associations, validations, schema for one model |
 | `rails-ai-context://controllers/{name}` | Actions, inherited filters, strong params |
 | `rails-ai-context://controllers/{name}/{action}` | Action source with the filters that apply |
 | `rails-ai-context://views/{path}` | View template content (path traversal blocked) |

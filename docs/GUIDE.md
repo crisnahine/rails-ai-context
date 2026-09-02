@@ -1033,7 +1033,7 @@ In addition to tools, the gem registers static MCP resources that AI clients can
 | `rails://tests` | Test infrastructure details (JSON) |
 | `rails://migrations` | Migration history and statistics (JSON) |
 | `rails://engines` | Mounted engines with paths and descriptions (JSON) |
-| `rails://models/{name}` | Per-model details (resource template) |
+| `rails-ai-context://models/{name}` | Per-model details (resource template) |
 
 ### Dynamic Resource Templates (VFS)
 

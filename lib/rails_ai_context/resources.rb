@@ -64,7 +64,7 @@ module RailsAiContext
     }.freeze
 
     MODEL_TEMPLATE = MCP::ResourceTemplate.new(
-      uri_template: "rails://models/{name}",
+      uri_template: "rails-ai-context://models/{name}",
       name: "Model Details",
       description: "Detailed information about a specific ActiveRecord model",
       mime_type: "application/json"
@@ -152,13 +152,12 @@ module RailsAiContext
       def read_resource(params)
         uri = params[:uri]
 
-        # The two schemes are historical; accept either one for every
+        # The two schemes are historical; both resolve through VFS for every
         # template so clients don't have to remember which resource uses
         # which. Bare "rails://controllers" (no path) stays a static
-        # resource; models already resolve under both schemes (legacy
-        # handler below, VFS for the rails-ai-context:// form). Contents are
-        # relabeled with the URI the client actually requested.
-        if uri.match?(%r{\Arails://(controllers|views|routes)/.})
+        # resource. Contents are relabeled with the URI the client actually
+        # requested.
+        if uri.match?(%r{\Arails://(controllers|views|routes|models)/.})
           normalized = uri.sub("rails://", "#{VFS::SCHEME}://")
           return VFS.resolve(normalized).map { |content| content.merge(uri: uri) }
         end
@@ -172,12 +171,6 @@ module RailsAiContext
         if STATIC_RESOURCES.key?(uri)
           key = STATIC_RESOURCES[uri][:key]
           content = JsonBudget.for_resource(context[key] || {})
-          [ { uri: uri, mimeType: "application/json", text: content } ]
-        elsif (match = uri.match(%r{\Arails://models/(.+)\z}))
-          model_name = match[1]
-          models = context[:models] || {}
-          data = models[model_name] || { error: "Model '#{model_name}' not found" }
-          content = JsonBudget.for_resource(data)
           [ { uri: uri, mimeType: "application/json", text: content } ]
         else
           raise RailsAiContext::Error, "Unknown resource: #{uri}"
