@@ -327,6 +327,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
         end
       RUBY
 
+      allow(described_class).to receive(:rails_app).and_return(double(root: Rails.root))
       allow(described_class).to receive(:cached_context).and_return(
         controllers: {
           controllers: {

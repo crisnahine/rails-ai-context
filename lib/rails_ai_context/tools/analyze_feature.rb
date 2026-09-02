@@ -179,7 +179,7 @@ module RailsAiContext
               lines << "" << "### #{name}"
               lines << "- **Actions:** #{actions}"
 
-              split = RailsAiContext::ActionFilters.for_controller(ctx, name)
+              split = RailsAiContext::ActionFilters.for_controller(ctx, name, root: rails_app.root.to_s)
               if split[:inherited].any?
                 lines << "- **Inherited filters:** #{split[:inherited].map { |f| "#{f[:name]} _(from #{f[:from]})_" }.join(', ')}"
               end

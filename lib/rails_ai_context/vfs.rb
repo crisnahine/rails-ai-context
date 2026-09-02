@@ -96,7 +96,7 @@ module RailsAiContext
         end
 
         # Build action-specific data
-        applicable = ActionFilters.for(context, key, action)
+        applicable = ActionFilters.for(context, key, action, root: RailsAiContext.default_app.root.to_s)
         action_data = {
           controller: key,
           action: action.to_s,

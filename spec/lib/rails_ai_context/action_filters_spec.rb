@@ -74,15 +74,13 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
-    before { allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root)) }
-
     it "names every filter a skip lists, when the skip applies to the action" do
-      expect(described_class.for(context, "PostsController", "show")[:skipped]).to eq(%w[authenticate verify_token])
-      expect(described_class.for(context, "PostsController", "index")[:skipped]).to eq(%w[track])
+      expect(described_class.for(context, "PostsController", "show", root: @root)[:skipped]).to eq(%w[authenticate verify_token])
+      expect(described_class.for(context, "PostsController", "index", root: @root)[:skipped]).to eq(%w[track])
     end
 
     it "drops a skipped filter from own and inherited" do
-      result = described_class.for(context, "PostsController", "show")
+      result = described_class.for(context, "PostsController", "show", root: @root)
       expect(result[:inherited]).to eq([])
       expect(result[:own].map { |f| f[:name] }).to eq(%w[set_post track])
     end
@@ -104,7 +102,6 @@ RSpec.describe RailsAiContext::ActionFilters do
             end
           RUBY
           File.symlink(outside, File.join(root, "packs"))
-          allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(root))
 
           ctx = { controllers: { controllers: {
             "ApplicationController" => { filters: [ { kind: "before_action", name: "authenticate" } ] },
@@ -115,7 +112,7 @@ RSpec.describe RailsAiContext::ActionFilters do
             }
           } } }
 
-          expect(described_class.for_controller(ctx, "BillingController")[:skipped]).to eq(%w[authenticate])
+          expect(described_class.for_controller(ctx, "BillingController", root: root)[:skipped]).to eq(%w[authenticate])
         end
       end
     end
@@ -181,13 +178,12 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
 
       before do
-        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
         deep_context[:controllers][:controllers]["Admin::BaseController"][:file] =
           "app/controllers/admin/base_controller.rb"
       end
 
       it "does not carry it into the child's inherited list" do
-        result = described_class.for_controller(deep_context, "Admin::PostsController")
+        result = described_class.for_controller(deep_context, "Admin::PostsController", root: @root)
 
         expect(result[:inherited].map { |f| f[:name] }).to eq(%w[require_admin])
       end
