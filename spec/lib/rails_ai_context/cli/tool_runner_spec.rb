@@ -454,5 +454,17 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       output = runner.run
       expect(output).to be_a(String)
     end
+
+    # The CLI prints the response text as it comes, so anything a tool adds to
+    # mark its answer has to live outside that text.
+    it "prints a not-found answer with no invisible marker in it" do
+      plain = described_class.new("schema", [ "--table", "no_such_table_here" ]).run
+      json = described_class.new("schema", [ "--table", "no_such_table_here" ], json_mode: true).run
+
+      expect(plain).to include("not found")
+      expect(plain).not_to include("​")
+      expect(json).not_to include("​")
+      expect(json).not_to include('\\u200b')
+    end
   end
 end

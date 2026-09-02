@@ -47,6 +47,32 @@ RSpec.describe RailsAiContext::Tools::ReviewChanges do
       expect(warnings).to be_an(Array)
     end
 
+    # The routes block used to be dropped whenever the answer's prose held the
+    # words "not found", which a real route listing can carry.
+    describe "the routes block for a changed controller" do
+      def routes_block_for(response)
+        allow(RailsAiContext::Tools::GetRoutes).to receive(:call).and_return(response)
+        described_class.send(:gather_file_context, "app/controllers/posts_controller.rb",
+          :controller, Rails.root.to_s, "HEAD").join("\n")
+      end
+
+      it "is absent when get_routes found nothing" do
+        base = RailsAiContext::Tools::BaseTool
+        text = routes_block_for(base.empty_response("No routes for 'posts'. Controllers: users"))
+
+        expect(text).not_to include("**Routes:**")
+        expect(text).not_to include("No routes for")
+      end
+
+      it "is present when a real listing mentions not found" do
+        base = RailsAiContext::Tools::BaseTool
+        text = routes_block_for(base.text_response("GET /posts/:id posts#show\n# rescues a not found record"))
+
+        expect(text).to include("**Routes:**")
+        expect(text).to include("posts#show")
+      end
+    end
+
     it "handles missing git gracefully" do
       allow(Open3).to receive(:capture2).and_return([ "", double(success?: false) ])
       result = described_class.call(ref: "HEAD")

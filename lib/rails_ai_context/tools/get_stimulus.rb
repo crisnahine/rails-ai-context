@@ -182,8 +182,7 @@ module RailsAiContext
         # Turbo event listeners
         lines << "- **Turbo events:** #{ctrl[:turbo_event_listeners].join(', ')}" if ctrl[:turbo_event_listeners]&.any?
 
-        # Detect lifecycle methods from source
-        lifecycle = detect_lifecycle(ctrl[:file])
+        lifecycle = ctrl[:lifecycle]
         lines << "- **Lifecycle:** #{lifecycle.join(', ')}" if lifecycle&.any?
 
         lines << "- **File:** #{ctrl[:file]}" if ctrl[:file]
@@ -249,21 +248,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] find_views_using failed: #{e.message}" if ENV["DEBUG"]
         []
-      end
-
-      private_class_method def self.detect_lifecycle(relative_path)
-        return nil unless relative_path
-        path = rails_app.root.join("app/javascript/controllers", relative_path)
-        return nil unless File.exist?(path)
-
-        content = RailsAiContext::SafeFile.read(path)
-        return nil unless content
-
-        methods = []
-        methods << "connect" if content.match?(/\bconnect\s*\(\s*\)/)
-        methods << "disconnect" if content.match?(/\bdisconnect\s*\(\s*\)/)
-        methods << "initialize" if content.match?(/\binitialize\s*\(\s*\)/)
-        methods
       end
     end
   end

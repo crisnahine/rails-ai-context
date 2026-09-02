@@ -48,6 +48,14 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.list({}, :turbo, :turbo_frames)).to eq([])
     end
   end
+  describe ".view_ivars" do
+    it "reads the ivars a template uses from the view templates section" do
+      ctx = IntrospectedFixture.context
+      expect(described_class.view_ivars(ctx, "posts/index")).to include("posts")
+      expect(described_class.view_ivars(ctx, "nope/nope")).to eq(Set.new)
+    end
+  end
+
   describe ".controller_route_key" do
     def ctx(file)
       { controllers: { controllers: { "InvoicesController" => { file: file } } } }

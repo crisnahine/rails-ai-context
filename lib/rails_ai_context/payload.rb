@@ -125,6 +125,28 @@ module RailsAiContext
       name ? [ name, controllers[name] ] : nil
     end
 
+    # The ivars a template reads, across every format that renders the same
+    # action. Scraping them back out of GetView's rendered "ivars:" line made
+    # the cross-check hostage to that line's wording, and it re-read files the
+    # payload had already parsed.
+    def view_ivars(ctx, template)
+      templates = section(ctx, :view_templates)&.dig(:templates)
+      return Set.new unless templates.is_a?(Hash)
+
+      wanted = template.to_s
+      templates.each_with_object(Set.new) do |(path, entry), found|
+        next unless entry.is_a?(Hash) && template_key(path) == wanted
+
+        found.merge(Array(entry[:ivars]).map(&:to_s))
+      end
+    end
+
+    # A template path without its format and handler suffixes:
+    # "posts/create.turbo_stream.erb" is the "posts/create" action.
+    def template_key(path)
+      path.to_s.sub(%r{(?:\.[^./]+)+\z}, "")
+    end
+
     # The key Rails routes a controller by: its path, minus the controllers
     # root and the _controller suffix. Packs and in-repo engines put that root
     # somewhere other than the start of the path.

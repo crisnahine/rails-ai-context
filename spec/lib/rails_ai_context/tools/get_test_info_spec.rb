@@ -128,6 +128,45 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("No test file found")
       expect(text).to include("Searched:")
     end
+
+    it "does not name a directory outside the app root when it finds nothing" do
+      Dir.mktmpdir do |parent|
+        root = File.join(parent, "app")
+        FileUtils.mkdir_p(File.join(root, "spec", "models"))
+        File.write(File.join(parent, "outside_marker.txt"), "x\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+
+        text = described_class.call(model: "../../outside", detail: "full").content.first[:text]
+
+        expect(text).to include("No test file found")
+        expect(text).not_to include("outside_marker.txt")
+        expect(text).not_to include("Files in test directory")
+      end
+    end
+
+    it "does not read a test file that resolves outside the app root or to a sensitive file" do
+      Dir.mktmpdir do |parent|
+        root = File.join(parent, "app")
+        backup = File.join(parent, "app_backup")
+        FileUtils.mkdir_p(File.join(root, "spec", "models"))
+        FileUtils.mkdir_p(File.join(root, "config"))
+        FileUtils.mkdir_p(backup)
+        File.write(File.join(root, "spec", "models", "post_spec.rb"), "describe Post do; end\n")
+        File.write(File.join(backup, "secret_spec.rb"), "secret\n")
+        File.write(File.join(root, "config", "master.key"), "0123456789abcdef\n")
+        File.symlink(File.join(backup, "secret_spec.rb"), File.join(root, "spec", "models", "escape_spec.rb"))
+        File.symlink(File.join(root, "config", "master.key"), File.join(root, "spec", "models", "leak_spec.rb"))
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+
+        escape = described_class.call(model: "escape", detail: "full").content.first[:text]
+        leak = described_class.call(model: "leak", detail: "full").content.first[:text]
+        post = described_class.call(model: "post", detail: "full").content.first[:text]
+
+        expect(escape).not_to include("secret")
+        expect(leak).not_to include("0123456789abcdef")
+        expect(post).to include("describe Post do")
+      end
+    end
   end
 
   describe ".call with controller filter" do

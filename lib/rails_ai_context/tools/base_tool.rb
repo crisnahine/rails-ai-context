@@ -320,7 +320,30 @@ module RailsAiContext
           lines << "Did you mean '#{suggestion}'?" if suggestion
           lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}" if available.any?
           lines << "_Recovery: #{recovery_tool}_" if recovery_tool
-          text_response(lines.join("\n"))
+          empty_response(lines.join("\n"))
+        end
+
+        # A tool ran, answered honestly, and found nothing. Renders exactly
+        # like text_response - the mark rides in `_meta`, where a composing
+        # tool can read it and a reader never sees it.
+        def empty_response(text, suffix: nil)
+          answered = text_response(text, suffix: suffix)
+          MCP::Tool::Response.new(answered.content, error: answered.error?, meta: { empty: true })
+        end
+
+        # The only thing a composing tool may ask about a sub-tool's answer,
+        # instead of scraping its prose - a controller that rescues
+        # RecordNotFound used to drop its own section.
+        def empty?(response)
+          meta = response.meta if response.respond_to?(:meta)
+          meta.is_a?(Hash) && !!meta[:empty]
+        end
+
+        # A sub-tool's text. A response can carry no text content at all, so
+        # the composers do not index into `content` themselves.
+        def response_text(response)
+          first = response.content.first
+          first.is_a?(Hash) ? first[:text].to_s : ""
         end
 
         # One-line banner listing introspectors that failed during context

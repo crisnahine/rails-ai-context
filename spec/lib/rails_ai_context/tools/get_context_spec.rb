@@ -153,6 +153,26 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       expect(text).not_to include("not rendered in response")
       expect(text).to include("@order")
     end
+
+    it "keeps a section whose own body mentions not found" do
+      allow(described_class).to receive(:cached_context).and_return({})
+
+      base = RailsAiContext::Tools::BaseTool
+      allow(RailsAiContext::Tools::GetControllers).to receive(:call)
+        .and_return(base.text_response("# PostsController#show"))
+      allow(RailsAiContext::Tools::GetModelDetails).to receive(:call)
+        .and_return(base.text_response("# Post\n\nrescue_from ActiveRecord::RecordNotFound do\n  render plain: \"record not found\"\nend"))
+      allow(RailsAiContext::Tools::GetRoutes).to receive(:call)
+        .and_return(base.empty_response("No routes for 'posts'. Controllers: users"))
+      allow(RailsAiContext::Tools::GetView).to receive(:call)
+        .and_return(base.empty_response("No views for 'posts'."))
+
+      text = described_class.send(:controller_action_context, "PostsController", "show")
+
+      expect(text).to include("record not found")
+      expect(text).not_to include("No routes for")
+      expect(text).not_to include("No views for")
+    end
   end
 
   # The controllers section is a Hash of name => data. Reading it as a list of

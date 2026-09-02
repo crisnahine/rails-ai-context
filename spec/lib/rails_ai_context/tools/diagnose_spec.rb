@@ -26,6 +26,22 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).to include("Suggested Fix")
     end
 
+    it "says nothing about git, and nothing on stderr, outside a repository" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post; end\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+        text = nil
+        expect {
+          text = described_class.call(error: "NoMethodError: undefined method `title` for nil",
+            file: "app/models/post.rb", line: 1).content.first[:text]
+        }.not_to output.to_stderr_from_any_process
+
+        expect(text).not_to include("Recent Git Changes")
+      end
+    end
+
     it "parses ActiveRecord::RecordNotFound" do
       result = described_class.call(error: "ActiveRecord::RecordNotFound: Couldn't find User with 'id'=999")
       text = result.content.first[:text]
