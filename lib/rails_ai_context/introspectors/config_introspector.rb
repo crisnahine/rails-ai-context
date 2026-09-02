@@ -8,6 +8,16 @@ module RailsAiContext
       extend StaticTier
       static_tier :runtime_only
 
+      ERROR_MONITORS = {
+        "sentry" => %w[sentry-ruby sentry-rails],
+        "bugsnag" => %w[bugsnag],
+        "honeybadger" => %w[honeybadger],
+        "rollbar" => %w[rollbar],
+        "airbrake" => %w[airbrake],
+        "appsignal" => %w[appsignal]
+      }.freeze
+      private_constant :ERROR_MONITORS
+
       attr_reader :app
 
       def initialize(app)
@@ -162,16 +172,6 @@ module RailsAiContext
           nil
         end
       end
-
-      ERROR_MONITORS = {
-        "sentry" => %w[sentry-ruby sentry-rails],
-        "bugsnag" => %w[bugsnag],
-        "honeybadger" => %w[honeybadger],
-        "rollbar" => %w[rollbar],
-        "airbrake" => %w[airbrake],
-        "appsignal" => %w[appsignal]
-      }.freeze
-      private_constant :ERROR_MONITORS
 
       def detect_error_monitoring
         lock = RailsAiContext::GemLock.for(app.root)

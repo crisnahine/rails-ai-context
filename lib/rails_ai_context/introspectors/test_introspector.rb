@@ -268,7 +268,9 @@ module RailsAiContext
       end
 
       def detect_database_cleaner
-        if RailsAiContext::GemLock.for(root).any?("database_cleaner", "database_cleaner-active_record")
+        # Every adapter gem depends on database_cleaner-core, so core is the
+        # complete signal; the unsuffixed name is the pre-2.0 single gem.
+        if RailsAiContext::GemLock.for(root).any?("database_cleaner", "database_cleaner-core")
           strategy = nil
           %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb].each do |helper|
             path = File.join(root, helper)

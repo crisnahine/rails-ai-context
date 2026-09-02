@@ -328,7 +328,7 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     end
 
     it "is true when the Gemfile.lock does not list rails-ai-context" do
-      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails (7.1.0)\n")
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
       expect(helper.standalone_install?).to be(true)
     end
 

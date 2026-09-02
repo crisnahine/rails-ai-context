@@ -4,7 +4,8 @@ require "spec_helper"
 require "tmpdir"
 
 RSpec.describe RailsAiContext::GemLock do
-  LOCK = <<~LOCK
+  let(:lock_text) do
+    <<~LOCK
     GIT
       remote: https://github.com/heartcombo/devise.git
       revision: 0123456789abcdef0123456789abcdef01234567
@@ -47,11 +48,12 @@ RSpec.describe RailsAiContext::GemLock do
     BUNDLED WITH
        2.5.11
   LOCK
+  end
 
   around do |example|
     Dir.mktmpdir do |dir|
       @root = dir
-      File.write(File.join(dir, "Gemfile.lock"), LOCK)
+      File.write(File.join(dir, "Gemfile.lock"), lock_text)
       example.run
     end
   end
@@ -102,15 +104,16 @@ RSpec.describe RailsAiContext::GemLock do
     expect(described_class.for(@root)).to equal(first)
 
     path = File.join(@root, "Gemfile.lock")
-    File.write(path, LOCK.sub("rails (7.2.2)", "rails (8.0.1)"))
+    File.write(path, lock_text.sub("rails (7.2.2)", "rails (8.0.1)"))
     File.utime(Time.now + 2, Time.now + 2, path)
 
     expect(described_class.for(@root).version("rails")).to eq("8.0.1")
   end
 
-  it "answers missing for a lockfile it cannot parse" do
+  it "answers no gems for a file with no specs section" do
     File.write(File.join(@root, "Gemfile.lock"), "not a lockfile\n  GEM\n specs")
     File.utime(Time.now + 2, Time.now + 2, File.join(@root, "Gemfile.lock"))
     expect(described_class.for(@root).present?("rails")).to be false
+    expect(described_class.for(@root).missing?).to be false
   end
 end
