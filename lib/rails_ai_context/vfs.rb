@@ -96,18 +96,11 @@ module RailsAiContext
         end
 
         # Build action-specific data
+        applicable = ActionFilters.for(context, key, action)
         action_data = {
           controller: key,
           action: action.to_s,
-          filters: (info[:filters] || []).select { |f|
-            if f[:only]&.any?
-              f[:only].map(&:to_s).include?(action.to_s)
-            elsif f[:except]&.any?
-              !f[:except].map(&:to_s).include?(action.to_s)
-            else
-              true
-            end
-          },
+          filters: applicable[:own] + applicable[:inherited],
           strong_params: info[:strong_params]
         }.compact
 

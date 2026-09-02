@@ -179,27 +179,11 @@ module RailsAiContext
           return empty_response("Action '#{action_name}' not found in #{controller_name}. Available: #{actions.join(', ')}")
         end
 
-        # Find applicable filters from this controller
-        filters = (info[:filters] || []).select do |f|
-          if f[:only]&.any?
-            f[:only].map(&:to_s).include?(action_name.to_s)
-          elsif f[:except]&.any?
-            !f[:except].map(&:to_s).include?(action_name.to_s)
-          else
-            true
-          end
-        end
+        applicable = RailsAiContext::ActionFilters.for(cached_context, controller_name, action_name)
 
-        # Detect skip_before_action declarations in the child controller source
         carried = RailsAiContext::Payload.controller_file(cached_context, controller_name)
         source_path = carried ? rails_app.root.join(carried) :
           rails_app.root.join("app", "controllers", "#{controller_name.underscore}.rb")
-        skipped_filters = detect_skipped_filters(source_path, action_name)
-
-        # Include inherited filters from parent controller, excluding skipped ones
-        parent_filters = detect_parent_filters(info[:parent_class]).reject do |f|
-          skipped_filters.include?(f[:name])
-        end
 
         # Extract source code with line numbers
         source_with_lines = extract_method_with_lines(source_path, action_name)
@@ -207,25 +191,11 @@ module RailsAiContext
         lines = [ "# #{controller_name}##{action_name}", "" ]
         lines << "**File:** `#{carried || "app/controllers/#{controller_name.underscore}.rb"}`"
 
-        if parent_filters.any? || filters.any? || skipped_filters.any?
+        if applicable.values.any?(&:any?)
           lines << "" << "## Applicable Filters"
-          # Dedupe parent vs own filters by name - `filters` is reflection-derived
-          # for loaded controllers and already includes the inherited chain, so
-          # listing parent_filters separately would double-list them.
-          applicable_names = filters.map { |f| f[:name] }.to_set
-          parent_names = parent_filters.map { |f| f[:name] }.to_set
-          parent_filters.reject { |f| applicable_names.include?(f[:name]) }.each do |f|
-            lines << "- `#{f[:kind]}` **#{f[:name]}** _(from #{info[:parent_class]})_"
-          end
-          filters.each do |f|
-            line = "- `#{f[:kind]}` **#{f[:name]}**"
-            line += " _(from #{info[:parent_class]})_" if parent_names.include?(f[:name])
-            line += " (only: #{f[:only].join(', ')})" if f[:only]&.any?
-            lines << line
-          end
-          skipped_filters.each do |name|
-            lines << "- ~~#{name}~~ _(skipped)_"
-          end
+          applicable[:inherited].each { |f| lines << filter_line(f, info[:parent_class]) }
+          applicable[:own].each { |f| lines << filter_line(f, nil) }
+          applicable[:skipped].each { |name| lines << "- ~~#{name}~~ _(skipped)_" }
         end
 
         if source_with_lines
@@ -360,32 +330,11 @@ module RailsAiContext
         []
       end
 
-      # Detect skip_before_action declarations in a controller source file
-      private_class_method def self.detect_skipped_filters(source_path, action_name)
-        return [] unless File.exist?(source_path)
-        return [] if File.size(source_path) > RailsAiContext.configuration.max_file_size
-
-        source = RailsAiContext::SafeFile.read(source_path)
-        return [] unless source
-
-        skipped = []
-        source.each_line do |line|
-          if (m = line.match(/\A\s*skip_before_action\s+:(\w+)/))
-            # Check if the skip applies to this action
-            if line.include?("only:")
-              only_match = line.match(/only:\s*\[?\s*([^\]]+)\]?/)
-              if only_match
-                only_actions = only_match[1].scan(/:(\w+)/).flatten
-                next unless only_actions.map(&:to_s).include?(action_name.to_s)
-              end
-            end
-            skipped << m[1]
-          end
-        end
-        skipped
-      rescue => e
-        $stderr.puts "[rails-ai-context] detect_skipped_filters failed: #{e.message}" if ENV["DEBUG"]
-        []
+      private_class_method def self.filter_line(filter, parent_class)
+        line = "- `#{filter[:kind]}` **#{filter[:name]}**"
+        line += " _(from #{parent_class})_" if parent_class
+        line += " (only: #{filter[:only].join(', ')})" if filter[:only]&.any?
+        line
       end
 
       # Extract render map from action source: redirects, renders, and side effects
