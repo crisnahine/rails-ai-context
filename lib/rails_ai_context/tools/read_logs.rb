@@ -6,7 +6,8 @@ module RailsAiContext
       tool_name "rails_read_logs"
       description "Read recent log entries with level filtering and sensitive data redaction. " \
         "Use when: debugging errors, checking recent activity, investigating failed requests. " \
-        "Key params: lines (default 50), level (ERROR/WARN/INFO/DEBUG/FATAL/all), file, search."
+        "Key params: lines (default 50), level (ERROR/WARN/INFO/DEBUG/FATAL/all), file, search. " \
+        "Search matches the redacted line, so a filtered value cannot be searched for."
 
       input_schema(
         properties: {
@@ -94,18 +95,11 @@ module RailsAiContext
         format = detect_format(raw_lines)
         filtered = filter_by_level(raw_lines, level, format)
 
-        # Apply search filter
-        if search && !search.strip.empty?
-          search_term = search.strip
-          filtered = filtered.select { |line| line.downcase.include?(search_term.downcase) }
-        end
+        redacted = RailsAiContext::Redaction.redact_log_lines(filtered, search: search)
 
-        if filtered.empty?
+        if redacted.empty?
           return text_response("# Log: #{File.basename(path)}\nNo entries matching level:#{level}#{" search:\"#{search}\"" if search}.\n\n---\nAvailable log files: #{available.join(', ')}")
         end
-
-        # Redact sensitive data
-        redacted = filtered.map { |line| RailsAiContext::Redaction.redact_log_line(line) }
 
         # Format output
         file_size = File.size(path)

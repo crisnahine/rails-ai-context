@@ -450,4 +450,37 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(vars.first[:line]).to eq(3)
     end
   end
+
+  describe "Dockerfile values" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app"))
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "Dockerfile"), <<~DOCKER)
+          FROM ruby:3.3
+          ENV RAILS_ENV=production
+          ENV SECRET_KEY_BASE=0123456789abcdef0123456789abcdef0123456789abcdef
+          ARG NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789
+        DOCKER
+        @root = dir
+        example.run
+      end
+    end
+
+    before do
+      allow(described_class).to receive(:scan_env_vars).and_call_original
+      allow(described_class).to receive(:scan_dockerfile).and_call_original
+    end
+
+    it "never prints a Dockerfile value that is a credential" do
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("`ENV` `RAILS_ENV` = `production`")
+      expect(text).to include("`ENV` `SECRET_KEY_BASE` = `[FILTERED]`")
+      expect(text).to include("`ARG` `NPM_TOKEN` = `[FILTERED]`")
+      expect(text).not_to include("0123456789abcdef")
+      expect(text).not_to include("npm_abc")
+    end
+  end
 end
