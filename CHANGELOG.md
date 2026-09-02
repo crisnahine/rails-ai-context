@@ -146,6 +146,7 @@ duplicated mechanisms behind them.
 - **`Presets.names` and `Presets.fetch`** - the listing and the run read
   `DEFINITIONS` directly.
 - **`SchemaHintBuilder.build_many`** - no callers.
+- **`Fingerprinter.changed?`** - no callers; `stale?` answers the question.
 - **The public constant `ChangeWatch::WATCH_DIRS`.**
 
 ## [5.24.0] - 2026-08-17

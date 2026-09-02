@@ -159,12 +159,6 @@ module RailsAiContext
         $stderr.puts "[rails-ai-context] local_gem_path? failed: #{e.message}" if ENV["DEBUG"]
         false
       end
-
-      public
-
-      def changed?(app, previous)
-        compute(app) != previous
-      end
     end
   end
 end
