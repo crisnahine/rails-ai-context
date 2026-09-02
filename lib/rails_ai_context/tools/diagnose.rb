@@ -411,12 +411,11 @@ module RailsAiContext
           if parsed[:method_name] && lines.none? { |l| l.include?("Code Context") }
             begin
               result = SearchCode.call(pattern: parsed[:method_name], match_type: "trace")
-              text = response_text(result)
               # A trace that found callers but no `def` is still not the
               # method's definition, which is what this section promises.
-              unless empty?(result) || text.include?("No definition")
+              unless empty?(result) || definition_missing?(result)
                 lines << "## Method Trace"
-                lines << text
+                lines << response_text(result)
                 lines << ""
               end
             rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end

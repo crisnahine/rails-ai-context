@@ -112,6 +112,22 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     end
   end
 
+  # A composer must be able to ask whether the trace found a `def` without
+  # reading the sentence this tool renders.
+  describe "a trace that found no definition" do
+    it "marks the answer rather than only saying so in prose" do
+      traced = described_class.call(pattern: "zzz_no_such_method_anywhere", match_type: "trace")
+
+      expect(described_class.send(:definition_missing?, traced)).to be true
+    end
+
+    it "does not mark a trace that found one" do
+      traced = described_class.call(pattern: "display_url", match_type: "trace")
+
+      expect(described_class.send(:definition_missing?, traced)).to be false
+    end
+  end
+
   describe ".ripgrep_available?" do
     after { described_class.instance_variable_set(:@rg_available, nil) }
 

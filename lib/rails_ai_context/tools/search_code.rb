@@ -469,6 +469,8 @@ module RailsAiContext
           lines << "_No call sites found (method may be unused or called dynamically)_"
         end
 
+        return definition_missing_response(lines.join("\n")) if def_results.empty?
+
         text_response(lines.join("\n"))
       rescue => e
         text_response("Trace error: #{e.message}")

@@ -335,8 +335,24 @@ module RailsAiContext
         # instead of scraping its prose - a controller that rescues
         # RecordNotFound used to drop its own section.
         def empty?(response)
+          response_meta(response)[:empty] ? true : false
+        end
+
+        # A trace that found call sites but no `def`. The answer is real, so
+        # it is not empty; the fact rides in `_meta` beside `empty` so a
+        # composer asks instead of matching the sentence this tool renders.
+        def definition_missing_response(text)
+          answered = text_response(text)
+          MCP::Tool::Response.new(answered.content, error: answered.error?, meta: { definition_missing: true })
+        end
+
+        def definition_missing?(response)
+          response_meta(response)[:definition_missing] ? true : false
+        end
+
+        def response_meta(response)
           meta = response.meta if response.respond_to?(:meta)
-          meta.is_a?(Hash) && !!meta[:empty]
+          meta.is_a?(Hash) ? meta : {}
         end
 
         # A sub-tool's text. A response can carry no text content at all, so

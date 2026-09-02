@@ -51,6 +51,16 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).to include("Path not allowed")
     end
 
+    # The section promises the method's definition; a trace that only found
+    # call sites is not that, and the fact comes from the answer's mark.
+    it "renders no method trace when the trace found no definition" do
+      text = described_class.call(
+        error: "NoMethodError: undefined method `zzz_undefined_helper' for nil:NilClass"
+      ).content.first[:text]
+
+      expect(text).not_to include("## Method Trace")
+    end
+
     it "parses ActiveRecord::RecordNotFound" do
       result = described_class.call(error: "ActiveRecord::RecordNotFound: Couldn't find User with 'id'=999")
       text = result.content.first[:text]
