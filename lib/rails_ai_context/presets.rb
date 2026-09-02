@@ -35,11 +35,21 @@ module RailsAiContext
       }
     }.freeze
 
+    # The one place a typed name becomes a definition key, so the binary's
+    # guard and the run accept exactly the same spellings.
+    # @return [String, nil] the key, or nil for a name no preset carries
+    def self.resolve(name)
+      key = name.to_s.strip.downcase
+      DEFINITIONS.key?(key) ? key : nil
+    end
+
     # Framing goes to err and tool output to out so a pipe keeps its order;
     # one failing tool costs itself, not the rest of the preset.
     def self.run(name, out: $stdout, err: $stderr)
-      preset = DEFINITIONS[name.to_s.strip.downcase]
-      return false unless preset
+      key = resolve(name)
+      return false unless key
+
+      preset = DEFINITIONS[key]
 
       err.puts "=" * 60
       err.puts " Preset: #{name} - #{preset[:desc]}"

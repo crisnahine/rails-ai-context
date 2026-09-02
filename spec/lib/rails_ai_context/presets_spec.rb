@@ -65,6 +65,18 @@ RSpec.describe RailsAiContext::Presets do
     end
   end
 
+  describe ".resolve" do
+    it "answers the definition key for a name in any case or spacing" do
+      expect(described_class.resolve("Migration ")).to eq("migration")
+      expect(described_class.resolve("migration")).to eq("migration")
+    end
+
+    it "answers nil for a name no preset carries" do
+      expect(described_class.resolve("nope")).to be_nil
+      expect(described_class.resolve(nil)).to be_nil
+    end
+  end
+
   describe ".listing" do
     it "renders one line per preset in the caller's invocation form" do
       text = described_class.listing(invocation: ->(key) { "rails-ai-context preset #{key}" })
