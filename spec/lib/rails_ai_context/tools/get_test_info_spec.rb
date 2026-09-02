@@ -144,6 +144,21 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       end
     end
 
+    # Listing paths that were refused reads as if they were searched.
+    it "says the name was refused rather than listing paths it never read" do
+      Dir.mktmpdir do |parent|
+        root = File.join(parent, "app")
+        FileUtils.mkdir_p(File.join(root, "spec", "models"))
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+
+        text = described_class.call(model: "../../etc", detail: "full").content.first[:text]
+
+        expect(text).to include("refused")
+        expect(text).not_to include("Searched:")
+        expect(text).not_to include("../../etc_spec.rb")
+      end
+    end
+
     it "does not read a test file that resolves outside the app root or to a sensitive file" do
       Dir.mktmpdir do |parent|
         root = File.join(parent, "app")

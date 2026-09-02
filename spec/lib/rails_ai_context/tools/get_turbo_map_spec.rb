@@ -123,6 +123,30 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
     Dir.mktmpdir { |dir| RailsAiContext::Introspectors::TurboIntrospector.new(RailsAiContext::StaticApp.new(dir)).call }
   end
 
+  # The section's own entries are `{ controller:, action: }`; a Ruby hash
+  # inspect is not how the rest of the file names a controller action.
+  describe "a Turbo Stream response" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        turbo: turbo_section_of_an_empty_app.merge(
+          turbo_stream_responses: [ { controller: "PostsController", action: "create" } ]
+        )
+      )
+    end
+
+    it "renders as Controller#action in the standard view" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("- `PostsController#create`")
+    end
+
+    it "renders as Controller#action in the full view" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- `PostsController#create`")
+    end
+  end
+
   describe ".call for an API-only app" do
     it "reports API-only apps as not applicable instead of an empty listing" do
       allow(described_class).to receive(:cached_context).and_return(api: { api_only: true }, turbo: turbo_section_of_an_empty_app)
@@ -247,7 +271,7 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         - data-turbo-preload: 0
 
         ## Turbo Stream Responses
-        - `{controller: "PostsController", action: "create"}`
+        - `PostsController#create`
 
         ## Turbo Stream Templates (1) (actions: append×1)
         - `posts/create.turbo_stream.erb`
@@ -279,7 +303,7 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         - data-turbo-preload: 0
 
         ## Turbo Stream Responses (1)
-        - `{controller: "PostsController", action: "create"}`
+        - `PostsController#create`
 
         ## Turbo Stream Templates (1)
         - `posts/create.turbo_stream.erb`
@@ -332,7 +356,7 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         - data-turbo-preload: 0
 
         ## Turbo Stream Responses (1)
-        - `{controller: "PostsController", action: "create"}`
+        - `PostsController#create`
 
         ## Turbo Stream Templates (1)
         - `posts/create.turbo_stream.erb`

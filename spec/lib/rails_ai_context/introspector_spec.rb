@@ -192,6 +192,13 @@ RSpec.describe RailsAiContext::Introspector do
       expect(result[:gems]).to include(:total_gems)
     end
 
+    # The lockfile says what is installed, and the marker it replaces landed
+    # mid-sentence in files the user commits.
+    it "reads the Rails version from the lockfile" do
+      files_app = RailsAiContext::StaticApp.new(File.expand_path("../../fixtures/static_app", __dir__))
+      expect(RailsAiContext::Introspector.new(files_app).call[:rails_version]).to eq("7.2.2")
+    end
+
     it "does not count unavailable sections as warnings" do
       result = RailsAiContext::Introspector.new(static_app).call
       Array(result[:_warnings]).each do |w|

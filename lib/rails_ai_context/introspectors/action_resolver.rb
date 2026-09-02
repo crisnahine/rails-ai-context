@@ -37,8 +37,9 @@ module RailsAiContext
 
       # The first `=` that assigns. `==`, `!=`, `>=`, `<=` and `=~` are reads
       # of the ivar on their left, and counting one as an assignment made
-      # every guard clause look like a setter.
-      ASSIGNMENT = /(?<![=!<>~])=(?![=~])/
+      # every guard clause look like a setter. A doubled bracket is the
+      # shift-assign, which does assign.
+      ASSIGNMENT = /(?<![=!<>~])=(?![=~])|(?<![<>])(?:<<|>>)=/
 
       module_function
 

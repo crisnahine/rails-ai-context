@@ -75,6 +75,30 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  # An STI child or a namespaced second model shares its parent's table, and
+  # the emptier of the two used to win the listing line on payload order.
+  describe "a table more than one model maps to" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: tables, total_tables: 3 },
+        models: {
+          "Admin::User" => { table_name: "users", associations: [], validations: [] },
+          "User" => {
+            table_name: "users",
+            associations: [ { name: "posts" }, { name: "comments" } ],
+            validations: [ { field: "email" } ]
+          }
+        }
+      })
+    end
+
+    it "names every model, the one carrying the most detail first" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("### users → **User** (2 assoc, 1 val), **Admin::User** (0 assoc, 0 val)")
+    end
+  end
+
   describe ".call with specific table" do
     it "returns full detail for a specific table" do
       result = described_class.call(table: "users")

@@ -126,7 +126,7 @@ module RailsAiContext
         if turbo_data[:turbo_stream_responses]&.any?
           lines << "## Turbo Stream Responses"
           turbo_data[:turbo_stream_responses].first(15).each do |resp|
-            lines << "- `#{resp}`"
+            lines << "- `#{stream_response_label(resp)}`"
           end
           lines << ""
         end
@@ -203,6 +203,14 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
+      # The entries are `{ controller:, action: }`; the rest of the file names
+      # a controller action `PostsController#create`, so this section does too.
+      private_class_method def self.stream_response_label(resp)
+        return resp.to_s unless resp.is_a?(Hash)
+
+        "#{resp[:controller]}##{resp[:action]}"
+      end
+
       # The one Drive section: both formatters render it identically.
       private_class_method def self.drive_configuration_lines(turbo_data)
         parts = []
@@ -225,7 +233,7 @@ module RailsAiContext
         if turbo_data[:turbo_stream_responses]&.any?
           lines << "## Turbo Stream Responses (#{turbo_data[:turbo_stream_responses].size})"
           turbo_data[:turbo_stream_responses].each do |resp|
-            lines << "- `#{resp}`"
+            lines << "- `#{stream_response_label(resp)}`"
           end
           lines << ""
         end

@@ -16,26 +16,30 @@ module RailsAiContext
 
     # { own: [filter], inherited: [filter], skipped: [name] } for one action.
     # `source:` is the controller's source when the caller already has it.
-    def for(ctx, controller_name, action, source: nil, root: default_root)
-      split(ctx, controller_name, action.to_s, source, root)
+    def for(ctx, controller_name, action, source: nil, root: nil)
+      split(ctx, controller_name, action.to_s, source: source, root: root)
     end
 
     # The same three lists for the whole controller: every declared filter,
     # whatever actions it constrains itself to.
-    def for_controller(ctx, controller_name, source: nil, root: default_root)
-      split(ctx, controller_name, nil, source, root)
+    def for_controller(ctx, controller_name, source: nil, root: nil)
+      split(ctx, controller_name, nil, source: source, root: root)
     end
 
-    # The app root a caller that has one need not name.
+    # The app root a caller that has one need not name. Nil outside a booted
+    # app, where nothing can be read anyway: the gem is required on its own
+    # by the standalone binary long before `Rails` exists.
     def default_root
-      RailsAiContext.default_app.root.to_s
+      return nil unless RailsAiContext.static_tier? || defined?(Rails)
+
+      RailsAiContext.default_app&.root&.to_s
     end
 
-    def split(ctx, controller_name, action, source, root)
+    def split(ctx, controller_name, action, source:, root:)
       info = Payload.controllers(ctx)[controller_name.to_s]
       return { own: [], inherited: [], skipped: [] } unless info.is_a?(Hash)
 
-      skipped = skipped_names(ctx, controller_name, action, root, source)
+      skipped = skipped_names(ctx, controller_name, action, root: root, source: source)
       declared = Array(info[:filters]).grep(Hash)
       applicable = declared.select { |f| applies?(f, action) }
         .reject { |f| skipped.include?(f[:name].to_s) }
@@ -92,7 +96,7 @@ module RailsAiContext
           .reject { |f| dropped.include?(f[:name].to_s) }
           .each { |f| found[f[:name].to_s] ||= f.merge(from: name) }
 
-        dropped.merge(skipped_names(ctx, name, action, root))
+        dropped.merge(skipped_names(ctx, name, action, root: root))
         name = info[:parent_class]&.to_s
       end
 
@@ -102,7 +106,7 @@ module RailsAiContext
     # Skips live only in the class body, so they are read from the file the
     # introspector carried - never a path derived from the class name. A file
     # SafePath refuses (too large, unreadable, gone) skips nothing.
-    def skipped_names(ctx, controller_name, action, root, source = nil)
+    def skipped_names(ctx, controller_name, action, root: nil, source: nil)
       source ||= carried_source(ctx, controller_name, root)
       return [] unless source
 
@@ -122,6 +126,9 @@ module RailsAiContext
     def carried_source(ctx, controller_name, root)
       file = Payload.controller_file(ctx, controller_name)
       return nil unless file
+
+      root ||= default_root
+      return nil unless root
 
       SafeFile.read(File.join(root.to_s, file))
     end

@@ -39,16 +39,16 @@ module RailsAiContext
           Dir.glob(File.join(root, "app", "**", "*.rb")).any?
       end
 
-      def self.call(root:, allow_static:, no_boot: false)
+      def self.call(root:, allow_static:, no_boot: false, allow_source_only: false, context: nil)
         messages = []
 
         if allow_static && no_boot
-          return absent(root, messages) unless app_present?(root, allow_source_only: true)
+          return absent(root, messages, context) unless app_present?(root, allow_source_only: true)
 
           return enter_static("static mode requested with --no-boot", root, messages)
         end
 
-        return absent(root, messages) unless app_present?(root)
+        return absent(root, messages, context) unless app_present?(root, allow_source_only: allow_source_only)
 
         # Bundler.setup (in config/boot.rb) strips $LOAD_PATH and the spec
         # registry to Gemfile-resolved gems; in a standalone install that
@@ -99,9 +99,16 @@ module RailsAiContext
         require "rails_ai_context"
       end
 
-      def self.absent(root, messages)
-        messages << "Error: No Rails app found in #{root}"
-        messages << NO_APP_HINT
+      # A tree with app source but no config/environment.rb is an app that
+      # cannot boot, not a wrong directory: sending its owner to the app root
+      # they are already standing in is the wrong diagnosis.
+      def self.absent(root, messages, context = nil)
+        if app_present?(root, allow_source_only: true)
+          messages << "Error: #{context || 'this command'} needs a bootable app: no config/environment.rb in #{root}"
+        else
+          messages << "Error: No Rails app found in #{root}"
+          messages << NO_APP_HINT
+        end
         Outcome.new(tier: :absent, reason: nil, messages: messages)
       end
       private_class_method :absent

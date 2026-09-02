@@ -93,6 +93,27 @@ duplicated mechanisms behind them.
   cross-check.
 - **The ivar cross-check ran with no view templates section**, reporting every
   controller ivar as unused in the view. It is skipped instead.
+- **`rails_get_turbo_map` printed a Turbo Stream response as a Ruby hash.**
+  It renders `PostsController#create`, the way the file's other sections name
+  a controller action.
+- **A second `context` run rewrote `.ai-context.json`** for its timestamp
+  alone, so a repo that commits the context files saw a diff from a run that
+  found nothing new. A JSON file that differs only in `generated_at` is
+  skipped like the others.
+- **The schema listing named one model per table.** A table an STI child or a
+  namespaced second model shares listed whichever came first in the payload,
+  which could be the emptier one. Every model on the table is listed now,
+  the one carrying the most detail first.
+- **Every static-tier context file carried `Rails [UNAVAILABLE: app not
+  booted]` mid-sentence.** The version comes from the lockfile, and the
+  marker is left for a tree whose lockfile does not carry rails.
+- **`rails-ai-context preset " FULL "` exited 1 with the listing.** A preset
+  name is matched whatever its case or padding.
+- **A `--no-boot` run that found no app printed the doctor hint**, which asks
+  for a boot error that never happened. `doctor` and `init` also accept a
+  tree that has app source but no `config/environment.rb`, and the refusal
+  names that file instead of telling the user to go to the app root they are
+  standing in.
 
 ### Changed
 

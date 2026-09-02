@@ -254,7 +254,13 @@ module RailsAiContext
           return text_response("# #{rel}\n\n```ruby\n#{content}\n```")
         end
 
-        empty_response("No test file found for #{name}. Searched: #{candidates.join(', ')}#{nearby_tests_hint(contained)}")
+        # A refused candidate was never read, so listing it reads as a search
+        # that happened. When every one was refused, the name is the answer.
+        if contained.empty?
+          return empty_response("No test file found for #{name}: the name was refused, it leaves the app root.")
+        end
+
+        empty_response("No test file found for #{name}. Searched: #{contained.join(', ')}#{nearby_tests_hint(contained)}")
       end
 
       # Nearby test files, to help the agent find the right one. The glob base

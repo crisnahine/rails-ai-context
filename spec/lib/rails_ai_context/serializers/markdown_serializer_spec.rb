@@ -5,6 +5,22 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
   let(:context) { RailsAiContext.introspect }
 
+  describe "the header against a static-tier context" do
+    around do |example|
+      RailsAiContext.tier = :static
+      example.run
+    ensure
+      RailsAiContext.tier = :runtime
+    end
+
+    it "names the Rails version the lockfile carries" do
+      app = RailsAiContext::StaticApp.new(File.expand_path("../../../fixtures/static_app", __dir__))
+      output = described_class.new(RailsAiContext::Introspector.new(app).call).call
+
+      expect(output).to include("> Rails 7.2.2 | Ruby ")
+    end
+  end
+
   describe "the Hotwire section against the static fixture" do
     it "names each model's broadcast macros" do
       output = described_class.new(IntrospectedFixture.context).call
