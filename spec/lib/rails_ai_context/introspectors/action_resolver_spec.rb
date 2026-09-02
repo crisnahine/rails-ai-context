@@ -230,6 +230,14 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       expect(described_class.assigned_ivars(body)).to eq(%w[user count])
     end
 
+    # A doubled angle bracket is a shift-assign; a single one is a comparison.
+    it "counts a shift assignment" do
+      expect(described_class.assigned_ivars("@buffer <<= x\n")).to eq(%w[buffer])
+      expect(described_class.assigned_ivars("@shift >>= x\n")).to eq(%w[shift])
+      expect(described_class.assigned_ivars("@a <= b\n")).to eq([])
+      expect(described_class.assigned_ivars("@a >= b\n")).to eq([])
+    end
+
     it "names the templates the body renders" do
       expect(described_class.rendered_templates(action_source)).to eq(%w[edit])
     end
