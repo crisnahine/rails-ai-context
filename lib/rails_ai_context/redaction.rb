@@ -59,6 +59,11 @@ module RailsAiContext
     # read and often say "secret" precisely because they are not one.
     SECRET_VALUE = /#{CREDENTIAL_SHAPE}|key_|secret/i
 
+    # A config value longer than this is a credential by size alone.
+    VALUE_LIMIT = 40
+
+    PLACEHOLDER = /\Ayour_|\Aexample_|xxx|changeme|TODO|REPLACE/i
+
     ANSI_ESCAPE = /\e\[[0-9;]*[mGKHF]/
     EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/i
     DOTENV_LINE = /\[dotenv\]\s+Set\s+.*/i
@@ -173,6 +178,38 @@ module RailsAiContext
         LOG_PATTERNS.each { |pattern, replacement| result.gsub!(pattern, replacement) }
 
         result
+      end
+
+      # The one place a name and value pair leaves the process. The name can
+      # condemn a value on its own, and so can the value's shape.
+      # `placeholder_ok` keeps an example-file placeholder readable.
+      def value(name, value, placeholder_ok: false)
+        return nil if value.nil?
+
+        stripped = value.to_s.strip.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
+        return stripped if placeholder_ok && (stripped.empty? || stripped.match?(PLACEHOLDER))
+        return FILTERED if stripped.length > VALUE_LIMIT
+
+        # Downcased because the secret vocabulary is spelled lowercase and
+        # carries its own case-sensitive flags, while a process environment
+        # name and a hex blob both arrive in either case.
+        probe = stripped.downcase
+        return FILTERED if credential_shaped?(probe)
+        return FILTERED if secret_name?(name.to_s.downcase) || secret_value?(probe)
+
+        stripped
+      end
+
+      # Redacting before the search means a term can only match text the
+      # reader would see; matching the original told a caller whether a
+      # secret was there by whether a line came back.
+      def redact_log_lines(lines, search: nil)
+        redacted = Array(lines).map { |line| redact_log_line(line) }
+        term = search.to_s.strip
+        return redacted if term.empty?
+
+        needle = term.downcase
+        redacted.select { |line| line.downcase.include?(needle) }
       end
 
       private

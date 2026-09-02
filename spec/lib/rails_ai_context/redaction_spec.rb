@@ -292,6 +292,59 @@ RSpec.describe RailsAiContext::Redaction do
       expect(described_class::EMAIL).to eq("[EMAIL]")
     end
   end
+
+  describe ".value" do
+    it "keeps a short plain default" do
+      expect(described_class.value("PORT", "3000")).to eq("3000")
+    end
+
+    it "strips the quotes a literal arrived with" do
+      expect(described_class.value("HOST", '"localhost"')).to eq("localhost")
+    end
+
+    it "filters a value shaped like a credential whatever its name" do
+      expect(described_class.value("NPM_TOKEN", "npm_abcdefghijklmnopqrstuvwxyz0123456789")).to eq("[FILTERED]")
+      expect(described_class.value("X", "0123456789abcdef0123456789abcdef")).to eq("[FILTERED]")
+    end
+
+    it "filters a value under a secret name even when the value looks plain" do
+      expect(described_class.value("SECRET_KEY_BASE", "changeme")).to eq("[FILTERED]")
+    end
+
+    it "keeps an example-file placeholder when the caller says placeholders are fine" do
+      expect(described_class.value("API_KEY", "your_api_key_here", placeholder_ok: true)).to eq("your_api_key_here")
+      expect(described_class.value("API_KEY", "your_api_key_here")).to eq("[FILTERED]")
+    end
+
+    it "filters anything longer than a config value plausibly is" do
+      expect(described_class.value("X", "a" * 41)).to eq("[FILTERED]")
+    end
+
+    it "answers nil for nil" do
+      expect(described_class.value("X", nil)).to be_nil
+    end
+  end
+
+  describe ".redact_log_lines" do
+    let(:lines) { [ "INFO started", "INFO Bearer sk_live_abcdef0123456789abcdef used", "INFO done" ] }
+
+    it "redacts every line" do
+      expect(described_class.redact_log_lines(lines)[1]).to eq("INFO Bearer [FILTERED] used")
+    end
+
+    # The search runs after redaction, so a term can only match text a
+    # reader would see. Matching the hidden text first told a caller
+    # whether a secret was in the log by whether a line came back.
+    it "filters on the redacted text, never the original" do
+      expect(described_class.redact_log_lines(lines, search: "sk_live_abc")).to eq([])
+      expect(described_class.redact_log_lines(lines, search: "FILTERED")).to eq([ "INFO Bearer [FILTERED] used" ])
+    end
+
+    it "matches case-insensitively and ignores a blank search" do
+      expect(described_class.redact_log_lines(lines, search: "STARTED")).to eq([ "INFO started" ])
+      expect(described_class.redact_log_lines(lines, search: "  ")).to eq(described_class.redact_log_lines(lines))
+    end
+  end
 end
 
 RSpec.describe "Redaction marker vocabulary in lib" do
