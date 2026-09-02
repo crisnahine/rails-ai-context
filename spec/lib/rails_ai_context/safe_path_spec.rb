@@ -63,6 +63,12 @@ RSpec.describe RailsAiContext::SafePath do
       expect(locate("posts/escape.html.erb").refusal).to eq(:outside)
     end
 
+    it "refuses a symlink to a directory outside before deciding it is not a file" do
+      File.symlink(File.join(@root, "app/views_backup"), File.join(@root, "app/views/posts/escape_dir"))
+
+      expect(locate("posts/escape_dir").refusal).to eq(:outside)
+    end
+
     it "refuses a benign name whose realpath is a sensitive file" do
       expect(locate("posts/benign.html.erb").refusal).to eq(:sensitive)
     end

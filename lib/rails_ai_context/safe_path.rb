@@ -26,14 +26,13 @@ module RailsAiContext
       return refuse(:sensitive) if sensitive?(relative)
 
       real = File.realpath(File.join(under.to_s, relative))
-      return refuse(:missing) unless File.file?(real)
-
       real_under = File.realpath(under.to_s)
       return refuse(:outside) unless contained?(real, real_under)
 
       real_root = File.realpath(root.to_s)
       root_relative = real == real_root ? "" : real.delete_prefix(real_root + File::SEPARATOR)
       return refuse(:sensitive) if sensitive?(root_relative)
+      return refuse(:missing) unless File.file?(real)
 
       limit = max_size || RailsAiContext.configuration.max_file_size
       return refuse(:too_large, realpath: real, relative: root_relative) if File.size(real) > limit

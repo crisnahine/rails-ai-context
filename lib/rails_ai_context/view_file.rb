@@ -1,7 +1,8 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # Which template a caller-supplied view path names, and its content.
+  # The view tool and the view resource each decided which template an
+  # extension-less name meant, and disagreed; this is the one answer.
   module ViewFile
     Result = Data.define(:realpath, :relative, :refusal) do
       def ok?
