@@ -505,6 +505,8 @@ module RailsAiContext
       sensitive_files = []
       sensitive_files << ".env" if File.exist?(File.join(app.root, ".env"))
       sensitive_files << "config/master.key" if File.exist?(File.join(app.root, "config/master.key"))
+      # Written by our own install, and it embeds this machine's PATH and GEM_HOME.
+      sensitive_files << ".codex/config.toml" if File.exist?(File.join(app.root, ".codex/config.toml"))
 
       return Check.new(name: "Secrets in .gitignore", status: :pass, message: "No sensitive files to check", fix: nil) if sensitive_files.empty?
 
@@ -518,6 +520,7 @@ module RailsAiContext
       issues = []
       issues << ".env exists but not in .gitignore" if sensitive_files.include?(".env") && !gitignore_covers?(gitignore, ".env")
       issues << "config/master.key not in .gitignore" if sensitive_files.include?("config/master.key") && !gitignore_covers?(gitignore, "config/master.key")
+      issues << ".codex/config.toml not in .gitignore" if sensitive_files.include?(".codex/config.toml") && !gitignore_covers?(gitignore, ".codex/config.toml")
 
       if issues.empty?
         Check.new(name: "Secrets in .gitignore", status: :pass, message: "Sensitive files properly gitignored", fix: nil)

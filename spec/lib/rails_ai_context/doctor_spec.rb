@@ -438,6 +438,37 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.status).to eq(:pass)
       end
     end
+
+    # The Codex config carries this machine's PATH and GEM_HOME, which is why
+    # install gitignores it; the check never asked whether that survived.
+    context "when .codex/config.toml is committed" do
+      def gitignore_check_for(root)
+        described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_security_gitignore)
+      end
+
+      it "reports the Codex config as unignored" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          File.write(File.join(dir, ".codex/config.toml"), "[mcp_servers.rails-ai-context]\n")
+          File.write(File.join(dir, ".gitignore"), "log/\n")
+
+          check = gitignore_check_for(dir)
+
+          expect(check.status).to eq(:fail)
+          expect(check.message).to include(".codex/config.toml")
+        end
+      end
+
+      it "passes once .gitignore covers it" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          File.write(File.join(dir, ".codex/config.toml"), "[mcp_servers.rails-ai-context]\n")
+          File.write(File.join(dir, ".gitignore"), ".codex/config.toml\n")
+
+          expect(gitignore_check_for(dir).status).to eq(:pass)
+        end
+      end
+    end
   end
 
   describe "#check_context_freshness" do

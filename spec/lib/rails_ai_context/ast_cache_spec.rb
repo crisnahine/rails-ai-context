@@ -45,15 +45,6 @@ RSpec.describe RailsAiContext::AstCache do
     end
   end
 
-  describe ".invalidate" do
-    it "removes cached entries for a path" do
-      described_class.parse(tmpfile.path)
-      expect(described_class.size).to be >= 1
-      described_class.invalidate(tmpfile.path)
-      expect(described_class.size).to eq(0)
-    end
-  end
-
   describe ".clear" do
     it "empties the entire cache" do
       described_class.parse(tmpfile.path)

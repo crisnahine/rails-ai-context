@@ -263,7 +263,7 @@ module RailsAiContext
       if data.empty?
         File.delete(path)
       else
-        File.write(path, JSON.pretty_generate(data) + "\n")
+        RailsAiContext::SafeFile.atomic_write(path, JSON.pretty_generate(data) + "\n")
       end
       true
     rescue JSON::ParserError
@@ -282,7 +282,7 @@ module RailsAiContext
       if new_content.empty?
         File.delete(path)
       else
-        File.write(path, new_content + "\n")
+        RailsAiContext::SafeFile.atomic_write(path, new_content + "\n")
       end
       true
     end
