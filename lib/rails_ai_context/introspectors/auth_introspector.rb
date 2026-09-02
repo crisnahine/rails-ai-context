@@ -89,15 +89,12 @@ module RailsAiContext
       end
 
       def scan_allow_unauthenticated_access
-        controllers_dir = File.join(root, "app/controllers")
-        return [] unless Dir.exist?(controllers_dir)
-
-        Dir.glob(File.join(controllers_dir, "**/*.rb")).flat_map do |path|
-          ast = SourceIntrospector.walk(path, { macros: -> { Listeners::GenericMacroListener.new(:allow_unauthenticated_access) } })
+        SourceScan.each(root, kind: "app/controllers").flat_map do |record|
+          ast = SourceIntrospector.walk_source(record.source, { macros: -> { Listeners::GenericMacroListener.new(:allow_unauthenticated_access) } })
           hits = ast[:macros]
           next [] if hits.empty?
 
-          relative = path.sub("#{root}/", "")
+          relative = record.file
           hits.map do |hit|
             opts = hit[:options] || {}
             if opts.empty?
@@ -239,15 +236,12 @@ module RailsAiContext
       end
 
       def detect_http_token_auth
-        controllers_dir = File.join(root, "app/controllers")
-        return [] unless Dir.exist?(controllers_dir)
-
-        Dir.glob(File.join(controllers_dir, "**/*.rb")).filter_map do |path|
-          ast = SourceIntrospector.walk(path, {
+        SourceScan.each(root, kind: "app/controllers").filter_map do |record|
+          ast = SourceIntrospector.walk_source(record.source, {
             token: -> { Listeners::GenericMacroListener.new(:authenticate_with_http_token, :authenticate_or_request_with_http_token) }
           })
           next if ast[:token].empty?
-          path.sub("#{root}/", "")
+          record.file
         end.sort
       rescue => e
         $stderr.puts "[rails-ai-context] detect_http_token_auth failed: #{e.message}" if ENV["DEBUG"]

@@ -83,12 +83,9 @@ module RailsAiContext
       end
 
       def detect_versioning
-        controllers_dir = File.join(root, "app/controllers")
-        return [] unless Dir.exist?(controllers_dir)
-
-        Dir.glob(File.join(controllers_dir, "api/v*/")).filter_map do |path|
-          File.basename(path)
-        end.sort
+        RailsAiContext::PathResolver.controller_dirs(root).flat_map do |controllers_dir|
+          Dir.glob(File.join(controllers_dir, "api/v*/")).map { |path| File.basename(path) }
+        end.uniq.sort
       end
 
       def detect_openapi_specs
@@ -177,14 +174,11 @@ module RailsAiContext
         return { rack_attack: true } if File.exist?(init_path)
 
         # Rails 8 rate limiting - use AST to detect rate_limit macro calls
-        controllers_dir = File.join(root, "app/controllers")
-        if Dir.exist?(controllers_dir)
-          Dir.glob(File.join(controllers_dir, "**/*.rb")).each do |path|
-            ast_data = SourceIntrospector.walk(path, {
-              rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
-            })
-            return { rails_rate_limiting: true } if ast_data[:rate_limit].any?
-          end
+        SourceScan.each(root, kind: "app/controllers").each do |record|
+          ast_data = SourceIntrospector.walk_source(record.source, {
+            rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
+          })
+          return { rails_rate_limiting: true } if ast_data[:rate_limit].any?
         end
 
         {}

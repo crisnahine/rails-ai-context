@@ -48,13 +48,9 @@ module RailsAiContext
       end
 
       def extract_rich_text_fields
-        models_dir = File.join(root, "app/models")
-        return [] unless Dir.exist?(models_dir)
-
         fields = []
-        Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          model_name = File.basename(path, ".rb").camelize
-          ast_data = SourceIntrospector.walk(path, { macros: Listeners::MacrosListener })
+        SourceScan.classes(root, kind: "app/models").each do |model_name, record|
+          ast_data = SourceIntrospector.walk_source(record.source, { macros: Listeners::MacrosListener })
           ast_data[:macros].each do |m|
             next unless m[:macro] == :has_rich_text
             fields << { model: model_name, field: m[:attribute] }

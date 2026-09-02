@@ -208,18 +208,15 @@ module RailsAiContext
       # Rails 7.2 introduced `allow_browser` to block unsupported browsers.
       # Scan controllers for the declaration + any `versions:` argument.
       def extract_allow_browser
-        controllers_dir = File.join(root, "app/controllers")
-        return [] unless Dir.exist?(controllers_dir)
-
         findings = []
-        Dir.glob(File.join(controllers_dir, "**/*.rb")).sort.first(2000).each do |path|
-          ast = SourceIntrospector.walk(path, {
+        SourceScan.each(root, kind: "app/controllers").first(2000).each do |record|
+          ast = SourceIntrospector.walk_source(record.source, {
             browser: -> { Listeners::GenericMacroListener.new(:allow_browser) }
           })
           ast[:browser].each do |hit|
             args_str = hit[:options].map { |k, v| "#{k}: #{format_ast_value(v)}" }.join(", ")
             args_str = hit[:args].map { |a| ":#{a}" }.join(", ") if args_str.empty? && hit[:args].any?
-            findings << { file: path.sub("#{root}/", ""), args: args_str }
+            findings << { file: record.file, args: args_str }
           end
         end
         findings

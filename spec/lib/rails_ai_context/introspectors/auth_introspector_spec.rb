@@ -485,4 +485,28 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       expect(result[:authentication][:devise].map { |d| d[:model] }).to include("User", "Admin::User")
     end
   end
+
+  describe "controllers in a pack" do
+    let(:pack_controller) { File.join(Rails.root, "packs", "billing", "app", "controllers", "invoices_controller.rb") }
+
+    before do
+      FileUtils.mkdir_p(File.dirname(pack_controller))
+      File.write(pack_controller, <<~RUBY)
+        class InvoicesController < ApplicationController
+          before_action :authenticate
+
+          def authenticate
+            authenticate_or_request_with_http_token { |token, _| token == "x" }
+          end
+        end
+      RUBY
+    end
+
+    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
+
+    it "reports token auth from a pack controller" do
+      result = described_class.new(Rails.application).call
+      expect(result[:token_auth][:http_token_auth]).to include("packs/billing/app/controllers/invoices_controller.rb")
+    end
+  end
 end

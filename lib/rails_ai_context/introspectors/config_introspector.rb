@@ -124,20 +124,13 @@ module RailsAiContext
       end
 
       def detect_current_attributes
-        models_dir = File.join(root, "app/models")
-        return [] unless Dir.exist?(models_dir)
-
         target_bases = %w[ActiveSupport::CurrentAttributes Rails::CurrentAttributes]
 
-        Dir.glob(File.join(models_dir, "**/*.rb")).filter_map do |path|
-          parse_result = AstCache.parse(path)
-          class_node = find_first_class_node(parse_result.value)
+        SourceScan.classes(root, kind: "app/models").filter_map do |name, record|
+          class_node = find_first_class_node(AstCache.parse_string(record.source).value)
           next unless class_node&.superclass
 
-          superclass_name = constant_path_to_string(class_node.superclass)
-          if target_bases.include?(superclass_name)
-            File.basename(path, ".rb").camelize
-          end
+          name if target_bases.include?(constant_path_to_string(class_node.superclass))
         rescue => _e
           next
         end
