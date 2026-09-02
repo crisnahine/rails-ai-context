@@ -27,9 +27,19 @@ RSpec.describe RailsAiContext::VFS do
       },
       controllers: {
         controllers: {
+          "ApplicationController" => {
+            filters: [
+              { kind: "before", name: "authenticate_user!" },
+              { kind: "before", name: "set_locale" }
+            ]
+          },
           "PostsController" => {
+            parent_class: "ApplicationController",
             actions: [ "index", "show", "create" ],
-            filters: [ { kind: "before", name: "authenticate_user!" } ],
+            filters: [
+              { kind: "before", name: "set_post", only: [ "show" ] },
+              { kind: "before", name: "authenticate_user!" }
+            ],
             strong_params: [ { name: "post_params", requires: :post, permits: [ :title ] } ]
           },
           "Admin::PostsController" => {
@@ -169,6 +179,12 @@ RSpec.describe RailsAiContext::VFS do
         result = described_class.resolve("rails-ai-context://controllers/posts/index")
         data = JSON.parse(result.first[:text])
         expect(data["filters"]).to be_an(Array)
+      end
+
+      it "carries the inherited filters, ahead of the controller's own" do
+        result = described_class.resolve("rails-ai-context://controllers/posts/show")
+        data = JSON.parse(result.first[:text])
+        expect(data["filters"].map { |f| f["name"] }).to eq(%w[set_locale authenticate_user! set_post])
       end
     end
 

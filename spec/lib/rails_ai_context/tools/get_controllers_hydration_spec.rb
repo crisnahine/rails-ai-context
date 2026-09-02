@@ -15,7 +15,8 @@ RSpec.describe RailsAiContext::Tools::GetControllers, "hydration" do
         actions: %w[index show create],
         filters: [],
         strong_params: %w[post_params],
-        parent_class: "ApplicationController"
+        parent_class: "ApplicationController",
+        file: "app/controllers/posts_controller.rb"
       }
     }
   end
