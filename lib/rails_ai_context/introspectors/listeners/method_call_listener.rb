@@ -4,8 +4,7 @@ module RailsAiContext
   module Introspectors
     module Listeners
       # Call sites by name, wherever they appear: inside a def, a lambda, a
-      # callback block. The macro listener only sees class-body calls, and
-      # the line scanner this replaces could not tell a call from a comment.
+      # callback block. The macro listener only sees class-body calls.
       class MethodCallListener < BaseListener
         def initialize(names: nil, pattern: nil)
           super()
