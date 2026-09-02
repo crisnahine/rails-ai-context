@@ -129,7 +129,7 @@ module RailsAiContext
           # so the client gets a proper "-32602 Resource not found: <uri>" with
           # the URI in error data (the uniform message also avoids leaking why a
           # blocked path was rejected). That class doesn't exist on older but
-          # still-supported mcp (gemspec allows >= 0.8), so fall back to the
+          # still-supported mcp (gemspec allows >= 0.13), so fall back to the
           # original error there - same behavior as before this wrapper.
           raise e unless defined?(MCP::Server::ResourceNotFoundError)
 
