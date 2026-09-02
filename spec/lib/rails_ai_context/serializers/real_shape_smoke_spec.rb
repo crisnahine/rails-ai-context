@@ -24,7 +24,7 @@ RSpec.describe "Serializers against a real introspected context" do
       # A section that resolved names the fixture's five models. A key no
       # introspector emits empties the section instead of failing, so the
       # count is what says the read landed.
-      expect(output).to match(/Models[ :(]+5/) unless klass == RailsAiContext::Serializers::JsonSerializer
+      expect(output).to match(/Models[ :(]+7/) unless klass == RailsAiContext::Serializers::JsonSerializer
     end
   end
 
@@ -42,7 +42,7 @@ RSpec.describe "Serializers against a real introspected context" do
         end
 
         models_file = result[:written].find { |path| path.include?("models") }
-        expect(File.read(models_file)).to match(/Models \(5\)/)
+        expect(File.read(models_file)).to match(/Models \(7\)/)
       end
     end
   end
@@ -55,7 +55,7 @@ RSpec.describe "Serializers against a real introspected context" do
       result = RailsAiContext::Serializers::OpencodeRulesSerializer.new(context).call(dir)
       expect(result[:written].map { |p| p.sub("#{dir}/", "") })
         .to match_array(%w[app/models/AGENTS.md app/controllers/AGENTS.md])
-      expect(File.read(File.join(dir, "app", "models", "AGENTS.md"))).to include("Models (5)")
+      expect(File.read(File.join(dir, "app", "models", "AGENTS.md"))).to include("Models (7)")
     end
   end
 

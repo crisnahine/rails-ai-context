@@ -6,10 +6,10 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
   let(:context) { IntrospectedFixture.context }
 
   describe ".auth_line" do
-    # The fixture app declares no devise model and no Pundit policy, so the
-    # section resolves and still names nothing.
-    it "answers nil when the fixture's auth section found no framework" do
-      expect(described_class.auth_line(context)).to be_nil
+    # The fixture declares Devise on two models and no authorization gem, so
+    # the section resolves and names one framework.
+    it "names the framework the fixture's auth section found" do
+      expect(described_class.auth_line(context)).to eq("- Auth: Devise")
     end
 
     it "names every framework the section carries" do
