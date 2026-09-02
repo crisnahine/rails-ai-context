@@ -50,6 +50,14 @@ module RailsAiContext
 
         return absent(root, messages, context) unless app_present?(root, allow_source_only: allow_source_only)
 
+        # No boot can succeed without config/environment.rb, so a source-only
+        # tree answers now rather than printing a failure that was certain.
+        unless app_present?(root)
+          return absent(root, messages, context) unless allow_static
+
+          return enter_static("no config/environment.rb in #{root}", root, messages)
+        end
+
         # Bundler.setup (in config/boot.rb) strips $LOAD_PATH and the spec
         # registry to Gemfile-resolved gems; in a standalone install that
         # removes this gem and its MCP deps, so both are captured first.

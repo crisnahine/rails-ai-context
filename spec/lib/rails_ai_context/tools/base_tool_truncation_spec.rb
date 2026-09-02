@@ -207,6 +207,15 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       response = RailsAiContext::Tools::GetSchema.text_response("body")
       expect(response.content.first[:text]).to include("static mode requested with --no-boot")
     end
+
+    # A tree with no config/environment.rb never attempted a boot, so calling
+    # it a boot failure sends the reader after an error that was never raised.
+    it "names the missing file rather than a boot failure when nothing booted" do
+      RailsAiContext.static_reason = "no config/environment.rb in /tmp/app"
+      text = RailsAiContext::Tools::GetSchema.text_response("body").content.first[:text]
+      expect(text).to include("Static mode (no config/environment.rb in /tmp/app)")
+      expect(text).not_to include("App boot failed")
+    end
   end
 
   describe "runtime tier" do
