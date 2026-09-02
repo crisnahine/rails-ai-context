@@ -11,6 +11,15 @@ module RailsAiContext
       BROADCAST_CALL = /\Abroadcast_\w+_to\z/
       BROADCAST_KINDS = %w[app/controllers app/models app/services app/jobs app/workers app/channels].freeze
 
+      # A mention of these helpers anywhere in a controller is the signal,
+      # whether called, referenced or guarded. Vocabulary, not structure, so
+      # regex rather than a listener.
+      NATIVE_HELPER = /turbo_native_app\?|hotwire_native_app\?/
+      NATIVE_NAVIGATION = Regexp.union(%w[
+        recede_or_redirect_to resume_or_redirect_to refresh_or_redirect_to
+        recede_or_redirect_back_or_to resume_or_redirect_back_or_to refresh_or_redirect_back_or_to
+      ])
+
       attr_reader :app
 
       def initialize(app)
@@ -336,70 +345,77 @@ module RailsAiContext
 
       # Concerns stay in: a native include or a turbo_stream response can
       # live in one.
-      def controller_files
-        SourceScan.paths(root, kind: "app/controllers", skip_concerns: false)
-      end
-
       def controller_sources
         SourceScan.each(root, kind: "app/controllers", skip_concerns: false)
       end
 
+      # One walk over app/controllers feeding every collector that needs it,
+      # the way scan_broadcasts already reads app/models once. Each collector
+      # scanning for itself read and parsed the same files four times.
+      def scan_controllers
+        @scan_controllers ||= begin
+          include_found = false
+          helpers = []
+          navigation = []
+          responses = []
+
+          controller_sources.each do |record|
+            source = record.source
+            include_found ||= native_navigation_included?(source)
+            helpers << record.file if source.match?(NATIVE_HELPER)
+            source.scan(NATIVE_NAVIGATION) { |match| navigation << { file: record.file, method: match } }
+            responses.concat(stream_responses_in(record))
+          end
+
+          {
+            native_include: include_found,
+            native_helpers: helpers.sort,
+            native_navigation: navigation.sort_by { |r| [ r[:file], r[:method] ] },
+            turbo_stream_responses: responses.uniq.sort_by { |r| [ r[:controller], r[:action] ] }
+          }
+        end
+      rescue => e
+        $stderr.puts "[rails-ai-context] scan_controllers failed: #{e.message}" if ENV["DEBUG"]
+        { native_include: false, native_helpers: [], native_navigation: [], turbo_stream_responses: [] }
+      end
+
+      def native_navigation_included?(source)
+        walked = SourceIntrospector.walk_source(source, {
+          includes: -> { Listeners::GenericMacroListener.new(:include) }
+        })
+        Array(walked[:includes]).any? { |hit| hit[:values].include?("Turbo::Native::Navigation") }
+      end
+
+      # Tying a `format.turbo_stream` call to the action it sits in needs
+      # block scope, which the listeners do not track. Line scanning stays.
+      def stream_responses_in(record)
+        controller_name = DeclaredConstant.resolve(record.source, record.path_name)
+
+        found = []
+        current_action = nil
+        record.source.each_line do |line|
+          if (match = line.match(/^\s*def\s+(\w+)/))
+            current_action = match[1]
+          end
+
+          if current_action && line.match?(/format\.turbo_stream|respond_to\s*.*turbo_stream/)
+            found << { controller: controller_name, action: current_action }
+          end
+        end
+        found
+      end
+
       def detect_turbo_native
+        scanned = scan_controllers
         {
-          detected: detect_native_include,
-          native_helpers: detect_native_helpers,
-          native_navigation: detect_native_navigation,
+          detected: scanned[:native_include],
+          native_helpers: scanned[:native_helpers],
+          native_navigation: scanned[:native_navigation],
           native_conditionals: detect_native_conditionals
         }
       rescue => e
         $stderr.puts "[rails-ai-context] detect_turbo_native failed: #{e.message}" if ENV["DEBUG"]
         { detected: false, native_helpers: [], native_navigation: [], native_conditionals: 0 }
-      end
-
-      def detect_native_include
-        controller_files.any? do |record|
-          ast = SourceIntrospector.walk(record.path, {
-            includes: -> { Listeners::GenericMacroListener.new(:include) }
-          })
-          ast[:includes].any? { |hit| hit[:values].include?("Turbo::Native::Navigation") }
-        end
-      rescue => e
-        $stderr.puts "[rails-ai-context] detect_native_include failed: #{e.message}" if ENV["DEBUG"]
-        false
-      end
-
-      def detect_native_helpers
-        controller_sources.filter_map do |record|
-          # A mention of the helper anywhere in the file is the signal, whether
-          # it is called, referenced or guarded. Regex stays.
-          record.file if record.source.match?(/turbo_native_app\?|hotwire_native_app\?/)
-        end.sort
-      rescue => e
-        $stderr.puts "[rails-ai-context] detect_native_helpers failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      def detect_native_navigation
-        navigation_methods = %w[
-          recede_or_redirect_to resume_or_redirect_to refresh_or_redirect_to
-          recede_or_redirect_back_or_to resume_or_redirect_back_or_to refresh_or_redirect_back_or_to
-        ]
-        # A mention of any of these helpers counts wherever it appears, in a
-        # method body, a callback or a comment-free guard. Vocabulary, not
-        # structure, so regex stays.
-        pattern = Regexp.union(navigation_methods)
-
-        results = []
-        controller_sources.each do |record|
-          record.source.scan(pattern).each do |match|
-            results << { file: record.file, method: match }
-          end
-        end
-
-        results.sort_by { |r| [ r[:file], r[:method] ] }
-      rescue => e
-        $stderr.puts "[rails-ai-context] detect_native_navigation failed: #{e.message}" if ENV["DEBUG"]
-        []
       end
 
       def detect_native_conditionals
@@ -418,28 +434,7 @@ module RailsAiContext
       end
 
       def extract_turbo_stream_responses
-        responses = []
-        controller_sources.each do |record|
-          controller_name = DeclaredConstant.resolve(record.source, record.path_name)
-
-          # Tying a `format.turbo_stream` call to the action it sits in needs
-          # block scope, which the listeners do not track. Line scanning stays.
-          current_action = nil
-          record.source.each_line do |line|
-            if (match = line.match(/^\s*def\s+(\w+)/))
-              current_action = match[1]
-            end
-
-            if current_action && line.match?(/format\.turbo_stream|respond_to\s*.*turbo_stream/)
-              responses << { controller: controller_name, action: current_action }
-            end
-          end
-        end
-
-        responses.uniq.sort_by { |r| [ r[:controller], r[:action] ] }
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_turbo_stream_responses failed: #{e.message}" if ENV["DEBUG"]
-        []
+        scan_controllers[:turbo_stream_responses]
       end
     end
   end
