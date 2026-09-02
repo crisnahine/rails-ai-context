@@ -151,4 +151,52 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.model_file({ models: { "Order" => {} } }, "Order")).to eq("app/models/order.rb")
     end
   end
+
+  describe ".section on an unavailable section" do
+    it "answers nil for a section the static tier refused" do
+      expect(described_class.section({ config: { unavailable: "requires a booted Rails app" } }, :config)).to be_nil
+    end
+  end
+
+  describe ".controllers and .app_controllers" do
+    let(:context) do
+      { controllers: { controllers: {
+        "PostsController" => { actions: %w[index] },
+        "DeviseController" => { actions: %w[new] },
+        "Admin::BaseController" => { actions: [] }
+      } } }
+    end
+
+    it "reads the wrapped controllers hash" do
+      expect(described_class.controllers(context).keys).to contain_exactly("PostsController", "DeviseController", "Admin::BaseController")
+      expect(described_class.controllers({})).to eq({})
+      expect(described_class.controllers({ controllers: { error: "boom" } })).to eq({})
+    end
+
+    it "drops the configured framework controllers, default and user-added" do
+      expect(described_class.app_controllers(context).keys).to contain_exactly("PostsController", "Admin::BaseController")
+
+      RailsAiContext.configuration.excluded_controllers += %w[Admin::BaseController]
+      expect(described_class.app_controllers(context).keys).to eq(%w[PostsController])
+    ensure
+      RailsAiContext.configuration.excluded_controllers -= %w[Admin::BaseController]
+    end
+  end
+
+  describe ".models" do
+    it "reads the bare models hash and answers {} for a failed one" do
+      expect(described_class.models({ models: { "Post" => {} } })).to eq({ "Post" => {} })
+      expect(described_class.models({ models: { error: "boom" } })).to eq({})
+      expect(described_class.models({})).to eq({})
+    end
+  end
+
+  describe ".gem?" do
+    it "answers from the notable gems the introspector emits" do
+      ctx = { gems: { notable_gems: [ { name: "devise", version: "4.9.4" } ] } }
+      expect(described_class.gem?(ctx, "devise")).to be true
+      expect(described_class.gem?(ctx, "sorcery")).to be false
+      expect(described_class.gem?({}, "devise")).to be false
+    end
+  end
 end

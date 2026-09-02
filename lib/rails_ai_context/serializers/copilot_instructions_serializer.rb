@@ -50,19 +50,18 @@ module RailsAiContext
           lines << models_line
         end
 
-        routes = context[:routes]
-        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes.is_a?(Hash) && !routes[:error]
+        routes = Payload.section(context, :routes)
+        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes
 
-        gems = context[:gems]
-        if gems.is_a?(Hash) && !gems[:error]
-          notable = notable_gems_list(gems)
+        notable = Payload.notable_gems(context)
+        if notable.any?
           notable.group_by { |g| g[:category]&.to_s || "other" }.first(6).each do |cat, gem_list|
             lines << "- #{cat}: #{gem_list.map { |g| g[:name] }.join(', ')}"
           end
         end
 
-        conv = context[:conventions]
-        if conv.is_a?(Hash) && !conv[:error]
+        conv = Payload.section(context, :conventions)
+        if conv
           arch_labels = arch_labels_hash
           (conv[:architecture] || []).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
         end
@@ -88,8 +87,8 @@ module RailsAiContext
       end
 
       def render_models_instructions
-        models = context[:models]
-        return nil unless models.is_a?(Hash) && !models[:error] && models.any?
+        models = Payload.models(context)
+        return nil unless models.any?
 
         lines = [
           "---",
@@ -117,9 +116,7 @@ module RailsAiContext
       end
 
       def render_controllers_instructions
-        data = context[:controllers]
-        return nil unless data.is_a?(Hash) && !data[:error]
-        controllers = data[:controllers] || {}
+        controllers = Payload.app_controllers(context)
         return nil if controllers.empty?
 
         lines = [

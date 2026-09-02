@@ -93,6 +93,7 @@ RSpec.describe "route counts across every surface" do
       lib/rails_ai_context/tools/analyze_feature.rb
     ].freeze
 
+
     it "every file that renders a route count goes through the seam" do
       renders_a_count = Dir.glob("lib/**/*.{rb,rake}").select do |path|
         File.read(path).match?(/\[:total_routes\]|count_phrase\([^)]*["']app route["']/)

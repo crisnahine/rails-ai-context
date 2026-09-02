@@ -154,4 +154,35 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       expect(text).to include("@order")
     end
   end
+
+  # The controllers section is a Hash of name => data. Reading it as a list of
+  # entries raised a TypeError that the method-level rescue swallowed, which
+  # threw away every schema block already appended and answered plain
+  # AnalyzeFeature text instead.
+  describe "feature context over the introspected fixture" do
+    # Seeded in a before hook, not an around one: spec_helper resets the shared
+    # cache in a config-level before(:each), which runs after any around hook.
+    before do
+      context = IntrospectedFixture.context.deep_dup
+      # A controller the loose by-name match finds and the word match does not,
+      # which is the only way into the related-controllers branch.
+      context[:controllers][:controllers]["CommentaryController"] =
+        { actions: %w[index show], file: "app/controllers/commentary_controller.rb" }
+      cache = RailsAiContext::Tools::BaseTool::SHARED_CACHE
+      cache[:context] = context
+      cache[:timestamp] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    end
+
+    after { RailsAiContext::Tools::BaseTool.reset_cache! }
+
+    it "names the controllers that match by name and keeps the schema enrichment above them", :aggregate_failures do
+      text = described_class.call(feature: "comment").content.first[:text]
+
+      expect(text).to include("## Related Controllers (by name)")
+      expect(text).to include("- **CommentaryController** - index, show")
+      # GetSchema's own table heading, which only the enrichment block appends.
+      # The rescued fallback names the table too, in AnalyzeFeature's summary.
+      expect(text).to include("## Table: comments")
+    end
+  end
 end

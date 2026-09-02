@@ -22,6 +22,12 @@ RSpec.describe RailsAiContext::Serializers::OpencodeSerializer do
       }
     end
 
+    it "renders no routes line when the static tier refused routes" do
+      refused = context.merge(routes: { unavailable: "requires a booted Rails app" })
+
+      expect(described_class.new(refused).call).not_to include("- Routes:")
+    end
+
     context "in compact mode (default)" do
       before { RailsAiContext.configuration.context_mode = :compact }
       after { RailsAiContext.configuration.context_mode = :compact }

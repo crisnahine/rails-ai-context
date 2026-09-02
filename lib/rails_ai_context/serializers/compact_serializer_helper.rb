@@ -30,16 +30,16 @@ module RailsAiContext
           lines << models_line
         end
 
-        routes = context[:routes]
-        if routes && !routes[:error]
+        routes = Payload.section(context, :routes)
+        if routes
           app_ctrls = RouteCoverage.app_controllers(routes)
           lines << "- Routes: #{count_phrase(RouteCoverage.app_route_count(routes), "app route")} across " \
                    "#{count_phrase(app_ctrls.size, "controller")} " \
                    "(#{routes[:total_routes]} total incl. framework#{RouteCoverage.suffix(routes)})"
         end
 
-        jobs = context[:jobs]
-        if jobs.is_a?(Hash) && !jobs[:error]
+        jobs = Payload.section(context, :jobs)
+        if jobs
           job_count = jobs[:jobs]&.size || 0
           mailer_count = jobs[:mailers]&.size || 0
           channel_count = jobs[:channels]&.size || 0
@@ -50,10 +50,9 @@ module RailsAiContext
           lines << "- Async: #{parts.join(', ')}" if parts.any?
         end
 
-        migrations = context[:migrations]
-        if migrations.is_a?(Hash) && !migrations[:error]
-          pending = migrations[:pending]
-          lines << "- Migrations: #{migrations[:total]} total, #{pending&.size || 0} pending"
+        migrations = Payload.section(context, :migrations)
+        if migrations
+          lines << "- Migrations: #{migrations[:total]} total, #{Payload.pending_migrations(context).size} pending"
         end
 
         lines.concat(full_preset_stack_lines)
@@ -63,8 +62,8 @@ module RailsAiContext
       end
 
       def render_key_models
-        models = context[:models]
-        return [] unless models.is_a?(Hash) && !models[:error] && models.any?
+        models = Payload.models(context)
+        return [] unless models.any?
 
         max_show = 15
         lines = [ "## Key models (#{models.size} total)" ]
@@ -86,9 +85,7 @@ module RailsAiContext
       end
 
       def render_notable_gems
-        gems = context[:gems]
-        return [] unless gems.is_a?(Hash) && !gems[:error]
-        notable = notable_gems_list(gems)
+        notable = Payload.notable_gems(context)
         return [] if notable.empty?
 
         lines = [ "## Gems" ]
@@ -132,8 +129,8 @@ module RailsAiContext
       # Architecture / conventions section - moved from ClaudeSerializer so
       # Cursor (.cursorrules) and any future compact serializer can reuse.
       def render_architecture
-        conv = context[:conventions]
-        return [] unless conv.is_a?(Hash) && !conv[:error]
+        conv = Payload.section(context, :conventions)
+        return [] unless conv
 
         arch = conv[:architecture] || []
         patterns = conv[:patterns] || []
@@ -169,8 +166,8 @@ module RailsAiContext
         lines << "- Run `#{test_cmd}` after changes"
         lines << "- Do NOT re-read files to verify edits - trust your Edit, validate syntax only"
 
-        conv = context[:conventions]
-        if conv.is_a?(Hash) && !conv[:error]
+        conv = Payload.section(context, :conventions)
+        if conv
           arch = conv[:architecture] || []
           lines << "- Follow #{arch.join(' + ')} architecture" if arch.any?
           patterns = conv[:patterns] || []
@@ -179,8 +176,8 @@ module RailsAiContext
           lines << "- Use query objects for complex queries" if patterns.include?("query_objects")
         end
 
-        stimulus = context[:stimulus]
-        if stimulus.is_a?(Hash) && !stimulus[:error] && (stimulus[:controllers]&.any? || stimulus[:total_controllers]&.positive?)
+        stimulus = Payload.section(context, :stimulus)
+        if Payload.stimulus_controllers(context).any? || stimulus&.dig(:total_controllers)&.positive?
           lines << "- Stimulus controllers auto-register - no manual import in controllers/index.js needed"
         end
 

@@ -94,8 +94,8 @@ module RailsAiContext
       end
 
       def models_section
-        models = context[:models]
-        return if models.is_a?(Hash) && models[:error]
+        models = Payload.models(context)
+        return if models.empty?
 
         lines = [ "## Models (#{models.size})" ]
         models.each do |name, data|
@@ -114,8 +114,8 @@ module RailsAiContext
       end
 
       def routes_section
-        routes = context[:routes]
-        return if routes[:error]
+        routes = Payload.section(context, :routes)
+        return unless routes
 
         lines = [ "## Routes (#{routes[:total_routes]} total#{RouteCoverage.suffix(routes)})" ]
         routes[:by_controller]&.sort&.each do |ctrl, actions|
@@ -150,10 +150,7 @@ module RailsAiContext
       end
 
       def gems_section
-        gems = context[:gems]
-        return if gems[:error]
-
-        notable = notable_gems_list(gems)
+        notable = Payload.notable_gems(context)
         return if notable.empty?
 
         lines = [ "## Notable Gems" ]
@@ -176,10 +173,7 @@ module RailsAiContext
       end
 
       def controllers_section
-        data = context[:controllers]
-        return if data[:error]
-
-        controllers = data[:controllers] || {}
+        controllers = Payload.app_controllers(context)
         return if controllers.empty?
 
         lines = [ "## Controllers (#{controllers.size})" ]

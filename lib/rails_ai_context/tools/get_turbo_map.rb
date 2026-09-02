@@ -120,10 +120,9 @@ module RailsAiContext
 
       private_class_method def self.format_summary(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: nil)
         total_broadcasts = model_broadcasts.size + rb_broadcasts.size
-        turbo_data = cached_context[:turbo]
-        turbo_usable = turbo_data.is_a?(Hash) && !turbo_data[:error]
-        turbo_stream_response_count = turbo_usable ? turbo_data[:turbo_stream_responses]&.size.to_i : 0
-        turbo_stream_template_count = turbo_usable ? turbo_data[:turbo_streams]&.size.to_i : 0
+        turbo_data = Payload.section(cached_context, :turbo)
+        turbo_stream_response_count = turbo_data ? turbo_data[:turbo_stream_responses]&.size.to_i : 0
+        turbo_stream_template_count = turbo_data ? turbo_data[:turbo_streams]&.size.to_i : 0
 
         lines = [ "# Turbo Map", "" ]
         lines << "- **Turbo Stream responses:** #{turbo_stream_response_count} (controllers responding with `turbo_stream` format)" if turbo_stream_response_count > 0
@@ -150,8 +149,8 @@ module RailsAiContext
         lines = [ "# Turbo Map", "" ]
 
         # Turbo Drive Configuration
-        turbo_data = cached_context[:turbo]
-        if turbo_data.is_a?(Hash) && !turbo_data[:error]
+        turbo_data = Payload.section(cached_context, :turbo)
+        if turbo_data
           drive_parts = []
           drive_parts << "morph: #{turbo_data[:morph_meta] ? 'yes' : 'no'}" unless turbo_data[:morph_meta].nil?
           drive_parts << "permanent elements: #{turbo_data[:permanent_elements].size}" if turbo_data[:permanent_elements]&.any?
@@ -257,8 +256,8 @@ module RailsAiContext
         lines = [ "# Turbo Map (Full Detail)", "" ]
 
         # Turbo Drive Configuration & Stream Responses
-        turbo_data = cached_context[:turbo]
-        if turbo_data.is_a?(Hash) && !turbo_data[:error]
+        turbo_data = Payload.section(cached_context, :turbo)
+        if turbo_data
           drive_parts = []
           drive_parts << "morph: #{turbo_data[:morph_meta] ? 'yes' : 'no'}" unless turbo_data[:morph_meta].nil?
           drive_parts << "permanent elements: #{turbo_data[:permanent_elements].size}" if turbo_data[:permanent_elements]&.any?

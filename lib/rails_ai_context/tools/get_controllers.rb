@@ -47,9 +47,7 @@ module RailsAiContext
         fetch_section(:controllers, subject: "Controller introspection") do |data|
           controllers = data[:controllers] || {}
 
-          # Filter out framework-internal controllers for listings/error messages
-          framework_controllers = RailsAiContext.configuration.excluded_controllers
-          app_controller_names = controllers.keys.reject { |name| framework_controllers.include?(name) }.sort
+          app_controller_names = Payload.app_controllers(cached_context).keys.sort
 
           # Specific controller - always full detail (searches ALL controllers including framework)
           # Flexible matching: "posts", "PostsController", "postscontroller" all work
@@ -79,7 +77,7 @@ module RailsAiContext
             return text_response(format_controller(key, info))
           end
 
-          app_controllers = controllers.reject { |name, _| framework_controllers.include?(name) }
+          app_controllers = Payload.app_controllers(cached_context)
 
           # Pagination
           all_names = app_controllers.keys.sort

@@ -254,7 +254,7 @@ module RailsAiContext
 
         # Normalize: try as-is, then singularized, then classified
         ctx = cached_context
-        models = ctx[:models] || {}
+        models = Payload.models(ctx)
         key = fuzzy_find_key(models.keys, model_name)
 
         resolved_name = key || model_name
@@ -329,7 +329,7 @@ module RailsAiContext
         # Enrich with schema columns for matching models
         ctx = begin; cached_context; rescue; nil; end
         if ctx
-          models = ctx[:models] || {}
+          models = Payload.models(ctx)
           matched_tables = Set.new
 
           models.each_key do |model_name|
@@ -350,20 +350,16 @@ module RailsAiContext
           has_controllers = analyze_text.include?("## Controllers")
           unless has_controllers
             # Check if any controllers or services reference this feature by name
-            controllers = ctx[:controllers]
-            if controllers.is_a?(Hash) && !controllers[:error]
-              related_ctrls = (controllers[:controllers] || []).select do |c|
-                c_name = c[:name] || ""
-                c_name.downcase.include?(feature_name.downcase) ||
-                  c_name.downcase.include?(feature_name.singularize.downcase) ||
-                  c_name.downcase.include?(feature_name.pluralize.downcase)
-              end
-              if related_ctrls.any?
-                lines << "" << "## Related Controllers (by name)"
-                related_ctrls.each do |c|
-                  actions = (c[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
-                  lines << "- **#{c[:name]}** - #{actions.join(', ')}"
-                end
+            related_ctrls = Payload.controllers(ctx).select do |c_name, _|
+              c_name.downcase.include?(feature_name.downcase) ||
+                c_name.downcase.include?(feature_name.singularize.downcase) ||
+                c_name.downcase.include?(feature_name.pluralize.downcase)
+            end
+            if related_ctrls.any?
+              lines << "" << "## Related Controllers (by name)"
+              related_ctrls.each do |c_name, c|
+                actions = (c[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
+                lines << "- **#{c_name}** - #{actions.join(', ')}"
               end
             end
 

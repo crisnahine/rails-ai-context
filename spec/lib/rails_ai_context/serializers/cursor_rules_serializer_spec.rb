@@ -184,4 +184,14 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
       end
     end
   end
+
+  it "renders no routes line when the static tier refused routes" do
+    Dir.mktmpdir do |dir|
+      refused = context.merge(routes: { unavailable: "requires a booted Rails app" })
+      described_class.new(refused).call(dir)
+
+      project_rule = File.read(File.join(dir, ".cursor", "rules", "rails-project.mdc"))
+      expect(project_rule).not_to include("- Routes:")
+    end
+  end
 end

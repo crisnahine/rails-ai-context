@@ -135,7 +135,7 @@ module RailsAiContext
               # Detect encrypted columns from model data
               encrypted_cols = Set.new
               model_refs = models_for_table(name)
-              models_data = cached_context[:models] || {}
+              models_data = Payload.models(cached_context)
               model_refs.each do |model_name|
                 (models_data.dig(model_name, :encrypts) || []).each { |f| encrypted_cols.add(f) }
               end
@@ -214,10 +214,7 @@ module RailsAiContext
       end
 
       private_class_method def self.models_for_table(table_name)
-        models = cached_context[:models]
-        return [] unless models.is_a?(Hash)
-
-        models.select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
+        Payload.models(cached_context).select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
       rescue => e
         $stderr.puts "[rails-ai-context] models_for_table failed: #{e.message}" if ENV["DEBUG"]
         []
