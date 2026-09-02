@@ -119,11 +119,17 @@ module RailsAiContext
       # named the way an app author would write them.
       def changed_since(root, time)
         watched_dirs(root).select { |dir|
-          Dir.glob(File.join(dir, WATCHED_EXTENSIONS)).any? { |path| File.mtime(path) > time }
+          Dir.glob(File.join(dir, WATCHED_EXTENSIONS)).any? { |path| newer?(path, time) }
         }.map { |dir| dir.delete_prefix(root.to_s + File::SEPARATOR) }
       end
 
       private
+
+      def newer?(path, time)
+        File.mtime(path) > time
+      rescue Errno::ENOENT
+        false
+      end
 
       # Memoized gem-lib fingerprint. Sampled once per process: only a
       # developer editing the gem's own source sees it move, and a restart
