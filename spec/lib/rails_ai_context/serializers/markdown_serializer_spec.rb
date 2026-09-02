@@ -70,6 +70,13 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
 
       expect(described_class.new(ctx).call).not_to include("## Routes")
     end
+
+    it "renders no conventions section when conventions failed" do
+      ctx = RailsAiContext.introspect
+      ctx[:conventions] = { error: "boom", directory_structure: { "app/models" => 3 } }
+
+      expect(described_class.new(ctx).call).not_to include("## Project Structure")
+    end
   end
 end
 

@@ -16,11 +16,15 @@ RSpec.describe RailsAiContext::Payload do
       described_class::LISTS.each do |reader, (section_key, key)|
         emitted[section_key] ||= begin
           klass = RailsAiContext::Introspector::INTROSPECTOR_MAP.fetch(section_key)
-          instance = klass.new(static_app)
-          result = if klass.static_tier == RailsAiContext::Introspectors::StaticTier::ALTERNATE_SOURCE
-            instance.send(:static_call)
+          result = case klass.static_tier
+          when RailsAiContext::Introspectors::StaticTier::ALTERNATE_SOURCE
+            klass.new(static_app).send(:static_call)
+          when RailsAiContext::Introspectors::StaticTier::RUNTIME_ONLY
+            # No static answer to walk, so the walk stays honest by asking
+            # the booted app instead of skipping the row.
+            klass.new(Rails.application).call
           else
-            instance.call
+            klass.new(static_app).call
           end
           result.keys
         end
@@ -28,6 +32,21 @@ RSpec.describe RailsAiContext::Payload do
         expect(emitted[section_key]).to include(key),
           "Payload.#{reader} reads #{section_key}[:#{key}], but the introspector emits: #{emitted[section_key].join(', ')}"
       end
+    end
+  end
+
+  describe ".architecture and .patterns" do
+    it "answer the conventions lists the booted app emits" do
+      conventions = RailsAiContext::Introspectors::ConventionIntrospector.new(Rails.application).call
+      ctx = { conventions: conventions }
+
+      expect(described_class.architecture(ctx)).to eq(conventions[:architecture])
+      expect(described_class.patterns(ctx)).to eq(conventions[:patterns])
+    end
+
+    it "answer an empty list for a failed conventions section" do
+      expect(described_class.architecture({ conventions: { error: "boom" } })).to eq([])
+      expect(described_class.patterns({ conventions: { error: "boom" } })).to eq([])
     end
   end
 

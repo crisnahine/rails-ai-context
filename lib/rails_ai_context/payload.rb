@@ -29,6 +29,8 @@ module RailsAiContext
       databases: %i[multi_database databases],
       notable_gems: %i[gems notable_gems],
       stimulus_controllers: %i[stimulus controllers],
+      architecture: %i[conventions architecture],
+      patterns: %i[conventions patterns],
       pending_migrations: %i[migrations pending]
     }.freeze
 
