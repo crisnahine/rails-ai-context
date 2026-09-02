@@ -672,7 +672,7 @@ class RailsAiContextCLI < Thor
     # Every file here stands alone: no ActiveSupport, no Zeitwerk, no Rails.
     def require_install_files!
       %w[
-        install/ai_tool install/selection_record install/cleanup
+        gem_lock install/ai_tool install/selection_record install/cleanup
         install/program mcp_config_generator legacy_cleanup
       ].each { |file| require_relative "../lib/rails_ai_context/#{file}" }
 

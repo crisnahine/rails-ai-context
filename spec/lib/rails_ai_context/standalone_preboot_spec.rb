@@ -26,7 +26,7 @@ RSpec.describe "Standalone pre-boot load" do
   end
 
   it "names the files init loads before the boot" do
-    expect(files).to include("install/ai_tool", "install/selection_record")
+    expect(files).to include("install/ai_tool", "install/selection_record", "gem_lock")
   end
 
   # Whether a constant happens to be there depends on what the host already
