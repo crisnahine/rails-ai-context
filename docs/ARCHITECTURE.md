@@ -26,7 +26,7 @@ graph TD
         subgraph engine["Introspection Engine"]
             direction LR
             I["Introspectors\n40 modules\nPresets\nCached"]
-            AST["AST Engine\nPrism\n24 listeners\nConfidence tags"]
+            AST["AST Engine\nPrism\n26 listeners\nConfidence tags"]
             H["Hydration Layer\nSchema hints\ninjected into\ntool responses"]
         end
 
@@ -41,7 +41,7 @@ graph TD
         direction LR
         MCP["MCP Server\nstdio / HTTP\nResources\nVFS URIs"]
         CLI["CLI Runner\nRake / Thor\nSame 45 tools\nNo server needed"]
-        S["Serializers\n14 modules\nStatic files\nPer-AI-tool"]
+        S["Serializers\n18 modules\nStatic files\nPer-AI-tool"]
     end
 
     style app fill:#4a9eff,stroke:#2d7ad4,color:#fff
@@ -110,13 +110,24 @@ flowchart LR
 
 The `Introspector` orchestrator runs configured introspectors and merges results.
 
+Three modules answer questions every introspector used to answer for itself:
+
+- **SourceScan** - one walk over a kind of app source, across every directory `PathResolver` resolves: `paths` stats, `each` reads, `classes` names by the declared constant
+- **EagerLoad** - loads a directory's constants for a booted-tier walk, one file at a time, so an unloadable file costs only itself
+- **GemLock** - which gems the app resolved and at what version, read once per lockfile and matched by exact name across GEM, GIT and PATH
+
+Two more answer a question a tool asks:
+
+- **PendingMigrations** - which migration files are not in the applied set, from one derivation both the schema and migrations sections read
+- **ActionFilters** - which filters apply to a controller or to one of its actions: own, inherited, skipped
+
 ### AST Engine
 
 **Prism AST parsing** replaced all regex-based Ruby source parsing in v5.2.0.
 
 - **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by path + SHA256 + mtime
 - **SourceIntrospector** - Single-pass Prism Dispatcher walks the AST once, feeding every registered listener simultaneously
-- **21 Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros and Methods are the default map for model analysis; the rest are used through targeted walks over schema dumps, migrations, Gemfiles, rake tasks and initializers
+- **26 Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros and Methods are the default map for model analysis; the rest are used through targeted walks over schema dumps, migrations, Gemfiles, rake tasks and initializers, and `MethodCallListener` reports a named call with its arguments and options wherever one is asked for
 - **Confidence** - Every result carries `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions)
 
 ### Tool Registry (`lib/rails_ai_context/tools/base_tool.rb`)
@@ -162,12 +173,13 @@ Cross-tool semantic hydration (v5.3.0):
 - **ViewHydrator** - Maps `@post` → `Post` by convention, injects schema hints
 - **SchemaHintBuilder** - Resolves model names to `SchemaHint` value objects from cached context
 - **HydrationFormatter** - Renders hints as compact Markdown sections
+- **ModelHints** - Resolves a set of model names to hint blocks once, so a name spelled two ways is not warned about or rendered twice
 
 Result: controller and view tools automatically include relevant schema information without extra tool calls.
 
 ### Serializers (`lib/rails_ai_context/serializers/`)
 
-14 modules that format introspection output for different AI tools:
+18 modules that format introspection output for different AI tools:
 
 | Serializer | Output |
 |:-----------|:-------|
@@ -185,14 +197,24 @@ Result: controller and view tools automatically include relevant schema informat
 | `StackOverviewHelper` | Stack overview sections |
 | `ToolGuideHelper` | MCP/CLI tool reference sections |
 | `TestCommandDetection` | Test framework detection |
+| `SectionFacts` | One-line facts (auth, assets, associations) shared by every serializer |
+| `SectionGuard` | Whether a section resolved, so a refused one is not rendered |
+| `SectionMarkerWriter` | Writes a managed section into a file the user also owns |
+| `ContextModeDispatch` | Picks full or compact rendering for a run |
 
 ### CLI (`exe/rails-ai-context`, `lib/rails_ai_context/cli/`)
 
 Thor-based CLI that works standalone (no Gemfile entry):
 
+- `EntryBoot` - Finds and boots the host Rails app for the standalone binary, or says which tier it fell back to
 - `ToolRunner` - Parses CLI args, resolves tool names, executes tools, formats output
 - Supports `--json` mode for machine-readable output
 - Same 45 tools available as MCP and CLI
+
+### Path safety (`lib/rails_ai_context/safe_path.rb`, `lib/rails_ai_context/view_file.rb`)
+
+- **SafePath** - Resolves a caller-supplied path once, in a fixed refusal order: traversal, sensitive name, realpath, containment, sensitive realpath, file, size. `safe_glob` is the globbed-path form
+- **ViewFile** - Which file a view name means, and whether the app owns it, so no tool builds a template path itself
 
 ### Caching
 
