@@ -103,14 +103,13 @@ module RailsAiContext
         # Cross-reference: controller ivars vs view ivars
         # Also check templates rendered by the action (e.g., create renders :new on failure)
         ctrl_text = response_text(ctrl_result)
-        view_text = response_text(view_result)
         ctrl_ivars = extract_ivars_from_text(ctrl_text)
-        view_ivars = extract_ivars_from_view_text(view_text, action: action_name)
+        view_ivars = Payload.view_ivars(cached_context, "#{snake}/#{action_name}")
         # Detect "render :other_template" and include those templates' ivars too
         rendered = ctrl_text.scan(/render\s+:(\w+)/).flatten.uniq
         other_templates = rendered.reject { |t| t == action_name }
         other_templates.each do |tmpl|
-          view_ivars.merge(extract_ivars_from_view_text(view_text, action: tmpl))
+          view_ivars.merge(Payload.view_ivars(cached_context, "#{snake}/#{tmpl}"))
         end
         # `render json:`/`render xml:` responses are right there in the controller
         # source - an ivar rendered that way is consumed even though there's no
@@ -148,23 +147,6 @@ module RailsAiContext
             break unless line.strip.start_with?("- ")
             match = line.match(/@(\w+)/)
             ivars << match[1] if match
-          end
-        end
-        ivars
-      end
-
-      private_class_method def self.extract_ivars_from_view_text(text, action: nil)
-        # Extract from "ivars: foo, bar, baz" in view listing
-        # When action is specified, only extract from the matching template (e.g., "show.html.erb" for action "show")
-        ivars = Set.new
-        text.each_line do |line|
-          # Skip lines that don't match the action's template when filtering
-          if action
-            # Match: "posts/show.html.erb" for action "show", "posts/index.html.erb" for "index", etc.
-            next unless line.match?(/\/#{Regexp.escape(action)}\.html\.erb\b/)
-          end
-          if (match = line.match(/ivars:\s*(.+?)(?:\s+turbo:|$)/))
-            match[1].split(",").each { |v| ivars << v.strip }
           end
         end
         ivars

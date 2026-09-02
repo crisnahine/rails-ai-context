@@ -49,6 +49,7 @@ module RailsAiContext
           if phlex_view?(path, content)
             entry = {
               lines: content.lines.count,
+              ivars: extract_ivars(content),
               partials: extract_partial_refs(content),
               stimulus: extract_stimulus_refs(content),
               components: extract_phlex_component_renders(content),
@@ -60,6 +61,7 @@ module RailsAiContext
           else
             entry = {
               lines: content.lines.count,
+              ivars: extract_ivars(content),
               partials: extract_partial_refs(content),
               stimulus: extract_stimulus_refs(content)
             }
@@ -68,6 +70,13 @@ module RailsAiContext
           end
         end
         templates
+      end
+
+      # The buffer and path locals ERB itself sets are not the controller's.
+      RENDER_LOCALS = %w[output_buffer virtual_path _request].freeze
+
+      def extract_ivars(content)
+        content.scan(/@(\w+)/).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
       end
 
       def scan_partials(views_dir)
