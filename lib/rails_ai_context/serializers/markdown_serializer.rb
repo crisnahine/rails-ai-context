@@ -173,10 +173,7 @@ module RailsAiContext
       end
 
       def controllers_section
-        data = context[:controllers]
-        return if data[:error]
-
-        controllers = data[:controllers] || {}
+        controllers = Payload.app_controllers(context)
         return if controllers.empty?
 
         lines = [ "## Controllers (#{controllers.size})" ]

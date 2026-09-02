@@ -116,9 +116,7 @@ module RailsAiContext
       end
 
       def render_controllers_instructions
-        data = context[:controllers]
-        return nil unless data.is_a?(Hash) && !data[:error]
-        controllers = data[:controllers] || {}
+        controllers = Payload.app_controllers(context)
         return nil if controllers.empty?
 
         lines = [

@@ -75,14 +75,8 @@ module RailsAiContext
       end
 
       def render_controllers_reference
-        data = context[:controllers]
-        return nil unless data.is_a?(Hash) && !data[:error]
-        controllers = data[:controllers] || {}
-        return nil if controllers.empty?
-
-        # Filter out framework-internal controllers
-        framework = %w[DeviseController Devise::OmniauthCallbacksController]
-        app_controllers = controllers.reject { |name, _| framework.include?(name) }
+        app_controllers = Payload.app_controllers(context)
+        return nil if app_controllers.empty?
 
         lines = [
           "# Controllers (#{app_controllers.size})",

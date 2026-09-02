@@ -50,4 +50,56 @@ RSpec.describe "Serializers against a real introspected context" do
         .to match_array(%w[app/models/AGENTS.md app/controllers/AGENTS.md])
     end
   end
+
+  # One controller set for every surface: a listing that counts what the
+  # configuration hides answers a different number than the tool beside it.
+  describe "the configured controllers" do
+    around do |example|
+      RailsAiContext.configuration.excluded_controllers += %w[Api::V1::BaseController]
+      example.run
+    ensure
+      RailsAiContext.configuration.excluded_controllers -= %w[Api::V1::BaseController]
+    end
+
+    it "MarkdownSerializer leaves it out of the count and the listing" do
+      output = RailsAiContext::Serializers::MarkdownSerializer.new(context).call
+      expect(output).to include("## Controllers (1)")
+      expect(output).not_to include("Api::V1::BaseController")
+    end
+
+    it "CursorRulesSerializer leaves it out of the count" do
+      Dir.mktmpdir do |dir|
+        RailsAiContext::Serializers::CursorRulesSerializer.new(context).call(dir)
+        text = File.read(File.join(dir, ".cursor", "rules", "rails-controllers.mdc"))
+        expect(text).to include("# Controllers (1)")
+        expect(text).not_to include("Api::V1::BaseController")
+      end
+    end
+
+    it "CopilotInstructionsSerializer leaves it out of the count" do
+      Dir.mktmpdir do |dir|
+        RailsAiContext::Serializers::CopilotInstructionsSerializer.new(context).call(dir)
+        text = File.read(File.join(dir, ".github", "instructions", "rails-controllers.instructions.md"))
+        expect(text).to include("# Controllers (1)")
+        expect(text).not_to include("Api::V1::BaseController")
+      end
+    end
+
+    it "OpencodeRulesSerializer leaves it out of the count" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        RailsAiContext::Serializers::OpencodeRulesSerializer.new(context).call(dir)
+        text = File.read(File.join(dir, "app", "controllers", "AGENTS.md"))
+        expect(text).to include("# Controllers (1)")
+        expect(text).not_to include("Api::V1::BaseController")
+      end
+    end
+
+    it "rails_get_controllers leaves it out of the listing" do
+      allow(RailsAiContext::Tools::GetControllers).to receive(:cached_context).and_return(context)
+      text = RailsAiContext::Tools::GetControllers.call(detail: "summary").content.first[:text]
+      expect(text).not_to include("Api::V1::BaseController")
+    end
+  end
 end
