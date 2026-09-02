@@ -87,4 +87,41 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(result[:own].map { |f| f[:name] }).to eq(%w[set_post track])
     end
   end
+
+  # In the static tier each controller's list holds only its own
+  # declarations, so a filter two levels up is reached only by walking.
+  describe "an ancestor chain deeper than one level" do
+    let(:deep_context) do
+      { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before_action", name: "authenticate" } ] },
+        "Admin::BaseController" => {
+          parent_class: "ApplicationController",
+          filters: [ { kind: "before_action", name: "require_admin" } ]
+        },
+        "Admin::PostsController" => { parent_class: "Admin::BaseController", filters: [] }
+      } } }
+    end
+
+    it "carries the grandparent's filter into inherited" do
+      result = described_class.for_controller(deep_context, "Admin::PostsController")
+
+      expect(result[:inherited].map { |f| f[:name] }).to eq(%w[require_admin authenticate])
+    end
+
+    it "lists a filter the closer ancestor redeclares once" do
+      deep_context[:controllers][:controllers]["Admin::BaseController"][:filters] <<
+        { kind: "before_action", name: "authenticate", only: %w[index] }
+
+      names = described_class.for_controller(deep_context, "Admin::PostsController")[:inherited].map { |f| f[:name] }
+      expect(names.count("authenticate")).to eq(1)
+      expect(names).to eq(%w[require_admin authenticate])
+    end
+
+    it "stops at the first ancestor the payload does not carry" do
+      deep_context[:controllers][:controllers].delete("ApplicationController")
+
+      expect(described_class.for_controller(deep_context, "Admin::PostsController")[:inherited].map { |f| f[:name] })
+        .to eq(%w[require_admin])
+    end
+  end
 end
