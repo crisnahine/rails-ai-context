@@ -179,17 +179,17 @@ module RailsAiContext
           return empty_response("Action '#{action_name}' not found in #{controller_name}. Available: #{actions.join(', ')}")
         end
 
-        applicable = RailsAiContext::ActionFilters.for(cached_context, controller_name, action_name)
-
         carried = RailsAiContext::Payload.controller_file(cached_context, controller_name)
-        source_path = carried ? rails_app.root.join(carried) :
-          rails_app.root.join("app", "controllers", "#{controller_name.underscore}.rb")
+        source_path = carried ? rails_app.root.join(carried) : nil
+        source = carried && RailsAiContext::SafePath.read(carried, under: rails_app.root.to_s).first
+
+        applicable = RailsAiContext::ActionFilters.for(cached_context, controller_name, action_name, source: source)
 
         # Extract source code with line numbers
-        source_with_lines = extract_method_with_lines(source_path, action_name)
+        source_with_lines = source && extract_method_with_lines(source_path, action_name, source: source)
 
         lines = [ "# #{controller_name}##{action_name}", "" ]
-        lines << "**File:** `#{carried || "app/controllers/#{controller_name.underscore}.rb"}`"
+        lines << "**File:** `#{carried}`" if carried
 
         if applicable.values.any?(&:any?)
           lines << "" << "## Applicable Filters"
@@ -214,7 +214,7 @@ module RailsAiContext
           lines << "" << "## Instance Variables" << ivars.map { |v| "- `@#{v}`" }.join("\n") if ivars.any?
 
           # Private methods called by this action - include their source inline
-          called_methods = detect_called_private_methods(source_with_lines[:code], source_path)
+          called_methods = detect_called_private_methods(source_with_lines[:code], source_path, source: source)
           if called_methods.any?
             lines << "" << "## Private Methods Called"
             called_methods.each do |pm|
@@ -235,7 +235,7 @@ module RailsAiContext
             render_map[:side_effects].each { |s| lines << "- #{s}" }
           end
         else
-          lines << "" << "_Could not extract source code. File: #{source_path}_"
+          lines << "" << "_Could not extract source code. File: #{source_path || "not recorded for #{controller_name}"}_"
         end
 
         if info[:strong_params]&.any?
@@ -253,10 +253,10 @@ module RailsAiContext
                 end
                 sp[:arrays]&.each { |a| lines << "- array: `#{a}: []`" }
               end
-              body = extract_method_with_lines(source_path, sp[:name])
+              body = extract_method_with_lines(source_path, sp[:name], source: source)
               lines << "```ruby" << body[:code] << "```" if body
             else
-              body = extract_method_with_lines(source_path, sp)
+              body = extract_method_with_lines(source_path, sp, source: source)
               if body
                 lines << "```ruby" << body[:code] << "```"
               else
@@ -277,7 +277,7 @@ module RailsAiContext
       end
 
       # Detect private methods called within an action's source
-      private_class_method def self.detect_called_private_methods(action_code, source_path)
+      private_class_method def self.detect_called_private_methods(action_code, source_path, source: nil)
         return [] unless File.exist?(source_path)
         return [] if File.size(source_path) > RailsAiContext.configuration.max_file_size
 
@@ -289,44 +289,12 @@ module RailsAiContext
 
         called = candidates & private_methods
         called.filter_map do |method_name|
-          body = extract_method_with_lines(source_path, method_name)
+          body = extract_method_with_lines(source_path, method_name, source: source)
           next unless body
           { name: method_name, code: body[:code], start_line: body[:start_line], end_line: body[:end_line] }
         end.first(5) # Limit to 5 to avoid overwhelming response
       rescue => e
         $stderr.puts "[rails-ai-context] detect_called_private_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      # Detect before_action filters from parent controller source file
-      private_class_method def self.detect_parent_filters(parent_class)
-        return [] unless parent_class
-
-        # Try introspector data first
-        controllers = cached_context.dig(:controllers, :controllers) || {}
-        parent_data = controllers[parent_class]
-        if parent_data
-          return (parent_data[:filters] || []).select { |f| f[:kind] == "before" && !f[:only]&.any? && !f[:except]&.any? }
-        end
-
-        # Fallback: read ApplicationController source directly
-        path = rails_app.root.join("app", "controllers", "#{parent_class.underscore}.rb")
-        return [] unless File.exist?(path)
-        return [] if File.size(path) > RailsAiContext.configuration.max_file_size
-
-        source = RailsAiContext::SafeFile.read(path)
-        return [] unless source
-
-        filters = []
-        source.each_line do |line|
-          if (m = line.match(/\A\s*before_action\s+:(\w+)/))
-            next if line.include?("only:") || line.include?("except:")
-            filters << { kind: "before", name: m[1] }
-          end
-        end
-        filters
-      rescue => e
-        $stderr.puts "[rails-ai-context] detect_parent_filters failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 
@@ -394,10 +362,12 @@ module RailsAiContext
         { redirects: [], renders: [], side_effects: [] }
       end
 
-      private_class_method def self.extract_method_with_lines(file_path, method_name)
-        return nil unless File.exist?(file_path)
-        return nil if File.size(file_path) > RailsAiContext.configuration.max_file_size
-        source_lines = (RailsAiContext::SafeFile.read(file_path) || "").lines
+      private_class_method def self.extract_method_with_lines(file_path, method_name, source: nil)
+        unless source
+          return nil unless file_path && File.exist?(file_path)
+          return nil if File.size(file_path) > RailsAiContext.configuration.max_file_size
+        end
+        source_lines = (source || RailsAiContext::SafeFile.read(file_path) || "").lines
         start_idx = source_lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/) }
         return nil unless start_idx
 
@@ -434,29 +404,11 @@ module RailsAiContext
           lines << info[:actions].map { |a| "- `#{a}`" }.join("\n")
         end
 
-        # Show full filter chain including inherited from parent controller.
-        # `all_filters` is reflection-derived for loaded controllers and already
-        # includes the inherited chain; `parent_filters` re-parses the parent
-        # source. Listing both verbatim double-lists inherited filters (e.g.
-        # set_current_user appearing twice), so dedupe by name: surface only the
-        # parent filters missing from the own list (covers source-only
-        # controllers whose own list lacks the chain), then annotate the
-        # inherited entries in the own list rather than repeating them.
-        all_filters = info[:filters] || []
-        parent_filters = detect_parent_filters(info[:parent_class])
-        if parent_filters.any? || all_filters.any?
+        chain = RailsAiContext::ActionFilters.for_controller(cached_context, name)
+        if chain[:inherited].any? || chain[:own].any?
           lines << "" << "## Filters"
-          all_names = all_filters.map { |f| f[:name] }.to_set
-          parent_names = parent_filters.map { |f| f[:name] }.to_set
-          parent_filters.reject { |f| all_names.include?(f[:name]) }.each do |f|
-            lines << "- `#{f[:kind]}` **#{f[:name]}** _(from #{info[:parent_class]})_"
-          end
-          all_filters.each do |f|
-            detail = "- `#{f[:kind]}` **#{f[:name]}**"
-            detail += " _(from #{info[:parent_class]})_" if parent_names.include?(f[:name])
-            detail += " (only: #{f[:only].join(', ')})" if f[:only]&.any?
-            lines << detail
-          end
+          chain[:inherited].each { |f| lines << filter_line(f, info[:parent_class]) }
+          chain[:own].each { |f| lines << filter_line(f, nil) }
         end
 
         if info[:strong_params]&.any?
@@ -487,11 +439,9 @@ module RailsAiContext
         end
 
         # Hydrate with schema hints for models referenced in this controller
-        if RailsAiContext.configuration.hydration_enabled
-          carried = RailsAiContext::Payload.controller_file(cached_context, name)
-          source_path = carried ? rails_app.root.join(carried) :
-            rails_app.root.join("app", "controllers", "#{name.underscore}.rb")
-          hydration = Hydrators::ControllerHydrator.call(source_path.to_s, context: cached_context)
+        carried = RailsAiContext::Payload.controller_file(cached_context, name)
+        if RailsAiContext.configuration.hydration_enabled && carried
+          hydration = Hydrators::ControllerHydrator.call(rails_app.root.join(carried).to_s, context: cached_context)
           hydration_text = Hydrators::HydrationFormatter.format(hydration)
           lines << "" << hydration_text unless hydration_text.empty?
         end

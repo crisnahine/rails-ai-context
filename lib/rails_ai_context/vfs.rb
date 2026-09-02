@@ -100,7 +100,7 @@ module RailsAiContext
         action_data = {
           controller: key,
           action: action.to_s,
-          filters: applicable[:own] + applicable[:inherited],
+          filters: applicable[:inherited] + applicable[:own],
           strong_params: info[:strong_params]
         }.compact
 

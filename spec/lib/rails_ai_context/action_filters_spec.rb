@@ -33,6 +33,32 @@ RSpec.describe RailsAiContext::ActionFilters do
     expect(described_class.for(context, "Nope", "show")).to eq({ own: [], inherited: [], skipped: [] })
   end
 
+  describe ".for_controller" do
+    it "keeps every declared filter, whatever action it constrains itself to" do
+      result = described_class.for_controller(context, "PostsController")
+      expect(result[:own].map { |f| f[:name] }).to eq(%w[set_post track])
+      expect(result[:inherited].map { |f| f[:name] }).to eq(%w[authenticate])
+    end
+
+    it "answers empty lists for an unknown controller" do
+      expect(described_class.for_controller(context, "Nope")).to eq({ own: [], inherited: [], skipped: [] })
+    end
+  end
+
+  describe "source: keyword" do
+    it "reads the skips from the source it is handed instead of the file" do
+      source = "class PostsController\n  skip_before_action :authenticate\nend\n"
+      result = described_class.for(context, "PostsController", "show", source: source)
+      expect(result[:skipped]).to eq(%w[authenticate])
+      expect(result[:inherited]).to eq([])
+    end
+
+    it "names a filter a skip lists as a string" do
+      source = %(class PostsController\n  skip_before_action "authenticate"\nend\n)
+      expect(described_class.for_controller(context, "PostsController", source: source)[:skipped]).to eq(%w[authenticate])
+    end
+  end
+
   context "skips read from the carried file" do
     around do |example|
       Dir.mktmpdir("action-filters") do |dir|

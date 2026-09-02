@@ -1,11 +1,7 @@
 # frozen_string_literal: true
 
 module RailsAiContext
-  # Which filters run for one action of one controller. The VFS resource and
-  # the controller tool each decided this for themselves, from the same
-  # payload plus their own line regexes over the source, and disagreed on
-  # `except:`, on multi-name skips, and on whether an inherited filter was
-  # listed twice.
+  # Which filters run for a controller, and for one of its actions.
   #
   # A compiled callback keeps `only:`/`except:` in private ivars, so
   # reflection cannot recover them: the per-filter constraints the
@@ -18,13 +14,23 @@ module RailsAiContext
 
     module_function
 
-    # { own: [filter], inherited: [filter], skipped: [name] }.
-    def for(ctx, controller_name, action)
+    # { own: [filter], inherited: [filter], skipped: [name] } for one action.
+    # `source:` is the controller's source when the caller already has it.
+    def for(ctx, controller_name, action, source: nil)
+      split(ctx, controller_name, action.to_s, source)
+    end
+
+    # The same three lists for the whole controller: every declared filter,
+    # whatever actions it constrains itself to.
+    def for_controller(ctx, controller_name, source: nil)
+      split(ctx, controller_name, nil, source)
+    end
+
+    def split(ctx, controller_name, action, source)
       info = Payload.controllers(ctx)[controller_name.to_s]
       return { own: [], inherited: [], skipped: [] } unless info.is_a?(Hash)
 
-      action = action.to_s
-      skipped = skipped_names(ctx, controller_name, action)
+      skipped = skipped_names(ctx, controller_name, action, source)
       declared = Array(info[:filters]).grep(Hash)
       applicable = declared.select { |f| applies?(f, action) }
         .reject { |f| skipped.include?(f[:name].to_s) }
@@ -41,8 +47,11 @@ module RailsAiContext
       }
     end
 
-    # `only` wins over `except`; declaring neither means every action.
+    # `only` wins over `except`; declaring neither means every action. A nil
+    # action asks about the controller, where every filter counts.
     def applies?(filter, action)
+      return true unless action
+
       only = Array(filter[:only]).map(&:to_s)
       return only.include?(action) if only.any?
 
@@ -67,22 +76,27 @@ module RailsAiContext
     end
 
     # Skips live only in the class body, so they are read from the file the
-    # introspector carried - never a path derived from the class name.
-    def skipped_names(ctx, controller_name, action)
-      file = Payload.controller_file(ctx, controller_name)
-      return [] unless file
-
-      source, = SafePath.read(file, under: RailsAiContext.default_app.root.to_s)
+    # introspector carried - never a path derived from the class name. A file
+    # SafePath refuses (too large, unreadable, gone) skips nothing.
+    def skipped_names(ctx, controller_name, action, source = nil)
+      source ||= carried_source(ctx, controller_name)
       return [] unless source
 
       skip_calls(source).flat_map do |call|
         next [] unless applies?({ only: call.dig(:options, :only), except: call.dig(:options, :except) }, action)
 
-        Array(call[:arguments]).grep(Symbol).map(&:to_s)
+        Array(call[:arguments]).select { |a| a.is_a?(Symbol) || a.is_a?(String) }.map(&:to_s)
       end.uniq
     rescue => e
       $stderr.puts "[rails-ai-context] ActionFilters skipped_names failed: #{e.message}" if ENV["DEBUG"]
       []
+    end
+
+    def carried_source(ctx, controller_name)
+      file = Payload.controller_file(ctx, controller_name)
+      return nil unless file
+
+      SafePath.read(file, under: RailsAiContext.default_app.root.to_s).first
     end
 
     def skip_calls(source)
@@ -90,5 +104,7 @@ module RailsAiContext
         skips: -> { Introspectors::Listeners::MethodCallListener.new(names: SKIP_MACROS) }
       })[:skips] || []
     end
+
+    private_class_method :split, :applies?, :parent_filters, :skipped_names, :carried_source, :skip_calls
   end
 end
