@@ -58,4 +58,39 @@ RSpec.describe RailsAiContext::Introspectors::EagerLoad do
       expect(Nested.const_defined?(:ZzFine, false)).to be true
     end
   end
+
+  # Camelizing the path gives ZzHtmlParser, a constant nothing defines, so
+  # the file loads only if the loader's own inflector names it. The broken
+  # sibling stops eager_load_dir, which is what puts the inflected file on
+  # the per-constant path in the first place.
+  describe "a file the app registers an inflection for" do
+    let(:dir) { Dir.mktmpdir }
+    let(:loader) do
+      Zeitwerk::Loader.new.tap do |l|
+        l.inflector.inflect("zz_html_parser" => "ZzHTMLParser")
+        l.push_dir(dir)
+        l.setup
+      end
+    end
+
+    before do
+      File.write(File.join(dir, "zz_a_broken.rb"), "class ZzABroken <\n")
+      File.write(File.join(dir, "zz_html_parser.rb"), "class ZzHTMLParser; end\n")
+      allow(RailsAiContext::PathResolver).to receive(:dirs_for).and_return([ dir ])
+      allow(Rails.autoloaders).to receive(:main).and_return(loader)
+    end
+
+    after do
+      loader.unload
+      loader.unregister if loader.respond_to?(:unregister)
+      FileUtils.remove_entry(dir)
+    end
+
+    it "loads the constant the inflector names" do
+      described_class.dir(dir, kind: "app/models")
+
+      expect(Object.autoload?(:ZzHTMLParser)).to be_nil
+      expect(Object.const_defined?(:ZzHTMLParser, false)).to be true
+    end
+  end
 end

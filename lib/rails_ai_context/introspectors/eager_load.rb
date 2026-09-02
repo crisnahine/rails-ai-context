@@ -33,14 +33,23 @@ module RailsAiContext
         load_individually(path)
       end
 
+      # The loader names the constant, not `camelize`: an app inflection
+      # makes the two disagree, and a wrong name silently loads nothing.
       def load_individually(path)
+        loader = Rails.autoloaders.main
         Dir.glob(File.join(path, "**/*.rb")).sort.each do |file|
-          file.delete_prefix(path + File::SEPARATOR).sub(/\.rb\z/, "").camelize.constantize
+          cpath_for(loader, path, file).constantize
         rescue StandardError, ScriptError
           next
         end
       end
-      private_class_method :load_dir, :load_individually
+
+      def cpath_for(loader, path, file)
+        return loader.cpath_expected_at(file) if loader.respond_to?(:cpath_expected_at)
+
+        file.delete_prefix(path + File::SEPARATOR).sub(/\.rb\z/, "").camelize
+      end
+      private_class_method :load_dir, :load_individually, :cpath_for
     end
   end
 end
