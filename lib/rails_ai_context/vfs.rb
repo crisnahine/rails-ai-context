@@ -9,8 +9,8 @@ module RailsAiContext
     SCHEME = "rails-ai-context"
 
     PATTERNS = [
-      { pattern: %r{\Arails-ai-context://controllers/([^/]+)/([^/]+)\z}, handler: :resolve_controller_action },
-      { pattern: %r{\Arails-ai-context://controllers/([^/]+)\z}, handler: :resolve_controller },
+      { pattern: %r{\Arails-ai-context://controllers/(.+)/([^/]+)\z}, handler: :resolve_controller_action },
+      { pattern: %r{\Arails-ai-context://controllers/(.+)\z}, handler: :resolve_controller },
       { pattern: %r{\Arails-ai-context://models/(.+)\z}, handler: :resolve_model },
       { pattern: %r{\Arails-ai-context://views/(.+)\z}, handler: :resolve_view },
       { pattern: %r{\Arails-ai-context://routes/(.+)\z}, handler: :resolve_routes }
@@ -39,8 +39,7 @@ module RailsAiContext
         context = RailsAiContext.introspect
         models = context[:models] || {}
 
-        # Case-insensitive lookup
-        key = models.keys.find { |k| k.to_s.casecmp?(name) } || name
+        key = Tools::BaseTool.fuzzy_find_key(models.keys, name) || name
         data = models[key]
 
         unless data
@@ -60,13 +59,7 @@ module RailsAiContext
       def resolve_controller(uri, name)
         context = RailsAiContext.introspect
         controllers = context.dig(:controllers, :controllers) || {}
-
-        # Flexible matching: "posts", "PostsController", "postscontroller"
-        input_snake = name.underscore.delete_suffix("_controller")
-        key = controllers.keys.find { |k|
-          k.underscore.delete_suffix("_controller") == input_snake ||
-            k.downcase.delete_suffix("controller") == name.downcase.delete_suffix("controller")
-        }
+        key = find_controller(context, name)
 
         unless key
           available = controllers.keys.sort.first(20)
@@ -81,10 +74,12 @@ module RailsAiContext
         context = RailsAiContext.introspect
         controllers = context.dig(:controllers, :controllers) || {}
 
-        input_snake = controller_name.underscore.delete_suffix("_controller")
-        key = controllers.keys.find { |k|
-          k.underscore.delete_suffix("_controller") == input_snake
-        }
+        # "admin/posts" is a namespaced controller unless "admin" is itself a
+        # controller with a "posts" action.
+        whole = find_controller(context, "#{controller_name}/#{action_name}")
+        key = find_controller(context, controller_name)
+        prefix_action = key && (controllers.dig(key, :actions) || []).any? { |a| a.to_s.casecmp?(action_name) }
+        return resolve_controller(uri, "#{controller_name}/#{action_name}") if whole && !prefix_action
 
         unless key
           content = JSON.pretty_generate(error: "Controller '#{controller_name}' not found")
@@ -120,85 +115,21 @@ module RailsAiContext
       end
 
       def resolve_view(uri, path)
-        # Block path traversal
-        if path.include?("..") || path.start_with?("/")
-          raise RailsAiContext::Error, "Path not allowed: #{path}"
+        root = RailsAiContext.default_app.root.to_s
+        content, result = RailsAiContext::ViewFile.read(root, path)
+        case result.refusal
+        when :traversal, :outside then raise RailsAiContext::Error, "Path not allowed: #{path}"
+        when :sensitive then raise RailsAiContext::Error, "Path not allowed: #{path} (sensitive file)"
+        when :too_large
+          text = JSON.pretty_generate(error: "File too large: #{path}")
+          return [ { uri: uri, mimeType: "application/json", text: text } ]
+        when :missing
+          text = JSON.pretty_generate(error: "View not found: #{path}. Paths are relative to app/views; the extension is optional (posts/index and posts/index.html.erb both resolve).")
+          return [ { uri: uri, mimeType: "application/json", text: text } ]
         end
 
-        # Rule 1 (security conventions in CLAUDE.md): early sensitive-file
-        # check on the caller-supplied string BEFORE any filesystem stat.
-        # Without this, the "View not found" vs "Path not allowed (sensitive
-        # file)" message distinction acts as an existence oracle for
-        # `.env` / `master.key` / `credentials.yml.enc` inside `app/views/`.
-        if RailsAiContext::Tools::BaseTool.send(:sensitive_file?, path)
-          raise RailsAiContext::Error, "Path not allowed: #{path} (sensitive file)"
-        end
-
-        views_dir = RailsAiContext.default_app.root.join("app", "views")
-        full_path = views_dir.join(path)
-
-        # Extension-less lookup: "posts/index" resolves to the template file
-        # itself (posts/index.html.erb) so callers don't have to know the
-        # format/handler suffix chain. File.file? so a same-named directory
-        # (e.g. a posts/index/ partial dir) doesn't defeat the fallback.
-        unless File.file?(full_path)
-          dir = File.dirname(path)
-          base = File.basename(path)
-          parent = dir == "." ? views_dir.to_s : views_dir.join(dir).to_s
-          candidates = begin
-            Dir.children(parent).select { |e| e.start_with?("#{base}.") && File.file?(File.join(parent, e)) }
-          rescue SystemCallError
-            []
-          end
-          # Never let the fallback land on a sensitive file: "master" matching
-          # master.key would turn the not-found/not-allowed message split into
-          # an existence oracle for secrets placed under app/views.
-          candidates.reject! { |e| RailsAiContext::Tools::BaseTool.send(:sensitive_file?, dir == "." ? e : File.join(dir, e)) }
-          if candidates.any?
-            chosen = candidates.min_by { |e| [ e.end_with?(".html.erb") ? 0 : 1, e ] }
-            path = dir == "." ? chosen : File.join(dir, chosen)
-            full_path = views_dir.join(path)
-          end
-        end
-
-        unless File.file?(full_path)
-          content = JSON.pretty_generate(error: "View not found: #{path}. Paths are relative to app/views; the extension is optional (posts/index and posts/index.html.erb both resolve).")
-          return [ { uri: uri, mimeType: "application/json", text: content } ]
-        end
-
-        # Verify resolved path is still under views_dir. `start_with?` alone
-        # matches `/app/views_spec/x` against `/app/views` - so we append
-        # File::SEPARATOR (or accept exact equality for the dir itself).
-        # A symlink at `app/views/leak → ../views_spec/secret.html.erb`
-        # would otherwise escape the views tree. Fixed in v5.8.1.
-        real_view = File.realpath(full_path)
-        real_base = File.realpath(views_dir)
-        unless real_view == real_base || real_view.start_with?(real_base + File::SEPARATOR)
-          raise RailsAiContext::Error, "Path not allowed: #{path}"
-        end
-
-        # Defense-in-depth: re-run sensitive_file? on the realpath. If someone
-        # places a `.env` or `config/master.key` symlink inside `app/views/`,
-        # reject it even though the containment check passed. Mirrors the
-        # v5.8.1 fix in `get_edit_context.rb`.
-        relative_real = real_view.sub("#{real_base}/", "")
-        if RailsAiContext::Tools::BaseTool.send(:sensitive_file?, relative_real) ||
-           RailsAiContext::Tools::BaseTool.send(:sensitive_file?, path)
-          raise RailsAiContext::Error, "Path not allowed: #{path} (sensitive file)"
-        end
-
-        # Use the canonicalized realpath for size + read to eliminate the TOCTOU
-        # window between the containment/sensitive check and the actual file
-        # access. Mirrors the pattern in get_view.rb and get_edit_context.rb.
-        max_size = RailsAiContext.configuration.max_file_size
-        if File.size(real_view) > max_size
-          content = JSON.pretty_generate(error: "File too large: #{path} (#{File.size(real_view)} bytes)")
-          return [ { uri: uri, mimeType: "application/json", text: content } ]
-        end
-
-        view_content = RailsAiContext::SafeFile.read(real_view) || ""
-        mime = path.end_with?(".rb") ? "text/x-ruby" : "text/html"
-        [ { uri: uri, mimeType: mime, text: view_content } ]
+        mime = result.relative.end_with?(".rb") ? "text/x-ruby" : "text/html"
+        [ { uri: uri, mimeType: mime, text: content.to_s } ]
       end
 
       def resolve_routes(uri, controller)
@@ -212,8 +143,10 @@ module RailsAiContext
         # pairs merge into one PATCH|PUT entry so this resource reports the
         # same counts as the routes tool.
         by_controller = routes_data[:by_controller] || {}
+        key = find_controller(context, controller)
+        route_key = key && Payload.controller_route_key(context, key)
         routes = by_controller.flat_map { |name, entries|
-          next [] unless name.to_s.include?(controller)
+          next [] unless route_key ? name.to_s == route_key : name.to_s.include?(controller)
 
           Tools::BaseTool.dedupe_put_patch_routes(Array(entries)).map { |entry| entry.merge(controller: name.to_s) }
         }
@@ -221,6 +154,18 @@ module RailsAiContext
         data = { filtered_by: controller, total_routes: routes.size, routes: routes }
 
         [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(data) } ]
+      end
+
+      # "posts", "PostsController", "admin/posts", "Admin::PostsController",
+      # and a route key whose declared constant does not camelize from it.
+      def find_controller(ctx, input)
+        controllers = ctx.dig(:controllers, :controllers) || {}
+        by_route = Payload.controller_for_route_key(ctx, input.to_s.delete_suffix("_controller"))
+        return by_route.first if by_route
+
+        Tools::BaseTool.fuzzy_find_key(controllers.keys, input) ||
+          Tools::BaseTool.fuzzy_find_key(controllers.keys, "#{input}Controller") ||
+          Tools::BaseTool.fuzzy_find_key(controllers.keys, "#{input.to_s.camelize}Controller")
       end
     end
   end
