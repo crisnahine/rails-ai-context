@@ -58,19 +58,19 @@ module RailsAiContext
 
           # Stats: tables, models, jobs
           stats = []
-          schema = ctx[:schema]
-          if schema.is_a?(Hash) && !schema[:error]
+          schema = Payload.section(ctx, :schema)
+          if schema
             table_count = schema[:total_tables] || 0
             stats << count_phrase(table_count, "table") if table_count > 0
           end
 
-          models = ctx[:models]
-          if models.is_a?(Hash) && !models[:error] && models.any?
+          models = Payload.models(ctx)
+          if models.any?
             stats << count_phrase(models.size, "model")
           end
 
-          jobs = ctx[:jobs]
-          if jobs.is_a?(Hash) && !jobs[:error]
+          jobs = Payload.section(ctx, :jobs)
+          if jobs
             job_count = (jobs[:jobs] || []).size
             stats << count_phrase(job_count, "job") if job_count > 0
           end
@@ -81,8 +81,8 @@ module RailsAiContext
           frontend_desc = quick_frontend_summary(ctx)
           parts << "- #{frontend_desc}" if frontend_desc
 
-          tests = ctx[:tests]
-          if tests.is_a?(Hash) && !tests[:error]
+          tests = Payload.section(ctx, :tests)
+          if tests
             parts << "tested with #{tests[:framework] || 'unknown framework'}"
           end
 
@@ -131,8 +131,8 @@ module RailsAiContext
 
         def section_stack(ctx)
           lines = [ "## Stack", "" ]
-          schema = ctx[:schema]
-          if schema.is_a?(Hash) && !schema[:error]
+          schema = Payload.section(ctx, :schema)
+          if schema
             # Prefer live adapter from config over static_parse from schema introspector
             adapter = resolve_db_adapter(ctx, schema)
             db = "#{adapter} (#{count_phrase(schema[:total_tables].to_i, 'table')})"
@@ -141,8 +141,8 @@ module RailsAiContext
           end
           lines << "#{ctx[:app_name]} is a Rails #{ctx[:rails_version]} application running Ruby #{ctx[:ruby_version]} on #{db}."
 
-          gems = ctx[:gems]
-          if gems.is_a?(Hash) && !gems[:error]
+          gems = Payload.section(ctx, :gems)
+          if gems
             notable = gems[:notable_gems] || []
             if notable.any?
               by_cat = notable.group_by { |g| g[:category]&.to_s || "other" }
@@ -151,8 +151,8 @@ module RailsAiContext
             end
           end
 
-          conv = ctx[:conventions]
-          if conv.is_a?(Hash) && !conv[:error]
+          conv = Payload.section(ctx, :conventions)
+          if conv
             arch = conv[:architecture] || []
             lines << "Architecture: #{arch.join(', ')}." if arch.any?
           end
@@ -162,8 +162,8 @@ module RailsAiContext
         end
 
         def section_data_model(ctx)
-          models = ctx[:models]
-          return [] unless models.is_a?(Hash) && !models[:error] && models.any?
+          models = Payload.models(ctx)
+          return [] unless models.any?
 
           lines = [ "## Data Model", "" ]
           top = central_models(models, 7)
@@ -194,11 +194,11 @@ module RailsAiContext
         end
 
         def section_auth(ctx)
-          auth = ctx[:auth]
+          auth = Payload.section(ctx, :auth)
           lines = [ "## Authentication & Authorization", "" ]
           has_content = false
 
-          if auth.is_a?(Hash) && !auth[:error]
+          if auth
             authentication = auth[:authentication] || {}
             authorization = auth[:authorization] || {}
             if authentication[:method]
@@ -217,8 +217,8 @@ module RailsAiContext
 
           # Fallback: detect auth from gems if introspector didn't provide data
           unless has_content
-            gems = ctx[:gems]
-            if gems.is_a?(Hash) && !gems[:error]
+            gems = Payload.section(ctx, :gems)
+            if gems
               notable = gems[:notable_gems] || []
               auth_gem_names = %w[devise omniauth rodauth sorcery clearance authlogic]
               auth_gems = notable.select { |g| g.is_a?(Hash) && auth_gem_names.include?(g[:name].to_s) }
@@ -237,8 +237,8 @@ module RailsAiContext
 
           # Fallback: detect from conventions (global before_actions like authenticate_user!)
           unless has_content
-            conv = ctx[:conventions]
-            if conv.is_a?(Hash) && !conv[:error]
+            conv = Payload.section(ctx, :conventions)
+            if conv
               before_acts = Array(conv[:before_actions]).select { |a| a.to_s.match?(/authenticat|authorize/) }
               auth_checks = Array(conv[:authorization_checks]) + before_acts
               if auth_checks.any?
@@ -254,9 +254,9 @@ module RailsAiContext
         end
 
         def section_key_flows(ctx)
-          routes = ctx[:routes]
+          routes = Payload.section(ctx, :routes)
           controllers = ctx[:controllers]
-          return [] unless routes.is_a?(Hash) && !routes[:error]
+          return [] unless routes
 
           lines = [ "## Key Flows", "" ]
 
@@ -285,8 +285,8 @@ module RailsAiContext
         end
 
         def section_jobs(ctx)
-          jobs = ctx[:jobs]
-          return [] unless jobs.is_a?(Hash) && !jobs[:error]
+          jobs = Payload.section(ctx, :jobs)
+          return [] unless jobs
 
           job_list = jobs[:jobs] || []
           mailers = jobs[:mailers] || []
@@ -305,14 +305,14 @@ module RailsAiContext
         end
 
         def section_frontend(ctx)
-          frontend = ctx[:frontend_frameworks]
-          stimulus = ctx[:stimulus]
-          turbo = ctx[:turbo]
+          frontend = Payload.section(ctx, :frontend_frameworks)
+          stimulus = Payload.section(ctx, :stimulus)
+          turbo = Payload.section(ctx, :turbo)
 
           lines = []
           has_content = false
 
-          if frontend.is_a?(Hash) && !frontend[:error] && frontend[:frameworks]&.any?
+          if frontend && frontend[:frameworks]&.any?
             lines << "## Frontend" << ""
             frameworks = frontend[:frameworks]
             if frameworks.is_a?(Hash)
@@ -323,7 +323,7 @@ module RailsAiContext
             has_content = true
           end
 
-          if stimulus.is_a?(Hash) && !stimulus[:error]
+          if stimulus
             count = stimulus[:total_controllers] || stimulus[:controllers]&.size || 0
             if count > 0
               lines << "## Frontend" << "" unless has_content
@@ -332,7 +332,7 @@ module RailsAiContext
             end
           end
 
-          if turbo.is_a?(Hash) && !turbo[:error]
+          if turbo
             frames = turbo[:turbo_frames]&.size || 0
             streams = turbo[:turbo_streams]&.size || 0
             if frames > 0 || streams > 0
@@ -350,8 +350,8 @@ module RailsAiContext
         end
 
         def section_testing(ctx)
-          tests = ctx[:tests]
-          return [] unless tests.is_a?(Hash) && !tests[:error]
+          tests = Payload.section(ctx, :tests)
+          return [] unless tests
 
           lines = [ "## Testing", "" ]
           framework = tests[:framework] || "unknown"
@@ -394,9 +394,9 @@ module RailsAiContext
         # ── Full-only sections ───────────────────────────────────────────
 
         def section_payments(ctx)
-          gems = ctx[:gems]
-          models = ctx[:models]
-          return [] unless gems.is_a?(Hash) && !gems[:error] && models.is_a?(Hash)
+          gems = Payload.section(ctx, :gems)
+          models = Payload.models(ctx)
+          return [] unless gems
 
           payment_gems = %w[stripe pay braintree paddle_pay]
           notable = gems[:notable_gems] || []
@@ -435,8 +435,8 @@ module RailsAiContext
 
           # Fallback: check for turbo_stream usage in views
           unless has_content
-            views = ctx[:view_templates] || ctx[:views]
-            if views.is_a?(Hash) && !views[:error]
+            views = Payload.section(ctx, :view_templates) || Payload.section(ctx, :views)
+            if views
               templates = Array(views[:templates])
               turbo_views = templates.select { |v| v.is_a?(Hash) && (v[:path].to_s.include?("turbo_stream") || Array(v[:turbo_streams]).any?) }
               if turbo_views.any?
@@ -452,15 +452,15 @@ module RailsAiContext
         end
 
         def section_storage(ctx)
-          storage = ctx[:active_storage]
-          text = ctx[:action_text]
-          return [] unless (storage.is_a?(Hash) && !storage[:error]) || (text.is_a?(Hash) && !text[:error])
+          storage = Payload.section(ctx, :active_storage)
+          text = Payload.section(ctx, :action_text)
+          return [] unless storage || text
 
           lines = [ "## File Storage & Rich Text", "" ]
-          if storage.is_a?(Hash) && !storage[:error] && storage[:attachments]&.any?
+          if storage && storage[:attachments]&.any?
             lines << "Active Storage: #{count_phrase(storage[:attachments].size, "attachment")} across models."
           end
-          if text.is_a?(Hash) && !text[:error] && text[:models]&.any?
+          if text && text[:models]&.any?
             lines << "Action Text: #{count_phrase(text[:models].size, "model")} with rich text fields."
           end
           lines << ""
@@ -468,8 +468,8 @@ module RailsAiContext
         end
 
         def section_api(ctx)
-          api = ctx[:api]
-          return [] unless api.is_a?(Hash) && !api[:error]
+          api = Payload.section(ctx, :api)
+          return [] unless api
           return [] if api.empty? || (api[:endpoints]&.empty? && api[:graphql].nil?)
 
           lines = [ "## API", "" ]
@@ -487,11 +487,11 @@ module RailsAiContext
         end
 
         def section_devops(ctx)
-          devops = ctx[:devops]
+          devops = Payload.section(ctx, :devops)
           lines = [ "## Deployment & DevOps", "" ]
           has_content = false
 
-          if devops.is_a?(Hash) && !devops[:error]
+          if devops
             lines << "Dockerfile: #{devops[:dockerfile] ? 'present' : 'not found'}."
             lines << "Procfile: #{devops[:procfile] ? 'present' : 'not found'}." if devops.key?(:procfile)
             deploy = devops[:deployment_method]
@@ -520,8 +520,8 @@ module RailsAiContext
         end
 
         def section_i18n(ctx)
-          i18n = ctx[:i18n]
-          return [] unless i18n.is_a?(Hash) && !i18n[:error]
+          i18n = Payload.section(ctx, :i18n)
+          return [] unless i18n
 
           locales = i18n[:locales] || []
           return [] if locales.empty?
@@ -545,8 +545,8 @@ module RailsAiContext
 
         def section_env(ctx)
           # Summarize from models that have encrypts, and auth/payment-related env patterns
-          models = ctx[:models]
-          return [] unless models.is_a?(Hash) && !models[:error]
+          models = Payload.models(ctx)
+          return [] unless models.any?
 
           encrypted = models.select { |_, d| d.is_a?(Hash) && d[:encrypts]&.any? }
           return [] if encrypted.empty?
@@ -639,8 +639,8 @@ module RailsAiContext
         end
 
         def extract_job_names(ctx)
-          jobs = ctx[:jobs]
-          return [] unless jobs.is_a?(Hash) && !jobs[:error]
+          jobs = Payload.section(ctx, :jobs)
+          return [] unless jobs
           (jobs[:jobs] || []).map { |j| j[:name].to_s }.reject(&:empty?)
         end
 
@@ -659,20 +659,20 @@ module RailsAiContext
         end
 
         def extract_model_names(ctx)
-          models = ctx[:models]
-          return [] unless models.is_a?(Hash) && !models[:error]
+          models = Payload.models(ctx)
+          return [] unless models.any?
           models.keys.map(&:to_s)
         end
 
         def extract_gem_names(ctx)
-          gems = ctx[:gems]
-          return [] unless gems.is_a?(Hash) && !gems[:error]
+          gems = Payload.section(ctx, :gems)
+          return [] unless gems
           (gems[:notable_gems] || []).map { |g| g[:name].to_s }
         end
 
         def extract_architecture(ctx)
-          conv = ctx[:conventions]
-          return [] unless conv.is_a?(Hash) && !conv[:error]
+          conv = Payload.section(ctx, :conventions)
+          return [] unless conv
           conv[:architecture] || []
         end
 
@@ -809,8 +809,8 @@ module RailsAiContext
 
         # Quick one-line frontend summary from conventions
         def quick_frontend_summary(ctx)
-          conv = ctx[:conventions]
-          return nil unless conv.is_a?(Hash) && !conv[:error]
+          conv = Payload.section(ctx, :conventions)
+          return nil unless conv
 
           arch = conv[:architecture] || []
           parts = []
@@ -823,8 +823,8 @@ module RailsAiContext
           parts << "Vue" if arch.include?("vue")
 
           # Check frontend frameworks introspection too
-          frontend = ctx[:frontend_frameworks]
-          if frontend.is_a?(Hash) && !frontend[:error]
+          frontend = Payload.section(ctx, :frontend_frameworks)
+          if frontend
             frameworks = frontend[:frameworks]
             if frameworks.is_a?(Hash)
               frameworks.each_key do |name|
