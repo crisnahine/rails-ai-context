@@ -75,8 +75,18 @@ module RailsAiContext
       # The buffer and path locals ERB itself sets are not the controller's.
       RENDER_LOCALS = %w[output_buffer virtual_path _request].freeze
 
+      # A word character before the `@` makes it an address, and a second `@`
+      # makes it a class variable; neither is an ivar the controller assigned.
+      IVAR = /(?<![\w@])@(\w+)/
+
+      # The one reader of a template's ivars, so `get_view` and this
+      # introspector cannot disagree about what a template uses.
+      def self.ivars_in(content)
+        content.to_s.scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
+      end
+
       def extract_ivars(content)
-        content.scan(/@(\w+)/).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
+        self.class.ivars_in(content)
       end
 
       def scan_partials(views_dir)
