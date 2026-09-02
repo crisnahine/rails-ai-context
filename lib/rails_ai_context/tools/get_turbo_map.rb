@@ -95,7 +95,7 @@ module RailsAiContext
       end
 
       private_class_method def self.format_summary(found, turbo_data:, filter_label: nil)
-        model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings = found.deconstruct
+        found.to_h => { model_broadcasts:, rb_broadcasts:, view_subscriptions:, view_frames:, warnings: }
         turbo_stream_response_count = turbo_data[:turbo_stream_responses]&.size.to_i
         turbo_stream_template_count = turbo_data[:turbo_streams]&.size.to_i
 
@@ -118,7 +118,7 @@ module RailsAiContext
       end
 
       private_class_method def self.format_standard(found, turbo_data:, filter_label: nil)
-        model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings = found.deconstruct
+        found.to_h => { model_broadcasts:, rb_broadcasts:, view_subscriptions:, view_frames:, warnings: }
         lines = [ "# Turbo Map", "" ]
         lines.concat(drive_configuration_lines(turbo_data))
 
@@ -217,7 +217,7 @@ module RailsAiContext
       end
 
       private_class_method def self.format_full(found, turbo_data:, filter_label: nil)
-        model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings = found.deconstruct
+        found.to_h => { model_broadcasts:, rb_broadcasts:, view_subscriptions:, view_frames:, warnings: }
         lines = [ "# Turbo Map (Full Detail)", "" ]
         lines.concat(drive_configuration_lines(turbo_data))
 
