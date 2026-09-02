@@ -38,21 +38,16 @@ module RailsAiContext
           return text_response("The `partial` parameter is required. Provide a partial path relative to app/views (e.g. 'shared/status_badge').")
         end
 
-        # Reject path traversal attempts
-        if partial.include?("..") || partial.start_with?("/")
-          return text_response("Path not allowed: #{partial}")
-        end
-
-        # Rule 1 (security conventions): reject sensitive-file names on the
-        # caller-supplied string BEFORE any filesystem stat. Without this,
-        # the "not found" vs "access denied" distinction leaks whether
-        # `app/views/.env` / `app/views/master.key` exists.
-        if sensitive_file?(partial)
-          return text_response("Path not allowed: #{partial} (sensitive file)")
-        end
-
         root = rails_app.root.to_s
         views_dir = File.join(root, "app", "views")
+
+        # Only the caller string is judged here; the candidate search below
+        # decides whether the partial exists.
+        guard = RailsAiContext::SafePath.locate(partial, under: views_dir, root: root)
+        case guard.refusal
+        when :traversal then return text_response("Path not allowed: #{partial}")
+        when :sensitive then return text_response("Path not allowed: #{partial} (sensitive file)")
+        end
 
         unless Dir.exist?(views_dir)
           note = api_only_note("app/views")
@@ -266,22 +261,8 @@ module RailsAiContext
 
         return nil unless found
 
-        # Path traversal protection: separator-aware containment + post-realpath
-        # sensitive recheck. Returns real_found (the resolved realpath) so the
-        # caller reads from the same path that was security-checked - TOCTOU closed.
-        begin
-          real_found = File.realpath(found).to_s
-          real_base = File.realpath(views_dir).to_s
-          unless real_found == real_base || real_found.start_with?(real_base + File::SEPARATOR)
-            return nil
-          end
-          relative_real = real_found.sub("#{real_base}/", "")
-          return nil if sensitive_file?(relative_real) || sensitive_file?(partial)
-        rescue Errno::ENOENT
-          return nil
-        end
-
-        real_found
+        located = RailsAiContext::SafePath.locate(found.delete_prefix(views_dir + File::SEPARATOR), under: views_dir, root: rails_app.root.to_s)
+        located.ok? ? located.realpath : nil
       end
 
       # Extract locals declared via Rails 7.1+ magic comment: <%# locals: (name:, title: "default") %>

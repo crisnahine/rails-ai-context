@@ -134,15 +134,13 @@ module RailsAiContext
           return text_response("Path not found: #{path}. Top-level directories: #{top_dirs.first(15).join(', ')}")
         end
 
-        begin
-          real_search = File.realpath(search_path)
-          real_root = File.realpath(root)
-          unless real_search == real_root || real_search.start_with?(real_root + File::SEPARATOR)
-            return text_response("Path not allowed: #{path}")
-          end
+        real_root = File.realpath(root)
+        real_search = begin
+          File.realpath(search_path)
         rescue Errno::ENOENT
           return text_response("Path not found: #{path}")
         end
+        return text_response("Path not allowed: #{path}") unless RailsAiContext::SafePath.contained?(real_search, real_root)
 
         # Fetch all results (capped at 200 for safety)
         all_results = if ripgrep_available?

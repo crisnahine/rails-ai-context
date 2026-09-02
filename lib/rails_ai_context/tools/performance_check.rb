@@ -47,7 +47,7 @@ module RailsAiContext
             models_data = cached_context[:models]
             if models_data.is_a?(Hash) && !models_data[:error]
               model_names = models_data.keys.map(&:to_s)
-              unless model_names.any? { |m| m.downcase == model.downcase }
+              unless fuzzy_find_key(model_names, model)
                 return not_found_response("Model", model, model_names,
                   recovery_tool: "Call rails_performance_check() without model filter to see all issues")
               end
