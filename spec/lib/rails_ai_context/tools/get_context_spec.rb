@@ -175,12 +175,14 @@ RSpec.describe RailsAiContext::Tools::GetContext do
 
     after { RailsAiContext::Tools::BaseTool.reset_cache! }
 
-    it "names the controllers that match by name and keeps the schema enrichment above them" do
+    it "names the controllers that match by name and keeps the schema enrichment above them", :aggregate_failures do
       text = described_class.call(feature: "comment").content.first[:text]
 
       expect(text).to include("## Related Controllers (by name)")
       expect(text).to include("- **CommentaryController** - index, show")
-      expect(text).to include("comments")
+      # GetSchema's own table heading, which only the enrichment block appends.
+      # The rescued fallback names the table too, in AnalyzeFeature's summary.
+      expect(text).to include("## Table: comments")
     end
   end
 end
