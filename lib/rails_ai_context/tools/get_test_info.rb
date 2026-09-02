@@ -230,18 +230,7 @@ module RailsAiContext
         end
 
         candidates.each do |rel|
-          path = rails_app.root.join(rel)
-          next unless File.exist?(path)
-          # Path traversal protection
-          begin
-            real_path = File.realpath(path)
-            real_root = File.realpath(rails_app.root)
-            next unless real_path.start_with?(real_root)
-          rescue Errno::ENOENT
-            next
-          end
-          next if File.size(path) > max_test_file_size
-          content = RailsAiContext::SafeFile.read(path)
+          content, = RailsAiContext::SafePath.read(rel, under: rails_app.root.to_s, max_size: max_test_file_size)
           next unless content
 
           # Summary/standard: return just test names (saves 2000+ tokens vs full source)
