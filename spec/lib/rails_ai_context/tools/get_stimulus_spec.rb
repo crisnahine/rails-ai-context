@@ -8,7 +8,7 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
   let(:stimulus_data) do
     {
       controllers: [
-        { name: "hello", targets: %w[name output], actions: %w[greet], values: { "name" => "String" }, outlets: [], classes: [], file: "hello_controller.js" },
+        { name: "hello", targets: %w[name output], actions: %w[greet], values: { "name" => "String" }, outlets: [], classes: [], lifecycle: %w[connect disconnect], file: "hello_controller.js" },
         { name: "search", targets: %w[input results], actions: %w[search clear], values: {}, outlets: %w[hello], classes: %w[active], file: "search_controller.js" },
         { name: "infinite-scroll", targets: [], actions: [], values: { "url" => "String", "page" => "Number" }, outlets: [], classes: [], file: "infinite_scroll_controller.js" }
       ]
@@ -50,6 +50,15 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
       expect(text).to include("## hello")
       expect(text).to include("**Targets:**")
       expect(text).to include("**File:** hello_controller.js")
+    end
+
+    it "renders the lifecycle the introspector recorded without reading the file" do
+      allow(File).to receive(:read).and_call_original
+
+      text = described_class.call(controller: "hello", detail: "full").content.first[:text]
+
+      expect(text).to include("- **Lifecycle:** connect, disconnect")
+      expect(File).not_to have_received(:read).with(a_string_ending_with("hello_controller.js"), anything)
     end
 
     it "supports case-insensitive lookup" do
