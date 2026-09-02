@@ -377,7 +377,7 @@ module RailsAiContext
             "## Getting Started", "",
             "```bash",
             "git clone <repo-url>",
-            "cd #{ctx[:app_name]&.underscore || 'app'}",
+            "cd #{File.basename(rails_app.root.to_s)}",
             "bundle install",
             "rails db:setup",
             server_cmd,

@@ -32,6 +32,13 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("## Getting Started")
     end
 
+    # `cd` needs a directory, and an app name underscored is not one.
+    it "names the app's own directory in Getting Started" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("cd #{File.basename(RailsAiContext.default_app.root.to_s)}")
+    end
+
     it "full mode includes additional sections beyond standard" do
       result = described_class.call(detail: "full")
       text = result.content.first[:text]
