@@ -113,16 +113,6 @@ module RailsAiContext
       MAX_SESSIONS = 100
       MAX_SESSION_ID_LENGTH = 200
 
-      # How a response says it found nothing, so a composing tool reads the
-      # answer instead of scraping its prose - a controller that rescues
-      # RecordNotFound used to drop its own section. `meta` arrived in mcp
-      # 1.0 and the gemspec allows 0.8, so where the response object cannot
-      # carry the mark the text does: zero-width, so it survives truncation
-      # at index 0 and no renderer shows it.
-      META_RESPONSES = MCP::Tool::Response.instance_method(:initialize)
-        .parameters.any? { |_, name| name == :meta }
-      EMPTY_MARKER = "​"
-
       # One row of the generated tool guide, declared beside the tool's own
       # description so adding a tool touches one file. `order` fixes where the
       # row lands; the CLI command is derived from tool_name, never spelled.
@@ -334,29 +324,26 @@ module RailsAiContext
         end
 
         # A tool ran, answered honestly, and found nothing. Renders exactly
-        # like text_response; the difference is only what `empty?` can read.
+        # like text_response - the mark rides in `_meta`, where a composing
+        # tool can read it and a reader never sees it.
         def empty_response(text, suffix: nil)
-          return text_response("#{EMPTY_MARKER}#{text}", suffix: suffix) unless META_RESPONSES
-
           answered = text_response(text, suffix: suffix)
           MCP::Tool::Response.new(answered.content, error: answered.error?, meta: { empty: true })
         end
 
-        # The only thing a composing tool may ask about a sub-tool's answer.
+        # The only thing a composing tool may ask about a sub-tool's answer,
+        # instead of scraping its prose - a controller that rescues
+        # RecordNotFound used to drop its own section.
         def empty?(response)
-          return false unless response.respond_to?(:content)
-
           meta = response.meta if response.respond_to?(:meta)
-          return true if meta.is_a?(Hash) && meta[:empty]
-
-          first = response.content.first
-          first.is_a?(Hash) && first[:text].to_s.start_with?(EMPTY_MARKER)
+          meta.is_a?(Hash) && !!meta[:empty]
         end
 
-        # A sub-tool's text as a reader should see it.
+        # A sub-tool's text. A response can carry no text content at all, so
+        # the composers do not index into `content` themselves.
         def response_text(response)
           first = response.content.first
-          first.is_a?(Hash) ? first[:text].to_s.delete_prefix(EMPTY_MARKER) : ""
+          first.is_a?(Hash) ? first[:text].to_s : ""
         end
 
         # One-line banner listing introspectors that failed during context

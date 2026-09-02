@@ -78,14 +78,11 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(described_class.empty?(response)).to be false
     end
 
-    context "on an mcp version whose Response carries no meta" do
-      before { stub_const("#{described_class}::META_RESPONSES", false) }
-
-      it "marks the answer with a zero-width prefix the reader never sees" do
-        response = described_class.empty_response("No views found for posts.")
-        expect(described_class.empty?(response)).to be true
-        expect(described_class.response_text(response)).to eq("No views found for posts.")
-      end
+    # The mark rides in _meta, so nothing about the rendered answer changes.
+    it "renders the text it was given, byte for byte" do
+      response = described_class.empty_response("x")
+      expect(described_class.response_text(response)).to eq("x")
+      expect(response.to_h[:content]).to eq([ { type: "text", text: "x" } ])
     end
   end
 end
