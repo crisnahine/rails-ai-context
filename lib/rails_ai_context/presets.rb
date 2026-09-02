@@ -35,12 +35,33 @@ module RailsAiContext
       }
     }.freeze
 
-    def self.names
-      DEFINITIONS.keys
+    # Framing goes to err and tool output to out so a pipe keeps its order;
+    # one failing tool costs itself, not the rest of the preset.
+    def self.run(name, out: $stdout, err: $stderr)
+      preset = DEFINITIONS[name.to_s.strip.downcase]
+      return false unless preset
+
+      require_relative "cli/tool_runner"
+      err.puts "=" * 60
+      err.puts " Preset: #{name} - #{preset[:desc]}"
+      err.puts "=" * 60
+      err.puts ""
+      preset[:tools].each do |tool_spec|
+        err.puts "-" * 40
+        err.puts "Running: #{tool_spec[:name]}"
+        err.puts "-" * 40
+        out.puts CLI::ToolRunner.new(tool_spec[:name], tool_spec[:params]).run
+        out.puts ""
+      rescue => e
+        err.puts "  [error] #{tool_spec[:name]}: #{e.message}"
+      end
+      true
     end
 
-    def self.fetch(name)
-      DEFINITIONS[name]
+    def self.listing(invocation:)
+      lines = [ "Available presets:", "" ]
+      DEFINITIONS.each { |key, info| lines << "  #{invocation.call(key)}".ljust(45) + "# #{info[:desc]}" }
+      lines.join("\n") + "\n"
     end
   end
 end

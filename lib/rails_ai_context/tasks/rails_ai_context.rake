@@ -193,7 +193,10 @@ namespace :ai do
     # First time - no tools configured, ask the user. The record is written
     # once below, so the selection reaches both files together.
     prompted = ai_tools.nil?
-    ai_tools = prompt_ai_tools if prompted
+    if prompted
+      ai_tools = prompt_ai_tools
+      RailsAiContext.configuration.ai_tools = ai_tools
+    end
 
     # Prompt for tool_mode if not yet configured in initializer
     unless tool_mode_configured?
@@ -224,17 +227,10 @@ namespace :ai do
 
     if ai_tools.nil? || ai_tools.empty?
       puts "📝 Writing context files for all AI tools..."
-      result = RailsAiContext.generate_context(format: :all)
-      print_result(result)
     else
       puts "📝 Writing context files for: #{ai_tools.map(&:to_s).join(', ')}..."
-      # One call for every selected format so ContextFileSerializer's
-      # cross-format dedup applies (opencode and codex share AGENTS.md and
-      # its split rules - generating one format at a time defeats that dedup
-      # and reports the same file as both written and unchanged).
-      result = RailsAiContext.generate_context(format: ai_tools)
-      print_result(result)
     end
+    print_result(RailsAiContext.generate_context)
 
     puts ""
     if Array(ai_tools).include?(:codex)
@@ -392,42 +388,10 @@ namespace :ai do
   task :preset, [ :name ] => :environment do |_t, args|
     require "rails_ai_context"
 
-    presets = RailsAiContext::Presets::DEFINITIONS
-
     name = args[:name]&.strip&.downcase
-    unless name && presets.key?(name)
-      puts "Available presets:"
-      puts ""
-      presets.each do |key, info|
-        puts "  rails 'ai:preset[#{key}]'".ljust(38) + "# #{info[:desc]}"
-      end
-      next
-    end
+    next if name && RailsAiContext::Presets.run(name)
 
-    preset = presets[name]
-    # All framing goes to stderr so stdout stays pure tool output - mixing
-    # the two scrambles ordering under pipes (stderr is unbuffered, piped
-    # stdout is block-buffered).
-    $stderr.puts "=" * 60
-    $stderr.puts " Preset: #{name} - #{preset[:desc]}"
-    $stderr.puts "=" * 60
-    $stderr.puts ""
-
-    preset[:tools].each do |tool_spec|
-      begin
-        $stderr.puts "-" * 40
-        $stderr.puts "Running: #{tool_spec[:name]}"
-        $stderr.puts "-" * 40
-        runner = RailsAiContext::CLI::ToolRunner.new(
-          tool_spec[:name],
-          tool_spec[:params]
-        )
-        puts runner.run
-        puts ""
-      rescue => e
-        $stderr.puts "  [error] #{tool_spec[:name]}: #{e.message}"
-      end
-    end
+    puts RailsAiContext::Presets.listing(invocation: ->(k) { "rails 'ai:preset[#{k}]'" })
   end
 
   desc "Print a concise schema facts summary (tables, columns, indexes, associations, dependencies)"
