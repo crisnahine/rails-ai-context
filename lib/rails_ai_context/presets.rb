@@ -41,7 +41,6 @@ module RailsAiContext
       preset = DEFINITIONS[name.to_s.strip.downcase]
       return false unless preset
 
-      require_relative "cli/tool_runner"
       err.puts "=" * 60
       err.puts " Preset: #{name} - #{preset[:desc]}"
       err.puts "=" * 60
