@@ -235,38 +235,14 @@ module RailsAiContext
         files = Dir.glob(File.join(layouts_dir, "*")).reject { |f| File.directory?(f) }.sort
         return text_response("No layout files found.") if files.empty?
 
-        # Canonicalize the containment base once so every per-file check uses
-        # the same realpath. `max_file_size` is the configured per-file cap
-        # (default 5MB) - large apps raise it via `config.max_file_size`.
-        real_base = File.realpath(layouts_dir).to_s
-        max_size  = max_file_size
-
+        views_dir = rails_app.root.join("app", "views")
         lines = [ "# Layouts (#{count_phrase(files.size, "file")})", "" ]
         files.each do |path|
           relative = "layouts/#{File.basename(path)}"
+          located = RailsAiContext::SafePath.locate(relative, under: views_dir, root: rails_app.root)
+          next unless located.ok?
 
-          # Apply the 5-rule file-reading pattern per CLAUDE.md:
-          #   1. sensitive_file? on the relative string (checked post-realpath
-          #      below, plus the basename pre-check here)
-          #   2. realpath + separator-aware containment under layouts_dir
-          #   3. post-realpath sensitive_file? recheck
-          #   4. size cap before SafeFile.read
-          #   5. read from the realpath, never the original Dir.glob string
-          # Without these, a symlink `layouts/leak.key -> ../../config/master.key`
-          # would leak secrets verbatim in the "full" detail branch.
-          real =
-            begin
-              File.realpath(path).to_s
-            rescue Errno::ENOENT
-              nil
-            end
-          next unless real
-          next unless real == real_base || real.start_with?(real_base + File::SEPARATOR)
-
-          relative_real = real.sub("#{real_base}/", "")
-          next if sensitive_file?(relative_real) || sensitive_file?(relative)
-          next if File.size(real) > max_size
-
+          real = located.realpath
           if RailsAiContext::DetailLevel.full?(detail)
             content = RailsAiContext::SafeFile.read(real) || "(error reading)"
             lines << "## #{relative}" << "```erb" << strip_svg(content) << "```" << ""
@@ -279,94 +255,22 @@ module RailsAiContext
       end
 
       private_class_method def self.read_view_file(path)
-        # Reject path traversal attempts before any filesystem operation
-        if path.include?("..") || path.start_with?("/")
-          return text_response("Path not allowed: #{path}")
+        content, result = RailsAiContext::ViewFile.read(rails_app.root.to_s, path)
+        case result.refusal
+        when :traversal, :outside then return text_response("Path not allowed: #{path}")
+        when :sensitive then return text_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
+        when :too_large then return text_response("File too large: #{path}")
+        when :missing
+          dir = File.dirname(path.to_s.delete_prefix("app/views/"))
+          views_dir = rails_app.root.join("app", "views")
+          siblings = Dir.glob(File.join(views_dir, dir, "*")).map { |f| "#{dir}/#{File.basename(f)}" }.sort.first(10)
+          hint = siblings.any? ? " Files in #{dir}/: #{siblings.join(', ')}" : ""
+          return text_response("View not found: #{path}.#{hint}")
         end
-
-        # Accept the full repo-relative form too (e.g. "app/views/layouts/mailer.html.erb"),
-        # not just the documented app/views-relative form ("layouts/mailer.html.erb").
-        # Agents commonly address a file the way they found it on disk; without
-        # this, a file that genuinely exists reads as "not found" purely because
-        # of which convention the caller used.
-        path = path.delete_prefix("app/views/") if path.start_with?("app/views/")
-
-        # Block sensitive files on the caller-supplied string before any
-        # filesystem stat - closes the existence-oracle side channel.
-        if sensitive_file?(path)
-          return text_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
-        end
-
-        views_dir = rails_app.root.join("app", "views")
-        full_path = views_dir.join(path)
-
-        unless File.exist?(full_path)
-          # Agents (and this tool's own description) naturally address a view by
-          # its logical "controller/action" path with no extension, e.g.
-          # "posts/index". Resolve that to the concrete template
-          # ("posts/index.html.erb") before giving up. Only attempts resolution
-          # for safe, extension-less path shapes so the glob can't be abused;
-          # the resolved path still runs the realpath/sensitive/size checks below.
-          resolved = resolve_template_path(path, views_dir)
-          if resolved
-            path = resolved
-            full_path = views_dir.join(path)
-          else
-            dir = File.dirname(path)
-            siblings = Dir.glob(File.join(views_dir, dir, "*")).map { |f| "#{dir}/#{File.basename(f)}" }.sort.first(10)
-            hint = siblings.any? ? " Files in #{dir}/: #{siblings.join(', ')}" : ""
-            return text_response("View not found: #{path}.#{hint}")
-          end
-        end
-        # Containment check with separator + post-realpath sensitive recheck.
-        # Mirrors the v5.8.1 fix in vfs.rb / get_edit_context.rb. Without
-        # `File::SEPARATOR`, `start_with?` matches sibling directories like
-        # `app/views_backup/secret` against `app/views`. Without the
-        # post-realpath sensitive recheck, a symlink at
-        # `app/views/leak.key → ../../config/master.key` would slip through
-        # and read the secret.
-        real = nil
-        begin
-          real = File.realpath(full_path).to_s
-          real_base = File.realpath(views_dir).to_s
-          unless real == real_base || real.start_with?(real_base + File::SEPARATOR)
-            return text_response("Path not allowed: #{path}")
-          end
-          relative_real = real.sub("#{real_base}/", "")
-          if sensitive_file?(relative_real)
-            return text_response("Access denied: #{path} resolves to a sensitive file (secrets/keys/credentials).")
-          end
-        rescue Errno::ENOENT
-          return text_response("View not found: #{path}")
-        end
-        if File.size(real) > max_file_size
-          return text_response("File too large: #{path} (#{File.size(real)} bytes, max: #{max_file_size})")
-        end
-
-        content = RailsAiContext::SafeFile.read(real)
         return text_response("Could not read file: #{path}") unless content
+
         content = compress_tailwind(strip_svg(content))
-        text_response("# #{path}\n\n```erb\n#{content}\n```")
-      end
-
-      # Resolve a logical, extension-less view path ("posts/index") to a
-      # concrete template relative path ("posts/index.html.erb"). Returns nil
-      # when the path already carries an extension, contains glob-unsafe
-      # characters, or matches no template - so the caller falls back to its
-      # not-found hint. Prefers an .html.* format when several exist (the page
-      # an agent almost always means), otherwise the first match alphabetically.
-      private_class_method def self.resolve_template_path(path, views_dir)
-        # Restrict to safe "segment/segment" shapes with no extension so the
-        # Dir.glob below stays literal (no *, ?, [] or dot to expand).
-        return nil unless path.match?(%r{\A[\w\-]+(?:/[\w\-]+)*\z})
-
-        matches = Dir.glob(File.join(views_dir, "#{path}.*"))
-          .reject { |f| File.directory?(f) }
-          .map { |f| f.sub("#{views_dir}/", "") }
-          .sort
-        return nil if matches.empty?
-
-        matches.find { |m| m.include?(".html.") || m.end_with?(".html") } || matches.first
+        text_response("# #{result.relative}\n\n```erb\n#{content}\n```")
       end
 
       # Strip inline SVG blocks - they're visual noise that buries the signal AI needs.
@@ -403,34 +307,16 @@ module RailsAiContext
       end
 
       private_class_method def self.read_view_content(relative_path)
-        # Defense-in-depth: `relative_path` normally comes from the view
-        # introspector's Dir.glob over `app/views/`, but apply the 5-rule
-        # file-reading pattern anyway so a stale introspector entry, a
-        # symlink pivot, or a caller that wires a different source cannot
-        # turn this into a `cat /etc/passwd` primitive. Size cap uses
-        # `max_file_size` (default 5MB, tunable via `config.max_file_size`
-        # for large apps).
         return "(file not found)" if relative_path.nil? || relative_path.to_s.empty?
-        return "(access denied)" if sensitive_file?(relative_path.to_s)
 
-        views_dir = rails_app.root.join("app", "views")
-        full_path = views_dir.join(relative_path)
-        return "(file not found)" unless File.exist?(full_path)
-
-        real_base = File.realpath(views_dir).to_s
-        real      = File.realpath(full_path).to_s
-        return "(path not allowed)" unless real == real_base || real.start_with?(real_base + File::SEPARATOR)
-
-        relative_real = real.sub("#{real_base}/", "")
-        return "(access denied)" if sensitive_file?(relative_real)
-        return "(file too large)" if File.size(real) > max_file_size
-
-        RailsAiContext::SafeFile.read(real) || "(error reading file)"
-      rescue Errno::ENOENT
-        "(file not found)"
-      rescue => e
-        $stderr.puts "[rails-ai-context] read_view_content failed: #{e.message}" if ENV["DEBUG"]
-        "(error reading file)"
+        content, result = RailsAiContext::ViewFile.read(rails_app.root.to_s, relative_path)
+        case result.refusal
+        when :sensitive then "(access denied)"
+        when :traversal, :outside then "(path not allowed)"
+        when :too_large then "(file too large)"
+        when :missing then "(file not found)"
+        else content || "(error reading file)"
+        end
       end
 
       # Extract instance variables and Turbo wiring from a view template
