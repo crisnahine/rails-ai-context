@@ -230,12 +230,12 @@ module RailsAiContext
     # Install writes our initializer in the same run that generates the
     # context files, so on its own it never means the context is stale.
     def only_our_initializer_newer?(dir, generated_at)
-      return false unless dir == "config/initializers"
+      return false unless dir == "config"
 
       newer = Dir.glob(File.join(app.root, dir, Fingerprinter::WATCHED_EXTENSIONS))
         .select { |path| File.mtime(path) > generated_at }
 
-      newer.any? && newer.all? { |path| path.end_with?("rails_ai_context.rb") }
+      newer.any? && newer.all? { |path| path.end_with?("initializers/rails_ai_context.rb") }
     end
 
     # A guard written before the respond_to? check was added only tests

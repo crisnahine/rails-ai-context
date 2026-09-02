@@ -550,41 +550,6 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
-    context "when context file is stale" do
-      before do
-        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
-        allow(File).to receive(:exist?).and_call_original
-        allow(Dir).to receive(:exist?).and_call_original
-
-        claude_path = File.join(app.root, "CLAUDE.md")
-        allow(File).to receive(:exist?).with(claude_path).and_return(true)
-        allow(File).to receive(:directory?).and_call_original
-        allow(File).to receive(:directory?).with(claude_path).and_return(false)
-        # Context generated 1 hour ago
-        allow(File).to receive(:mtime).and_call_original
-        allow(File).to receive(:mtime).with(claude_path).and_return(Time.now - 3600)
-
-        # app/models exists and has a file newer than context
-        models_dir = File.join(app.root, "app/models")
-        allow(Dir).to receive(:exist?).with(models_dir).and_return(true)
-        model_file = File.join(models_dir, "user.rb")
-        allow(Dir).to receive(:glob).and_call_original
-        allow(Dir).to receive(:glob).with(File.join(models_dir, "**/*.rb")).and_return([ model_file ])
-        allow(File).to receive(:mtime).with(model_file).and_return(Time.now)
-
-        # Other dirs don't exist
-        %w[app/controllers app/views config db/migrate].each do |dir|
-          allow(Dir).to receive(:exist?).with(File.join(app.root, dir)).and_return(false)
-        end
-      end
-
-      it "returns warn with stale message" do
-        expect(check.status).to eq(:warn)
-        expect(check.message).to include("stale")
-        expect(check.message).to include("app/models")
-      end
-    end
-
     # The freshness check read five hardcoded directories while the watch
     # scope read many more, so an edit in a service or a pack left the
     # context reported as up to date.
@@ -610,6 +575,33 @@ RSpec.describe RailsAiContext::Doctor do
 
           expect(check.status).to eq(:warn)
           expect(check.message).to include("app/services")
+        end
+      end
+
+      it "calls the context stale when a model is newer than it" do
+        Dir.mktmpdir do |root|
+          write_context_file(root)
+          FileUtils.mkdir_p(File.join(root, "app/models"))
+          File.write(File.join(root, "app/models/user.rb"), "class User; end")
+
+          check = freshness_for(root)
+
+          expect(check.status).to eq(:warn)
+          expect(check.message).to include("stale")
+          expect(check.message).to include("app/models")
+        end
+      end
+
+      it "warns after a routes edit, which the config directory covers" do
+        Dir.mktmpdir do |root|
+          write_context_file(root)
+          FileUtils.mkdir_p(File.join(root, "config"))
+          File.write(File.join(root, "config/routes.rb"), "Rails.application.routes.draw {}")
+
+          check = freshness_for(root)
+
+          expect(check.status).to eq(:warn)
+          expect(check.message).to include("config")
         end
       end
 

@@ -139,6 +139,15 @@ RSpec.describe RailsAiContext::Fingerprinter do
       File.utime(Time.now + 5, Time.now + 5, path)
       expect(described_class.stale?(app, mark)).to be true
     end
+
+    # config/routes.rb is covered by the config directory, not by a file entry.
+    it "goes stale when config/routes.rb changes" do
+      mark = described_class.mark(app)
+      path = File.join(app.root, "config/routes.rb")
+      File.utime(Time.now + 5, Time.now + 5, path)
+
+      expect(described_class.stale?(app, mark)).to be true
+    end
   end
 
   describe ".changed_since" do

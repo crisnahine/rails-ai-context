@@ -17,10 +17,7 @@ module RailsAiContext
     end
 
     # One scope, the fingerprint's: a directory the fingerprint reads but
-    # nobody watches is a change that never reaches the reaction. The root
-    # manifests (Gemfile.lock, package.json) are fingerprinted only - Listen
-    # is recursive with no opt-out, so watching the root would walk
-    # node_modules.
+    # nobody watches is a change that never reaches the reaction.
     def watched_dirs
       Fingerprinter.watched_dirs(@app.root.to_s)
     end

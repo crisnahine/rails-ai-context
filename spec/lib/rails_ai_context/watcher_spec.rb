@@ -12,8 +12,22 @@ RSpec.describe RailsAiContext::Watcher do
       root = app.root.to_s
       expect(dirs).to include(File.join(root, "app/models"))
       expect(dirs).to include(File.join(root, "app/controllers"))
-      expect(dirs).to include(File.join(root, "config/locales"))
+      expect(dirs).to include(File.join(root, "config"))
       expect(dirs).to include(File.join(root, "lib/tasks"))
+    end
+
+    # config/routes.rb and db/schema.rb are the two edits an author expects to
+    # regenerate context, and only a Listen event runs the gate.
+    it "watches config and db whole" do
+      require "tmpdir"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "config"))
+        FileUtils.mkdir_p(File.join(root, "db"))
+        File.write(File.join(root, "config/routes.rb"), "Rails.application.routes.draw {}")
+        watch = RailsAiContext::ChangeWatch.new(RailsAiContext::StaticApp.new(root))
+
+        expect(watch.watched_dirs).to include(File.join(root, "config"), File.join(root, "db"))
+      end
     end
 
     it "watches a pack's models, so a pack edit reaches the reaction" do

@@ -6,17 +6,18 @@ module RailsAiContext
   # Computes a SHA256 fingerprint of key application files to detect changes.
   # Used by BaseTool to invalidate cached introspection when files change.
   class Fingerprinter
+    # The root manifests, plus the one file under a watched directory whose
+    # extension WATCHED_EXTENSIONS does not name.
     WATCHED_FILES = %w[
-      db/schema.rb
       db/structure.sql
-      config/routes.rb
-      config/database.yml
       Gemfile
       Gemfile.lock
       package.json
       tsconfig.json
     ].freeze
 
+    # The one scope: everything the fingerprint walks is also everything the
+    # watcher watches.
     WATCHED_DIRS = %w[
       app/models
       app/controllers
@@ -29,10 +30,8 @@ module RailsAiContext
       app/services
       app/javascript/controllers
       app/middleware
-      config/initializers
-      config/locales
-      config/environments
-      db/migrate
+      config
+      db
       lib/tasks
     ].freeze
 
@@ -40,8 +39,7 @@ module RailsAiContext
     # tree - packs/*, engines/* and configured extras. Derived at compute
     # time so an edit in a pack invalidates the cache the way one in app/
     # does; a stale answer that looks fresh is the failure this exists to
-    # prevent. WATCHED_DIRS stays a plain list because live_reload and the
-    # watcher consume it as relative patterns.
+    # prevent.
     RESOLVED_KINDS = %w[
       app/models app/controllers app/views app/jobs app/mailers
       app/channels app/components app/helpers app/services
@@ -108,9 +106,9 @@ module RailsAiContext
         (conventional + resolved + ConcernPaths.resolve(root)).uniq.select { |dir| Dir.exist?(dir) }
       end
 
-      # The root manifests, absolute and existing. They sit at the app root,
-      # which no watcher can follow (Listen is recursive), so they are
-      # fingerprinted rather than watched.
+      # The manifests, absolute and existing. Most sit at the app root, which
+      # no watcher can follow - Listen recurses with no opt-out, so watching
+      # the root would walk node_modules - so these are fingerprinted only.
       def watched_files(root)
         WATCHED_FILES.map { |file| File.join(root, file) }.select { |path| File.exist?(path) }
       end
@@ -118,9 +116,10 @@ module RailsAiContext
       # Which watched directories hold a file newer than the given time,
       # named the way an app author would write them.
       def changed_since(root, time)
-        watched_dirs(root).select { |dir|
+        base = File.expand_path(root.to_s)
+        watched_dirs(base).select { |dir|
           Dir.glob(File.join(dir, WATCHED_EXTENSIONS)).any? { |path| newer?(path, time) }
-        }.map { |dir| dir.delete_prefix(root.to_s + File::SEPARATOR) }
+        }.map { |dir| dir.delete_prefix(base + File::SEPARATOR) }
       end
 
       private
