@@ -47,12 +47,11 @@ module RailsAiContext
       MAX_NODES = 50
 
       def self.call(model: nil, depth: 2, format: "mermaid", show_cycles: false, show_sti: false, server_context: nil)
-        models_data = cached_context[:models]
-
-        note = unavailable_note(models_data)
+        note = unavailable_note(cached_context[:models])
         return text_response(note) if note
 
-        unless models_data.is_a?(Hash) && !models_data[:error]
+        models_data = Payload.section(cached_context, :models)
+        unless models_data
           return text_response("No model data available. Ensure :models introspector is enabled.")
         end
 

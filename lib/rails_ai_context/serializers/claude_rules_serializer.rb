@@ -86,7 +86,7 @@ module RailsAiContext
         skip_cols = %w[id created_at updated_at]
         keep_cols = %w[type deleted_at discarded_at]
         # Get enum values from models introspection if available
-        models = context[:models] || {}
+        models = Payload.models(context)
 
         tables.keys.sort.first(30).each do |name|
           data = tables[name]

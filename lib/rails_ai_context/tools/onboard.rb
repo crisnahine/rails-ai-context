@@ -255,7 +255,6 @@ module RailsAiContext
 
         def section_key_flows(ctx)
           routes = Payload.section(ctx, :routes)
-          controllers = ctx[:controllers]
           return [] unless routes
 
           lines = [ "## Key Flows", "" ]

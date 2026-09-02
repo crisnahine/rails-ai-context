@@ -254,7 +254,7 @@ module RailsAiContext
 
         # Normalize: try as-is, then singularized, then classified
         ctx = cached_context
-        models = ctx[:models] || {}
+        models = Payload.models(ctx)
         key = fuzzy_find_key(models.keys, model_name)
 
         resolved_name = key || model_name
@@ -329,7 +329,7 @@ module RailsAiContext
         # Enrich with schema columns for matching models
         ctx = begin; cached_context; rescue; nil; end
         if ctx
-          models = ctx[:models] || {}
+          models = Payload.models(ctx)
           matched_tables = Set.new
 
           models.each_key do |model_name|

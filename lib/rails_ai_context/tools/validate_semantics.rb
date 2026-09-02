@@ -318,7 +318,7 @@ module RailsAiContext
 
       private_class_method def self.check_route_helpers_ast(file, visitor, context)
         warnings = []
-        routes = context[:routes]
+        routes = Payload.section(context, :routes)
         return warnings unless routes && routes[:by_controller]
         valid_names = build_route_name_set(routes)
         return warnings if valid_names.empty?
@@ -346,7 +346,7 @@ module RailsAiContext
       # Regex fallback
       private_class_method def self.check_route_helpers_regex(file, content, context)
         warnings = []
-        routes = context[:routes]
+        routes = Payload.section(context, :routes)
         return warnings unless routes && routes[:by_controller]
         valid_names = build_route_name_set(routes)
         return warnings if valid_names.empty?
@@ -441,9 +441,9 @@ module RailsAiContext
 
       # Shared helper: build valid column set for a model file
       private_class_method def self.model_valid_columns(file, context)
-        models = context[:models]
-        schema = context[:schema]
-        return nil unless models && schema
+        models = Payload.models(context)
+        schema = Payload.section(context, :schema)
+        return nil if models.empty? || schema.nil?
 
         model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return nil unless model_data
@@ -471,9 +471,9 @@ module RailsAiContext
         return warnings unless file.start_with?("app/controllers/")
         return warnings if visitor.permit_calls.empty?
 
-        schema = context[:schema]
-        models = context[:models]
-        return warnings unless schema && models
+        schema = Payload.section(context, :schema)
+        models = Payload.models(context)
+        return warnings if schema.nil? || models.empty?
 
         visitor.permit_calls.each do |pc|
           # Infer model: prefer require_key (:post → Post), fall back to controller filename
@@ -518,8 +518,8 @@ module RailsAiContext
         return warnings unless file.start_with?("app/models/") && !file.include?("/concerns/")
         return warnings if visitor.callback_registrations.empty?
 
-        models = context[:models]
-        return warnings unless models
+        models = Payload.models(context)
+        return warnings if models.empty?
 
         model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
@@ -549,8 +549,8 @@ module RailsAiContext
         warnings = []
         return warnings unless file.start_with?("app/controllers/")
 
-        routes = context[:routes]
-        controllers = context[:controllers]
+        routes = Payload.section(context, :routes)
+        controllers = Payload.section(context, :controllers)
         return warnings unless routes && controllers
 
         # Map file to controller name: app/controllers/posts_controller.rb → posts
@@ -584,8 +584,8 @@ module RailsAiContext
         warnings = []
         return warnings unless file.start_with?("app/models/") && !file.include?("/concerns/")
 
-        models = context[:models]
-        return warnings unless models
+        models = Payload.models(context)
+        return warnings if models.empty?
 
         model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
@@ -605,9 +605,9 @@ module RailsAiContext
         warnings = []
         return warnings unless file.start_with?("app/models/") && !file.include?("/concerns/")
 
-        schema = context[:schema]
-        models = context[:models]
-        return warnings unless schema && models
+        schema = Payload.section(context, :schema)
+        models = Payload.models(context)
+        return warnings if schema.nil? || models.empty?
 
         model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
@@ -642,7 +642,7 @@ module RailsAiContext
 
       private_class_method def self.check_stimulus_controllers(content, context)
         warnings = []
-        stimulus = context[:stimulus]
+        stimulus = Payload.section(context, :stimulus)
         return warnings unless stimulus
 
         # Build known controller names (normalize: both dash and underscore forms)

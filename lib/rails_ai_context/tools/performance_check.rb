@@ -44,8 +44,8 @@ module RailsAiContext
 
           # Validate model exists if specified
           if model && !model.empty?
-            models_data = cached_context[:models]
-            if models_data.is_a?(Hash) && !models_data[:error]
+            models_data = Payload.models(cached_context)
+            if models_data.any?
               model_names = models_data.keys.map(&:to_s)
               unless model_names.any? { |m| m.downcase == model.downcase }
                 return not_found_response("Model", model, model_names,

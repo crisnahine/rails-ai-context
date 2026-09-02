@@ -94,8 +94,8 @@ module RailsAiContext
       end
 
       def models_section
-        models = context[:models]
-        return if models.is_a?(Hash) && models[:error]
+        models = Payload.models(context)
+        return if models.empty?
 
         lines = [ "## Models (#{models.size})" ]
         models.each do |name, data|

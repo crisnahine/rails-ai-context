@@ -67,8 +67,8 @@ module RailsAiContext
 
         # For auth-related keywords, also discover auth gems
         if AUTH_KEYWORDS.include?(pattern)
-          gems = ctx[:gems]
-          if gems.is_a?(Hash) && !gems[:error]
+          gems = Payload.section(ctx, :gems)
+          if gems
             notable = gems[:notable_gems] || []
             auth_gems = notable.select { |g| AUTH_GEM_NAMES.include?(g[:name]) }
             if auth_gems.any?
@@ -81,7 +81,7 @@ module RailsAiContext
         # If nothing was discovered, return a clean "no match" with real suggestions
         has_content = lines.any? { |l| l.start_with?("## ") || l.start_with?("### ") }
         unless has_content
-          model_names = (ctx[:models] || {}).keys.map(&:to_s).sort.first(10)
+          model_names = Payload.models(ctx).keys.map(&:to_s).sort.first(10)
           hint = if model_names.any?
             "\n\nTry one of your model names: #{model_names.join(', ')}"
           else
@@ -117,7 +117,7 @@ module RailsAiContext
 
         # --- AF: Models ---
         def discover_models(ctx, pattern, lines)
-          models = ctx[:models] || {}
+          models = Payload.models(ctx)
 
           # For auth-related keywords, also match the User model and auth-related concerns
           extra_auth_match = AUTH_KEYWORDS.include?(pattern)
@@ -319,8 +319,8 @@ module RailsAiContext
 
         # --- AF4: Stimulus Controllers ---
         def discover_stimulus(ctx, pattern, lines)
-          stim = ctx[:stimulus]
-          return unless stim.is_a?(Hash) && !stim[:error]
+          stim = Payload.section(ctx, :stimulus)
+          return unless stim
 
           controllers = stim[:controllers] || []
           matched = controllers.select do |c|
@@ -413,7 +413,7 @@ module RailsAiContext
           end
 
           # Check controllers
-          controllers = ctx[:controllers]&.dig(:controllers) || {}
+          controllers = Payload.controllers(ctx)
           controllers.each_key do |ctrl_name|
             next unless feature_word_match?(ctrl_name, pattern)
             snake = RailsAiContext::Payload.controller_route_key(ctx, ctrl_name)
@@ -591,8 +591,8 @@ module RailsAiContext
 
         # --- Component usage in feature views ---
         def discover_components(ctx, pattern, lines)
-          comp = ctx[:components]
-          return unless comp.is_a?(Hash) && !comp[:error] && comp[:components]&.any?
+          comp = Payload.section(ctx, :components)
+          return unless comp && comp[:components]&.any?
 
           # Find components whose usage includes views matching the pattern
           matched = comp[:components].select do |c|
