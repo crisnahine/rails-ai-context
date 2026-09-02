@@ -129,8 +129,8 @@ module RailsAiContext
 
         # Schema columns - inline from schema introspection
         if data[:table_name]
-          schema = cached_context[:schema]
-          if schema.is_a?(Hash) && !schema[:error] && schema[:tables]&.key?(data[:table_name])
+          schema = Payload.section(cached_context, :schema)
+          if schema && schema[:tables]&.key?(data[:table_name])
             table_data = schema[:tables][data[:table_name]]
             cols = table_data[:columns] || []
             if cols.any?

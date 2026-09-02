@@ -829,8 +829,8 @@ module RailsAiContext
 
       private_class_method def self.check_performance_warnings(file, context)
         warnings = []
-        perf = context[:performance]
-        return warnings unless perf.is_a?(Hash) && !perf[:error]
+        perf = Payload.section(context, :performance)
+        return warnings unless perf
 
         # Check 13: Model.all in controllers
         if file.start_with?("app/controllers/") && perf[:model_all_in_controllers]&.any?

@@ -50,7 +50,7 @@ module RailsAiContext
     # @return [String] a leading-comma clause naming what the count leaves out,
     #   or "" when the count is the whole table
     def suffix(routes)
-      return "" unless routes.is_a?(Hash) && !routes[:error]
+      return "" unless Tools::SectionFetch.usable?(routes)
 
       unexpanded = routes[:dynamic_routes].to_i
       return "" unless unexpanded.positive?

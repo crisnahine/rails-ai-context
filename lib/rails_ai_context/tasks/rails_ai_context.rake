@@ -357,8 +357,8 @@ namespace :ai do
 
     if context[:models] && !context[:models].is_a?(Hash)
       puts "🏗️  Models: #{context[:models].size}"
-    elsif context[:models].is_a?(Hash) && !context[:models][:error]
-      puts "🏗️  Models: #{context[:models].size}"
+    elsif RailsAiContext::Payload.models(context).any?
+      puts "🏗️  Models: #{RailsAiContext::Payload.models(context).size}"
     end
 
     if context[:routes] && !context[:routes][:error]

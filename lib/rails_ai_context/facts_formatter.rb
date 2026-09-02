@@ -34,8 +34,8 @@ module RailsAiContext
       end
 
       def tables_section(context)
-        schema = context[:schema]
-        return [] unless schema.is_a?(Hash) && !schema[:error]
+        schema = Payload.section(context, :schema)
+        return [] unless schema
 
         tables = schema[:tables] || {}
         lines = [ "## Tables (#{tables.size})" ]
@@ -52,8 +52,8 @@ module RailsAiContext
       end
 
       def associations_section(context)
-        models = context[:models]
-        return [] unless models.is_a?(Hash) && !models[:error]
+        models = Payload.models(context)
+        return [] if models.empty?
 
         entries = models.filter_map do |model_name, meta|
           next unless meta.is_a?(Hash) && !meta[:error]
@@ -85,8 +85,8 @@ module RailsAiContext
       end
 
       def architecture_section(context)
-        conv = context[:conventions]
-        return [] unless conv.is_a?(Hash) && !conv[:error]
+        conv = Payload.section(context, :conventions)
+        return [] unless conv
 
         arch = conv[:architecture] || []
         return [] if arch.empty?
