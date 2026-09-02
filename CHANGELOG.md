@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Defects found by a second survey round over the whole surface, and the
 duplicated mechanisms behind them.
 
+- **`init` refused a tree with app source but no `config/environment.rb`
+  after it had already written the config files**, leaving it half set up
+  with no `CLAUDE.md`. Every command that can serve the static tier now
+  reads such a tree, the way `--no-boot` already did.
 - **A source path was contained without a separator and against an
   unresolved root.** The frontend framework introspector's own containment
   check let `/app-old` pass for `/app`. The pre-v5.8.1 bug, still in one

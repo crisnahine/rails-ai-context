@@ -62,4 +62,24 @@ RSpec.describe "E2E: standalone install", type: :e2e do
       expect(result.success?).to be(true), result.to_s
     end
   end
+
+  # A tree with source and no config/environment.rb is what the static tier is
+  # for. init used to write the config files, then refuse at the boot gate and
+  # leave the tree half set up with no context files at all.
+  describe "init on a source-only tree" do
+    it "finishes and generates context from the static tier" do
+      dir = File.join(E2E.root, "source_only_init")
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "config", "application.rb"), "")
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+      bin = File.join(@builder.gem_home, "bin", "rails-ai-context")
+      env = @builder.env.merge("BUNDLE_GEMFILE" => nil)
+      out, status = Open3.capture2e(env, bin, "init", chdir: dir, stdin_data: "a\n1\nn\n")
+
+      expect(status.exitstatus).to eq(0), out
+      expect(File.exist?(File.join(dir, "CLAUDE.md"))).to be(true), out
+    end
+  end
 end
