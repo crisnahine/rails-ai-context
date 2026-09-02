@@ -4,9 +4,9 @@ module RailsAiContext
   module Introspectors
     # One walk over a kind of app source: every directory PathResolver
     # resolves for it, packs and engines included, each file with its
-    # root-relative path and the name its path camelizes to. Thirteen
-    # introspectors globbed app/<kind> directly and every one of them missed
-    # a pack.
+    # root-relative path and the name its path camelizes to. A caller that
+    # globs app/<kind> itself sees only the conventional layout, so every
+    # pack and in-repo engine is invisible to it.
     #
     # `paths` stats only; `each` reads the source on top of it. A count or a
     # constantize wants the first, a parser the second.

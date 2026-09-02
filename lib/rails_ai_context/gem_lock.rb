@@ -3,9 +3,9 @@
 require_relative "safe_file"
 
 module RailsAiContext
-  # Which gems an app resolved, read once per lockfile. Ten hand-rolled scans
-  # disagreed on this: substring matches that took bugsnag-capistrano for
-  # bugsnag, and a GEM-section parser that never saw a git or path gem.
+  # Which gems an app resolved, read once per lockfile, and the one answer
+  # every caller gets: a gem is present by exact name, so `bugsnag` is not
+  # `bugsnag-capistrano`, and a git or path gem counts like any other.
   # Bundler's own parser needs a Gemfile it can locate and raises without one,
   # which the standalone binary never has, so the spec-line grammar is read
   # here: a section header, a specs: line, then one four-space line per gem
