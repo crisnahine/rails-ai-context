@@ -155,16 +155,20 @@ module RailsAiContext
                   "#{c[:name]}:#{c[:type]}#{hint_str}"
                 end.join(", ")
               # Inline model info so AI doesn't need a separate get_model_details call
-              model_info = ""
-              if model_refs.any?
-                model_refs.each do |mname|
-                  md = models_data[mname]
-                  next unless md.is_a?(Hash) && !md[:error]
-                  assoc_count = md[:associations]&.size || 0
-                  val_count = md[:validations]&.size || 0
-                  model_info = " → **#{mname}** (#{assoc_count} assoc, #{val_count} val)"
-                  break
-                end
+              # Every model on the table, richest first: an STI child or a
+              # namespaced second model shares the table, and stopping at the
+              # first in payload order can name the emptier one.
+              usable = model_refs.filter_map do |mname|
+                md = models_data[mname]
+                next unless md.is_a?(Hash) && !md[:error]
+
+                [ mname, md[:associations]&.size || 0, md[:validations]&.size || 0 ]
+              end
+              usable = usable.each_with_index.sort_by { |(_, a, v), i| [ -(a + v), i ] }.map(&:first)
+              model_info = if usable.any?
+                " → " + usable.map { |mname, a, v| "**#{mname}** (#{a} assoc, #{v} val)" }.join(", ")
+              else
+                ""
               end
               lines << "### #{name}#{model_info}"
               lines << cols

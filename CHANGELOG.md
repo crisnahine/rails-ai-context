@@ -93,6 +93,10 @@ duplicated mechanisms behind them.
   cross-check.
 - **The ivar cross-check ran with no view templates section**, reporting every
   controller ivar as unused in the view. It is skipped instead.
+- **The schema listing named one model per table.** A table an STI child or a
+  namespaced second model shares listed whichever came first in the payload,
+  which could be the emptier one. Every model on the table is listed now,
+  the one carrying the most detail first.
 - **Every static-tier context file carried `Rails [UNAVAILABLE: app not
   booted]` mid-sentence.** The version comes from the lockfile, and the
   marker is left for a tree whose lockfile does not carry rails.
