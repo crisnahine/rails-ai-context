@@ -478,12 +478,13 @@ module RailsAiContext
 
           files_to_check = [ file, *file_refs.map { |r| r[:file] } ].compact.uniq.first(3)
           return lines if files_to_check.empty?
+          return lines unless git_repository?(root)
 
           git_output = []
           files_to_check.each do |f|
             full = File.join(root, f)
             next unless File.exist?(full)
-            output, status = Open3.capture2("git", "log", "--oneline", "-5", "--", f, chdir: root)
+            output, status = Open3.capture2("git", "log", "--oneline", "-5", "--", f, chdir: root, err: File::NULL)
             if status.success? && !output.strip.empty?
               git_output << "**#{f}:**\n#{output.strip}"
             end
@@ -499,6 +500,15 @@ module RailsAiContext
         rescue => e
           $stderr.puts "[rails-ai-context] gather_git_context failed: #{e.message}" if ENV["DEBUG"]
           []
+        end
+
+        # A `.git` entry is a file in a worktree and a submodule, so ask git
+        # rather than stat the path. Child stderr goes to File::NULL: git's
+        # "fatal: not a git repository" would otherwise land on the server
+        # terminal for an app that simply is not in one.
+        def git_repository?(root)
+          _, status = Open3.capture2("git", "rev-parse", "--git-dir", chdir: root, err: File::NULL)
+          status.success?
         end
 
         def gather_log_context(exception_class)
