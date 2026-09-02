@@ -181,7 +181,7 @@ module RailsAiContext
 
         carried = RailsAiContext::Payload.controller_file(cached_context, controller_name)
         source_path = carried ? rails_app.root.join(carried) : nil
-        source = carried && RailsAiContext::SafePath.read(carried, under: rails_app.root.to_s).first
+        source = source_path && safe_read(source_path.to_s)
 
         applicable = RailsAiContext::ActionFilters.for(cached_context, controller_name, action_name, source: source)
 

@@ -111,11 +111,14 @@ module RailsAiContext
       []
     end
 
+    # A carried path came from the gem's own walk, and that walk keeps the
+    # spelling the app uses, so realpath containment would refuse a
+    # symlinked pack. The size cap still applies.
     def carried_source(ctx, controller_name)
       file = Payload.controller_file(ctx, controller_name)
       return nil unless file
 
-      SafePath.read(file, under: RailsAiContext.default_app.root.to_s).first
+      SafeFile.read(File.join(RailsAiContext.default_app.root.to_s, file))
     end
 
     def skip_calls(source)

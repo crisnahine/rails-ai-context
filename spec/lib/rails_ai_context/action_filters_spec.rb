@@ -88,6 +88,39 @@ RSpec.describe RailsAiContext::ActionFilters do
     end
   end
 
+  # SourceScan carries the spelling the app uses, not the realpath, so a
+  # symlinked pack's file is outside the root by realpath and only a reader
+  # that trusts the carried path can open it.
+  context "a controller in a pack symlinked out of the root" do
+    it "reads the skips out of the carried file" do
+      skip "symlinks unavailable" unless File.respond_to?(:symlink?)
+
+      Dir.mktmpdir("outside-pack") do |outside|
+        Dir.mktmpdir("pack-root") do |root|
+          FileUtils.mkdir_p(File.join(outside, "billing", "app", "controllers"))
+          File.write(File.join(outside, "billing", "app", "controllers", "billing_controller.rb"), <<~RUBY)
+            class BillingController < ApplicationController
+              skip_before_action :authenticate
+            end
+          RUBY
+          File.symlink(outside, File.join(root, "packs"))
+          allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(root))
+
+          ctx = { controllers: { controllers: {
+            "ApplicationController" => { filters: [ { kind: "before_action", name: "authenticate" } ] },
+            "BillingController" => {
+              parent_class: "ApplicationController",
+              filters: [],
+              file: "packs/billing/app/controllers/billing_controller.rb"
+            }
+          } } }
+
+          expect(described_class.for_controller(ctx, "BillingController")[:skipped]).to eq(%w[authenticate])
+        end
+      end
+    end
+  end
+
   # In the static tier each controller's list holds only its own
   # declarations, so a filter two levels up is reached only by walking.
   describe "an ancestor chain deeper than one level" do
