@@ -327,27 +327,34 @@ module RailsAiContext
         # like text_response - the mark rides in `_meta`, where a composing
         # tool can read it and a reader never sees it.
         def empty_response(text, suffix: nil)
-          answered = text_response(text, suffix: suffix)
-          MCP::Tool::Response.new(answered.content, error: answered.error?, meta: { empty: true })
+          marked_response(text, :empty, suffix: suffix)
         end
 
         # The mark is the contract between a sub-tool and a composer: the
         # answer says whether it found anything, and no composer decides that
         # by matching the sentence the sub-tool happened to render.
         def empty?(response)
-          response_meta(response)[:empty] ? true : false
+          marked?(response, :empty)
         end
 
         # A trace that found call sites but no `def`. The answer is real, so
         # it is not empty; the fact rides in `_meta` beside `empty` so a
         # composer asks instead of matching the sentence this tool renders.
         def definition_missing_response(text)
-          answered = text_response(text)
-          MCP::Tool::Response.new(answered.content, error: answered.error?, meta: { definition_missing: true })
+          marked_response(text, :definition_missing)
         end
 
         def definition_missing?(response)
-          response_meta(response)[:definition_missing] ? true : false
+          marked?(response, :definition_missing)
+        end
+
+        def marked_response(text, key, suffix: nil)
+          answered = text_response(text, suffix: suffix)
+          MCP::Tool::Response.new(answered.content, error: answered.error?, meta: { key => true })
+        end
+
+        def marked?(response, key)
+          response_meta(response)[key] ? true : false
         end
 
         def response_meta(response)
