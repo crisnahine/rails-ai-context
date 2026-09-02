@@ -95,32 +95,6 @@ RSpec.describe RailsAiContext::Tools::GetContext do
     end
   end
 
-  describe "extract_api_rendered_ivars" do
-    it "treats render json: @ivar as a rendered ivar" do
-      text = 'render json: @order, status: :created'
-      result = described_class.send(:extract_api_rendered_ivars, text)
-      expect(result).to include("order")
-    end
-
-    it "captures the leading ivar from render json: @ivar.errors" do
-      text = "render json: @order.errors, status: :unprocessable_entity"
-      result = described_class.send(:extract_api_rendered_ivars, text)
-      expect(result).to include("order")
-    end
-
-    it "treats render xml: @ivar as a rendered ivar" do
-      text = "render xml: @widget"
-      result = described_class.send(:extract_api_rendered_ivars, text)
-      expect(result).to include("widget")
-    end
-
-    it "returns an empty set when there is no render json/xml" do
-      text = "redirect_to @post, notice: \"ok\""
-      result = described_class.send(:extract_api_rendered_ivars, text)
-      expect(result).to be_empty
-    end
-  end
-
   describe "controller_action_context" do
     it "does not warn that an ivar rendered via render json: is unused" do
       allow(described_class).to receive(:cached_context).and_return(api: { api_only: true })

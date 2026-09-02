@@ -202,15 +202,7 @@ module RailsAiContext
           lines << "" << "## Source (lines #{source_with_lines[:start_line]}-#{source_with_lines[:end_line]})"
           lines << "```ruby" << source_with_lines[:code] << "```"
 
-          # Instance variables set by this action
-          # Detect instance variables - handles both @var = x and @a, @b = x
-          ivars = []
-          source_with_lines[:code].each_line do |line|
-            next unless line.include?("=")
-            left_side = line.split("=", 2).first
-            left_side.scan(/@(\w+)/).each { |m| ivars << m[0] }
-          end
-          ivars.uniq!
+          ivars = RailsAiContext::Introspectors::ActionResolver.assigned_ivars(source_with_lines[:code])
           lines << "" << "## Instance Variables" << ivars.map { |v| "- `@#{v}`" }.join("\n") if ivars.any?
 
           # Private methods called by this action - include their source inline
@@ -368,27 +360,9 @@ module RailsAiContext
           return nil unless file_path && File.exist?(file_path)
           return nil if File.size(file_path) > RailsAiContext.configuration.max_file_size
         end
-        source_lines = (source || RailsAiContext::SafeFile.read(file_path) || "").lines
-        start_idx = source_lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/) }
-        return nil unless start_idx
-
-        # Use indentation-based matching - much more reliable than regex depth counting.
-        # The `end` for a `def` is always at the same indentation level.
-        def_indent = source_lines[start_idx][/\A\s*/].length
-        result = []
-        end_idx = start_idx
-        source_lines[start_idx..].each_with_index do |line, i|
-          result << line.rstrip
-          end_idx = start_idx + i
-          # Stop at `end` with same indentation as `def` (skip the def line itself)
-          break if i > 0 && line.match?(/\A\s{#{def_indent}}end\b/)
-        end
-
-        {
-          code: result.join("\n"),
-          start_line: start_idx + 1,
-          end_line: end_idx + 1
-        }
+        RailsAiContext::Introspectors::ActionResolver.method_body(
+          source || RailsAiContext::SafeFile.read(file_path) || "", method_name
+        )
       rescue => e
         $stderr.puts "[rails-ai-context] extract_method_with_lines failed: #{e.message}" if ENV["DEBUG"]
         nil
