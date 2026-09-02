@@ -38,10 +38,13 @@ module RailsAiContext
         discover_from_filesystem.each do |path_name, record|
           next if result.key?(path_name)
 
-          name = DeclaredConstant.resolve(record.source, path_name)
+          source = SafeFile.read(record.path)
+          next result[path_name] = { error: "unreadable" } unless source
+
+          name = DeclaredConstant.resolve(source, path_name)
           next if result.key?(name)
 
-          result[name] = extract_details_from_source(record, name)
+          result[name] = extract_details_from_source(record, name, source)
         end
 
         { controllers: result }
@@ -55,8 +58,11 @@ module RailsAiContext
         # No reflection here, so every file's own source is the only source of
         # its name as well as its details.
         result = discover_from_filesystem.each_with_object({}) do |(path_name, record), hash|
-          name = DeclaredConstant.resolve(record.source, path_name)
-          hash[name] = extract_details_from_source(record, name).merge(confidence: Confidence::STATIC)
+          source = SafeFile.read(record.path)
+          next hash[path_name] = { error: "unreadable" } unless source
+
+          name = DeclaredConstant.resolve(source, path_name)
+          hash[name] = extract_details_from_source(record, name, source).merge(confidence: Confidence::STATIC)
         rescue => e
           hash[path_name] = { error: e.message }
         end
@@ -83,11 +89,11 @@ module RailsAiContext
       end
 
       # Controller files not yet loaded as classes, keyed by the name the path
-      # camelizes to. Callers resolve the constant the source declares where
-      # they need it; doing it here would parse every controller file for
-      # both tiers.
+      # camelizes to. Stats only: reflection has already named most of these,
+      # and reading their source here would be a read per file the caller
+      # throws away. Callers resolve the declared constant where they need it.
       def discover_from_filesystem
-        SourceScan.each(app.root, kind: "app/controllers").each_with_object({}) do |record, result|
+        SourceScan.paths(app.root, kind: "app/controllers").each_with_object({}) do |record, result|
           next unless record.path.end_with?("_controller.rb")
           next if record.path_name == "ApplicationController"
           next if record.path_name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
@@ -97,8 +103,7 @@ module RailsAiContext
       end
 
       # Extract details purely from source file (for controllers not loaded as classes)
-      def extract_details_from_source(record, class_name)
-        source = record.source
+      def extract_details_from_source(record, class_name, source)
         # Carry the file that was read: the declared name does not round-trip
         # back to a path. See CONTEXT.md, "Declared constant".
         relative_file = record.file

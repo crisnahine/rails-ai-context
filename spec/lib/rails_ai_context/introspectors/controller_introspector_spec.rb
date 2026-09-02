@@ -358,6 +358,20 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
+    # A file that was there and could not be read is not a controller the
+    # app does not have; listing it is what tells the reader the difference.
+    it "lists a controller file it could not read under its path name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "huge_controller.rb"), "x" * 2_000)
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(100)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["HugeController"]).to eq({ error: "unreadable" })
+      end
+    end
+
     it "returns an empty controllers hash when the directory is missing" do
       Dir.mktmpdir do |dir|
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
