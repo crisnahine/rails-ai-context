@@ -607,13 +607,7 @@ module RailsAiContext
 
         # Shared utility: check if a relative path matches sensitive file patterns.
         def sensitive_file?(relative_path)
-          patterns = RailsAiContext.configuration.sensitive_patterns
-          basename = File.basename(relative_path)
-          flags = File::FNM_DOTMATCH | File::FNM_CASEFOLD
-          patterns.any? do |pattern|
-            File.fnmatch(pattern, relative_path, flags) ||
-              File.fnmatch(pattern, basename, flags)
-          end
+          RailsAiContext::SafePath.sensitive?(relative_path)
         end
 
         # Resolve a Dir.glob result to a realpath that is:
@@ -625,7 +619,7 @@ module RailsAiContext
         # file operations on the returned realpath, not the original glob path.
         def safe_glob_realpath(file_path, real_dir, real_root)
           real = File.realpath(file_path).to_s
-          return nil unless real == real_dir || real.start_with?(real_dir + File::SEPARATOR)
+          return nil unless RailsAiContext::SafePath.contained?(real, real_dir)
           relative = real.sub("#{real_root}/", "")
           return nil if sensitive_file?(relative)
           real
