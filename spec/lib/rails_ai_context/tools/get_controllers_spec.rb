@@ -256,5 +256,22 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
         expect(found.map { |m| m[:name] }).to eq(%w[load_widget])
       end
     end
+
+    # An inherited filter names where it was declared, not whichever class
+    # happens to be the direct parent.
+    it "names the grandparent an inherited filter was declared on" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: {
+          "ApplicationController" => { actions: [], filters: [ { kind: "before_action", name: "authenticate" } ] },
+          "Admin::BaseController" => { actions: [], filters: [], parent_class: "ApplicationController" },
+          "Admin::PostsController" => { actions: %w[index], filters: [], parent_class: "Admin::BaseController" }
+        } }
+      )
+
+      text = described_class.call(controller: "Admin::PostsController").content.first[:text]
+
+      expect(text).to include("_(from ApplicationController)_")
+      expect(text).not_to include("_(from Admin::BaseController)_")
+    end
   end
 end

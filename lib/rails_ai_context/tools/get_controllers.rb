@@ -193,8 +193,8 @@ module RailsAiContext
 
         if applicable.values.any?(&:any?)
           lines << "" << "## Applicable Filters"
-          applicable[:inherited].each { |f| lines << filter_line(f, info[:parent_class]) }
-          applicable[:own].each { |f| lines << filter_line(f, nil) }
+          applicable[:inherited].each { |f| lines << filter_line(f) }
+          applicable[:own].each { |f| lines << filter_line(f) }
           applicable[:skipped].each { |name| lines << "- ~~#{name}~~ _(skipped)_" }
         end
 
@@ -298,9 +298,9 @@ module RailsAiContext
         []
       end
 
-      private_class_method def self.filter_line(filter, parent_class)
+      private_class_method def self.filter_line(filter)
         line = "- `#{filter[:kind]}` **#{filter[:name]}**"
-        line += " _(from #{parent_class})_" if parent_class
+        line += " _(from #{filter[:from]})_" if filter[:from]
         line += " (only: #{filter[:only].join(', ')})" if filter[:only]&.any?
         line += " (except: #{filter[:except].join(', ')})" if filter[:except]&.any?
         line
@@ -408,8 +408,8 @@ module RailsAiContext
         chain = RailsAiContext::ActionFilters.for_controller(cached_context, name)
         if chain.values.any?(&:any?)
           lines << "" << "## Filters"
-          chain[:inherited].each { |f| lines << filter_line(f, info[:parent_class]) }
-          chain[:own].each { |f| lines << filter_line(f, nil) }
+          chain[:inherited].each { |f| lines << filter_line(f) }
+          chain[:own].each { |f| lines << filter_line(f) }
           chain[:skipped].each { |skipped| lines << "- ~~#{skipped}~~ _(skipped)_" }
         end
 

@@ -123,5 +123,41 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(described_class.for_controller(deep_context, "Admin::PostsController")[:inherited].map { |f| f[:name] })
         .to eq(%w[require_admin])
     end
+
+    it "names the ancestor each inherited filter was found on" do
+      result = described_class.for_controller(deep_context, "Admin::PostsController")
+
+      expect(result[:inherited].map { |f| [ f[:name], f[:from] ] })
+        .to eq([ %w[require_admin Admin::BaseController], %w[authenticate ApplicationController] ])
+    end
+
+    # A skip in a class between the child and the declaring ancestor stops
+    # the filter as surely as one in the child's own body.
+    context "when an intermediate ancestor skips the grandparent's filter" do
+      around do |example|
+        Dir.mktmpdir("action-filters-chain") do |dir|
+          @root = dir
+          FileUtils.mkdir_p(File.join(dir, "app/controllers/admin"))
+          File.write(File.join(dir, "app/controllers/admin/base_controller.rb"), <<~RUBY)
+            class Admin::BaseController < ApplicationController
+              skip_before_action :authenticate
+            end
+          RUBY
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        deep_context[:controllers][:controllers]["Admin::BaseController"][:file] =
+          "app/controllers/admin/base_controller.rb"
+      end
+
+      it "does not carry it into the child's inherited list" do
+        result = described_class.for_controller(deep_context, "Admin::PostsController")
+
+        expect(result[:inherited].map { |f| f[:name] }).to eq(%w[require_admin])
+      end
+    end
   end
 end

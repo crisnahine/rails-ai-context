@@ -36,13 +36,14 @@ module RailsAiContext
         .reject { |f| skipped.include?(f[:name].to_s) }
 
       parent = parent_filters(ctx, info[:parent_class], action, skipped)
-      parent_names = parent.map { |f| f[:name].to_s }.to_set
+      declared_on = parent.to_h { |f| [ f[:name].to_s, f[:from] ] }
       declared_names = declared.map { |f| f[:name].to_s }.to_set
 
       {
-        own: applicable.reject { |f| parent_names.include?(f[:name].to_s) },
+        own: applicable.reject { |f| declared_on.key?(f[:name].to_s) },
         inherited: parent.reject { |f| declared_names.include?(f[:name].to_s) } +
-          applicable.select { |f| parent_names.include?(f[:name].to_s) },
+          applicable.select { |f| declared_on.key?(f[:name].to_s) }
+            .map { |f| f.merge(from: declared_on[f[:name].to_s]) },
         skipped: skipped
       }
     end
@@ -61,16 +62,19 @@ module RailsAiContext
       true
     end
 
-    # Every ancestor's filters, closest first, deduped by name. The runtime
-    # tier's list already carries the whole chain, so the dedupe is what
-    # keeps it correct; the static tier's holds one class's declarations
-    # only, so the walk is what completes it. An ancestor the payload does
-    # not carry ends it: reconstructing a path from a class name breaks on
-    # every app inflection.
+    # Every ancestor's filters, closest first, deduped by name and tagged
+    # with the ancestor they were found on. The runtime tier's list already
+    # carries the whole chain, so the dedupe is what keeps it correct; the
+    # static tier's holds one class's declarations only, so the walk is what
+    # completes it. Each class's skips join the set as the walk passes it, so
+    # a filter an intermediate ancestor skipped never reaches the child. An
+    # ancestor the payload does not carry ends it: reconstructing a path from
+    # a class name breaks on every app inflection.
     def parent_filters(ctx, parent_class, action, skipped)
       controllers = Payload.controllers(ctx)
       seen = Set.new
       found = {}
+      dropped = skipped.map(&:to_s).to_set
       name = parent_class&.to_s
 
       while name && !seen.include?(name)
@@ -80,9 +84,10 @@ module RailsAiContext
 
         Array(info[:filters]).grep(Hash)
           .select { |f| applies?(f, action) }
-          .reject { |f| skipped.include?(f[:name].to_s) }
-          .each { |f| found[f[:name].to_s] ||= f }
+          .reject { |f| dropped.include?(f[:name].to_s) }
+          .each { |f| found[f[:name].to_s] ||= f.merge(from: name) }
 
+        dropped.merge(skipped_names(ctx, name, action))
         name = info[:parent_class]&.to_s
       end
 
