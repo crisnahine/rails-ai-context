@@ -102,7 +102,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
         app = RailsAiContext::StaticApp.new(dir)
         result = described_class.new(app).call
         expect(result[:total]).to eq(1)
-        expect(result[:recent].first[:name]).to eq("Create widgets")
+        expect(result[:recent].first[:name]).to eq("CreateWidgets")
       end
     end
 
@@ -139,7 +139,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
 
-        expect(result[:pending]).to eq([ { version: "20240201000000", name: "Add index" } ])
+        expect(result[:pending]).to eq([ { version: "20240201000000", name: "AddIndex" } ])
       end
     end
 
@@ -174,7 +174,7 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
 
-        expect(result[:pending]).to eq([ { version: "20240301000000", name: "Create posts" } ])
+        expect(result[:pending]).to eq([ { version: "20240301000000", name: "CreatePosts" } ])
       end
     end
   end

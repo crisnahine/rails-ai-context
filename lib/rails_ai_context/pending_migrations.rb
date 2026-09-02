@@ -50,7 +50,11 @@ module RailsAiContext
       Dir.glob(File.join(migrate_dir, "*.rb")).sort.filter_map do |path|
         base = File.basename(path, ".rb")
         version = base[/\A\d+/] or next
-        { version: version, name: base.sub(/\A\d+_/, "").tr("_", " ").capitalize, path: path }
+        # The class name, so a static entry names the migration the way the
+        # connection's own pending list does. Built without camelize: this
+        # runs in the standalone binary, which has no ActiveSupport.
+        name = base.sub(/\A\d+_/, "").split("_").map(&:capitalize).join
+        { version: version, name: name, path: path }
       end
     end
   end

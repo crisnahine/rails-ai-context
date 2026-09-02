@@ -28,12 +28,12 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
     # pending migrations, so the rendering is otherwise unreachable.
     it "renders each pending migration as a version and a name" do
       allow(RailsAiContext::PendingMigrations).to receive(:live)
-        .and_return([ { version: "20240201000000", name: "Add index" } ])
+        .and_return([ { version: "20240201000000", name: "AddIndex" } ])
 
       text = described_class.call(section: "database").content.first[:text]
 
       expect(text).to include("**Pending migrations:** 1")
-      expect(text).to include("- 20240201000000 Add index")
+      expect(text).to include("- 20240201000000 AddIndex")
     end
 
     it "shows database section" do
