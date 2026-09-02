@@ -104,16 +104,28 @@ module RailsAiContext
       end
 
       def first_argument(text)
+        top_level_arguments(text).first.to_s
+      end
+
+      # Splits on commas outside any bracket, so `[a, :b]` and `f(x, :y)` stay
+      # one argument.
+      def top_level_arguments(text)
+        args = []
         depth = 0
+        start = 0
         text.each_char.with_index do |ch, i|
           case ch
           when "(", "[", "{" then depth += 1
           when ")", "]", "}" then depth -= 1
           when ","
-            return text[0...i].strip if depth.zero?
+            if depth.zero?
+              args << text[start...i].strip
+              start = i + 1
+            end
           end
         end
-        text.strip
+        args << text[start..].to_s.strip
+        args.reject(&:empty?)
       end
 
       def frame_src(line)
@@ -130,7 +142,16 @@ module RailsAiContext
         args = match[1].strip
         return normalize_interpolation(args) if args.include?("#")
 
-        args.split(/\s*,\s*/).map { |arg| arg.sub(/\A:/, "").delete('"\'') }.join(", ").strip
+        top_level_arguments(args).map { |arg| bare_stream_name(arg) }.join(", ")
+      end
+
+      # Only a whole symbol loses its colon and only a whole string its quotes;
+      # an array or a call keeps every character it was written with.
+      def bare_stream_name(arg)
+        return arg.delete_prefix(":") if arg.match?(/\A:[A-Za-z_]\w*[?!]?\z/)
+        return arg[1..-2] if arg.match?(/\A"[^"]*"\z/) || arg.match?(/\A'[^']*'\z/)
+
+        arg
       end
 
       def normalize_interpolation(text)

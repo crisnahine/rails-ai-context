@@ -216,6 +216,34 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
     end
   end
 
+  describe "a subscription whose argument carries its own commas" do
+    def streams_for(view)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "views", "posts"))
+        File.write(File.join(dir, "app", "views", "posts", "index.html.erb"), view)
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+        result[:stream_subscriptions].map { |s| s[:stream] }
+      end
+    end
+
+    it "keeps an array argument whole" do
+      expect(streams_for("<%= turbo_stream_from [current_user, :notifications] %>\n"))
+        .to eq([ "[current_user, :notifications]" ])
+    end
+
+    it "keeps a call argument whole" do
+      expect(streams_for("<%= turbo_stream_from dom_id(@post, :x) %>\n")).to eq([ "dom_id(@post, :x)" ])
+    end
+
+    it "strips the colon from a whole symbol argument" do
+      expect(streams_for("<%= turbo_stream_from :posts %>\n")).to eq([ "posts" ])
+    end
+
+    it "still splits two top-level arguments" do
+      expect(streams_for("<%= turbo_stream_from \"posts\", :comments %>\n")).to eq([ "posts, comments" ])
+    end
+  end
+
   describe "concerns and the model walk" do
     def app_in(dir)
       RailsAiContext::StaticApp.new(dir)
