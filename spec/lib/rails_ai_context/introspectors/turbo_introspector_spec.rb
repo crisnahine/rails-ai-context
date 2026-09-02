@@ -216,6 +216,82 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
     end
   end
 
+  describe "concerns and the model walk" do
+    def app_in(dir)
+      RailsAiContext::StaticApp.new(dir)
+    end
+
+    it "reports broadcasts declared in a model concern and a controller concern under the concern's name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "commentable.rb"), <<~RUBY)
+          module Commentable
+            extend ActiveSupport::Concern
+            included do
+              broadcasts_to :comments
+              after_create_commit -> { broadcast_append_to "comments" }
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "concerns", "streamy.rb"), <<~RUBY)
+          module Streamy
+            def refresh = broadcast_replace_to(:x)
+          end
+        RUBY
+
+        result = described_class.new(app_in(dir)).call
+
+        expect(result[:model_broadcasts]).to include(
+          a_hash_including(model: "Commentable", macro: "broadcasts_to", stream: "comments", file: "app/models/concerns/commentable.rb", line: 4)
+        )
+        expect(result[:explicit_broadcasts]).to include(
+          a_hash_including(method: "broadcast_append_to", stream: "comments", file: "app/models/concerns/commentable.rb", line: 5),
+          a_hash_including(method: "broadcast_replace_to", stream: "x", file: "app/controllers/concerns/streamy.rb", line: 2)
+        )
+      end
+    end
+
+    it "parses each model file once for both lists" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        source = "class Post < ApplicationRecord\n  broadcasts\n  after_update_commit -> { broadcast_replace_to \"posts\" }\nend\n"
+        File.write(File.join(dir, "app", "models", "post.rb"), source)
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_call_original
+
+        result = described_class.new(app_in(dir)).call
+
+        expect(result[:model_broadcasts].size).to eq(1)
+        expect(result[:explicit_broadcasts].size).to eq(1)
+        expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:walk_source).with(source, anything).once
+      end
+    end
+
+    it "carries one entry per macro hit" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "room.rb"), "class Room < ApplicationRecord\n  broadcasts_to :lobby\n  broadcasts_refreshes\nend\n")
+
+        broadcasts = described_class.new(app_in(dir)).call[:model_broadcasts]
+
+        expect(broadcasts.map { |b| [ b[:macro], b[:stream], b[:line] ] }).to eq([
+          [ "broadcasts_to", "lobby", 2 ], [ "broadcasts_refreshes", "self (model plural, refreshes)", 3 ]
+        ])
+      end
+    end
+
+    it "reads a frame tag with no argument as dynamic" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "views", "posts"))
+        File.write(File.join(dir, "app", "views", "posts", "show.html.erb"), "<%= turbo_frame_tag %>\n<%= turbo_frame_tag do %>\n<% end %>\n")
+
+        frames = described_class.new(app_in(dir)).call[:turbo_frames]
+
+        expect(frames.map { |f| f[:id] }).to eq([ "(dynamic)", "(dynamic)" ])
+      end
+    end
+  end
+
   describe "explicit broadcasts" do
     it "records each broadcast_*_to call with its stream, target and partial, wherever it sits" do
       Dir.mktmpdir do |dir|

@@ -134,6 +134,39 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
     end
   end
 
+  describe "stream wiring" do
+    it "pairs a broadcast with its subscription and warns only about the unmatched one" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "app", "views", "posts"))
+        File.write(File.join(dir, "app", "models", "post.rb"),
+                   "class Post < ApplicationRecord\n  after_create_commit -> { broadcast_append_to \"posts\" }\nend\n")
+        File.write(File.join(dir, "app", "views", "posts", "index.html.erb"),
+                   "<%= turbo_stream_from :posts %>\n<%= turbo_stream_from :alerts %>\n")
+        app = RailsAiContext::StaticApp.new(dir)
+        allow(RailsAiContext).to receive(:default_app).and_return(app)
+        allow(described_class).to receive(:cached_context).and_return(turbo: RailsAiContext::Introspectors::TurboIntrospector.new(app).call)
+
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include(<<~'TEXT')
+          ## Stream Wiring
+          ### Stream: `alerts`
+          - **Subscribers:** `app/views/posts/index.html.erb:2`
+          - _No broadcasters found for this stream_
+
+          ### Stream: `posts`
+          - **Broadcasters:** `broadcast_append_to (app/models/post.rb:2)`
+          - **Subscribers:** `app/views/posts/index.html.erb:1`
+
+          ## Warnings
+          - Subscription to `alerts` has no matching broadcast (app/views/posts/index.html.erb:2)
+        TEXT
+        expect(text.scan("has no matching").size).to eq(1)
+      end
+    end
+  end
+
   describe ".call when nothing is found" do
     before { allow(described_class).to receive(:cached_context).and_return(turbo: turbo_section_of_an_empty_app) }
 
