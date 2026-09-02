@@ -32,9 +32,9 @@ module RailsAiContext
 
         # Discover controllers from filesystem that may not be loaded as classes.
         # Reflection has already named every controller it loaded, so the file's
-        # own source is only worth reading for the ones it did not - resolving
-        # the declared constant up front would read and parse every controller
-        # in the app to produce a name this loop throws away.
+        # own source is only worth parsing for the ones it did not - resolving
+        # the declared constant up front would parse every controller in the
+        # app to produce a name this loop throws away.
         discover_from_filesystem.each do |path_name, record|
           next if result.key?(path_name)
 

@@ -123,7 +123,9 @@ module RailsAiContext
         end
 
         known = models.map(&:name).to_set
-        SourceScan.each(app.root, kind: "app/models").each do |record|
+        # Concerns stay in: a class declared under a nested concerns directory
+        # is a model, and constantize sorts the mixins out.
+        SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each do |record|
           class_name = record.path_name
           next if known.include?(class_name)
           next if config.excluded_models.include?(class_name)

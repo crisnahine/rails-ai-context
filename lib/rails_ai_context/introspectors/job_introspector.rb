@@ -312,13 +312,17 @@ module RailsAiContext
       end
 
       # The file a loaded class was read from, root-relative; nil when the
-      # constant has no source location or it lies outside the app.
+      # constant has no source location or it lies outside the app. Compared
+      # as real paths, the way app_defined? does, so a symlinked root keeps it.
       def source_file_for(klass)
         location = Object.const_source_location(klass.name)&.first
-        return nil unless location&.start_with?("#{app.root}/")
+        return nil unless location
 
-        location.delete_prefix("#{app.root}/")
-      rescue NameError, ArgumentError, TypeError
+        real = File.realpath(location)
+        return nil unless real.start_with?("#{app_root_real}/")
+
+        real.delete_prefix("#{app_root_real}/")
+      rescue NameError, ArgumentError, TypeError, SystemCallError
         nil
       end
 
