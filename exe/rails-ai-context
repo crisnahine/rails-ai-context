@@ -81,7 +81,7 @@ class RailsAiContextCLI < Thor
       end
 
       if args.include?("--help") || args.include?("-h")
-        require_gem_without_app!
+        entry_boot.require_gem_without_app!
         tool_class = ::RailsAiContext::CLI::ToolRunner.new(name, []).tool_class
         puts ::RailsAiContext::CLI::ToolRunner.tool_help(tool_class)
         return
@@ -236,8 +236,7 @@ class RailsAiContextCLI < Thor
     desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml and .mcp.json)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def init
-      config_path = File.join(Dir.pwd, "config", "environment.rb")
-      unless File.exist?(config_path)
+      unless entry_boot.app_present?(Dir.pwd)
         $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
         $stderr.puts "Run this command from your Rails app root directory."
         exit 1
@@ -465,14 +464,13 @@ class RailsAiContextCLI < Thor
     # otherwise load the gem standalone and list from that. Only execution
     # (running a specific tool) genuinely needs a live app.
     def print_tool_list
-      config_path = File.join(Dir.pwd, "config", "environment.rb")
-      if File.exist?(config_path) && try_boot_for_list
+      if entry_boot.app_present?(Dir.pwd) && try_boot_for_list
         puts ::RailsAiContext::CLI::ToolRunner.tool_list
         return
       end
 
       begin
-        require_gem_without_app!
+        entry_boot.require_gem_without_app!
         # Boot is what normally loads .rails-ai-context.yml, so without it the
         # listing took the gem's defaults and advertised tools the app has
         # configured off - which the very next call then refuses by name.
@@ -501,12 +499,6 @@ class RailsAiContextCLI < Thor
       false
     end
 
-    # Gems that the MCP SDK reads from `Gem.loaded_specs` at tool-call time
-    # (specifically `Gem.loaded_specs["json-schema"].full_gem_path` in
-    # mcp/tool/schema.rb). Bundler.setup strips them in standalone mode so we
-    # capture references BEFORE Rails boot runs and re-register them afterwards.
-    STANDALONE_REQUIRED_GEMS = %w[mcp json-schema addressable public_suffix].freeze
-
     # Pull a value-taking flag (--flag VALUE or --flag=VALUE) out of the
     # pass-through args that stop_on_unknown_option! leaves after the tool
     # name. Returns the value, or nil when the flag isn't present.
@@ -531,133 +523,22 @@ class RailsAiContextCLI < Thor
       Dir.chdir(app_root) if app_path_opt
       ENV["RAILS_ENV"] = environment_opt if environment_opt
 
-      if allow_static && (no_boot || options[:no_boot])
-        # Something to read, or the static tier describes a directory that is
-        # not an app: in an empty folder this wrote a CLAUDE.md reporting
-        # "Migrations: 0 total" and exited 0. The bar is source, not boot
-        # files - an engine keeps its dummy app under spec/dummy, so its root
-        # has app/ and no config/, and it is a real target.
-        unless File.exist?(File.join(Dir.pwd, "config", "application.rb")) ||
-               File.exist?(File.join(Dir.pwd, "config", "environment.rb")) ||
-               Dir.glob(File.join(Dir.pwd, "app", "**", "*.rb")).any?
-          $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
-          $stderr.puts "Run this command from your Rails app root directory (or pass --app-path)."
-          exit 1
-        end
+      outcome = entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot])
+      outcome.messages.each { |line| $stderr.puts line }
+      return unless outcome.tier == :absent
 
-        enter_static_tier!("static mode requested with --no-boot")
-        return
-      end
-
-      config_path = File.join(Dir.pwd, "config", "environment.rb")
-      unless File.exist?(config_path)
-        $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
-        $stderr.puts "Run this command from your Rails app root directory (or pass --app-path)."
-        exit 1
-      end
-
-      require_relative "../lib/rails_ai_context/boot_manager"
-
-      # Save $LOAD_PATH before Rails boot.
-      # Bundler.setup (in config/boot.rb) strips $LOAD_PATH to Gemfile-only gems.
-      # In standalone mode (gem not in Gemfile), this removes our gem and mcp paths.
-      # We restore them after boot so lazy requires (mcp, etc.) still resolve.
-      pre_boot_paths = $LOAD_PATH.dup
-
-      # Capture spec references BEFORE Bundler.setup runs. After Bundler.setup,
-      # Gem::Specification.find_by_name is filtered to only Gemfile-resolved gems
-      # and our transitive deps (mcp, json-schema) become invisible — find_by_name
-      # raises Gem::MissingSpecError. Capturing first means we hold real spec
-      # objects we can splice back in after boot. No-op in in-Gemfile mode (the
-      # captured specs already exist in Gem.loaded_specs and our `||=` skips them).
-      pre_boot_specs = capture_standalone_specs
-
-      # Standalone mode on Ruby 3.4+: this CLI process lazily activates the
-      # newest/default version of stdlib gems (e.g. psych via `require "yaml"`,
-      # date via transitive requires) BEFORE the app's Bundler.setup runs inside
-      # the boot require. If the app resolves a different version, Bundler
-      # raises `Gem::LoadError: already activated psych 5.4.0, but your Gemfile
-      # requires psych 5.3.1`. Clear the pre-activated specs so Bundler activates
-      # the versions the app resolves. No-op under `bundle exec`, so in-Gemfile
-      # mode is unaffected.
-      drop_conflicting_gem_activations!
-
-      timeout = ::RailsAiContext::BootManager.env_timeout
-      result = ::RailsAiContext::BootManager.boot!(app_root: Dir.pwd, timeout: timeout)
-
-      unless result.booted?
-        if allow_static
-          $stderr.puts "[rails-ai-context] App boot failed: #{result.failure_summary}"
-          if result.error.is_a?(::RailsAiContext::BootManager::BootTimeoutError)
-            $stderr.puts "[rails-ai-context]   If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
-          end
-          $stderr.puts "[rails-ai-context] Serving static analysis; runtime-only data is marked [UNAVAILABLE]."
-          $stderr.puts "[rails-ai-context] Run `rails-ai-context doctor` for boot diagnostics."
-          restore_standalone_environment!(pre_boot_paths, pre_boot_specs)
-          enter_static_tier!(result.failure_summary)
-          return
-        end
-
-        $stderr.puts "Error: Rails app failed to boot in #{Dir.pwd}"
-        $stderr.puts "  #{result.failure_summary}"
-        if ENV["DEBUG"]
-          Array(result.error.backtrace).first(15).each { |line| $stderr.puts "    #{line}" }
-        else
-          $stderr.puts "  Run with DEBUG=1 for the full backtrace."
-        end
-
-        if result.error.is_a?(::RailsAiContext::BootManager::BootTimeoutError)
-          $stderr.puts "  The app took longer than #{timeout}s to boot. Raise the limit with"
-          $stderr.puts "  RAILS_AI_CONTEXT_BOOT_TIMEOUT=<seconds> (current: #{timeout}s)."
-        else
-          $stderr.puts "  Common causes: missing ENV vars or credentials, an initializer"
-          $stderr.puts "  that needs a service (database, Redis), or a syntax error."
-          $stderr.puts "  If the app is healthy but slow to boot, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, default 60)."
-        end
-
-        $stderr.puts "  doctor needs a bootable app; fix the boot error above first." if context == "doctor"
-
-        exit 1
-      end
-
-      restore_standalone_environment!(pre_boot_paths, pre_boot_specs)
-
-      require "rails_ai_context"
-
-      if defined?(Rails::VERSION::MAJOR) && Rails::VERSION::MAJOR >= 9
-        $stderr.puts "[rails-ai-context] WARNING: Rails #{Rails.version} is newer than this gem supports (< 9.0)."
-        $stderr.puts "[rails-ai-context]   Introspection is untested on this version and may be wrong or incomplete."
-        $stderr.puts "[rails-ai-context]   Check for a newer rails-ai-context release."
-      end
-
-      RailsAiContext::Configuration.auto_load!
+      $stderr.puts "  doctor needs a bootable app; fix the boot error above first." if context == "doctor" && outcome.reason
+      exit 1
     end
 
-    # Bundler.setup during app boot strips $LOAD_PATH and the spec registry
-    # to Gemfile-resolved gems; in standalone mode our own transitive deps
-    # (mcp, json-schema) vanish. Splice back what was captured pre-boot.
-    def restore_standalone_environment!(pre_boot_paths, pre_boot_specs)
-      (pre_boot_paths - $LOAD_PATH).each { |p| $LOAD_PATH << p }
-      pre_boot_specs.each { |name, spec| Gem.loaded_specs[name] ||= spec }
-
-      missing = STANDALONE_REQUIRED_GEMS.reject { |g| Gem.loaded_specs.key?(g) }
-      return if missing.none? || ENV["BUNDLE_BIN_PATH"]
-
-      $stderr.puts "[rails-ai-context] WARNING: standalone CLI could not restore gemspec(s): #{missing.join(', ')}."
-      $stderr.puts "[rails-ai-context]   Tool calls may crash with `undefined method 'full_gem_path' for nil`."
-      $stderr.puts "[rails-ai-context]   Try `gem install rails-ai-context` to ensure all transitive deps are installed."
-    end
-
-    # Loads the gem with no booted app. Framework gems whose load paths the
-    # top-of-file strip removed are spliced back from the stashed specs -
-    # except any gem a completed Bundler.setup already resolved, whose pinned
-    # paths must keep winning over the newest installed version.
-    def require_gem_without_app!
-      STRIPPED_FRAMEWORK_SPECS.each do |name, spec|
-        next if Gem.loaded_specs.key?(name)
-        spec.full_require_paths.each { |p| $LOAD_PATH.unshift(p) unless $LOAD_PATH.include?(p) }
+    # Loaded on first use, never at file top: the boot path must not touch the
+    # gem before the app decides its own gem versions.
+    def entry_boot
+      @entry_boot ||= begin
+        require_relative "../lib/rails_ai_context/cli/entry_boot"
+        ::RailsAiContext::CLI::EntryBoot.stripped_framework_specs = STRIPPED_FRAMEWORK_SPECS
+        ::RailsAiContext::CLI::EntryBoot
       end
-      require "rails_ai_context"
     end
 
     # What `init` needs before it boots the app, loaded file by file rather
@@ -681,60 +562,6 @@ class RailsAiContextCLI < Thor
       # Defined in the entry file, which is the thing that must not load yet.
       # With no Rails in the process it only writes to stderr.
       ::RailsAiContext.define_singleton_method(:log_warn) { |message| $stderr.puts(message) }
-    end
-
-    # Static tier: the gem loads standalone (no app constants), introspection
-    # runs against the filesystem, and every tool response carries the tier
-    # banner so consumers know runtime data is absent.
-    def enter_static_tier!(reason)
-      require_gem_without_app!
-      ::RailsAiContext.tier = :static
-      ::RailsAiContext.static_reason = reason
-      ::RailsAiContext.configuration.app_root = Dir.pwd
-      ::RailsAiContext::Configuration.auto_load!
-      $stderr.puts "[rails-ai-context] static tier active: #{reason}"
-    end
-
-    # Look up each required gem via Gem::Specification.find_by_name BEFORE
-    # Bundler.setup runs and filters the spec registry. Returns a hash of
-    # {gem_name => Gem::Specification}. In in-Gemfile mode the lookups still
-    # succeed but the result is unused (Bundler keeps these specs registered).
-    def capture_standalone_specs
-      return {} unless defined?(Gem) && Gem.respond_to?(:loaded_specs)
-
-      STANDALONE_REQUIRED_GEMS.each_with_object({}) do |gem_name, acc|
-        spec = Gem::Specification.find_by_name(gem_name)
-        acc[gem_name] = spec if spec
-      rescue Gem::MissingSpecError, Gem::LoadError
-        # The gem is not installed at all (not just Bundler-filtered). Skip
-        # silently — the downstream `require` produces a clearer error.
-        next
-      end
-    end
-
-    # Remove activated gem specs whose version differs from the app's
-    # Gemfile.lock pin, so the app's Bundler.setup can activate the locked
-    # version instead of raising `Gem::LoadError: already activated`. Only the
-    # in-memory spec registration is removed; already-loaded stdlib code stays,
-    # which is safe (require is idempotent and the affected gems - psych, date,
-    # bigdecimal, stringio - keep stable APIs across the involved versions).
-    # No-op under `bundle exec` (BUNDLE_BIN_PATH set): Bundler already governs
-    # activation there, so in-Gemfile mode is untouched.
-    def drop_conflicting_gem_activations!
-      return if ENV["BUNDLE_BIN_PATH"]
-      return unless defined?(Gem) && Gem.respond_to?(:loaded_specs)
-
-      # Drop every pre-activated spec except bundler (which is mid-execution),
-      # so the app's Bundler.setup activates each gem at the version IT resolves
-      # rather than colliding with whatever RubyGems pre-activated. Without this,
-      # `require config_path` raises `Gem::LoadError: already activated psych
-      # 5.4.0, but your Gemfile requires psych 5.3.1`. Only the in-memory spec
-      # registration is removed; already-loaded code stays (require is
-      # idempotent). The gem's own spec and its MCP deps are captured before
-      # this call and restored after boot (see capture_standalone_specs).
-      Gem.loaded_specs.delete_if { |name, _| name != "bundler" }
-    rescue => e
-      $stderr.puts "[rails-ai-context] drop_conflicting_gem_activations! failed: #{e.message}" if ENV["DEBUG"]
     end
 end
 
