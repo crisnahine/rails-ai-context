@@ -351,7 +351,9 @@ module RailsAiContext
 
       # One walk over app/controllers feeding every collector that needs it,
       # the way scan_broadcasts already reads app/models once. Each collector
-      # scanning for itself read and parsed the same files four times.
+      # scanning for itself read and parsed the same files four times. The
+      # memo is assigned either way, so a failure is not re-walked on every
+      # later call.
       def scan_controllers
         @scan_controllers ||= build_controller_scan
       end
@@ -364,18 +366,18 @@ module RailsAiContext
 
         each_controller_record do |record|
           source = record.source
-          collect { include_found ||= native_navigation_included?(source) }
-          collect { helpers << record.file if source.match?(NATIVE_HELPER) }
-          collect { source.scan(NATIVE_NAVIGATION) { |m| navigation << { file: record.file, method: m } } }
-          collect { responses.concat(stream_responses_in(record)) }
+          guarded { include_found ||= native_navigation_included?(source) }
+          guarded { helpers << record.file if source.match?(NATIVE_HELPER) }
+          guarded { source.scan(NATIVE_NAVIGATION) { |m| navigation << { file: record.file, method: m } } }
+          guarded { responses.concat(stream_responses_in(record)) }
         end
 
         # Each list is ordered under its own collector's rescue: an entry the
         # comparison cannot order costs that list its order, not the section.
-        collect { helpers.sort! }
-        collect { navigation.sort_by! { |r| [ r[:file], r[:method] ] } }
-        collect { responses.uniq! }
-        collect { responses.sort_by! { |r| [ r[:controller], r[:action] ] } }
+        guarded { helpers.sort! }
+        guarded { navigation.sort_by! { |r| [ r[:file], r[:method] ] } }
+        guarded { responses.uniq! }
+        guarded { responses.sort_by! { |r| [ r[:controller], r[:action] ] } }
 
         {
           native_include: include_found,
@@ -388,10 +390,8 @@ module RailsAiContext
         { native_include: false, native_helpers: [], native_navigation: [], turbo_stream_responses: [] }
       end
 
-      # One collector raising costs its own list for that file only, and the
-      # memo is assigned either way so a failure is not re-walked on every
-      # later call.
-      def collect
+      # One collector raising costs its own list, not the section.
+      def guarded
         yield
       rescue => e
         $stderr.puts "[rails-ai-context] scan_controllers collector failed: #{e.message}" if ENV["DEBUG"]
