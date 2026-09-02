@@ -16,19 +16,23 @@ module RailsAiContext
 
     # { own: [filter], inherited: [filter], skipped: [name] } for one action.
     # `source:` is the controller's source when the caller already has it.
-    def for(ctx, controller_name, action, source: nil, root: default_root)
+    def for(ctx, controller_name, action, source: nil, root: nil)
       split(ctx, controller_name, action.to_s, source, root)
     end
 
     # The same three lists for the whole controller: every declared filter,
     # whatever actions it constrains itself to.
-    def for_controller(ctx, controller_name, source: nil, root: default_root)
+    def for_controller(ctx, controller_name, source: nil, root: nil)
       split(ctx, controller_name, nil, source, root)
     end
 
-    # The app root a caller that has one need not name.
+    # The app root a caller that has one need not name. Nil outside a booted
+    # app, where nothing can be read anyway: the gem is required on its own
+    # by the standalone binary long before `Rails` exists.
     def default_root
-      RailsAiContext.default_app.root.to_s
+      return nil unless RailsAiContext.static_tier? || defined?(Rails)
+
+      RailsAiContext.default_app&.root&.to_s
     end
 
     def split(ctx, controller_name, action, source, root)
@@ -122,6 +126,9 @@ module RailsAiContext
     def carried_source(ctx, controller_name, root)
       file = Payload.controller_file(ctx, controller_name)
       return nil unless file
+
+      root ||= default_root
+      return nil unless root
 
       SafeFile.read(File.join(root.to_s, file))
     end

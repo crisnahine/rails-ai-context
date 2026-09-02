@@ -1,8 +1,26 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "shellwords"
 
 RSpec.describe RailsAiContext::ActionFilters do
+  # The gem is required on its own by the standalone binary and by any
+  # consumer outside a booted app, so no entry point may reach for `Rails`
+  # before a payload asks for a file.
+  it "answers without a Rails constant in the process" do
+    root = File.expand_path("../../..", __dir__)
+    script = [
+      "$LOAD_PATH.unshift #{File.join(root, 'lib').inspect}",
+      'require "rails_ai_context"',
+      'puts RailsAiContext::ActionFilters.for({}, "Nope", :show).inspect'
+    ].join("\n")
+
+    output = `ruby -e #{script.shellescape} 2>&1`
+
+    expect(output).to include("{own: [], inherited: [], skipped: []}").or include("{:own=>[], :inherited=>[], :skipped=>[]}")
+    expect($?.exitstatus).to eq(0)
+  end
+
   let(:context) do
     { controllers: { controllers: {
       "ApplicationController" => { filters: [ { kind: "before_action", name: "authenticate" } ], file: "app/controllers/application_controller.rb" },
