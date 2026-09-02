@@ -279,6 +279,24 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         FileUtils.remove_entry(empty_dir) if empty_dir
       end
 
+      # The name is benign, so only the post-realpath check catches it; the
+      # directory loop has to render that refusal rather than search on.
+      it "rejects a concern file symlinked to a sensitive path" do
+        skip "symlinks unavailable" unless File.respond_to?(:symlink?)
+
+        secret = File.join(model_concerns_dir, "buried.key")
+        File.write(secret, "should-never-leak-from-symlink")
+        link = File.join(model_concerns_dir, "secret_helper.rb")
+        File.symlink(secret, link)
+
+        text = described_class.call(name: "secret_helper").content.first[:text]
+        expect(text).to match(/not allowed/)
+        expect(text).to include("sensitive file")
+        expect(text).not_to include("should-never-leak-from-symlink")
+      ensure
+        FileUtils.rm_f([ link, secret ].compact)
+      end
+
       it "rejects null bytes in the name parameter" do
         result = described_class.call(name: "searchable\0.rb")
         text = result.content.first[:text]
