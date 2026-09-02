@@ -366,10 +366,8 @@ namespace :ai do
       puts "📧 Mailers: #{context[:jobs][:mailers]&.size || 0}"
     end
 
-    if context[:conventions]
-      arch = context[:conventions][:architecture] || []
-      puts "🏛️  Architecture: #{arch.join(', ')}" if arch.any?
-    end
+    arch = RailsAiContext::Payload.architecture(context)
+    puts "🏛️  Architecture: #{arch.join(', ')}" if arch.any?
 
     puts ""
     puts ASSISTANT_TABLE

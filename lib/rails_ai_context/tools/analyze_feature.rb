@@ -181,7 +181,7 @@ module RailsAiContext
 
               split = RailsAiContext::ActionFilters.for_controller(ctx, name)
               if split[:inherited].any?
-                lines << "- **Inherited filters:** #{split[:inherited].map { |f| "#{f[:name]} _(from #{info[:parent_class]})_" }.join(', ')}"
+                lines << "- **Inherited filters:** #{split[:inherited].map { |f| "#{f[:name]} _(from #{f[:from]})_" }.join(', ')}"
               end
 
               filters = split[:own].map do |f|

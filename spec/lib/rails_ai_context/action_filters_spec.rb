@@ -88,6 +88,39 @@ RSpec.describe RailsAiContext::ActionFilters do
     end
   end
 
+  # SourceScan carries the spelling the app uses, not the realpath, so a
+  # symlinked pack's file is outside the root by realpath and only a reader
+  # that trusts the carried path can open it.
+  context "a controller in a pack symlinked out of the root" do
+    it "reads the skips out of the carried file" do
+      skip "symlinks unavailable" unless File.respond_to?(:symlink?)
+
+      Dir.mktmpdir("outside-pack") do |outside|
+        Dir.mktmpdir("pack-root") do |root|
+          FileUtils.mkdir_p(File.join(outside, "billing", "app", "controllers"))
+          File.write(File.join(outside, "billing", "app", "controllers", "billing_controller.rb"), <<~RUBY)
+            class BillingController < ApplicationController
+              skip_before_action :authenticate
+            end
+          RUBY
+          File.symlink(outside, File.join(root, "packs"))
+          allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(root))
+
+          ctx = { controllers: { controllers: {
+            "ApplicationController" => { filters: [ { kind: "before_action", name: "authenticate" } ] },
+            "BillingController" => {
+              parent_class: "ApplicationController",
+              filters: [],
+              file: "packs/billing/app/controllers/billing_controller.rb"
+            }
+          } } }
+
+          expect(described_class.for_controller(ctx, "BillingController")[:skipped]).to eq(%w[authenticate])
+        end
+      end
+    end
+  end
+
   # In the static tier each controller's list holds only its own
   # declarations, so a filter two levels up is reached only by walking.
   describe "an ancestor chain deeper than one level" do
@@ -122,6 +155,42 @@ RSpec.describe RailsAiContext::ActionFilters do
 
       expect(described_class.for_controller(deep_context, "Admin::PostsController")[:inherited].map { |f| f[:name] })
         .to eq(%w[require_admin])
+    end
+
+    it "names the ancestor each inherited filter was found on" do
+      result = described_class.for_controller(deep_context, "Admin::PostsController")
+
+      expect(result[:inherited].map { |f| [ f[:name], f[:from] ] })
+        .to eq([ %w[require_admin Admin::BaseController], %w[authenticate ApplicationController] ])
+    end
+
+    # A skip in a class between the child and the declaring ancestor stops
+    # the filter as surely as one in the child's own body.
+    context "when an intermediate ancestor skips the grandparent's filter" do
+      around do |example|
+        Dir.mktmpdir("action-filters-chain") do |dir|
+          @root = dir
+          FileUtils.mkdir_p(File.join(dir, "app/controllers/admin"))
+          File.write(File.join(dir, "app/controllers/admin/base_controller.rb"), <<~RUBY)
+            class Admin::BaseController < ApplicationController
+              skip_before_action :authenticate
+            end
+          RUBY
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        deep_context[:controllers][:controllers]["Admin::BaseController"][:file] =
+          "app/controllers/admin/base_controller.rb"
+      end
+
+      it "does not carry it into the child's inherited list" do
+        result = described_class.for_controller(deep_context, "Admin::PostsController")
+
+        expect(result[:inherited].map { |f| f[:name] }).to eq(%w[require_admin])
+      end
     end
   end
 end

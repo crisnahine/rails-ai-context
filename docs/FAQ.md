@@ -158,7 +158,7 @@ Yes. Add content outside the `<!-- BEGIN/END rails-ai-context -->` markers. The 
 
 ### Is introspection slow?
 
-Introspection results are cached with TTL (default: 60s) and fingerprint invalidation. The first call is slower; subsequent calls use cache. Prism AST parsing uses a single-pass Dispatcher - all 7 listeners run in one tree walk.
+Introspection results are cached with TTL (default: 60s) and fingerprint invalidation. The first call is slower; subsequent calls use cache. Prism AST parsing uses a single-pass Dispatcher - all 8 listeners run in one tree walk.
 
 ### Does this affect my app's performance?
 

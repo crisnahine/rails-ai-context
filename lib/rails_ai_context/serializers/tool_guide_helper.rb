@@ -35,8 +35,7 @@ module RailsAiContext
         ctx = context
         return true if ctx.is_a?(Hash) && ctx.dig(:api, :api_only) == true
 
-        arch = ctx.is_a?(Hash) ? ctx.dig(:conventions, :architecture) : nil
-        arch.is_a?(Array) && arch.include?("api_only")
+        RailsAiContext::Payload.architecture(ctx).include?("api_only")
       end
 
       # Derived from BaseTool.registered_tools - the single source of truth for tool count.

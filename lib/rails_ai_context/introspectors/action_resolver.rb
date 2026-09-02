@@ -110,6 +110,57 @@ module RailsAiContext
         signature(method)[/\A[^(]*\((.*)\)\z/m, 1].to_s
       end
 
+      # One method's body out of a file's source, with the lines it occupies.
+      # The `end` that closes a `def` sits at the `def`'s own indentation,
+      # which reads more reliably than counting block depth.
+      def method_body(source, method_name)
+        lines = source.to_s.lines
+        start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/) }
+        return nil unless start_idx
+
+        indent = lines[start_idx][/\A\s*/].length
+        body = []
+        end_idx = start_idx
+        lines[start_idx..].each_with_index do |line, i|
+          body << line.rstrip
+          end_idx = start_idx + i
+          break if i.positive? && line.match?(/\A\s{#{indent}}end\b/)
+        end
+
+        { code: body.join("\n"), start_line: start_idx + 1, end_line: end_idx + 1 }
+      rescue => e
+        $stderr.puts "[rails-ai-context] ActionResolver.method_body failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      # What an action body assigns and what it renders. One owner for the
+      # question, so a tool answers it from the source rather than from
+      # another tool's rendered prose.
+      #
+      # Only the left of an assignment counts, which is what tells `@post =`
+      # apart from a read of `@post` on the right and what makes
+      # `@a, @b = x` two names.
+      def assigned_ivars(action_source)
+        action_source.to_s.each_line.flat_map do |line|
+          next [] unless line.include?("=")
+
+          line.split("=", 2).first.scan(/@(\w+)/).flatten
+        end.uniq
+      end
+
+      # A template the action renders instead of its own, `create` falling
+      # back to `:new` being the case that matters.
+      def rendered_templates(action_source)
+        action_source.to_s.scan(/render\s+:(\w+)/).flatten.uniq
+      end
+
+      # An ivar a `render json:`/`render xml:` response consumes. There is no
+      # template to cross-reference it against, so the call itself is the
+      # only evidence it was used. `render json: @post.errors` counts `@post`.
+      def rendered_ivars(action_source)
+        action_source.to_s.scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten.uniq
+      end
+
       def methods_in(source)
         SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })[:methods] || []
       end

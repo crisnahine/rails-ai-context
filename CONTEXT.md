@@ -34,6 +34,12 @@ A caller-supplied path resolved once, through `SafePath`, before anything reads 
 
 Not the same as a path that merely looks harmless, and not a caller's own containment check - "the tool guards this parameter" means it hands the parameter to `SafePath` and renders whatever refusal comes back.
 
+## Carried path
+
+A path the payload already holds because the gem's own walk found it - a controller's or a model's `file:`. It is re-read with `SafeFile.read(File.join(root, relative))`, which applies the size cap and nothing else. The reason is the walk: `SourceScan` deliberately keeps the spelling the app uses rather than the realpath, so a pack or an in-repo engine symlinked out of the root is spelled inside it, and `SafePath`'s realpath containment would refuse the very file the payload just named - the source comes back nil and a section silently empties.
+
+Not an exception to the **safe path** rule, the other side of it: a caller-supplied path is untrusted and goes through `SafePath`; a carried path was produced by this gem and only needs the cap.
+
 ## Source scan
 
 The one walk over a kind of app source, across every directory `PathResolver` resolves for it: conventional layout, packs, in-repo engines. `SourceScan.paths` stats only, `each` reads the source on top of it, and `classes` names each file by its declared constant. An introspector that globs `app/<kind>` itself is the mistake this entry exists to name: it misses every pack and engine, and it names files by their path rather than by what they declare.

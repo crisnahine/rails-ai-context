@@ -44,8 +44,18 @@ module RailsAiContext
         end
       end
 
+      # The loader declines a file it does not manage (a pack or an in-repo
+      # engine runs its own), by nil or by raising; camelize still names it
+      # well enough for that loader's autoload to answer.
       def cpath_for(loader, path, file)
-        return loader.cpath_expected_at(file) if loader.respond_to?(:cpath_expected_at)
+        if loader.respond_to?(:cpath_expected_at)
+          begin
+            cpath = loader.cpath_expected_at(file)
+            return cpath if cpath
+          rescue Zeitwerk::Error
+            nil
+          end
+        end
 
         file.delete_prefix(path + File::SEPARATOR).sub(/\.rb\z/, "").camelize
       end

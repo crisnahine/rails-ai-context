@@ -77,6 +77,20 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
 
       expect(described_class.new(ctx).call).not_to include("## Project Structure")
     end
+
+    it "renders no configuration section when the static tier refused config" do
+      ctx = RailsAiContext.introspect
+      ctx[:config] = { unavailable: "runtime only" }
+
+      expect(described_class.new(ctx).call).not_to include("## Configuration")
+    end
+
+    it "renders no schema section when schema failed" do
+      ctx = RailsAiContext.introspect
+      ctx[:schema] = { error: "boom", total_tables: 3 }
+
+      expect(described_class.new(ctx).call).not_to include("## Database Schema")
+    end
   end
 end
 

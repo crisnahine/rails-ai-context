@@ -93,4 +93,38 @@ RSpec.describe RailsAiContext::Introspectors::EagerLoad do
       expect(Object.const_defined?(:ZzHTMLParser, false)).to be true
     end
   end
+
+  # A pack or an in-repo engine runs its own loader, so the main loader
+  # declines to name that directory's files: cpath_expected_at raises
+  # Zeitwerk::Error for a root it does not manage.
+  describe "a directory another loader owns" do
+    let(:main_dir) { Dir.mktmpdir }
+    let(:pack_dir) { Dir.mktmpdir }
+    let(:main_loader) { Zeitwerk::Loader.new.tap { |l| l.push_dir(main_dir); l.setup } }
+    let(:pack_loader) { Zeitwerk::Loader.new.tap { |l| l.push_dir(pack_dir); l.setup } }
+
+    before do
+      File.write(File.join(main_dir, "zz_main_thing.rb"), "class ZzMainThing; end\n")
+      File.write(File.join(pack_dir, "zz_pack_thing.rb"), "class ZzPackThing; end\n")
+      main_loader
+      pack_loader
+      allow(RailsAiContext::PathResolver).to receive(:dirs_for).and_return([ pack_dir ])
+      allow(Rails.autoloaders).to receive(:main).and_return(main_loader)
+    end
+
+    after do
+      [ main_loader, pack_loader ].each do |l|
+        l.unload
+        l.unregister if l.respond_to?(:unregister)
+      end
+      [ main_dir, pack_dir ].each { |d| FileUtils.remove_entry(d) }
+    end
+
+    it "loads the constant through the owning loader's autoload" do
+      described_class.dir(pack_dir, kind: "app/models")
+
+      expect(Object.autoload?(:ZzPackThing)).to be_nil
+      expect(Object.const_defined?(:ZzPackThing, false)).to be true
+    end
+  end
 end

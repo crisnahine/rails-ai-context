@@ -123,10 +123,14 @@ module RailsAiContext
         end
 
         known = models.map(&:name).to_set
-        # Concerns stay in: a class declared under a nested concerns directory
-        # is a model, and constantize sorts the mixins out.
+        # Concerns stay in: a nested concerns directory is a namespace, so a
+        # class declared under one is a model and constantize sorts the mixins
+        # out. A top-level `app/models/concerns` is an autoload root instead,
+        # so its files declare no `Concerns::` prefix and that path name never
+        # constantizes.
         SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each do |record|
           class_name = record.path_name
+          next if class_name.start_with?("Concerns::")
           next if known.include?(class_name)
           next if config.excluded_models.include?(class_name)
 

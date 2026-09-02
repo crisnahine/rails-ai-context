@@ -231,14 +231,11 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       end
     end
 
-    # The caller already read the file; reading it again can only disagree
-    # with the source the rest of the render used.
-    it "reads the private methods out of the source it was handed" do
+    it "inlines the body of a private method the action calls" do
       Dir.mktmpdir do |root|
-        path = File.join(root, "widgets_controller.rb")
-        File.write(path, "class WidgetsController\n  def show; end\nend\n")
-        handed = <<~RUBY
-          class WidgetsController
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        File.write(File.join(root, "app/controllers/widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
             def show
               load_widget
             end
@@ -250,11 +247,37 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
             end
           end
         RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "WidgetsController" => {
+            actions: %w[show], filters: [], parent_class: "ApplicationController",
+            file: "app/controllers/widgets_controller.rb"
+          } } }
+        )
 
-        found = described_class.send(:detect_called_private_methods, "  load_widget\n", path, source: handed)
+        text = described_class.call(controller: "WidgetsController", action: "show").content.first[:text]
 
-        expect(found.map { |m| m[:name] }).to eq(%w[load_widget])
+        expect(text).to include("## Private Methods Called")
+        expect(text).to include("### load_widget")
+        expect(text).to include("@widget = Widget.find(params[:id])")
       end
+    end
+
+    # An inherited filter names where it was declared, not whichever class
+    # happens to be the direct parent.
+    it "names the grandparent an inherited filter was declared on" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: {
+          "ApplicationController" => { actions: [], filters: [ { kind: "before_action", name: "authenticate" } ] },
+          "Admin::BaseController" => { actions: [], filters: [], parent_class: "ApplicationController" },
+          "Admin::PostsController" => { actions: %w[index], filters: [], parent_class: "Admin::BaseController" }
+        } }
+      )
+
+      text = described_class.call(controller: "Admin::PostsController").content.first[:text]
+
+      expect(text).to include("_(from ApplicationController)_")
+      expect(text).not_to include("_(from Admin::BaseController)_")
     end
   end
 end

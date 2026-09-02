@@ -359,12 +359,12 @@ module RailsAiContext
           navigation = []
           responses = []
 
-          controller_sources.each do |record|
+          each_controller_record do |record|
             source = record.source
-            include_found ||= native_navigation_included?(source)
-            helpers << record.file if source.match?(NATIVE_HELPER)
-            source.scan(NATIVE_NAVIGATION) { |match| navigation << { file: record.file, method: match } }
-            responses.concat(stream_responses_in(record))
+            collect { include_found ||= native_navigation_included?(source) }
+            collect { helpers << record.file if source.match?(NATIVE_HELPER) }
+            collect { source.scan(NATIVE_NAVIGATION) { |m| navigation << { file: record.file, method: m } } }
+            collect { responses.concat(stream_responses_in(record)) }
           end
 
           {
@@ -374,9 +374,23 @@ module RailsAiContext
             turbo_stream_responses: responses.uniq.sort_by { |r| [ r[:controller], r[:action] ] }
           }
         end
+      end
+
+      # One collector raising costs its own list for that file only, and the
+      # memo is assigned either way so a failure is not re-walked on every
+      # later call.
+      def collect
+        yield
+      rescue => e
+        $stderr.puts "[rails-ai-context] scan_controllers collector failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      def each_controller_record(&block)
+        controller_sources.each(&block)
       rescue => e
         $stderr.puts "[rails-ai-context] scan_controllers failed: #{e.message}" if ENV["DEBUG"]
-        { native_include: false, native_helpers: [], native_navigation: [], turbo_stream_responses: [] }
+        nil
       end
 
       def native_navigation_included?(source)

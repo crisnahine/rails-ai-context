@@ -8,8 +8,7 @@ module RailsAiContext
       private
 
       def detect_test_command
-        tests = context[:tests]
-        framework = tests.is_a?(Hash) ? tests[:framework] : nil
+        framework = Payload.section(context, :tests)&.dig(:framework)
         case framework
         when "rspec" then "bundle exec rspec"
         when "minitest" then "rails test"

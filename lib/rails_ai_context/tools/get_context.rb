@@ -100,21 +100,19 @@ module RailsAiContext
           lines << response_text(view_result)
         end
 
-        # Cross-reference: controller ivars vs view ivars
-        # Also check templates rendered by the action (e.g., create renders :new on failure)
-        ctrl_text = response_text(ctrl_result)
-        ctrl_ivars = extract_ivars_from_text(ctrl_text)
+        # Cross-reference: controller ivars vs view ivars. The action's own
+        # source is the origin for both sides of the controller's half; a
+        # body this app cannot read skips the cross-check.
+        action_body = action_source(controller_name, action_name)
+        resolver = RailsAiContext::Introspectors::ActionResolver
+        ctrl_ivars = Set.new(action_body ? resolver.assigned_ivars(action_body) : [])
         view_ivars = Payload.view_ivars(cached_context, "#{snake}/#{action_name}")
-        # Detect "render :other_template" and include those templates' ivars too
-        rendered = ctrl_text.scan(/render\s+:(\w+)/).flatten.uniq
+        rendered = action_body ? resolver.rendered_templates(action_body) : []
         other_templates = rendered.reject { |t| t == action_name }
         other_templates.each do |tmpl|
           view_ivars.merge(Payload.view_ivars(cached_context, "#{snake}/#{tmpl}"))
         end
-        # `render json:`/`render xml:` responses are right there in the controller
-        # source - an ivar rendered that way is consumed even though there's no
-        # view template to cross-reference it against.
-        view_ivars.merge(extract_api_rendered_ivars(ctrl_text))
+        view_ivars.merge(action_body ? resolver.rendered_ivars(action_body) : [])
         ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates, api_only: api_only?)
         lines << "" << ivar_check if ivar_check
 
@@ -134,30 +132,16 @@ module RailsAiContext
         "Error assembling context: #{e.message}"
       end
 
-      private_class_method def self.extract_ivars_from_text(text)
-        # Extract from "## Instance Variables\n- @foo\n- @bar" section
-        ivars = Set.new
-        in_section = false
-        text.each_line do |line|
-          if line.include?("Instance Variables")
-            in_section = true
-            next
-          end
-          if in_section
-            break unless line.strip.start_with?("- ")
-            match = line.match(/@(\w+)/)
-            ivars << match[1] if match
-          end
-        end
-        ivars
-      end
+      # The action's body out of the file the payload carried for the
+      # controller - never a path rebuilt from the class name.
+      private_class_method def self.action_source(controller_name, action_name)
+        carried = Payload.controller_file(cached_context, controller_name)
+        return nil unless carried
 
-      # Extract ivars consumed by `render json: @foo` / `render xml: @foo` (and
-      # `render json: @foo.errors`, whose leading `@foo` is what's actually set).
-      # These responses live in the controller source itself - no view template
-      # exists to cross-reference them against.
-      private_class_method def self.extract_api_rendered_ivars(ctrl_text)
-        Set.new(ctrl_text.scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten)
+        source = safe_read(File.join(rails_app.root.to_s, carried))
+        return nil unless source
+
+        RailsAiContext::Introspectors::ActionResolver.method_body(source, action_name)&.dig(:code)
       end
 
       # True when the app runs in API-only mode (no view layer), so ivar

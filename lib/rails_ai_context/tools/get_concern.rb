@@ -108,6 +108,8 @@ module RailsAiContext
           case located.refusal
           when :too_large
             return text_response("Concern file too large: #{located.realpath} (#{File.size(located.realpath)} bytes, max: #{max_size})")
+          when :traversal then return text_response("Path not allowed: #{name}")
+          when :sensitive then return text_response("Path not allowed: #{name} (sensitive file)")
           when :missing, :outside then next
           end
 
