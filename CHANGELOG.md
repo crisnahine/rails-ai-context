@@ -79,6 +79,8 @@ duplicated mechanisms behind them.
   named a pipeline**, so every generated context file carried
   `- Assets: none`. The line shows only the parts that name something, and
   disappears when there are none.
+- **`rails_get_view`'s ivar list counted an `@` inside an email address and a
+  `@@class_variable`.** Neither is an instance variable.
 
 ### Changed
 
@@ -120,6 +122,11 @@ duplicated mechanisms behind them.
   strings.
 - **`rails-ai-context://routes/{controller}` prefers an exact route-key
   match**, so `routes/posts` no longer also returns `admin/posts`.
+- **`api[:unavailable_sections]` is a list of section keys**, not a reason
+  string.
+- **`controllers[:controllers]` can carry `{ error: "unreadable" }` entries**
+  for a file over the size cap or otherwise unreadable, and the listing and
+  the count include them.
 
 ### Removed
 

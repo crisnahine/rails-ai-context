@@ -14,17 +14,17 @@ module RailsAiContext
         @app = app
       end
 
-      # Everything but api_only needs a booted app, but api_only itself is a
-      # plain assignment in config/application.rb - and the view tools already
-      # read it there. Leaving this section wholly unavailable meant one
-      # process answering "this is an API-only app" from get_stimulus and
-      # "cannot say" from get_api.
       # Everything `call` answers except api_only itself.
       STATIC_UNAVAILABLE = %w[
         serializers graphql api_versioning rate_limiting openapi_spec
         cors_config api_client_generation graphql_details pagination
       ].freeze
 
+      # Everything but api_only needs a booted app, but api_only itself is a
+      # plain assignment in config/application.rb - and the view tools already
+      # read it there. Leaving this section wholly unavailable meant one
+      # process answering "this is an API-only app" from get_stimulus and
+      # "cannot say" from get_api.
       def static_call
         {
           api_only: AppKind.api_only?(app.root),
