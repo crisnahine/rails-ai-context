@@ -172,14 +172,18 @@ module RailsAiContext
             # TTL expired: re-validate via fingerprint before re-introspecting.
             # If fingerprint is unchanged, bump the timestamp and reuse the
             # cached context - saves re-running all 40 introspectors.
-            if SHARED_CACHE[:context] && !Fingerprinter.changed?(rails_app, SHARED_CACHE[:fingerprint])
+            if SHARED_CACHE[:context] && !Fingerprinter.stale?(rails_app, SHARED_CACHE[:fingerprint])
               SHARED_CACHE[:timestamp] = now
               return SHARED_CACHE[:context].deep_dup
             end
 
+            # Marked before the walk, not after: a mark taken afterwards
+            # covers edits made while the 40 introspectors ran, and the next
+            # caller reads a stale context as fresh.
+            mark = Fingerprinter.mark(rails_app)
             SHARED_CACHE[:context] = RailsAiContext.introspect
             SHARED_CACHE[:timestamp] = now
-            SHARED_CACHE[:fingerprint] = Fingerprinter.compute(rails_app)
+            SHARED_CACHE[:fingerprint] = mark
             SHARED_CACHE[:context].deep_dup
           end
         end
@@ -435,7 +439,7 @@ module RailsAiContext
 
         # Cache key for paginated responses - lets agents detect stale data between pages
         def cache_key
-          SHARED_CACHE[:fingerprint] || "none"
+          SHARED_CACHE[:fingerprint]&.digest || "none"
         end
 
         # Case-insensitive fuzzy key lookup for hashes keyed by class/table names.

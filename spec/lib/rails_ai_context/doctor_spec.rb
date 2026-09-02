@@ -553,5 +553,44 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.message).to include("app/models")
       end
     end
+
+    # The freshness check read five hardcoded directories while the watch
+    # scope read many more, so an edit in a service or a pack left the
+    # context reported as up to date.
+    context "against a real app tree" do
+      def freshness_for(root)
+        allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
+        described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_context_freshness)
+      end
+
+      def write_context_file(root)
+        path = File.join(root, "CLAUDE.md")
+        File.write(path, "context")
+        File.utime(Time.now - 3600, Time.now - 3600, path)
+      end
+
+      it "names any directory the watch scope covers" do
+        Dir.mktmpdir do |root|
+          write_context_file(root)
+          FileUtils.mkdir_p(File.join(root, "app/services"))
+          File.write(File.join(root, "app/services/billing.rb"), "class Billing; end")
+
+          check = freshness_for(root)
+
+          expect(check.status).to eq(:warn)
+          expect(check.message).to include("app/services")
+        end
+      end
+
+      it "ignores our own initializer, which install writes in the same run" do
+        Dir.mktmpdir do |root|
+          write_context_file(root)
+          FileUtils.mkdir_p(File.join(root, "config/initializers"))
+          File.write(File.join(root, "config/initializers/rails_ai_context.rb"), "# installed")
+
+          expect(freshness_for(root).status).to eq(:pass)
+        end
+      end
+    end
   end
 end

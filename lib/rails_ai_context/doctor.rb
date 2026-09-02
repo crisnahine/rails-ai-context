@@ -213,15 +213,10 @@ module RailsAiContext
       else
         File.mtime(context_file)
       end
-      # Check if any source file changed after context was generated.
-      # Exclude our own initializer - it's written during install and would
-      # always appear newer than context files generated in the same run.
-      stale_dirs = %w[app/models app/controllers app/views config db/migrate].select do |dir|
-        full = File.join(app.root, dir)
-        Dir.exist?(full) && Dir.glob(File.join(full, "**/*.rb"))
-          .reject { |f| f.end_with?("initializers/rails_ai_context.rb") }
-          .any? { |f| File.mtime(f) > generated_at }
-      end
+      # Freshness is measured over the same scope the watcher and the tool
+      # cache use, so a service or a pack cannot change unnoticed.
+      stale_dirs = Fingerprinter.changed_since(app.root, generated_at)
+        .reject { |dir| only_our_initializer_newer?(dir, generated_at) }
 
       if stale_dirs.empty?
         Check.new(name: "Context files", status: :pass, message: "#{context_label} is up to date", fix: nil)
@@ -230,6 +225,17 @@ module RailsAiContext
           message: "#{context_label} may be stale - #{stale_dirs.join(', ')} changed since last generation",
           fix: "Run `rails ai:context` to regenerate")
       end
+    end
+
+    # Install writes our initializer in the same run that generates the
+    # context files, so on its own it never means the context is stale.
+    def only_our_initializer_newer?(dir, generated_at)
+      return false unless dir == "config/initializers"
+
+      newer = Dir.glob(File.join(app.root, dir, Fingerprinter::WATCHED_EXTENSIONS))
+        .select { |path| File.mtime(path) > generated_at }
+
+      newer.any? && newer.all? { |path| path.end_with?("rails_ai_context.rb") }
     end
 
     # A guard written before the respond_to? check was added only tests

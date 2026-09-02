@@ -43,8 +43,9 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
         models: { "User" => { associations: [], validations: [] } },
         schema: { tables: { "users" => { columns: [ { name: "id", type: "integer" } ] } } }
       })
-      allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_return(false)
-      allow(RailsAiContext::Fingerprinter).to receive(:compute).and_return("abc123")
+      allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(false)
+      allow(RailsAiContext::Fingerprinter).to receive(:mark)
+        .and_return(RailsAiContext::Fingerprinter::Mark.new(digest: "abc123"))
     end
 
     after { described_class.reset_cache! }
@@ -64,6 +65,16 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       ctx2 = described_class.cached_context
       expect(ctx2[:models]).to have_key("User")
       expect(ctx2[:models]["User"][:associations]).to be_empty
+    end
+
+    # A mark taken after the introspection covers edits the answer never
+    # read, so the next caller trusts a context that is already stale.
+    it "marks the app before it introspects" do
+      expect(RailsAiContext::Fingerprinter).to receive(:mark).ordered
+        .and_return(RailsAiContext::Fingerprinter::Mark.new(digest: "abc123"))
+      expect(RailsAiContext).to receive(:introspect).ordered.and_return({})
+
+      described_class.cached_context
     end
 
     it "deep copies nested arrays" do

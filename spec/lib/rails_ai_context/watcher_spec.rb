@@ -8,12 +8,22 @@ RSpec.describe RailsAiContext::Watcher do
 
   describe "the shared watch list" do
     it "includes key Rails directories" do
-      patterns = RailsAiContext::ChangeWatch::WATCH_DIRS
-      expect(patterns).to be_frozen
-      expect(patterns).to include("app/models")
-      expect(patterns).to include("app/controllers")
-      expect(patterns).to include("config")
-      expect(patterns).to include("db")
+      dirs = RailsAiContext::ChangeWatch.new(app).watched_dirs
+      root = app.root.to_s
+      expect(dirs).to include(File.join(root, "app/models"))
+      expect(dirs).to include(File.join(root, "app/controllers"))
+      expect(dirs).to include(File.join(root, "config/locales"))
+      expect(dirs).to include(File.join(root, "lib/tasks"))
+    end
+
+    it "watches a pack's models, so a pack edit reaches the reaction" do
+      require "tmpdir"
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "packs", "billing", "app", "models"))
+        watch = RailsAiContext::ChangeWatch.new(RailsAiContext::StaticApp.new(root))
+
+        expect(watch.watched_dirs).to include(File.join(root, "packs", "billing", "app", "models"))
+      end
     end
   end
 
@@ -49,8 +59,8 @@ RSpec.describe RailsAiContext::Watcher do
   describe "handle_change (private)" do
     context "when fingerprint has changed" do
       before do
-        allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_return(true)
-        allow(RailsAiContext::Fingerprinter).to receive(:compute).and_return("new_fp")
+        allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(true)
+        allow(RailsAiContext::Fingerprinter).to receive(:mark).and_return(RailsAiContext::Fingerprinter::Mark.new(digest: "new_fp"))
         allow(RailsAiContext).to receive(:generate_context).and_return(
           { written: [ "/tmp/CLAUDE.md" ], skipped: [ "/tmp/.cursorrules" ] }
         )
@@ -75,7 +85,7 @@ RSpec.describe RailsAiContext::Watcher do
 
     context "when fingerprint has not changed" do
       before do
-        allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_return(false)
+        allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(false)
       end
 
       it "does not regenerate context" do
@@ -86,8 +96,8 @@ RSpec.describe RailsAiContext::Watcher do
 
     context "when an error occurs during regeneration" do
       before do
-        allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_return(true)
-        allow(RailsAiContext::Fingerprinter).to receive(:compute).and_return("new_fp")
+        allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(true)
+        allow(RailsAiContext::Fingerprinter).to receive(:mark).and_return(RailsAiContext::Fingerprinter::Mark.new(digest: "new_fp"))
         allow(RailsAiContext).to receive(:generate_context).and_raise(StandardError, "write failure")
         allow($stderr).to receive(:puts)
       end
@@ -104,8 +114,8 @@ RSpec.describe RailsAiContext::Watcher do
   describe "#handle_change" do
     it "reloads the app's code before regenerating" do
       watcher = described_class.new(Rails.application)
-      allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_return(true)
-      allow(RailsAiContext::Fingerprinter).to receive(:compute).and_return("fp")
+      allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(true)
+      allow(RailsAiContext::Fingerprinter).to receive(:mark).and_return(RailsAiContext::Fingerprinter::Mark.new(digest: "fp"))
       allow(RailsAiContext).to receive(:generate_context).and_return({ written: [], skipped: [] })
       allow($stderr).to receive(:puts)
 

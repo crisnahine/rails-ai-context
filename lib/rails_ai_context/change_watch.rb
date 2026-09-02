@@ -11,24 +11,18 @@ module RailsAiContext
   # and notify clients) and its own policy for a missing `listen` gem -
   # start raises LoadError so a CLI can exit and a server can downgrade.
   class ChangeWatch
-    # The union the two watchers had converged on, one home. config and db
-    # cover their subdirectories; the app/ entries mirror what the
-    # fingerprint reads.
-    WATCH_DIRS = %w[
-      app/models app/controllers app/views app/jobs app/mailers
-      app/channels app/components app/helpers app/services
-      app/javascript/controllers app/middleware
-      config db lib/tasks
-    ].freeze
-
     def initialize(app)
       @app = app
-      @last_fingerprint = Fingerprinter.compute(app)
+      @mark = Fingerprinter.mark(app)
     end
 
+    # One scope, the fingerprint's: a directory the fingerprint reads but
+    # nobody watches is a change that never reaches the reaction. The root
+    # manifests (Gemfile.lock, package.json) are fingerprinted only - Listen
+    # is recursive with no opt-out, so watching the root would walk
+    # node_modules.
     def watched_dirs
-      root = @app.root.to_s
-      WATCH_DIRS.map { |p| File.join(root, p) }.select { |d| Dir.exist?(d) }
+      Fingerprinter.watched_dirs(@app.root.to_s)
     end
 
     # Wires Listen to the watched directories and runs every change batch
@@ -59,9 +53,9 @@ module RailsAiContext
     # moved, and the reaction sees fresh code - without the reload, a
     # reaction describes the app as it was when the watch started.
     def gate(paths, &reaction)
-      return unless Fingerprinter.changed?(@app, @last_fingerprint)
+      return unless Fingerprinter.stale?(@app, @mark)
 
-      @last_fingerprint = Fingerprinter.compute(@app)
+      @mark = Fingerprinter.mark(@app)
       reloaded = CodeReloader.reload!
       reaction.call(paths, reloaded)
     rescue => e
