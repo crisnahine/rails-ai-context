@@ -100,10 +100,11 @@ duplicated mechanisms behind them.
 - **`rails_get_turbo_map` printed a Turbo Stream response as a Ruby hash.**
   It renders `PostsController#create`, the way the file's other sections name
   a controller action.
-- **A second `context` run rewrote `.ai-context.json`** for its timestamp
+- **A second `context` run rewrote the generated files** for their timestamp
   alone, so a repo that commits the context files saw a diff from a run that
-  found nothing new. A JSON file that differs only in `generated_at` is
-  skipped like the others.
+  found nothing new. One rule now covers them all: a file that differs only
+  in its `generated_at` key, or in the full-mode header's `> Generated:`
+  line, is skipped.
 - **The schema listing named one model per table.** A table an STI child or a
   namespaced second model shares listed whichever came first in the payload,
   which could be the emptier one. Every model on the table is listed now,
