@@ -118,7 +118,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(filters_block("show")).to eq(<<~MD.strip)
         ## Applicable Filters
         - `before` **authenticate** _(from ApplicationController)_
-        - `before` **set_locale** _(from ApplicationController)_
+        - `before` **set_locale** _(from ApplicationController)_ (except: health)
         - `after` **track** _(from ApplicationController)_
         - `before` **set_post** (only: show)
       MD
@@ -127,10 +127,39 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
     it "drops the skipped filter and strikes it through" do
       expect(filters_block("index")).to eq(<<~MD.strip)
         ## Applicable Filters
-        - `before` **set_locale** _(from ApplicationController)_
+        - `before` **set_locale** _(from ApplicationController)_ (except: health)
         - `after` **track** _(from ApplicationController)_
         - ~~authenticate~~ _(skipped)_
       MD
+    end
+
+    it "strikes the skipped filter through in the whole-controller view too" do
+      text = described_class.call(controller: "PostsController").content.first[:text]
+
+      expect(text[/## Filters\n(?:- .*\n?)*/].to_s.strip).to eq(<<~MD.strip)
+        ## Filters
+        - `before` **set_locale** _(from ApplicationController)_ (except: health)
+        - `after` **track** _(from ApplicationController)_
+        - `before` **set_post** (only: show)
+        - ~~authenticate~~ _(skipped)_
+      MD
+    end
+  end
+
+  describe "a controller entry that carries no file" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        controllers: { controllers: {
+          "PostsController" => { actions: %w[index], filters: [] }
+        } }
+      })
+    end
+
+    it "says the source is not recorded and skips hydration" do
+      text = described_class.call(controller: "PostsController", action: "index").content.first[:text]
+
+      expect(text).to include("not recorded for")
+      expect(text).not_to include("**File:**")
     end
   end
 end

@@ -302,6 +302,7 @@ module RailsAiContext
         line = "- `#{filter[:kind]}` **#{filter[:name]}**"
         line += " _(from #{parent_class})_" if parent_class
         line += " (only: #{filter[:only].join(', ')})" if filter[:only]&.any?
+        line += " (except: #{filter[:except].join(', ')})" if filter[:except]&.any?
         line
       end
 
@@ -405,10 +406,11 @@ module RailsAiContext
         end
 
         chain = RailsAiContext::ActionFilters.for_controller(cached_context, name)
-        if chain[:inherited].any? || chain[:own].any?
+        if chain.values.any?(&:any?)
           lines << "" << "## Filters"
           chain[:inherited].each { |f| lines << filter_line(f, info[:parent_class]) }
           chain[:own].each { |f| lines << filter_line(f, nil) }
+          chain[:skipped].each { |skipped| lines << "- ~~#{skipped}~~ _(skipped)_" }
         end
 
         if info[:strong_params]&.any?

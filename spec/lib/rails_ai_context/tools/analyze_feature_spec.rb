@@ -311,4 +311,35 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
   end
+
+  describe "an inherited filter" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: {
+          controllers: {
+            "ApplicationController" => {
+              actions: [],
+              filters: [ { kind: "before", name: "authenticate_widget", only: [ "index" ] } ]
+            },
+            "WidgetsController" => {
+              actions: [ "index" ],
+              filters: [
+                { kind: "before", name: "set_widget" },
+                { kind: "before", name: "authenticate_widget", only: [ "index" ] }
+              ],
+              parent_class: "ApplicationController"
+            }
+          }
+        }
+      )
+    end
+
+    it "is listed once, annotated with the parent it comes from" do
+      text = described_class.call(feature: "widget").content.first[:text]
+
+      expect(text).to include("- **Inherited filters:** authenticate_widget _(from ApplicationController)_")
+      expect(text.scan("authenticate_widget").size).to eq(1)
+      expect(text).to include("- **Filters:** before set_widget")
+    end
+  end
 end
