@@ -55,9 +55,6 @@ duplicated mechanisms behind them.
 - **`YAML.safe_load` refused the `&default` anchors** every stock webpacker
   or shakapacker config carries, so the source path fell back to the
   convention.
-- **The `rails://models/{name}` resource hit an exact-match legacy reader.**
-  Every scheme resolves through the VFS now, and the template advertises
-  `rails-ai-context://models/{name}`.
 - **VFS: `controllers/admin/posts` fell into the action handler** and
   `routes/PostsController` returned zero routes.
 - **`Payload.section` accepted a refused (`unavailable`) section**, so a
@@ -131,6 +128,10 @@ duplicated mechanisms behind them.
   match**, so `routes/posts` no longer also returns `admin/posts`.
 - **`api[:unavailable_sections]` is a list of section keys**, not a reason
   string.
+- **The models resource template advertises
+  `rails-ai-context://models/{name}`**, and every scheme resolves through the
+  VFS rather than an exact-match legacy reader. `rails://models/{name}` is
+  still accepted.
 - **`controllers[:controllers]` can carry `{ error: "unreadable" }` entries**
   for a file over the size cap or otherwise unreadable, and the listing and
   the count include them.

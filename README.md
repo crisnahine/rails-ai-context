@@ -203,6 +203,8 @@ MCP clients can also read structured data as resources. Templates introspect fre
 | `rails-ai-context://views/{path}` | View template content (path traversal blocked) |
 | `rails-ai-context://routes/{controller}` | Live route map for one controller |
 
+The legacy `rails://models/{name}` form is still accepted.
+
 Plus 9 static resources: `rails://schema`, `routes`, `conventions`, `gems`, `controllers`, `config`, `tests`, `migrations`, `engines`.
 
 ## Anti-hallucination rules
