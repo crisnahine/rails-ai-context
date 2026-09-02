@@ -69,7 +69,12 @@ module RailsAiContext
 
         path.delete_prefix(root + File::SEPARATOR)
       end
-      private_class_method :relative_file
+
+      # Whether either spelling of a path lands inside either spelling of the
+      # root. Only one of the two holds for a symlinked pack.
+      def under_root?(path, real, root, real_root)
+        path.start_with?(root + File::SEPARATOR) || real.start_with?(real_root + File::SEPARATOR)
+      end
     end
   end
 end
