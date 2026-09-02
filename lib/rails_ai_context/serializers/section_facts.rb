@@ -17,7 +17,7 @@ module RailsAiContext
 
       def database_line(ctx)
         schema = Payload.section(ctx, :schema)
-        return nil unless SectionGuard.usable?(schema)
+        return nil unless schema
 
         "- Database: #{SchemaAdapter.label(ctx)} - #{CountPhrase.call(schema[:total_tables].to_i, "table")}"
       end

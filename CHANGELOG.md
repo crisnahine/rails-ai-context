@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sprockets-rails`, `sprockets`, `sorcery` and `clearance` join the notable
+  gem table**, so `rails_get_gems` lists them and the `rails_get_config` assets
+  and auth lines name them from the lockfile rather than from a loaded
+  constant.
+
 ### Fixed
 
 Defects found by a second survey round over the whole surface, and the
@@ -48,9 +55,6 @@ duplicated mechanisms behind them.
 - **`YAML.safe_load` refused the `&default` anchors** every stock webpacker
   or shakapacker config carries, so the source path fell back to the
   convention.
-- **The `rails://models/{name}` resource hit an exact-match legacy reader.**
-  Every scheme resolves through the VFS now, and the template advertises
-  `rails-ai-context://models/{name}`.
 - **VFS: `controllers/admin/posts` fell into the action handler** and
   `routes/PostsController` returned zero routes.
 - **`Payload.section` accepted a refused (`unavailable`) section**, so a
@@ -81,6 +85,14 @@ duplicated mechanisms behind them.
   disappears when there are none.
 - **`rails_get_view`'s ivar list counted an `@` inside an email address and a
   `@@class_variable`.** Neither is an instance variable.
+- **A controller ivar compared, not assigned, was reported as set.** `return
+  unless @post == current_user` no longer names `@post`; `||=` and `+=` still
+  count.
+- **`rails_get_context` resolved an action name case-sensitively** while
+  `rails_get_controllers` did not, so `action: "Show"` skipped the ivar
+  cross-check.
+- **The ivar cross-check ran with no view templates section**, reporting every
+  controller ivar as unused in the view. It is skipped instead.
 
 ### Changed
 
@@ -124,6 +136,10 @@ duplicated mechanisms behind them.
   match**, so `routes/posts` no longer also returns `admin/posts`.
 - **`api[:unavailable_sections]` is a list of section keys**, not a reason
   string.
+- **The models resource template advertises
+  `rails-ai-context://models/{name}`**, and every scheme resolves through the
+  VFS rather than an exact-match legacy reader. `rails://models/{name}` is
+  still accepted.
 - **`controllers[:controllers]` can carry `{ error: "unreadable" }` entries**
   for a file over the size cap or otherwise unreadable, and the listing and
   the count include them.
@@ -139,6 +155,7 @@ duplicated mechanisms behind them.
 - **`Presets.names` and `Presets.fetch`** - the listing and the run read
   `DEFINITIONS` directly.
 - **`SchemaHintBuilder.build_many`** - no callers.
+- **`Fingerprinter.changed?`** - no callers; `stale?` answers the question.
 - **The public constant `ChangeWatch::WATCH_DIRS`.**
 
 ## [5.24.0] - 2026-08-17

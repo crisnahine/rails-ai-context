@@ -268,7 +268,7 @@ class RailsAiContextCLI < Thor
     def preset(name = nil)
       require_relative "../lib/rails_ai_context/presets"
 
-      unless name && ::RailsAiContext::Presets::DEFINITIONS.key?(name)
+      unless name && ::RailsAiContext::Presets.resolve(name)
         $stderr.puts "Unknown preset: #{name}\n\n" if name
         $stderr.print ::RailsAiContext::Presets.listing(invocation: ->(k) { "rails-ai-context preset #{k}" })
         # Bare `preset` is a listing request (exit 0); a name that matches no

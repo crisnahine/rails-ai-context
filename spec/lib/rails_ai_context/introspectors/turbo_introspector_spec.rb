@@ -350,6 +350,37 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
     end
   end
 
+  describe "one controller scan feeding four lists" do
+    it "keeps the other lists when a controller's class line names no matching path" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"), <<~RUBY)
+          class SomethingElse < ApplicationController
+            def create
+              respond_to { |format| format.turbo_stream }
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "notes_controller.rb"), <<~RUBY)
+          class NotesController < ApplicationController
+            include Turbo::Native::Navigation
+
+            def show
+              recede_or_redirect_to root_path if turbo_native_app?
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+        expect(result).not_to have_key(:error)
+        expect(result[:turbo_native][:detected]).to be true
+        expect(result[:turbo_native][:native_helpers]).to eq([ "app/controllers/notes_controller.rb" ])
+        expect(result[:turbo_native][:native_navigation].map { |r| r[:method] }).to eq([ "recede_or_redirect_to" ])
+        expect(result[:turbo_stream_responses]).to eq([ { controller: "PostsController", action: "create" } ])
+      end
+    end
+  end
+
   describe "model broadcasts across every model directory" do
     it "names a pack model and a namespaced model by their declared names" do
       Dir.mktmpdir do |dir|

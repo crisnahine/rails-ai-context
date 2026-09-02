@@ -14,6 +14,13 @@ module RailsAiContext
       extend StaticTier
       static_tier :files_only
 
+      # The buffer and path locals ERB itself sets are not the controller's.
+      RENDER_LOCALS = %w[output_buffer virtual_path _request].freeze
+
+      # A word character before the `@` makes it an address, and a second `@`
+      # makes it a class variable; neither is an ivar the controller assigned.
+      IVAR = /(?<![\w@])@(\w+)/
+
       attr_reader :app
 
       def initialize(app)
@@ -71,13 +78,6 @@ module RailsAiContext
         end
         templates
       end
-
-      # The buffer and path locals ERB itself sets are not the controller's.
-      RENDER_LOCALS = %w[output_buffer virtual_path _request].freeze
-
-      # A word character before the `@` makes it an address, and a second `@`
-      # makes it a class variable; neither is an ivar the controller assigned.
-      IVAR = /(?<![\w@])@(\w+)/
 
       # The one reader of a template's ivars, so `get_view` and this
       # introspector cannot disagree about what a template uses.

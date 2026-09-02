@@ -353,27 +353,39 @@ module RailsAiContext
       # the way scan_broadcasts already reads app/models once. Each collector
       # scanning for itself read and parsed the same files four times.
       def scan_controllers
-        @scan_controllers ||= begin
-          include_found = false
-          helpers = []
-          navigation = []
-          responses = []
+        @scan_controllers ||= build_controller_scan
+      end
 
-          each_controller_record do |record|
-            source = record.source
-            collect { include_found ||= native_navigation_included?(source) }
-            collect { helpers << record.file if source.match?(NATIVE_HELPER) }
-            collect { source.scan(NATIVE_NAVIGATION) { |m| navigation << { file: record.file, method: m } } }
-            collect { responses.concat(stream_responses_in(record)) }
-          end
+      def build_controller_scan
+        include_found = false
+        helpers = []
+        navigation = []
+        responses = []
 
-          {
-            native_include: include_found,
-            native_helpers: helpers.sort,
-            native_navigation: navigation.sort_by { |r| [ r[:file], r[:method] ] },
-            turbo_stream_responses: responses.uniq.sort_by { |r| [ r[:controller], r[:action] ] }
-          }
+        each_controller_record do |record|
+          source = record.source
+          collect { include_found ||= native_navigation_included?(source) }
+          collect { helpers << record.file if source.match?(NATIVE_HELPER) }
+          collect { source.scan(NATIVE_NAVIGATION) { |m| navigation << { file: record.file, method: m } } }
+          collect { responses.concat(stream_responses_in(record)) }
         end
+
+        # Each list is ordered under its own collector's rescue: an entry the
+        # comparison cannot order costs that list its order, not the section.
+        collect { helpers.sort! }
+        collect { navigation.sort_by! { |r| [ r[:file], r[:method] ] } }
+        collect { responses.uniq! }
+        collect { responses.sort_by! { |r| [ r[:controller], r[:action] ] } }
+
+        {
+          native_include: include_found,
+          native_helpers: helpers,
+          native_navigation: navigation,
+          turbo_stream_responses: responses
+        }
+      rescue => e
+        $stderr.puts "[rails-ai-context] scan_controllers failed: #{e.message}" if ENV["DEBUG"]
+        { native_include: false, native_helpers: [], native_navigation: [], turbo_stream_responses: [] }
       end
 
       # One collector raising costs its own list for that file only, and the

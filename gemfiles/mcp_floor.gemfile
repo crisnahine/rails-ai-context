@@ -17,6 +17,12 @@ group :development, :test do
   gem "activerecord", "~> #{rails_version}.0"
   gem "actionmailer", "~> #{rails_version}.0"
   gem "puma"
-  gem "sqlite3"
+  # Rails 7.0's sqlite3 adapter caps at sqlite3 ~> 1.4; the 2.x line is only
+  # supported from Rails 7.1 on.
+  if rails_version == "7.0"
+    gem "sqlite3", "~> 1.4"
+  else
+    gem "sqlite3"
+  end
   gem "logger"
 end

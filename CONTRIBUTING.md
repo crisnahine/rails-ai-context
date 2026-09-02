@@ -82,6 +82,14 @@ bundle exec rspec spec/lib/    # Just lib specs
 bundle exec rubocop --parallel # Lint check
 ```
 
+### Static fixture
+
+`spec/fixtures/static_app` is the app the static tier is exercised against, and
+`spec/lib/rails_ai_context/serializers/real_shape_smoke_spec.rb` pins its model
+count in two places (`Models 7` and `Models (7)`).
+
+Adding or removing a fixture model means changing that spec in the same commit.
+
 ## Pull Request Process
 
 1. Fork the repo and create your branch from `main`

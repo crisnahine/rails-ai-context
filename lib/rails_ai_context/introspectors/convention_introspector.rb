@@ -244,8 +244,6 @@ module RailsAiContext
         []
       end
 
-      # Extract the parent class name from a Ruby file via AST ClassNode.
-      # Returns a simple name like "User" (no module path).
       # A superclass written without its namespace, inside `module Admin`,
       # still names the app's `Admin::Report`.
       def app_model?(superclass, names)

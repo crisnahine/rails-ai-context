@@ -1035,6 +1035,8 @@ In addition to tools, the gem registers static MCP resources that AI clients can
 | `rails://engines` | Mounted engines with paths and descriptions (JSON) |
 | `rails-ai-context://models/{name}` | Per-model details (resource template) |
 
+The legacy `rails://models/{name}` form is still accepted.
+
 ### Dynamic Resource Templates (VFS)
 
 Live resources introspected fresh on every request - zero stale data:

@@ -35,6 +35,10 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # A candidate whose own resolution left the app root must not have its
+      # directory globbed either, or the miss lists a tree outside the app.
+      ESCAPING_REFUSALS = %i[traversal outside sensitive].freeze
+
       def self.call(model: nil, controller: nil, detail: "standard", server_context: nil)
         fetch_section(:tests, subject: "Test introspection") do |data|
           # Specific model tests
@@ -252,10 +256,6 @@ module RailsAiContext
 
         empty_response("No test file found for #{name}. Searched: #{candidates.join(', ')}#{nearby_tests_hint(contained)}")
       end
-
-      # A candidate whose own resolution left the app root must not have its
-      # directory globbed either, or the miss lists a tree outside the app.
-      ESCAPING_REFUSALS = %i[traversal outside sensitive].freeze
 
       # Nearby test files, to help the agent find the right one. The glob base
       # is the realpath, so a symlinked test directory cannot widen it.

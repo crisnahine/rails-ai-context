@@ -183,7 +183,8 @@ module RailsAiContext
         source_path = carried ? rails_app.root.join(carried) : nil
         source = source_path && safe_read(source_path.to_s)
 
-        applicable = RailsAiContext::ActionFilters.for(cached_context, controller_name, action_name, source: source)
+        applicable = RailsAiContext::ActionFilters.for(cached_context, controller_name, action_name, source: source,
+          root: rails_app.root.to_s)
 
         # Extract source code with line numbers
         source_with_lines = source && extract_method_with_lines(source_path, action_name, source: source)
@@ -379,7 +380,7 @@ module RailsAiContext
           lines << info[:actions].map { |a| "- `#{a}`" }.join("\n")
         end
 
-        chain = RailsAiContext::ActionFilters.for_controller(cached_context, name)
+        chain = RailsAiContext::ActionFilters.for_controller(cached_context, name, root: rails_app.root.to_s)
         if chain.values.any?(&:any?)
           lines << "" << "## Filters"
           chain[:inherited].each { |f| lines << filter_line(f) }

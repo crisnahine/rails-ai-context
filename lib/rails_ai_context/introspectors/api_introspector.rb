@@ -8,17 +8,17 @@ module RailsAiContext
       extend StaticTier
       static_tier :alternate_source
 
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
-
       # Everything `call` answers except api_only itself.
       STATIC_UNAVAILABLE = %w[
         serializers graphql api_versioning rate_limiting openapi_spec
         cors_config api_client_generation graphql_details pagination
       ].freeze
+
+      attr_reader :app
+
+      def initialize(app)
+        @app = app
+      end
 
       # Everything but api_only needs a booted app, but api_only itself is a
       # plain assignment in config/application.rb - and the view tools already

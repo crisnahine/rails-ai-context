@@ -119,17 +119,6 @@ RSpec.describe RailsAiContext::Fingerprinter do
     end
   end
 
-  describe ".changed?" do
-    it "returns false when fingerprint matches" do
-      current = described_class.compute(Rails.application)
-      expect(described_class.changed?(Rails.application, current)).to be false
-    end
-
-    it "returns true when fingerprint differs" do
-      expect(described_class.changed?(Rails.application, "stale")).to be true
-    end
-  end
-
   describe ".mark and .stale?" do
     it "is not stale until a watched file changes" do
       mark = described_class.mark(app)

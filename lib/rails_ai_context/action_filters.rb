@@ -16,26 +16,31 @@ module RailsAiContext
 
     # { own: [filter], inherited: [filter], skipped: [name] } for one action.
     # `source:` is the controller's source when the caller already has it.
-    def for(ctx, controller_name, action, source: nil)
-      split(ctx, controller_name, action.to_s, source)
+    def for(ctx, controller_name, action, source: nil, root: default_root)
+      split(ctx, controller_name, action.to_s, source, root)
     end
 
     # The same three lists for the whole controller: every declared filter,
     # whatever actions it constrains itself to.
-    def for_controller(ctx, controller_name, source: nil)
-      split(ctx, controller_name, nil, source)
+    def for_controller(ctx, controller_name, source: nil, root: default_root)
+      split(ctx, controller_name, nil, source, root)
     end
 
-    def split(ctx, controller_name, action, source)
+    # The app root a caller that has one need not name.
+    def default_root
+      RailsAiContext.default_app.root.to_s
+    end
+
+    def split(ctx, controller_name, action, source, root)
       info = Payload.controllers(ctx)[controller_name.to_s]
       return { own: [], inherited: [], skipped: [] } unless info.is_a?(Hash)
 
-      skipped = skipped_names(ctx, controller_name, action, source)
+      skipped = skipped_names(ctx, controller_name, action, root, source)
       declared = Array(info[:filters]).grep(Hash)
       applicable = declared.select { |f| applies?(f, action) }
         .reject { |f| skipped.include?(f[:name].to_s) }
 
-      parent = parent_filters(ctx, info[:parent_class], action, skipped)
+      parent = parent_filters(ctx, info[:parent_class], action, skipped, root)
       declared_on = parent.to_h { |f| [ f[:name].to_s, f[:from] ] }
       declared_names = declared.map { |f| f[:name].to_s }.to_set
 
@@ -70,7 +75,7 @@ module RailsAiContext
     # a filter an intermediate ancestor skipped never reaches the child. An
     # ancestor the payload does not carry ends it: reconstructing a path from
     # a class name breaks on every app inflection.
-    def parent_filters(ctx, parent_class, action, skipped)
+    def parent_filters(ctx, parent_class, action, skipped, root)
       controllers = Payload.controllers(ctx)
       seen = Set.new
       found = {}
@@ -87,7 +92,7 @@ module RailsAiContext
           .reject { |f| dropped.include?(f[:name].to_s) }
           .each { |f| found[f[:name].to_s] ||= f.merge(from: name) }
 
-        dropped.merge(skipped_names(ctx, name, action))
+        dropped.merge(skipped_names(ctx, name, action, root))
         name = info[:parent_class]&.to_s
       end
 
@@ -97,8 +102,8 @@ module RailsAiContext
     # Skips live only in the class body, so they are read from the file the
     # introspector carried - never a path derived from the class name. A file
     # SafePath refuses (too large, unreadable, gone) skips nothing.
-    def skipped_names(ctx, controller_name, action, source = nil)
-      source ||= carried_source(ctx, controller_name)
+    def skipped_names(ctx, controller_name, action, root, source = nil)
+      source ||= carried_source(ctx, controller_name, root)
       return [] unless source
 
       skip_calls(source).flat_map do |call|
@@ -114,11 +119,11 @@ module RailsAiContext
     # A carried path came from the gem's own walk, and that walk keeps the
     # spelling the app uses, so realpath containment would refuse a
     # symlinked pack. The size cap still applies.
-    def carried_source(ctx, controller_name)
+    def carried_source(ctx, controller_name, root)
       file = Payload.controller_file(ctx, controller_name)
       return nil unless file
 
-      SafeFile.read(File.join(RailsAiContext.default_app.root.to_s, file))
+      SafeFile.read(File.join(root.to_s, file))
     end
 
     def skip_calls(source)
@@ -127,6 +132,7 @@ module RailsAiContext
       })[:skips] || []
     end
 
-    private_class_method :split, :applies?, :parent_filters, :skipped_names, :carried_source, :skip_calls
+    private_class_method :default_root, :split, :applies?, :parent_filters, :skipped_names, :carried_source,
+                         :skip_calls
   end
 end
