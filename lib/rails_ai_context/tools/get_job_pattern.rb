@@ -30,6 +30,8 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      NOT_COVERED = "Workers the introspector did not see (Sidekiq::Worker in app/workers/, for example) are not covered by this tool."
+
       def self.call(job: nil, detail: "standard", server_context: nil)
         real_root = File.realpath(rails_app.root.to_s).to_s
         # The payload is the one list of jobs: it walked every job directory
@@ -72,8 +74,6 @@ module RailsAiContext
         end
         text_response(lines.join("\n"))
       end
-
-      NOT_COVERED = "Workers the introspector did not see (Sidekiq::Worker in app/workers/, for example) are not covered by this tool."
 
       private_class_method def self.no_job_files_message(sidekiq_line = nil)
         [ "No jobs found. #{NOT_COVERED}", sidekiq_line ].compact.join(" ")
