@@ -129,6 +129,11 @@ RSpec.describe RailsAiContext::Tools::GetView do
         text = result.content.first[:text]
         expect(text).to match(/not allowed|denied|sensitive/)
       end
+
+      it "denies a sensitive name under app/views" do
+        result = described_class.call(path: ".env")
+        expect(result.content.first[:text]).to include("Access denied")
+      end
     end
 
     context "when the app is API-only" do

@@ -15,6 +15,13 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       expect(text).to include("url")
     end
 
+    it "reports a partial over the size cap" do
+      allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(10)
+
+      result = described_class.call(partial: "posts/form")
+      expect(result.content.first[:text]).to include("Partial file too large")
+    end
+
     it "shows summary detail level" do
       result = described_class.call(partial: "posts/form", detail: "summary")
       text = result.content.first[:text]

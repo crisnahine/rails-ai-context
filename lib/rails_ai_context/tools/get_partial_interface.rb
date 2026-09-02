@@ -56,29 +56,24 @@ module RailsAiContext
           return text_response("No app/views/ directory found.")
         end
 
-        # Resolve partial to actual file path
-        file_path = resolve_partial_path(views_dir, partial)
+        located = resolve_partial_path(views_dir, partial)
 
-        unless file_path
+        unless located
           available = find_available_partials(views_dir, root)
           return not_found_response("Partial", partial, available,
             recovery_tool: "Call rails_get_view(detail:\"summary\") to see all views and partials")
         end
 
-        # Derive display-string bases from the realpath that resolve_partial_path
-        # already computed internally - keeps all path operations on realpaths.
-        real_root = File.realpath(root)
-        real_views_dir = File.realpath(views_dir)
-
-        if File.size(file_path) > max_file_size
+        file_path = located.realpath
+        if located.refusal == :too_large
           return text_response("Partial file too large: #{file_path} (#{File.size(file_path)} bytes, max: #{max_file_size})")
         end
 
         source = safe_read(file_path)
         return text_response("Could not read partial file.") unless source
 
-        relative_path = file_path.sub("#{real_root}/", "")
-        partial_name = file_path.sub("#{real_views_dir}/", "")
+        relative_path = located.relative
+        partial_name = relative_path.delete_prefix("app/views/")
 
         # Parse the partial's interface
         magic_locals = extract_magic_comment_locals(source)
@@ -262,7 +257,7 @@ module RailsAiContext
         return nil unless found
 
         located = RailsAiContext::SafePath.locate(found.delete_prefix(views_dir + File::SEPARATOR), under: views_dir, root: rails_app.root.to_s)
-        located.ok? ? located.realpath : nil
+        located.ok? || located.refusal == :too_large ? located : nil
       end
 
       # Extract locals declared via Rails 7.1+ magic comment: <%# locals: (name:, title: "default") %>

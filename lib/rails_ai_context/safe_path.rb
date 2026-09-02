@@ -26,6 +26,8 @@ module RailsAiContext
       return refuse(:sensitive) if sensitive?(relative)
 
       real = File.realpath(File.join(under.to_s, relative))
+      return refuse(:missing) unless File.file?(real)
+
       real_under = File.realpath(under.to_s)
       return refuse(:outside) unless contained?(real, real_under)
 
@@ -34,7 +36,7 @@ module RailsAiContext
       return refuse(:sensitive) if sensitive?(root_relative)
 
       limit = max_size || RailsAiContext.configuration.max_file_size
-      return refuse(:too_large) if File.size(real) > limit
+      return refuse(:too_large, realpath: real, relative: root_relative) if File.size(real) > limit
 
       Resolution.new(realpath: real, relative: root_relative, refusal: nil)
     rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG, Errno::ENOTDIR
@@ -45,7 +47,7 @@ module RailsAiContext
       resolution = locate(relative, under: under, root: root, max_size: max_size)
       return [ nil, resolution ] unless resolution.ok?
 
-      [ RailsAiContext::SafeFile.read(resolution.realpath), resolution ]
+      [ RailsAiContext::SafeFile.read(resolution.realpath, max_size: max_size), resolution ]
     end
 
     def sensitive?(relative)
@@ -61,8 +63,10 @@ module RailsAiContext
       real == real_dir || real.start_with?(real_dir + File::SEPARATOR)
     end
 
-    def refuse(reason)
-      Resolution.new(realpath: nil, relative: nil, refusal: reason)
+    # A too-large file was found, so its resolution keeps the path for the
+    # caller to name.
+    def refuse(reason, realpath: nil, relative: nil)
+      Resolution.new(realpath: realpath, relative: relative, refusal: reason)
     end
     private_class_method :refuse
   end

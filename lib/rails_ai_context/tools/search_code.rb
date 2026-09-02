@@ -134,10 +134,10 @@ module RailsAiContext
           return text_response("Path not found: #{path}. Top-level directories: #{top_dirs.first(15).join(', ')}")
         end
 
-        real_root = File.realpath(root)
-        real_search = begin
-          File.realpath(search_path)
-        rescue Errno::ENOENT
+        begin
+          real_root = File.realpath(root)
+          real_search = File.realpath(search_path)
+        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
           return text_response("Path not found: #{path}")
         end
         return text_response("Path not allowed: #{path}") unless RailsAiContext::SafePath.contained?(real_search, real_root)

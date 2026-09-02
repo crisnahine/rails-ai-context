@@ -89,8 +89,7 @@ module RailsAiContext
           when :traversal then return text_response("Path not allowed: #{name}")
           when :sensitive then return text_response("Path not allowed: #{name} (sensitive file)")
           when :too_large
-            candidate = File.join(dir, relative)
-            return text_response("Concern file too large: #{candidate} (#{File.size(candidate)} bytes, max: #{max_size})")
+            return text_response("Concern file too large: #{located.realpath} (#{File.size(located.realpath)} bytes, max: #{max_size})")
           when :missing, :outside then next
           end
 

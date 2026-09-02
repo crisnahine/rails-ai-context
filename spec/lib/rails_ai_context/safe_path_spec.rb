@@ -48,10 +48,15 @@ RSpec.describe RailsAiContext::SafePath do
     it "refuses a sensitive name on the caller string whether or not the file exists" do
       expect(locate("master.key").refusal).to eq(:sensitive)
       expect(locate("posts/.env").refusal).to eq(:sensitive)
+      expect(locate("leak.key").refusal).to eq(:sensitive)
     end
 
     it "answers missing for a file that is not there" do
       expect(locate("posts/nope.html.erb").refusal).to eq(:missing)
+    end
+
+    it "answers missing for a directory" do
+      expect(locate("posts").refusal).to eq(:missing)
     end
 
     it "refuses a symlink that resolves outside the directory, including a sibling that shares the prefix" do
@@ -62,8 +67,11 @@ RSpec.describe RailsAiContext::SafePath do
       expect(locate("posts/benign.html.erb").refusal).to eq(:sensitive)
     end
 
-    it "refuses a file over the size cap" do
-      expect(locate("posts/index.html.erb", max_size: 3).refusal).to eq(:too_large)
+    it "refuses a file over the size cap and still names the file" do
+      result = locate("posts/index.html.erb", max_size: 3)
+
+      expect(result.refusal).to eq(:too_large)
+      expect(result.realpath).to eq(File.join(@root, "app/views/posts/index.html.erb"))
     end
 
     it "treats the directory itself as contained" do
@@ -78,6 +86,15 @@ RSpec.describe RailsAiContext::SafePath do
 
       expect(content).to eq("<h1>Posts</h1>\n")
       expect(result.refusal).to be_nil
+    end
+
+    it "reads a file over the configured cap when the caller raises the cap" do
+      allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(3)
+
+      content, result = described_class.read("posts/index.html.erb", under: views, root: @root, max_size: 1_000)
+
+      expect(result.refusal).to be_nil
+      expect(content).to eq("<h1>Posts</h1>\n")
     end
 
     it "returns nil content with the refusal when the file is refused" do

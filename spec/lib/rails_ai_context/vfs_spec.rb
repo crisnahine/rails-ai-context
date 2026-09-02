@@ -195,6 +195,19 @@ RSpec.describe RailsAiContext::VFS do
         expect(by_name["total_routes"]).to eq(by_key["total_routes"])
       end
 
+      it "answers routes by route key for a controller that carries no file" do
+        controllers = context[:controllers][:controllers].merge("ActivityPub::OutboxesController" => { actions: [ "show" ] })
+        by_controller = context[:routes][:by_controller].merge(
+          "activitypub/outboxes" => [ { verb: "GET", path: "/users/:id/outbox", action: "show", name: "outbox" } ]
+        )
+        allow(RailsAiContext).to receive(:introspect).and_return(
+          context.merge(controllers: { controllers: controllers }, routes: context[:routes].merge(by_controller: by_controller))
+        )
+
+        data = JSON.parse(described_class.resolve("rails-ai-context://routes/activitypub/outboxes").first[:text])
+        expect(data["total_routes"]).to eq(1)
+      end
+
       it "returns an empty list for a controller with no routes" do
         result = described_class.resolve("rails-ai-context://routes/widgets")
         data = JSON.parse(result.first[:text])
