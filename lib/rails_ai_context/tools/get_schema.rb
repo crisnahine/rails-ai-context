@@ -234,7 +234,7 @@ module RailsAiContext
         if schema[:pending_migrations].is_a?(Array)
           pending = schema[:pending_migrations]
           if pending.any?
-            shown = pending.first(5).join(", ")
+            shown = pending.first(5).map { |m| m[:version] }.join(", ")
             more = pending.size > 5 ? " (+#{pending.size - 5} more)" : ""
             lines << "**Pending migrations:** #{pending.size} - #{shown}#{more}"
           elsif schema[:schema_version]

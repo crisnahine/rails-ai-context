@@ -47,6 +47,19 @@ module RailsAiContext
       versions.map(&:to_i).max.to_s
     end
 
+    # The whole applied set, which only structure.sql records; schema.rb
+    # carries the max version alone, so `current` is the answer there.
+    def self.applied(root)
+      path = File.join(root.to_s, "db", "structure.sql")
+      return nil unless File.exist?(path)
+
+      content = RailsAiContext::SafeFile.read(path, max_size: RailsAiContext.configuration.max_schema_file_size)
+      return nil unless content
+
+      versions = applied_versions(content)
+      versions.empty? ? nil : versions
+    end
+
     # Every applied version recorded in a structure.sql dump's
     # schema_migrations INSERT block(s). Single home for the INSERT regex -
     # the schema introspector's pending-migration derivation uses this too.

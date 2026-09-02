@@ -15,6 +15,11 @@ RSpec.describe RailsAiContext::Hydrators::ViewHydrator do
           table_name: "users",
           associations: [],
           validations: [ { kind: "presence", attributes: [ "email" ] } ]
+        },
+        "OAuthClientConfig" => {
+          table_name: "oauth_client_configs",
+          associations: [],
+          validations: []
         }
       },
       schema: {
@@ -25,6 +30,10 @@ RSpec.describe RailsAiContext::Hydrators::ViewHydrator do
           },
           "users" => {
             columns: [ { name: "id", type: "integer" }, { name: "email", type: "string" } ],
+            primary_key: "id"
+          },
+          "oauth_client_configs" => {
+            columns: [ { name: "id", type: "integer" } ],
             primary_key: "id"
           }
         }
@@ -82,6 +91,13 @@ RSpec.describe RailsAiContext::Hydrators::ViewHydrator do
       allow(RailsAiContext.configuration).to receive(:hydration_max_hints).and_return(1)
       result = described_class.call(%w[post user], context: context)
       expect(result.hints.size).to eq(1)
+    end
+
+    it "hints once, without a warning, for a model the acronym inflects two ways" do
+      result = described_class.call(%w[oauth_client_config oauth_client_configs], context: context)
+
+      expect(result.hints.map(&:model_name)).to eq([ "OAuthClientConfig" ])
+      expect(result.warnings).to eq([])
     end
   end
 end

@@ -327,26 +327,26 @@ module RailsAiContext
         enum_types = schema.enums
 
         version = schema_version_for(path)
-        # schema.rb records only the max applied version, so pending here
-        # means "migration files newer than the schema version" - exact for
-        # linear histories, best-effort for out-of-order merges.
-        pending = if version
-          migration_file_versions(migrate_dir_for_dump(path)).select { |v| v.to_i > version.to_i }.sort
-        else
-          []
-        end
 
-        {
+        result = {
           adapter: "static_parse",
           tables: tables,
           total_tables: tables.size,
           schema_version: version,
-          pending_migrations: pending,
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: generated_columns(schema),
           note: "Parsed from db/schema.rb (no DB connection)"
         }
+        # schema.rb records only the max applied version, so pending here
+        # means "migration files newer than the schema version" - exact for
+        # linear histories, best-effort for out-of-order merges. With no
+        # version recorded there is no answer, so the key stays absent.
+        if version
+          migrate_dir = RailsAiContext::PendingMigrations.migrate_dir_for(app.root, path)
+          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: version)
+        end
+        result
       end
 
       def parse_structure_sql(path)
@@ -368,36 +368,10 @@ module RailsAiContext
         }
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
-          # Compare numerically: legacy zero-padded filenames ("001_") store
-          # version "1" in schema_migrations and must not read as pending.
-          applied_ints = applied.map(&:to_i)
-          pending = migration_file_versions(migrate_dir_for_dump(path)).reject { |v| applied_ints.include?(v.to_i) }
-          result[:pending_migrations] = pending.sort
+          migrate_dir = RailsAiContext::PendingMigrations.migrate_dir_for(app.root, path)
+          result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied)
         end
         result
-      end
-
-      # Version prefixes of every file in the given migrate directory - the
-      # static-tier counterpart of the schema_migrations table for pending
-      # detection.
-      def migration_file_versions(migrate_dir)
-        Dir.glob(File.join(migrate_dir, "*.rb")).filter_map do |f|
-          File.basename(f)[/\A\d+/]
-        end
-      rescue => e
-        $stderr.puts "[rails-ai-context] migration_file_versions failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      # The parsers serve secondary dumps too (db/queue_schema.rb,
-      # db/cache_structure.sql), and each secondary database keeps its own
-      # migrations directory (db/queue_migrate) - comparing a secondary dump
-      # against db/migrate would report the primary's files as pending.
-      def migrate_dir_for_dump(path)
-        base = File.basename(path).sub(/\.(rb|sql)\z/, "")
-        prefix = base.sub(/_?(schema|structure)\z/, "")
-        dir_name = prefix.empty? ? "migrate" : "#{prefix}_migrate"
-        File.join(app.root.to_s, "db", dir_name)
       end
 
       def generated_columns(schema)

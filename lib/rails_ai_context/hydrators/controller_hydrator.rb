@@ -14,15 +14,8 @@ module RailsAiContext
         model_names = detect_model_references(source_path)
         return HydrationResult.new if model_names.empty?
 
-        hints = SchemaHintBuilder.build_many(model_names, context: context, max: RailsAiContext.configuration.hydration_max_hints)
-
-        warnings = []
-        unresolved = model_names - hints.map(&:model_name)
-        unresolved.each do |name|
-          warnings << "Model '#{name}' referenced but not found in introspection data"
-        end
-
-        HydrationResult.new(hints: hints, warnings: warnings)
+        ModelHints.resolve(model_names, context: context,
+          describe: ->(name) { "Model '#{name}' referenced but not found in introspection data" })
       rescue => e
         $stderr.puts "[rails-ai-context] ControllerHydrator failed: #{e.message}" if ENV["DEBUG"]
         HydrationResult.new

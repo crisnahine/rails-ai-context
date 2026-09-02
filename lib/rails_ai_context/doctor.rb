@@ -81,7 +81,7 @@ module RailsAiContext
     def check_pending_migrations
       return nil unless defined?(ActiveRecord::Base)
 
-      pending = RailsAiContext::MigrationStatus.pending(File.join(app.root, "db/migrate"))
+      pending = RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dir_for(app.root))
       return nil unless pending
 
       if pending.empty?

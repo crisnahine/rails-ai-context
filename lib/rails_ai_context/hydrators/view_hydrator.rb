@@ -14,15 +14,8 @@ module RailsAiContext
         model_names = ivar_names.filter_map { |ivar| ivar_to_model_name(ivar) }.uniq
         return HydrationResult.new if model_names.empty?
 
-        hints = SchemaHintBuilder.build_many(model_names, context: context, max: RailsAiContext.configuration.hydration_max_hints)
-
-        warnings = []
-        unresolved = model_names - hints.map(&:model_name)
-        unresolved.each do |name|
-          warnings << "@#{name.underscore} used in view but '#{name}' model not found"
-        end
-
-        HydrationResult.new(hints: hints, warnings: warnings)
+        ModelHints.resolve(model_names, context: context,
+          describe: ->(name) { "@#{name.underscore} used in view but '#{name}' model not found" })
       rescue => e
         $stderr.puts "[rails-ai-context] ViewHydrator failed: #{e.message}" if ENV["DEBUG"]
         HydrationResult.new
