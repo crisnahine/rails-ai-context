@@ -284,7 +284,7 @@ module RailsAiContext
         # Find all method-like calls in the action (word followed by optional parens)
         candidates = action_code.scan(/\b([a-z_]\w*[!?]?)(?:\s*[\(,]|\s*$)/).flatten.uniq
 
-        full_source = RailsAiContext::SafeFile.read(source_path) || ""
+        full_source = source || RailsAiContext::SafeFile.read(source_path) || ""
         private_methods = Introspectors::ActionResolver.private_methods_from_source(full_source).map { |m| m.split("(").first }
 
         called = candidates & private_methods

@@ -230,5 +230,31 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
         expect(text).to include("### load_widget")
       end
     end
+
+    # The caller already read the file; reading it again can only disagree
+    # with the source the rest of the render used.
+    it "reads the private methods out of the source it was handed" do
+      Dir.mktmpdir do |root|
+        path = File.join(root, "widgets_controller.rb")
+        File.write(path, "class WidgetsController\n  def show; end\nend\n")
+        handed = <<~RUBY
+          class WidgetsController
+            def show
+              load_widget
+            end
+
+            private
+
+            def load_widget
+              @widget = Widget.find(params[:id])
+            end
+          end
+        RUBY
+
+        found = described_class.send(:detect_called_private_methods, "  load_widget\n", path, source: handed)
+
+        expect(found.map { |m| m[:name] }).to eq(%w[load_widget])
+      end
+    end
   end
 end
