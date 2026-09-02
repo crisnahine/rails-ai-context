@@ -290,15 +290,10 @@ class RailsAiContextCLI < Thor
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def preset(name = nil)
       require_relative "../lib/rails_ai_context/presets"
-      presets = ::RailsAiContext::Presets::DEFINITIONS
 
-      unless name && presets.key?(name)
+      unless name && ::RailsAiContext::Presets::DEFINITIONS.key?(name)
         $stderr.puts "Unknown preset: #{name}\n\n" if name
-        $stderr.puts "Available presets:"
-        $stderr.puts ""
-        presets.each do |key, info|
-          $stderr.puts "  rails-ai-context preset #{key}".ljust(45) + "# #{info[:desc]}"
-        end
+        $stderr.print ::RailsAiContext::Presets.listing(invocation: ->(k) { "rails-ai-context preset #{k}" })
         # Bare `preset` is a listing request (exit 0); a name that matches no
         # preset is an input error, so scripts get a non-zero exit.
         exit 1 if name
@@ -306,31 +301,7 @@ class RailsAiContextCLI < Thor
       end
 
       boot_rails!(allow_static: true)
-
-      preset = presets[name]
-      $stderr.puts "=" * 60
-      $stderr.puts " Preset: #{name} - #{preset[:desc]}"
-      $stderr.puts "=" * 60
-      $stderr.puts ""
-
-      # All framing goes to stderr so stdout stays pure tool output - mixing
-      # the two scrambles ordering under pipes (stderr is unbuffered, piped
-      # stdout is block-buffered).
-      preset[:tools].each do |tool_spec|
-        begin
-          $stderr.puts "-" * 40
-          $stderr.puts "Running: #{tool_spec[:name]}"
-          $stderr.puts "-" * 40
-          runner = ::RailsAiContext::CLI::ToolRunner.new(
-            tool_spec[:name],
-            tool_spec[:params]
-          )
-          puts runner.run
-          puts ""
-        rescue => e
-          $stderr.puts "  [error] #{tool_spec[:name]}: #{e.message}"
-        end
-      end
+      exit 1 unless ::RailsAiContext::Presets.run(name)
     rescue SystemExit
       raise
     rescue StandardError, ScriptError => e

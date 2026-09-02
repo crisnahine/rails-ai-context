@@ -392,42 +392,10 @@ namespace :ai do
   task :preset, [ :name ] => :environment do |_t, args|
     require "rails_ai_context"
 
-    presets = RailsAiContext::Presets::DEFINITIONS
-
     name = args[:name]&.strip&.downcase
-    unless name && presets.key?(name)
-      puts "Available presets:"
-      puts ""
-      presets.each do |key, info|
-        puts "  rails 'ai:preset[#{key}]'".ljust(38) + "# #{info[:desc]}"
-      end
-      next
-    end
+    next if name && RailsAiContext::Presets.run(name)
 
-    preset = presets[name]
-    # All framing goes to stderr so stdout stays pure tool output - mixing
-    # the two scrambles ordering under pipes (stderr is unbuffered, piped
-    # stdout is block-buffered).
-    $stderr.puts "=" * 60
-    $stderr.puts " Preset: #{name} - #{preset[:desc]}"
-    $stderr.puts "=" * 60
-    $stderr.puts ""
-
-    preset[:tools].each do |tool_spec|
-      begin
-        $stderr.puts "-" * 40
-        $stderr.puts "Running: #{tool_spec[:name]}"
-        $stderr.puts "-" * 40
-        runner = RailsAiContext::CLI::ToolRunner.new(
-          tool_spec[:name],
-          tool_spec[:params]
-        )
-        puts runner.run
-        puts ""
-      rescue => e
-        $stderr.puts "  [error] #{tool_spec[:name]}: #{e.message}"
-      end
-    end
+    puts RailsAiContext::Presets.listing(invocation: ->(k) { "rails 'ai:preset[#{k}]'" })
   end
 
   desc "Print a concise schema facts summary (tables, columns, indexes, associations, dependencies)"
