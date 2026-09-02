@@ -21,7 +21,7 @@ module RailsAiContext
       end
 
       def call
-        eager_load_controllers!
+        EagerLoad.dir(app.root, kind: "app/controllers")
         controllers = discover_controllers
 
         result = controllers.each_with_object({}) do |ctrl, hash|
@@ -69,37 +69,6 @@ module RailsAiContext
       end
 
       private
-
-      def eager_load_controllers!
-        return if Rails.application.config.eager_load
-
-        # Use targeted eager_load_dir to pick up newly created controller files
-        controllers_path = File.join(app.root, "app", "controllers")
-        if defined?(Zeitwerk) && Dir.exist?(controllers_path) &&
-           Rails.autoloaders.respond_to?(:main) && Rails.autoloaders.main.respond_to?(:eager_load_dir)
-          Rails.autoloaders.main.eager_load_dir(controllers_path)
-        else
-          Rails.application.eager_load!
-        end
-      rescue StandardError, ScriptError => e
-        # ScriptError included: one syntax-broken controller must not abort
-        # introspection (eager_load_dir stops at the first bad file). Load
-        # the rest one constant at a time.
-        $stderr.puts "[rails-ai-context] eager_load_controllers! failed: #{e.message}" if ENV["DEBUG"]
-        eager_load_controllers_individually!(controllers_path)
-        nil
-      end
-
-      def eager_load_controllers_individually!(controllers_path)
-        return unless Dir.exist?(controllers_path)
-
-        Dir.glob(File.join(controllers_path, "**/*.rb")).sort.each do |file|
-          const_name = file.sub("#{controllers_path}/", "").sub(/\.rb\z/, "").camelize
-          const_name.constantize
-        rescue StandardError, ScriptError
-          next
-        end
-      end
 
       def discover_controllers
         return [] unless defined?(ActionController::Base)

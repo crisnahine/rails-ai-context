@@ -23,7 +23,7 @@ module RailsAiContext
 
       # @return [Hash] model metadata keyed by model name
       def call
-        eager_load_models!
+        EagerLoad.dir(app.root, kind: "app/models")
         models = discover_models
 
         result = models.each_with_object({}) do |model, hash|
@@ -114,37 +114,6 @@ module RailsAiContext
         return true if segments.first == "concerns"
 
         !DeclaredConstant.declares_class?(source)
-      end
-
-      def eager_load_models!
-        return if Rails.application.config.eager_load
-
-        models_path = File.join(app.root, "app", "models")
-        if defined?(Zeitwerk) && Dir.exist?(models_path) &&
-           Rails.autoloaders.respond_to?(:main) && Rails.autoloaders.main.respond_to?(:eager_load_dir)
-          Rails.autoloaders.main.eager_load_dir(models_path)
-        else
-          Rails.application.eager_load!
-        end
-      rescue StandardError, ScriptError => e
-        # eager_load_dir aborts at the first unloadable file (SyntaxError is a
-        # ScriptError, so it escaped the old bare rescue and killed the whole
-        # process). Load the rest one constant at a time so a single broken
-        # model costs only itself.
-        $stderr.puts "[rails-ai-context] eager_load_models! failed: #{e.message}" if ENV["DEBUG"]
-        eager_load_models_individually!(models_path)
-        nil
-      end
-
-      def eager_load_models_individually!(models_path)
-        return unless Dir.exist?(models_path)
-
-        Dir.glob(File.join(models_path, "**/*.rb")).sort.each do |file|
-          const_name = file.sub("#{models_path}/", "").sub(/\.rb\z/, "").camelize
-          const_name.constantize
-        rescue StandardError, ScriptError
-          next
-        end
       end
 
       def discover_models

@@ -528,4 +528,17 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
   end
+
+  describe "a mailer file that cannot load" do
+    let(:broken) { File.join(Rails.root, "app", "mailers", "zz_broken_mailer.rb") }
+
+    before { File.write(broken, "class ZzBrokenMailer < ApplicationMailer\n  def oops(\nend\n") }
+    after { FileUtils.rm_f(broken) }
+
+    it "costs itself, not the mailers list" do
+      mailers = described_class.new(Rails.application).call[:mailers]
+      expect(mailers.map { |m| m[:name] }).to include("UserMailer", "NotificationMailer")
+      expect(mailers.map { |m| m[:name] }).not_to include("ZzBrokenMailer")
+    end
+  end
 end

@@ -251,8 +251,8 @@ module RailsAiContext
 
         # In development (config.eager_load = false), mailer files are not
         # loaded until first delivery. Without this, .descendants is empty
-        # and mailers are reported as absent. Same pattern as eager_load_channels!.
-        eager_load_mailers!
+        # and mailers are reported as absent.
+        EagerLoad.dir(app.root, kind: "app/mailers")
 
         ActionMailer::Base.descendants.filter_map do |mailer|
           next if mailer.name.nil?
@@ -372,8 +372,7 @@ module RailsAiContext
         # In development (config.eager_load = false), channel files are not
         # loaded until a client subscribes. Without this, .descendants is empty
         # and the entire channels array is missing from the introspector output.
-        # Mirrors the eager_load pattern used by ModelIntrospector / ControllerIntrospector.
-        eager_load_channels!
+        EagerLoad.dir(app.root, kind: "app/channels")
 
         ActionCable::Channel::Base.descendants.filter_map do |channel|
           next if channel.name.nil? || channel.name == "ApplicationCable::Channel"
@@ -395,32 +394,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] extract_channels failed: #{e.message}" if ENV["DEBUG"]
         []
-      end
-
-      def eager_load_channels!
-        return if Rails.application.config.eager_load
-
-        channels_path = File.join(app.root, "app", "channels")
-        if defined?(Zeitwerk) && Dir.exist?(channels_path) &&
-           Rails.autoloaders.respond_to?(:main) && Rails.autoloaders.main.respond_to?(:eager_load_dir)
-          Rails.autoloaders.main.eager_load_dir(channels_path)
-        end
-      rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] eager_load_channels! failed: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      def eager_load_mailers!
-        return if Rails.application.config.eager_load
-
-        mailers_path = File.join(app.root, "app", "mailers")
-        if defined?(Zeitwerk) && Dir.exist?(mailers_path) &&
-           Rails.autoloaders.respond_to?(:main) && Rails.autoloaders.main.respond_to?(:eager_load_dir)
-          Rails.autoloaders.main.eager_load_dir(mailers_path)
-        end
-      rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] eager_load_mailers! failed: #{e.message}" if ENV["DEBUG"]
-        nil
       end
 
       def channel_source(channel)
