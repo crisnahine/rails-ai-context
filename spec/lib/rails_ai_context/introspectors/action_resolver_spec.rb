@@ -176,6 +176,14 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
     end
   end
 
+  describe ".public_methods_from_source on a concern that defines a method twice" do
+    it "lists the signature once" do
+      concern = "module Trackable\n  included do\n    def track; end\n  end\n\n  def track; end\nend\n"
+
+      expect(described_class.public_methods_from_source(concern)).to eq(%w[track])
+    end
+  end
+
   describe ".signature" do
     it "renders the method as written, without a self prefix" do
       methods = RailsAiContext::Introspectors::SourceIntrospector.walk_source(

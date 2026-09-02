@@ -83,13 +83,13 @@ module RailsAiContext
       def public_methods_from_source(source, owner: nil, skip_underscored: true)
         methods = own_methods_in(source, owner).select { |m| m[:scope] == :instance && m[:visibility] == :public }
         methods = methods.reject { |m| m[:name].start_with?("_") } if skip_underscored
-        methods.map { |m| signature(m) }
+        methods.map { |m| signature(m) }.uniq
       end
 
       def private_methods_from_source(source, owner: nil)
         own_methods_in(source, owner)
           .select { |m| m[:scope] == :instance && m[:visibility] != :public }
-          .map { |m| signature(m) }
+          .map { |m| signature(m) }.uniq
       end
 
       # A bare `private` never reaches `def self.x`; it does reach a def
@@ -97,7 +97,7 @@ module RailsAiContext
       def class_methods_from_source(source, owner: nil)
         own_methods_in(source, owner)
           .select { |m| m[:scope] == :class && (m[:visibility] == :public || m[:signature].to_s.start_with?("self.")) }
-          .map { |m| signature(m) }
+          .map { |m| signature(m) }.uniq
       end
 
       # The method as written, minus a `self.` receiver: `build(attrs)`.
@@ -125,6 +125,8 @@ module RailsAiContext
       # The outermost owner the methods sit in: the file's class, or its
       # module when it is a concern or a helper, whichever a nested class sits
       # inside. With no methods at all, the first class the file declares.
+      # Shortest owner path wins; two siblings at the same depth tie and the
+      # one whose method comes first in the file is it.
       def default_owner(source, methods)
         methods.map { |m| Array(m[:owner]) }.reject(&:empty?).min_by(&:length)&.join("::") ||
           DeclaredConstant.declared_names(source).first ||
