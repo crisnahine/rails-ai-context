@@ -38,13 +38,10 @@ module RailsAiContext
         discover_from_filesystem.each do |path_name, record|
           next if result.key?(path_name)
 
-          source = SafeFile.read(record.path)
-          next result[path_name] = { error: "unreadable" } unless source
-
-          name = DeclaredConstant.resolve(source, path_name)
+          name, details = detail_for(record, path_name)
           next if result.key?(name)
 
-          result[name] = extract_details_from_source(record, name, source)
+          result[name] = details
         end
 
         { controllers: result }
@@ -58,11 +55,8 @@ module RailsAiContext
         # No reflection here, so every file's own source is the only source of
         # its name as well as its details.
         result = discover_from_filesystem.each_with_object({}) do |(path_name, record), hash|
-          source = SafeFile.read(record.path)
-          next hash[path_name] = { error: "unreadable" } unless source
-
-          name = DeclaredConstant.resolve(source, path_name)
-          hash[name] = extract_details_from_source(record, name, source).merge(confidence: Confidence::STATIC)
+          name, details = detail_for(record, path_name)
+          hash[name] = details[:error] ? details : details.merge(confidence: Confidence::STATIC)
         rescue => e
           hash[path_name] = { error: e.message }
         end
@@ -75,6 +69,16 @@ module RailsAiContext
       end
 
       private
+
+      # What both tiers do with a file: read it, name it by what it declares,
+      # and extract. A file it cannot read is an entry saying so, not a gap.
+      def detail_for(record, path_name)
+        source = SafeFile.read(record.path)
+        return [ path_name, { error: "unreadable" } ] unless source
+
+        name = DeclaredConstant.resolve(source, path_name)
+        [ name, extract_details_from_source(record, name, source) ]
+      end
 
       def discover_controllers
         return [] unless defined?(ActionController::Base)
