@@ -29,6 +29,11 @@ duplicated mechanisms behind them.
   names the missing file; `doctor` refuses the same tree with that reason.
   The banner calls that tree static mode rather than a boot failure, since
   no boot ran.
+- **`rails_runtime_info` and `rails_query` told a tree with no
+  `config/environment.rb` to fix a boot failure or drop `--no-boot`**, neither
+  of which had happened. Such a tree now reads "This tree has no
+  `config/environment.rb`; add one (or run from the app root) for runtime
+  data."
 - **A source path was contained without a separator and against an
   unresolved root.** The frontend framework introspector's own containment
   check let `/app-old` pass for `/app`. The pre-v5.8.1 bug, still in one

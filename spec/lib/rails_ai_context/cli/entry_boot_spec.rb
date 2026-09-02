@@ -38,6 +38,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     ensure
       RailsAiContext.tier = :runtime
       RailsAiContext.static_reason = nil
+      RailsAiContext.static_kind = nil
       RailsAiContext.configuration.app_root = app_root
     end
 
@@ -86,6 +87,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         outcome = described_class.call(root: dir, allow_static: true, allow_source_only: true, context: "init")
 
         expect(outcome.tier).to eq(:static)
+        expect(outcome.kind).to eq(:source_only)
         expect(outcome.reason).to include("config/environment.rb")
         expect(outcome.messages).not_to include(a_string_starting_with("[rails-ai-context] App boot failed:"))
       end
@@ -113,6 +115,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         File.write(File.join(dir, "app/models/widget.rb"), "class Widget; end\n")
         outcome = described_class.call(root: dir, allow_static: true, no_boot: true)
         expect(outcome.tier).to eq(:static)
+        expect(outcome.kind).to eq(:requested)
         expect(outcome.reason).to eq("static mode requested with --no-boot")
       end
     end
@@ -167,6 +170,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         failing_app do |dir|
           allowed = described_class.call(root: dir, allow_static: true)
           expect(allowed.tier).to eq(:static)
+          expect(allowed.kind).to eq(:boot_failed)
           expect(allowed.messages).to include(a_string_starting_with("[rails-ai-context] App boot failed:"))
 
           refused = described_class.call(root: dir, allow_static: false)
