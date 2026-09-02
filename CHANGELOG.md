@@ -93,6 +93,9 @@ duplicated mechanisms behind them.
   cross-check.
 - **The ivar cross-check ran with no view templates section**, reporting every
   controller ivar as unused in the view. It is skipped instead.
+- **`rails_get_turbo_map` printed a Turbo Stream response as a Ruby hash.**
+  It renders `PostsController#create`, the way the file's other sections name
+  a controller action.
 - **A second `context` run rewrote `.ai-context.json`** for its timestamp
   alone, so a repo that commits the context files saw a diff from a run that
   found nothing new. A JSON file that differs only in `generated_at` is
