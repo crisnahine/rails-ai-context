@@ -23,6 +23,8 @@ module RailsAiContext
         "doorkeeper"      => { category: :auth, note: "OAuth 2 provider via Doorkeeper." },
         "devise-jwt"      => { category: :auth, note: "JWT authentication strategy for Devise." },
         "jwt"             => { category: :auth, note: "JWT token handling." },
+        "sorcery"         => { category: :auth, note: "Authentication via Sorcery. Check config/initializers/sorcery.rb." },
+        "clearance"       => { category: :auth, note: "Authentication via Clearance." },
 
         # Background jobs
         "sidekiq"         => { category: :jobs, note: "Background jobs via Sidekiq. Check config/sidekiq.yml." },
@@ -45,6 +47,8 @@ module RailsAiContext
         "inertia_rails"   => { category: :frontend, note: "Inertia.js for SPA with Rails backend." },
         "hotwire-native-rails" => { category: :frontend, note: "Hotwire Native Rails helpers for iOS/Android." },
         "propshaft"       => { category: :frontend, note: "Asset pipeline via Propshaft (Rails 8 default)." },
+        "sprockets-rails" => { category: :frontend, note: "Asset pipeline via Sprockets. Check app/assets/config/manifest.js." },
+        "sprockets"       => { category: :frontend, note: "Sprockets asset compilation." },
         "phlex-rails"     => { category: :frontend, note: "Phlex view components (Ruby-first HTML)." },
         "view_component"  => { category: :frontend, note: "ViewComponent for encapsulated view components." },
         "lookbook"        => { category: :frontend, note: "UI component preview and documentation via Lookbook." },

@@ -173,9 +173,9 @@ module RailsAiContext
 
         # The gems are read rather than the :assets section: assets is a
         # full-preset introspector, so the standard preset would lose the line.
-        propshaft = Payload.gem?(cached_context, "propshaft") || defined?(Propshaft)
+        propshaft = Payload.gem?(cached_context, "propshaft")
         sprockets = Payload.gem?(cached_context, "sprockets-rails") ||
-                    Payload.gem?(cached_context, "sprockets") || defined?(Sprockets)
+                    Payload.gem?(cached_context, "sprockets")
         parts << "Propshaft" if propshaft
         parts << "Sprockets" if sprockets && !propshaft
         parts << "Import Maps" if File.exist?(rails_app.root.join("config/importmap.rb"))

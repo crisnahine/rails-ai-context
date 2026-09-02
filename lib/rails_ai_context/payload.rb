@@ -69,6 +69,8 @@ module RailsAiContext
       value.is_a?(Hash) && !value[:error] ? value : {}
     end
 
+    # Answers only for gems in GemIntrospector::NOTABLE_GEMS - a gem missing
+    # from that table reads as absent here however the app depends on it.
     def gem?(ctx, name)
       notable_gems(ctx).any? { |g| g.is_a?(Hash) && g[:name] == name.to_s }
     end

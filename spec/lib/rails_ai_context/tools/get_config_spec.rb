@@ -171,6 +171,38 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       expect(described_class.call.content.first[:text]).to include("Propshaft")
     end
 
+    context "with a real Gemfile.lock through the gem introspector" do
+      let(:lock_tmpdir) { Dir.mktmpdir }
+
+      after { FileUtils.remove_entry(lock_tmpdir) }
+
+      def gems_section_for(specs)
+        body = [ "GEM", "  remote: https://rubygems.org/", "  specs:" ]
+        body += specs.map { |line| "    #{line}" }
+        body += [ "", "PLATFORMS", "  ruby", "", "DEPENDENCIES", "  rails (~> 8.0)", "" ]
+        File.write(File.join(lock_tmpdir, "Gemfile.lock"), body.join("\n"))
+        RailsAiContext::Introspectors::GemIntrospector.new(double("app", root: lock_tmpdir)).call
+      end
+
+      it "names Sprockets when the lockfile carries sprockets-rails" do
+        allow(described_class).to receive(:cached_context).and_return({
+          config: config_data,
+          gems: gems_section_for([ "sprockets-rails (3.5.2)", "sprockets (4.2.1)" ])
+        })
+
+        expect(described_class.call.content.first[:text]).to include("Sprockets")
+      end
+
+      it "names Sorcery when the lockfile carries sorcery" do
+        allow(described_class).to receive(:cached_context).and_return({
+          config: config_data,
+          gems: gems_section_for([ "sorcery (0.16.5)" ])
+        })
+
+        expect(described_class.call.content.first[:text]).to include("**Auth:** Sorcery")
+      end
+    end
+
     it "falls back gracefully when frontend introspector has error" do
       allow(described_class).to receive(:cached_context).and_return({
         config: config_data,

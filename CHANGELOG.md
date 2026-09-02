@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sprockets-rails`, `sprockets`, `sorcery` and `clearance` join the notable
+  gem table**, so `rails_get_gems` lists them and the `rails_get_config` assets
+  and auth lines name them from the lockfile rather than from a loaded
+  constant.
+
 ### Fixed
 
 Defects found by a second survey round over the whole surface, and the
