@@ -172,9 +172,9 @@ These introspectors map directly onto the internal RAILS_NERVOUS_SYSTEM checklis
 
 The **SourceIntrospector** uses Prism AST parsing for model analysis. It is infrastructure shared by the introspectors above rather than an introspector you can enable: there is no `:source` key for `config.introspectors`.
 
-It runs a single-pass Dispatcher that walks the AST once and feeds events to all registered listeners simultaneously. Model analysis uses the seven below by default; the rest are used through targeted walks (schema dumps, migrations, Gemfiles, rake tasks, initializers, components, and so on).
+It runs a single-pass Dispatcher that walks the AST once and feeds events to all registered listeners simultaneously. Model analysis uses the eight below by default; the rest are used through targeted walks (schema dumps, migrations, Gemfiles, rake tasks, initializers, components, and so on).
 
-### The 7 default Prism listeners
+### The 8 default Prism listeners
 
 | Listener | What it detects |
 |:---------|:---------------|

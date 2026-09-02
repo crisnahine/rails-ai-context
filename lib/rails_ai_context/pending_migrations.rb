@@ -51,9 +51,8 @@ module RailsAiContext
         base = File.basename(path, ".rb")
         version = base[/\A\d+/] or next
         # The class name, so a static entry names the migration the way the
-        # connection's own pending list does. Built without camelize: this
-        # runs in the standalone binary, which has no ActiveSupport.
-        name = base.sub(/\A\d+_/, "").split("_").map(&:capitalize).join
+        # connection's own pending list does.
+        name = base.sub(/\A\d+_/, "").camelize
         { version: version, name: name, path: path }
       end
     end

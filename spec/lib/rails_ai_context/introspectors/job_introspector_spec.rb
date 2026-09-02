@@ -572,7 +572,11 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         File.write(File.join(outside, "billing", "app", "jobs", "symlinked_pack_job.rb"),
                    "class SymlinkedPackJob < ActiveJob::Base\n  def perform(id); end\nend\n")
         link = File.join(Rails.root, "packs")
-        FileUtils.rm_rf(link)
+        # Only ever remove the link this example makes. A committed packs
+        # fixture would otherwise be deleted by a run of this spec.
+        skip "a real packs directory is checked in" if File.exist?(link) && !File.symlink?(link)
+
+        FileUtils.rm_f(link) if File.symlink?(link)
         File.symlink(outside, link)
 
         begin
@@ -582,7 +586,7 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
             a_hash_including(name: "SymlinkedPackJob", file: "packs/billing/app/jobs/symlinked_pack_job.rb")
           )
         ensure
-          FileUtils.rm_f(link)
+          FileUtils.rm_f(link) if File.symlink?(link)
           Object.send(:remove_const, :SymlinkedPackJob) if Object.const_defined?(:SymlinkedPackJob)
         end
       end

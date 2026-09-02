@@ -337,10 +337,10 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     end
 
     it "memoizes the result for the lifetime of the instance" do
-      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails (7.1.0)\n")
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
       expect(helper.standalone_install?).to be(true)
 
-      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails-ai-context (5.13.0)\n")
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")
       expect(helper.standalone_install?).to be(true), "expected the memoized value to stick within one instance"
     end
   end

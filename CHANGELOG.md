@@ -75,6 +75,10 @@ duplicated mechanisms behind them.
   dropped. Responses carry an empty marker in MCP `meta` now.
 - **`rails_get_test_info` guarded a caller-supplied name with its own
   containment.** It reads through the shared guard.
+- **The asset pipeline introspector's literal `none` was rendered as if it
+  named a pipeline**, so every generated context file carried
+  `- Assets: none`. The line shows only the parts that name something, and
+  disappears when there are none.
 
 ### Changed
 
@@ -92,7 +96,9 @@ duplicated mechanisms behind them.
   frames, model broadcasts, explicit broadcasts and stream subscriptions -
   and `rails_get_turbo_map` renders it. A `turbo_frame_tag dom_id(@post,
   :edit)` frame renders as that call, and a symbol `turbo_stream_from :posts`
-  now pairs with its broadcast.
+  now pairs with its broadcast. A subscription argument that carries its own
+  commas renders whole: `turbo_stream_from [current_user, :notifications]` and
+  `dom_id(@post, :x)` keep every character they were written with.
 - **The public-methods lists come from the parser.** `rails_get_concern`,
   `rails_get_helper_methods`, `rails_get_model_details` and
   `rails_get_controllers` read `private def` and `class_methods do`

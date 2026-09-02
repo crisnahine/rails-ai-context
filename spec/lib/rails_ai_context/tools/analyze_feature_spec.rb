@@ -341,5 +341,40 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text.scan("authenticate_widget").size).to eq(1)
       expect(text).to include("- **Filters:** before set_widget")
     end
+
+    # The deliberate trade: a parent the payload does not carry answers no
+    # inherited filters. Rebuilding its path from the class name breaks on
+    # every app inflection, so nothing is guessed.
+    it "is absent when the payload does not carry the parent at all" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: {
+          controllers: {
+            "WidgetsController" => {
+              actions: [ "index" ],
+              filters: [ { kind: "before", name: "set_widget" } ],
+              parent_class: "ApplicationController"
+            }
+          }
+        }
+      )
+
+      text = described_class.call(feature: "widget").content.first[:text]
+
+      expect(text).not_to include("Inherited filters")
+      expect(text).to include("- **Filters:** before set_widget")
+    end
+
+    # Exclusion hides a controller from the listings, not from the filter
+    # chain: ActionFilters reads every controller the payload carries.
+    it "still names a parent the configuration excludes from listings" do
+      original = RailsAiContext.configuration.excluded_controllers
+      RailsAiContext.configuration.excluded_controllers = %w[ApplicationController]
+
+      text = described_class.call(feature: "widget").content.first[:text]
+
+      expect(text).to include("- **Inherited filters:** authenticate_widget _(from ApplicationController)_")
+    ensure
+      RailsAiContext.configuration.excluded_controllers = original
+    end
   end
 end
