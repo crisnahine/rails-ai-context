@@ -199,11 +199,4 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.gem?({}, "devise")).to be false
     end
   end
-
-  describe ".route_totals" do
-    it "reads the totals and answers nil without a routes section" do
-      expect(described_class.route_totals({ routes: { total_routes: 12, dynamic_routes: 3 } })).to eq({ total: 12, dynamic: 3 })
-      expect(described_class.route_totals({})).to be_nil
-    end
-  end
 end

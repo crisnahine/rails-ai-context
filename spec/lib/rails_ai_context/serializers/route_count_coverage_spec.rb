@@ -93,9 +93,6 @@ RSpec.describe "route counts across every surface" do
       lib/rails_ai_context/tools/analyze_feature.rb
     ].freeze
 
-    # Payload reads the key, it renders nothing - the caveat belongs to the
-    # surfaces that print its answer.
-    READERS = %w[lib/rails_ai_context/payload.rb].freeze
 
     it "every file that renders a route count goes through the seam" do
       renders_a_count = Dir.glob("lib/**/*.{rb,rake}").select do |path|
@@ -103,7 +100,7 @@ RSpec.describe "route counts across every surface" do
       end
       expect(renders_a_count).not_to be_empty, "the guard's own pattern matched nothing"
 
-      missing = (renders_a_count - FILTERED_ANSWERS - READERS).reject do |path|
+      missing = (renders_a_count - FILTERED_ANSWERS).reject do |path|
         File.read(path).include?("RouteCoverage")
       end
 

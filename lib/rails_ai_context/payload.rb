@@ -69,13 +69,6 @@ module RailsAiContext
       notable_gems(ctx).any? { |g| g.is_a?(Hash) && g[:name] == name.to_s }
     end
 
-    def route_totals(ctx)
-      routes = section(ctx, :routes)
-      return nil unless routes
-
-      { total: routes[:total_routes].to_i, dynamic: routes[:dynamic_routes].to_i }
-    end
-
     # The file a controller was read from. Reconstructing it from the class
     # name breaks wherever the app registers an inflection, so the
     # introspector carries it - and one reader here means a rename of the key
