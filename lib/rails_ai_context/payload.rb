@@ -64,6 +64,16 @@ module RailsAiContext
       carried || "app/models/#{name.to_s.underscore}.rb"
     end
 
+    # The file a job or mailer was read from, nil when the tier recorded
+    # none: a job in a pack has no conventional path to fall back to.
+    def job_file(ctx, name)
+      jobs(ctx).find { |job| job.is_a?(Hash) && job[:name] == name.to_s }&.dig(:file)
+    end
+
+    def mailer_file(ctx, name)
+      mailers(ctx).find { |mailer| mailer.is_a?(Hash) && mailer[:name] == name.to_s }&.dig(:file)
+    end
+
     # The model a file declares, as [name, data].
     #
     # Camelizing the path is the wrong way back: `oauth_client_config.rb` is

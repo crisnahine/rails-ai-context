@@ -51,6 +51,8 @@ module RailsAiContext
       def extract_jobs
         return [] unless defined?(ActiveJob::Base)
 
+        EagerLoad.dir(app.root, kind: "app/jobs")
+
         ActiveJob::Base.descendants.filter_map do |job|
           next if job.name.nil? || job.name == "ApplicationJob" ||
                   job.name.start_with?("ActionMailer", "ActiveStorage::", "ActionMailbox::", "Turbo::", "Sentry::")
@@ -61,6 +63,7 @@ module RailsAiContext
 
           {
             name: job.name,
+            file: source_file_for(job),
             queue: queue.to_s,
             priority: job.priority
           }.compact
@@ -91,13 +94,10 @@ module RailsAiContext
       end
 
       def extract_jobs_from_source
-        jobs_dir = File.join(app.root, "app", "jobs")
-        return [] unless Dir.exist?(jobs_dir)
+        SourceScan.classes(app.root, kind: "app/jobs").filter_map do |name, record|
+          next if name == "ApplicationJob"
 
-        Dir.glob(File.join(jobs_dir, "**/*.rb")).filter_map do |path|
-          next unless File.exist?(path) && File.size(path) > 0
-
-          ast = SourceIntrospector.walk(path, {
+          ast = SourceIntrospector.walk_source(record.source, {
             macros: -> {
               Listeners::GenericMacroListener.new(
                 :queue_as, :retry_on, :discard_on,
@@ -108,12 +108,6 @@ module RailsAiContext
             },
             methods: Listeners::MethodsListener
           })
-
-          # Extract class name from AST
-          parse_result = AstCache.parse(path)
-          name = extract_class_name(parse_result.value)
-          next unless name
-          next if name == "ApplicationJob"
 
           # Extract queue_as
           queue_hit = ast[:macros].find { |m| m[:macro] == :queue_as }
@@ -128,17 +122,14 @@ module RailsAiContext
           retry_on = []
           discard_on = []
           if retry_on_hits.any? || discard_on_hits.any?
-            source = RailsAiContext::SafeFile.read(path)
-            if source
-              lines = source.lines
-              retry_on_hits.each do |hit|
-                line = lines[hit[:location] - 1]&.strip
-                retry_on << line.sub(/\Aretry_on\s+/, "") if line
-              end
-              discard_on_hits.each do |hit|
-                line = lines[hit[:location] - 1]&.strip
-                discard_on << line.sub(/\Adiscard_on\s+/, "") if line
-              end
+            lines = record.source.lines
+            retry_on_hits.each do |hit|
+              line = lines[hit[:location] - 1]&.strip
+              retry_on << line.sub(/\Aretry_on\s+/, "") if line
+            end
+            discard_on_hits.each do |hit|
+              line = lines[hit[:location] - 1]&.strip
+              discard_on << line.sub(/\Adiscard_on\s+/, "") if line
             end
           end
 
@@ -166,7 +157,7 @@ module RailsAiContext
             .map { |m| m[:macro].to_s }
             .uniq
 
-          job = { name: name }
+          job = { name: name, file: record.file }
           job[:queue] = queue if queue
           job[:retry_on] = retry_on if retry_on.any?
           job[:discard_on] = discard_on if discard_on.any?
@@ -177,37 +168,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] extract_jobs_from_source failed: #{e.message}" if ENV["DEBUG"]
         []
-      end
-
-      # Walk a Prism AST tree to find the first class name.
-      def extract_class_name(node)
-        case node
-        when Prism::ProgramNode
-          extract_class_name(node.statements)
-        when Prism::StatementsNode
-          node.body.each do |child|
-            result = extract_class_name(child)
-            return result if result
-          end
-          nil
-        when Prism::ClassNode
-          name_parts = []
-          current = node.constant_path
-          while current.is_a?(Prism::ConstantPathNode)
-            name_parts.unshift(current.name.to_s)
-            current = current.parent
-          end
-          name_parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
-          name_parts.join("::")
-        when Prism::ModuleNode
-          node.body&.body&.each do |child|
-            result = extract_class_name(child)
-            return result if result
-          end
-          nil
-        else
-          nil
-        end
       end
 
       def extract_solid_queue_recurring
@@ -266,9 +226,10 @@ module RailsAiContext
 
           {
             name: mailer.name,
+            file: source_file_for(mailer),
             actions: actions,
             delivery_method: mailer.delivery_method.to_s
-          }
+          }.compact
         end.sort_by { |m| m[:name] }
       rescue => e
         $stderr.puts "[rails-ai-context] extract_mailers failed: #{e.message}" if ENV["DEBUG"]
@@ -291,7 +252,7 @@ module RailsAiContext
       MAILER_FRAMEWORK_HOOKS = %w[delivering_email previewing_email delivered_email].freeze
 
       def extract_mailers_from_source
-        source_classes(File.join(app.root, "app", "mailers")).filter_map do |name, methods|
+        source_classes("app/mailers").filter_map do |name, methods, file|
           next if name == "ApplicationMailer"
 
           # The hook is as often a class method as an instance one, so the
@@ -301,26 +262,28 @@ module RailsAiContext
           actions = ActionResolver.own_actions(methods, class_name: name)
           next if actions.empty?
 
-          { name: name, actions: actions, confidence: RailsAiContext::Confidence::STATIC }
+          { name: name, file: file, actions: actions, confidence: RailsAiContext::Confidence::STATIC }
         end.sort_by { |m| m[:name] }
       end
 
       def extract_channels_from_source
         # ApplicationCable holds the base Channel and Connection, neither of
         # which is a channel of the app's own.
-        source_classes(File.join(app.root, "app", "channels")).filter_map do |name, methods|
+        source_classes("app/channels").filter_map do |name, methods, file|
           next if name.start_with?("ApplicationCable::")
 
           stream_methods = ActionResolver.own_methods(methods, name)
                                          .select { |m| m[:scope] == :instance }
                                          .map { |m| m[:name] }
                                          .select { |m| m.start_with?("stream_") || m == "subscribed" }
-          { name: name, stream_methods: stream_methods, confidence: RailsAiContext::Confidence::STATIC }
+          { name: name, file: file, stream_methods: stream_methods, confidence: RailsAiContext::Confidence::STATIC }
         end.sort_by { |c| c[:name] }
       end
 
-      # Class name plus method list for every .rb under `dir`, read from the
-      # AST. Yields nothing when the directory is absent.
+      # Class name, method list and file for every .rb of a kind, read from
+      # the AST. Concerns stay out: Rails adds app/*/concerns as its own
+      # autoload root, so what lives there is a mixin, not a mailer or a
+      # channel.
       #
       # The name comes from the constant the source declares, with the path as
       # the fallback - see DeclaredConstant for which wins when. The path has
@@ -328,19 +291,9 @@ module RailsAiContext
       # namespace when the source does not: `class Channel` in
       # `application_cable/channel.rb` matches no base-class filter and no name
       # the booted app would report.
-      def source_classes(dir)
-        return [] unless Dir.exist?(dir)
-
-        Dir.glob(File.join(dir, "**/*.rb")).sort.filter_map do |path|
-          next unless File.exist?(path) && File.size(path) > 0
-          next if File.size(path) > RailsAiContext.configuration.max_file_size
-          # Rails adds app/*/concerns as its own autoload root, so what lives
-          # there is a mixin, not a mailer or a channel - and naming it from
-          # the path would invent a `Concerns::` namespace that never exists.
-          next if path.sub("#{dir}/", "").start_with?("concerns/")
-
-          source = RailsAiContext::SafeFile.read(path)
-          next unless source
+      def source_classes(kind)
+        SourceScan.each(app.root, kind: kind).filter_map do |record|
+          next if record.source.empty?
 
           # Whether a declaration belongs here is decided by its own methods -
           # see MAILER_FRAMEWORK_HOOKS - because a mailer's actions are as
@@ -350,20 +303,23 @@ module RailsAiContext
           # The methods are the file's, not one class's, which is what lets a
           # mixin's actions count. The cost: a file declaring both a mailer and
           # an interceptor is read as one, and the hook drops both.
-          path_name = path_name_for(path, dir)
-          walked = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })
-          [ DeclaredConstant.resolve(source, path_name), walked[:methods] || [] ]
+          walked = SourceIntrospector.walk_source(record.source, { methods: Listeners::MethodsListener })
+          [ DeclaredConstant.resolve(record.source, record.path_name), walked[:methods] || [], record.file ]
         rescue StandardError, ScriptError => e
-          $stderr.puts "[rails-ai-context] source_classes failed for #{path}: #{e.message}" if ENV["DEBUG"]
+          $stderr.puts "[rails-ai-context] source_classes failed for #{record.path}: #{e.message}" if ENV["DEBUG"]
           nil
         end
       end
 
-      # The candidate a path camelizes to. Not the constant when the app
-      # registers an inflection for one of its segments, which is why the
-      # source gets the first word.
-      def path_name_for(path, dir)
-        path.sub("#{dir}/", "").sub(/\.rb\z/, "").camelize
+      # The file a loaded class was read from, root-relative; nil when the
+      # constant has no source location or it lies outside the app.
+      def source_file_for(klass)
+        location = Object.const_source_location(klass.name)&.first
+        return nil unless location&.start_with?("#{app.root}/")
+
+        location.delete_prefix("#{app.root}/")
+      rescue NameError, ArgumentError, TypeError
+        nil
       end
 
       def extract_channels
@@ -381,7 +337,7 @@ module RailsAiContext
 
           {
             name:           channel.name,
-            file:           channel_relative_path(channel),
+            file:           source_file_for(channel),
             stream_methods: channel.instance_methods(false)
               .select { |m| m.to_s.start_with?("stream_") || m == :subscribed }
               .map(&:to_s),
@@ -410,13 +366,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] channel_absolute_path failed: #{e.message}" if ENV["DEBUG"]
         nil
-      end
-
-      def channel_relative_path(channel)
-        path = channel_absolute_path(channel)
-        return nil unless path
-        rails_root = app.root.to_s
-        path.start_with?(rails_root) ? path.sub("#{rails_root}/", "") : path
       end
 
       def channel_macros(source, macro)

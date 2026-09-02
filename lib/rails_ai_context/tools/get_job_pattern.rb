@@ -57,11 +57,7 @@ module RailsAiContext
 
         sidekiq_line = sidekiq_queues_line(jobs_data)
 
-        # Single-job query: requires jobs to be present.
-        if job
-          return text_response(no_job_files_message(jobs_dir_exists, sidekiq_line)) if job_files.empty?
-          return format_single_job(job, job_files, real_jobs_dir, real_root)
-        end
+        return format_single_job(job, real_root, jobs_dir_exists, sidekiq_line) if job
 
         # No jobs and no channels - bail out, but say honestly whether the
         # directory is missing or just has no job classes beyond ApplicationJob.
@@ -133,32 +129,29 @@ module RailsAiContext
         "#{line}."
       end
 
-      private_class_method def self.format_single_job(job, job_files, jobs_dir, root)
-        # Match by class name or filename: "SendWelcomeEmailJob", "send_welcome_email_job", "send_welcome_email"
-        snake = job.underscore.delete_suffix(".rb")
-        snake_with_job = snake.end_with?("_job") ? snake : "#{snake}_job"
-        snake_without_job = snake.delete_suffix("_job")
+      # The name never rebuilds the path: the file is the one the introspector
+      # recorded, which is the only place a pack job's path is written down.
+      private_class_method def self.format_single_job(job, root, jobs_dir_exists, sidekiq_line)
+        names = RailsAiContext::Payload.jobs(cached_context).map { |j| j[:name] }
+        return text_response(no_job_files_message(jobs_dir_exists, sidekiq_line)) if names.empty?
 
-        file = job_files.find do |f|
-          relative = f.sub("#{jobs_dir}/", "").delete_suffix(".rb")
-          basename = relative.split("/").last
-          basename == snake_with_job || basename == snake_without_job || relative == snake
-        end
-
-        unless file
-          available = job_files.map { |f| File.basename(f, ".rb").camelize }
-          return not_found_response("Job", job, available.sort,
+        # "SendWelcomeEmailJob", "send_welcome_email_job" and "send_welcome_email" all name one job.
+        query = job.to_s.delete_suffix(".rb")
+        class_name = fuzzy_find_key(names, query) ||
+                     fuzzy_find_key(names, "#{query.underscore.delete_suffix("_job")}_job")
+        relative = class_name && RailsAiContext::Payload.job_file(cached_context, class_name)
+        unless relative
+          return not_found_response("Job", job, names.sort,
             recovery_tool: "Call rails_get_job_pattern(detail:\"summary\") to see all jobs")
         end
 
-        return text_response("Job file too large to analyze.") if File.size(file) > max_file_size
+        file = File.join(root, relative)
+        return text_response("Job file too large to analyze.") if File.file?(file) && File.size(file) > max_file_size
 
         source = safe_read(file)
         return text_response("Could not read job file.") unless source
 
-        relative = file.sub("#{root}/", "")
         line_count = source.lines.size
-        class_name = extract_class_name(source) || File.basename(file, ".rb").camelize
 
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"

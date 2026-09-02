@@ -94,6 +94,11 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
         allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
         allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+        # Files written after boot are not autoloadable, so the booted
+        # introspector cannot record them; the static tier's reading is what
+        # a real run over this directory would carry.
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
       end
 
       after { FileUtils.remove_entry(tmpdir) }
@@ -301,6 +306,48 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
           expect(text).not_to include("config/sidekiq.yml")
         end
       end
+    end
+  end
+
+  # The job's name does not rebuild its path: a pack job lives where the
+  # introspector found it, and the tool reads that file through the payload.
+  describe "a job in a pack" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      jobs_dir = File.join(tmpdir, "packs", "billing", "app", "jobs")
+      FileUtils.mkdir_p(jobs_dir)
+      File.write(File.join(jobs_dir, "invoice_job.rb"), <<~RUBY)
+        class InvoiceJob < ApplicationJob
+          queue_as :billing
+
+          def perform(invoice_id); end
+        end
+      RUBY
+
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "finds the job by name and reports the file it was read from" do
+      text = described_class.call(job: "InvoiceJob").content.first[:text]
+      expect(text).to include("# InvoiceJob")
+      expect(text).to include("**File:** `packs/billing/app/jobs/invoice_job.rb`")
+      expect(text).to include("billing")
+    end
+
+    it "finds the job by its snake_case name" do
+      text = described_class.call(job: "invoice").content.first[:text]
+      expect(text).to include("# InvoiceJob")
+    end
+
+    it "lists the recorded jobs when the name matches none" do
+      text = described_class.call(job: "Nope").content.first[:text]
+      expect(text).to include("not found")
+      expect(text).to include("InvoiceJob")
     end
   end
 end
