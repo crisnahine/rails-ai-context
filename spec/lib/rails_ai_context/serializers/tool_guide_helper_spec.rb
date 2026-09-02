@@ -228,6 +228,12 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
         instance = context_class.new(api: { api_only: false }, conventions: { architecture: %w[hotwire] })
         expect(instance.api_only?).to be false
       end
+
+      # A failed section carries no architecture, whatever else is in it.
+      it "is false when the conventions section failed" do
+        instance = context_class.new(conventions: { error: "boom", architecture: %w[api_only] })
+        expect(instance.api_only?).to be false
+      end
     end
   end
 
