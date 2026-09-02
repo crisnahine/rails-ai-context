@@ -222,4 +222,14 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       expect(result[:rate_limiting]).to eq({ rails_rate_limiting: true })
     end
   end
+
+  # One shape across every introspector that names what it could not answer.
+  describe "#static_call" do
+    it "names the keys the static tier cannot answer, as a list" do
+      static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
+      full = described_class.new(Rails.application).call.keys - [ :api_only ]
+
+      expect(static[:unavailable_sections]).to match_array(full.map(&:to_s))
+    end
+  end
 end
