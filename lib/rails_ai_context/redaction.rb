@@ -17,7 +17,7 @@ module RailsAiContext
     # sit in an interpolation, a heredoc or a bare string, and no node type
     # marks one - the words are the signal.
     SECRET_WORD = /password|passwd|secret|token|api_key|apikey|access_key|private_key|credentials|
-                   pepper|salt|master_key|signing_key|encryption_key|deterministic_key/x
+                   pepper|salt|master_key|signing_key|encryption_key|deterministic_key/xi
 
     # `primary_key` is ordinary ActiveRecord vocabulary; under
     # `active_record.encryption` it is a credential. Only the path tells them
@@ -180,22 +180,18 @@ module RailsAiContext
         result
       end
 
-      # The one place a name and value pair leaves the process. The name can
-      # condemn a value on its own, and so can the value's shape.
-      # `placeholder_ok` keeps an example-file placeholder readable.
+      # The one place a name and value pair leaves the process. Normally the
+      # name condemns a value on its own, and so does the value's shape.
+      # `placeholder_ok` says this is an example file, whose names are
+      # secret-ish by convention and whose values exist to be read: there a
+      # placeholder stays whole and only shape and length can condemn it.
       def value(name, value, placeholder_ok: false)
         return nil if value.nil?
 
         stripped = value.to_s.strip.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
         return stripped if placeholder_ok && (stripped.empty? || stripped.match?(PLACEHOLDER))
-        return FILTERED if stripped.length > VALUE_LIMIT
-
-        # Downcased because the secret vocabulary is spelled lowercase and
-        # carries its own case-sensitive flags, while a process environment
-        # name and a hex blob both arrive in either case.
-        probe = stripped.downcase
-        return FILTERED if credential_shaped?(probe)
-        return FILTERED if secret_name?(name.to_s.downcase) || secret_value?(probe)
+        return FILTERED if stripped.length > VALUE_LIMIT || credential_shaped?(stripped)
+        return FILTERED if !placeholder_ok && (secret_name?(name) || secret_value?(stripped))
 
         stripped
       end

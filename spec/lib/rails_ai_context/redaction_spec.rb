@@ -160,6 +160,15 @@ RSpec.describe RailsAiContext::Redaction do
       end
     end
 
+    # Names arrive uppercase from a process environment and lowercase from a
+    # config path. One word list answers both.
+    it "recognises a name in any case" do
+      expect(described_class.secret_name?("API_KEY")).to be(true)
+      expect(described_class.call(%(API_KEY = "abc123"))).to eq(%(API_KEY = "[FILTERED]"))
+      expect(described_class.redact_assignment("API_KEY", value: '"abc123"', source: nil)[:value])
+        .to eq('"[FILTERED]"')
+    end
+
     # `primary_key` is ordinary ActiveRecord vocabulary; only the encryption
     # one is a credential, and the path is what tells them apart.
     it "leaves a bare primary_key alone but filters the encryption one" do
@@ -314,6 +323,14 @@ RSpec.describe RailsAiContext::Redaction do
     it "keeps an example-file placeholder when the caller says placeholders are fine" do
       expect(described_class.value("API_KEY", "your_api_key_here", placeholder_ok: true)).to eq("your_api_key_here")
       expect(described_class.value("API_KEY", "your_api_key_here")).to eq("[FILTERED]")
+    end
+
+    # An example file's values exist to be read, and its names are secret-ish
+    # by convention. Only a real credential shape is worth hiding there.
+    it "judges an example-file value by its shape alone" do
+      expect(described_class.value("DATABASE_PASSWORD", "postgres", placeholder_ok: true)).to eq("postgres")
+      expect(described_class.value("API_KEY", "sk_live_abcdef0123456789", placeholder_ok: true)).to eq("[FILTERED]")
+      expect(described_class.value("DATABASE_PASSWORD", "postgres")).to eq("[FILTERED]")
     end
 
     it "filters anything longer than a config value plausibly is" do
