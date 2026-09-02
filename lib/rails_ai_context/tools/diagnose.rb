@@ -411,8 +411,10 @@ module RailsAiContext
           if parsed[:method_name] && lines.none? { |l| l.include?("Code Context") }
             begin
               result = SearchCode.call(pattern: parsed[:method_name], match_type: "trace")
-              text = result.content.first[:text]
-              unless text.include?("No results") || text.include?("No definition")
+              text = response_text(result)
+              # A trace that found callers but no `def` is still not the
+              # method's definition, which is what this section promises.
+              unless empty?(result) || text.include?("No definition")
                 lines << "## Method Trace"
                 lines << text
                 lines << ""
@@ -439,7 +441,7 @@ module RailsAiContext
             if method && file
               begin
                 ctx = GetEditContext.call(file: file, near: method)
-                code = ctx.content.first[:text]
+                code = response_text(ctx)
                 # Find the receiver: something.method_name
                 receiver_match = code.match(/(\w+)\.#{Regexp.escape(method)}/)
                 if receiver_match
@@ -459,7 +461,7 @@ module RailsAiContext
               begin
                 ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
                 result = GetControllers.call(controller: ctrl_class, action: act)
-                text = result.content.first[:text]
+                text = response_text(result)
                 if text.include?("set_") && text.include?("find")
                   return "The `set_*` before_action uses `.find` which raises RecordNotFound. " \
                          "The record with the given ID doesn't exist or doesn't belong to the current user. " \

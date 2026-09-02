@@ -294,7 +294,7 @@ module RailsAiContext
       private_class_method def self.feature_context(feature_name)
         # Start with full-stack feature analysis
         analyze_result = AnalyzeFeature.call(feature: feature_name)
-        lines = [ analyze_result.content.first[:text] ]
+        lines = [ response_text(analyze_result) ]
 
         # Enrich with schema columns for matching models
         ctx = begin; cached_context; rescue; nil; end
@@ -315,7 +315,7 @@ module RailsAiContext
 
           # Also include schema for related models (associated tables) if the
           # primary model was found but the feature analysis missed controllers/services
-          analyze_text = analyze_result.content.first[:text]
+          analyze_text = response_text(analyze_result)
           has_controllers = analyze_text.include?("## Controllers")
           unless has_controllers
             # Check if any controllers or services reference this feature by name
@@ -338,7 +338,7 @@ module RailsAiContext
         lines.join("\n")
       rescue => e
         # Fall back to plain analyze_feature on error
-        AnalyzeFeature.call(feature: feature_name).content.first[:text]
+        response_text(AnalyzeFeature.call(feature: feature_name))
       end
     end
   end

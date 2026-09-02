@@ -153,7 +153,7 @@ module RailsAiContext
         all_results.reject! { |r| r[:content].match?(/\A\s*def\s/) } if match_type == "call"
 
         if all_results.empty?
-          return text_response("No results found for '#{original_pattern}' in #{path || 'app'}.")
+          return empty_response("No results found for '#{original_pattern}' in #{path || 'app'}.")
         end
 
         # Smart default limit: <10 → all, 10-100 → half, >100 → 100

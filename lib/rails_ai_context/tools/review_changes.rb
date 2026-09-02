@@ -242,7 +242,7 @@ module RailsAiContext
           when :routes
             begin
               result = GetRoutes.call(detail: "summary")
-              lines << "" << "**Current routes:** #{result.content.first[:text].lines.first&.strip}"
+              lines << "" << "**Current routes:** #{response_text(result).lines.first&.strip}"
             rescue => e; $stderr.puts "[rails-ai-context] Context lookup skipped: #{e.message}" if ENV["DEBUG"]; end
           end
 
