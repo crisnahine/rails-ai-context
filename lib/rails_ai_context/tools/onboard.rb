@@ -141,14 +141,11 @@ module RailsAiContext
           end
           lines << "#{ctx[:app_name]} is a Rails #{ctx[:rails_version]} application running Ruby #{ctx[:ruby_version]} on #{db}."
 
-          gems = Payload.section(ctx, :gems)
-          if gems
-            notable = gems[:notable_gems] || []
-            if notable.any?
-              by_cat = notable.group_by { |g| g[:category]&.to_s || "other" }
-              gem_parts = by_cat.first(5).map { |cat, list| "#{cat}: #{list.map { |g| g[:name] }.join(', ')}" }
-              lines << "Notable gems - #{gem_parts.join('; ')}."
-            end
+          notable = Payload.notable_gems(ctx)
+          if notable.any?
+            by_cat = notable.group_by { |g| g[:category]&.to_s || "other" }
+            gem_parts = by_cat.first(5).map { |cat, list| "#{cat}: #{list.map { |g| g[:name] }.join(', ')}" }
+            lines << "Notable gems - #{gem_parts.join('; ')}."
           end
 
           conv = Payload.section(ctx, :conventions)
@@ -217,9 +214,8 @@ module RailsAiContext
 
           # Fallback: detect auth from gems if introspector didn't provide data
           unless has_content
-            gems = Payload.section(ctx, :gems)
-            if gems
-              notable = gems[:notable_gems] || []
+            notable = Payload.notable_gems(ctx)
+            if notable.any?
               auth_gem_names = %w[devise omniauth rodauth sorcery clearance authlogic]
               auth_gems = notable.select { |g| g.is_a?(Hash) && auth_gem_names.include?(g[:name].to_s) }
               if auth_gems.any?
@@ -398,8 +394,7 @@ module RailsAiContext
           return [] unless gems
 
           payment_gems = %w[stripe pay braintree paddle_pay]
-          notable = gems[:notable_gems] || []
-          found = notable.select { |g| payment_gems.include?(g[:name]) }
+          found = Payload.notable_gems(ctx).select { |g| payment_gems.include?(g[:name]) }
           payment_models = models.keys.select { |m| m.downcase.match?(/payment|subscription|charge|invoice|plan|billing/) }
           return [] if found.empty? && payment_models.empty?
 
@@ -664,9 +659,7 @@ module RailsAiContext
         end
 
         def extract_gem_names(ctx)
-          gems = Payload.section(ctx, :gems)
-          return [] unless gems
-          (gems[:notable_gems] || []).map { |g| g[:name].to_s }
+          Payload.notable_gems(ctx).map { |g| g[:name].to_s }
         end
 
         def extract_architecture(ctx)

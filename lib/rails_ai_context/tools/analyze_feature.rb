@@ -67,9 +67,8 @@ module RailsAiContext
 
         # For auth-related keywords, also discover auth gems
         if AUTH_KEYWORDS.include?(pattern)
-          gems = Payload.section(ctx, :gems)
-          if gems
-            notable = gems[:notable_gems] || []
+          notable = Payload.notable_gems(ctx)
+          if notable.any?
             auth_gems = notable.select { |g| AUTH_GEM_NAMES.include?(g[:name]) }
             if auth_gems.any?
               lines << "" << "## Auth Gems" << ""
