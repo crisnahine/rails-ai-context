@@ -74,14 +74,14 @@ Prism AST layer for source-level facts (scopes, callbacks, strong params).
 introspectors answer here; each declares which of three kinds it is
 (ADR-0002), so what a tier can say is a declaration rather than a guess.
 
-**files-only** (23) run unchanged against the static app handle, because they
+**files-only** (22) run unchanged against the static app handle, because they
 only ever read files: `gems`, `views`, `view_templates`, `turbo`, `stimulus`,
 `active_storage`, `action_text`, `auth`, `tests`, `rake_tasks`, `assets`,
-`devops`, `action_mailbox`, `migrations`, `seeds`, `middleware`, `env_config`,
+`devops`, `action_mailbox`, `migrations`, `seeds`, `env_config`,
 `multi_database`, `components`, `performance`, `frontend_frameworks`,
 `credentials` and `env`.
 
-**alternate-source** (9) have a `static_call` that reads a different source
+**alternate-source** (10) have a `static_call` that reads a different source
 from the booted path:
 
 | Introspector | Static source |
@@ -95,6 +95,7 @@ from the booted path:
 | `api` | serializers, API controllers and route constraints read from source |
 | `engines` | `config/routes.rb` mounts, plus the Gemfile |
 | `active_support` | concern and core-extension use read from source |
+| `middleware` | `app/middleware` and `config/initializers`; the booted stack and its count are declared unavailable |
 
 **runtime-only** (8) report `{ unavailable: reason }` here, and only these:
 `conventions`, `database_stats`, `config`, `initializers`, `autoload`,
