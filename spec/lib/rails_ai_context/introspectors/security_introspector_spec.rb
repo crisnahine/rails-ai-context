@@ -128,4 +128,20 @@ RSpec.describe RailsAiContext::Introspectors::SecurityIntrospector do
       end
     end
   end
+
+  describe "controllers in a pack" do
+    let(:pack_controller) { File.join(Rails.root, "packs", "billing", "app", "controllers", "invoices_controller.rb") }
+
+    before do
+      FileUtils.mkdir_p(File.dirname(pack_controller))
+      File.write(pack_controller, "class InvoicesController < ApplicationController\n  allow_browser versions: :modern\nend\n")
+    end
+
+    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
+
+    it "captures allow_browser from a pack controller" do
+      entries = described_class.new(Rails.application).call[:allow_browser]
+      expect(entries).to include(file: "packs/billing/app/controllers/invoices_controller.rb", args: "versions: :modern")
+    end
+  end
 end

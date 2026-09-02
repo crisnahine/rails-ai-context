@@ -177,4 +177,20 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
       end
     end
   end
+
+  describe "model broadcasts across every model directory" do
+    it "names a pack model and a namespaced model by their declared names" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        File.write(File.join(dir, "app", "models", "admin", "note.rb"),
+                   "class Admin::Note < ApplicationRecord\n  broadcasts\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"),
+                   "class Invoice < ApplicationRecord\n  broadcasts_to :account\nend\n")
+
+        broadcasts = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:model_broadcasts]
+        expect(broadcasts.map { |b| b[:model] }).to contain_exactly("Admin::Note", "Invoice")
+      end
+    end
+  end
 end

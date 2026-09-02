@@ -72,17 +72,16 @@ module RailsAiContext
       def detect_patterns
         patterns = []
 
-        # Check for common Rails patterns in model files
-        model_dir = File.join(root, "app/models")
-        if Dir.exist?(model_dir)
-          model_files = Dir.glob(File.join(model_dir, "**/*.rb"))
-
+        # Check for common Rails patterns in model files. Concerns stay in:
+        # a macro declared in one is the app's pattern as much as any other.
+        model_records = SourceScan.each(root, kind: "app/models", skip_concerns: false).first(500)
+        if model_records.any?
           # Collect AST-detected macros across all model files
           all_macros = Set.new
           all_association_options = []
 
-          model_files.first(500).each do |path|
-            ast = SourceIntrospector.walk(path, {
+          model_records.each do |record|
+            ast = SourceIntrospector.walk_source(record.source, {
               macros: -> {
                 Listeners::GenericMacroListener.new(
                   :acts_as_paranoid, :discard, :has_paper_trail, :audited,
@@ -104,7 +103,9 @@ module RailsAiContext
           end
 
           # STI detection via AST: extract parent class from ClassNode, check schema
-          app_model_names = model_files.filter_map { |f| File.basename(f, ".rb").camelize }
+          app_model_names = model_records.filter_map do |record|
+            DeclaredConstant.resolve(record.source, record.path_name) if DeclaredConstant.declares_class?(record.source)
+          end
           # Source-choosing, so a structure.sql app answers these schema
           # questions instead of falling to the looser source scans below.
           schema = SchemaReader.for(root)
@@ -114,21 +115,19 @@ module RailsAiContext
           has_inheritance_column = false
           has_current_attributes = false
 
-          model_files.first(500).each do |f|
-            parent = extract_parent_class(f)
-            if parent && app_model_names.include?(parent) && parent != "ApplicationRecord"
-              parent_table = parent.underscore.pluralize
+          model_records.each do |record|
+            superclass = extract_superclass_path(record.source)
+            if superclass && superclass != "ApplicationRecord" && app_model?(superclass, app_model_names)
               # Only the dump says whether the parent table carries a type
               # column, so an unreadable schema leaves this to the
               # inheritance_column check below rather than a source guess.
-              has_sti_subclass = true if schema_readable && schema.column?(parent_table, "type")
+              has_sti_subclass = true if schema_readable && sti_tables_for(superclass).any? { |t| schema.column?(t, "type") }
             end
 
-            superclass = extract_superclass_path(f)
             has_current_attributes = true if superclass == "ActiveSupport::CurrentAttributes"
 
             # self.inheritance_column= is an assignment via CallNode with self receiver
-            inheritance_check = SourceIntrospector.walk(f, {
+            inheritance_check = SourceIntrospector.walk_source(record.source, {
               inh: -> { Listeners::ChainedCallListener.new(:inheritance_column=) }
             })
             has_inheritance_column = true if inheritance_check[:inh].any?
@@ -140,7 +139,7 @@ module RailsAiContext
           has_deleted_at = if schema_readable
             schema.any_column?("deleted_at")
           else
-            model_files.first(500).any? { |f| RailsAiContext::SafeFile.read(f)&.match?(/deleted_at/) }
+            model_records.any? { |record| record.source.match?(/deleted_at/) }
           end
 
           patterns << "sti" if has_inheritance_column || has_sti_subclass
@@ -174,13 +173,10 @@ module RailsAiContext
       ].freeze
 
       def uses_async_queries?
-        %w[app/controllers app/services app/jobs app/models].any? do |rel_dir|
-          dir = File.join(root, rel_dir)
-          next false unless Dir.exist?(dir)
-
-          Dir.glob(File.join(dir, "**/*.rb")).first(500).any? do |f|
+        %w[app/controllers app/services app/jobs app/models].any? do |kind|
+          SourceScan.each(root, kind: kind, skip_concerns: false).first(500).any? do |record|
             # AST-based detection: ignores comments automatically
-            ast = SourceIntrospector.walk(f, {
+            ast = SourceIntrospector.walk_source(record.source, {
               async: -> { Listeners::ChainedCallListener.new(*ASYNC_QUERY_METHODS) }
             })
             ast[:async].any?
@@ -205,11 +201,8 @@ module RailsAiContext
         ]
 
         important_dirs.each_with_object({}) do |dir, hash|
-          full_path = File.join(root, dir)
-          next unless Dir.exist?(full_path)
-
-          count = Dir.glob(File.join(full_path, "**/*.rb")).size
-          count += Dir.glob(File.join(full_path, "**/*.js")).size if dir.include?("javascript")
+          count = SourceScan.paths(root, kind: dir, skip_concerns: false).count
+          count += Dir.glob(File.join(root, dir, "**/*.js")).size if dir.include?("javascript")
 
           hash[dir] = count if count > 0
         end
@@ -253,50 +246,26 @@ module RailsAiContext
 
       # Extract the parent class name from a Ruby file via AST ClassNode.
       # Returns a simple name like "User" (no module path).
-      def extract_parent_class(path)
-        parse_result = AstCache.parse(path)
-        find_parent_class(parse_result.value)
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_parent_class failed: #{e.message}" if ENV["DEBUG"]
-        nil
+      # A superclass written without its namespace, inside `module Admin`,
+      # still names the app's `Admin::Report`.
+      def app_model?(superclass, names)
+        names.include?(superclass) ||
+          (!superclass.include?("::") && names.any? { |name| name.demodulize == superclass })
+      end
+
+      # Rails names a namespaced model's table by the demodulized class unless
+      # the module sets a prefix, so both spellings are candidates.
+      def sti_tables_for(parent)
+        [ parent.demodulize.underscore.pluralize, parent.underscore.tr("/", "_").pluralize ].uniq
       end
 
       # Extract the full superclass path (e.g. "ActiveSupport::CurrentAttributes").
-      def extract_superclass_path(path)
-        parse_result = AstCache.parse(path)
+      def extract_superclass_path(source)
+        parse_result = AstCache.parse_string(source)
         find_superclass_path(parse_result.value)
       rescue => e
         $stderr.puts "[rails-ai-context] extract_superclass_path failed: #{e.message}" if ENV["DEBUG"]
         nil
-      end
-
-      def find_parent_class(node)
-        case node
-        when Prism::ProgramNode
-          find_parent_class(node.statements)
-        when Prism::StatementsNode
-          node.body.each do |child|
-            result = find_parent_class(child)
-            return result if result
-          end
-          nil
-        when Prism::ClassNode
-          superclass = node.superclass
-          case superclass
-          when Prism::ConstantReadNode then superclass.name.to_s
-          when Prism::ConstantPathNode
-            # Return just the final name for simple parent matching
-            superclass.name.to_s
-          else nil
-          end
-        when Prism::ModuleNode
-          node.body&.body&.each do |child|
-            result = find_parent_class(child)
-            return result if result
-          end
-          nil
-        else nil
-        end
       end
 
       def find_superclass_path(node)

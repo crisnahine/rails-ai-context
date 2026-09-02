@@ -94,12 +94,11 @@ module RailsAiContext
     end
 
     def check_models
-      models_dir = File.join(app.root, "app/models")
-      if Dir.exist?(models_dir) && Dir.glob(File.join(models_dir, "**/*.rb")).any?
-        count = Dir.glob(File.join(models_dir, "**/*.rb")).size
+      count = Introspectors::SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).count
+      if count > 0
         Check.new(name: "Models", status: :pass, message: "#{count_phrase(count, "model file")} found", fix: nil)
       else
-        Check.new(name: "Models", status: :warn, message: "No model files in app/models/", fix: "Generate models with `rails generate model`")
+        Check.new(name: "Models", status: :warn, message: "No model files", fix: "Generate models with `rails generate model`")
       end
     end
 
@@ -122,9 +121,8 @@ module RailsAiContext
     end
 
     def check_controllers
-      dir = File.join(app.root, "app/controllers")
-      if Dir.exist?(dir) && Dir.glob(File.join(dir, "**/*.rb")).any?
-        count = Dir.glob(File.join(dir, "**/*.rb")).size
+      count = Introspectors::SourceScan.paths(app.root, kind: "app/controllers", skip_concerns: false).count
+      if count > 0
         Check.new(name: "Controllers", status: :pass, message: "#{count_phrase(count, "controller file")} found", fix: nil)
       else
         Check.new(name: "Controllers", status: :warn, message: "No controller files", fix: nil)

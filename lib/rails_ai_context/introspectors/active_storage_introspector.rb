@@ -34,13 +34,9 @@ module RailsAiContext
       end
 
       def extract_attachments
-        models_dir = File.join(root, "app/models")
-        return [] unless Dir.exist?(models_dir)
-
         attachments = []
-        Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          model_name = File.basename(path, ".rb").camelize
-          ast_data = SourceIntrospector.walk(path, { macros: Listeners::MacrosListener })
+        SourceScan.classes(root, kind: "app/models").each do |model_name, record|
+          ast_data = SourceIntrospector.walk_source(record.source, { macros: Listeners::MacrosListener })
           ast_data[:macros].each do |m|
             next unless %i[has_one_attached has_many_attached].include?(m[:macro])
             attachments << { model: model_name, name: m[:attribute], type: m[:macro].to_s }
@@ -67,12 +63,8 @@ module RailsAiContext
 
       def extract_attachment_validations
         validations = []
-        models_dir = File.join(app.root, "app", "models")
-        return validations unless Dir.exist?(models_dir)
-
-        Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
-          model = File.basename(path, ".rb").camelize
-          ast_data = SourceIntrospector.walk(path, { validations: Listeners::ValidationsListener })
+        SourceScan.classes(root, kind: "app/models").each do |model, record|
+          ast_data = SourceIntrospector.walk_source(record.source, { validations: Listeners::ValidationsListener })
           ast_data[:validations].each do |v|
             attrs = v[:attributes] || []
             attrs.each do |attr|
@@ -89,12 +81,8 @@ module RailsAiContext
 
       def extract_variants
         variants = []
-        models_dir = File.join(app.root, "app", "models")
-        return variants unless Dir.exist?(models_dir)
-
-        Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
-          model = File.basename(path, ".rb").camelize
-          ast_data = SourceIntrospector.walk(path, { variants: Listeners::VariantCallListener })
+        SourceScan.classes(root, kind: "app/models").each do |model, record|
+          ast_data = SourceIntrospector.walk_source(record.source, { variants: Listeners::VariantCallListener })
           ast_data[:variants].each do |v|
             v[:args].each do |name|
               variants << { model: model, name: name.to_s }

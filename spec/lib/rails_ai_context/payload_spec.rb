@@ -207,4 +207,29 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.gem?({}, "devise")).to be false
     end
   end
+
+  # A job in a pack has no conventional path to fall back to, so these
+  # answer only what the tier recorded.
+  describe ".job_file and .mailer_file" do
+    let(:context) do
+      { jobs: {
+        jobs: [ { name: "InvoiceJob", file: "packs/billing/app/jobs/invoice_job.rb" }, { name: "PlacelessJob" } ],
+        mailers: [ { name: "UserMailer", file: "app/mailers/user_mailer.rb" } ]
+      } }
+    end
+
+    it "reads the file a job was read from" do
+      expect(described_class.job_file(context, "InvoiceJob")).to eq("packs/billing/app/jobs/invoice_job.rb")
+    end
+
+    it "reads the file a mailer was read from" do
+      expect(described_class.mailer_file(context, "UserMailer")).to eq("app/mailers/user_mailer.rb")
+    end
+
+    it "answers nil for an entry that carried none, and for a name nobody recorded" do
+      expect(described_class.job_file(context, "PlacelessJob")).to be_nil
+      expect(described_class.job_file(context, "Nope")).to be_nil
+      expect(described_class.mailer_file({}, "UserMailer")).to be_nil
+    end
+  end
 end

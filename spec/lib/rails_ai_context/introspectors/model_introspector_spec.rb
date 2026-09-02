@@ -761,4 +761,20 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
+
+  describe "#static_call containment" do
+    it "refuses a symlink that leaves the models directory" do
+      Dir.mktmpdir do |dir|
+        Dir.mktmpdir do |elsewhere|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          File.write(File.join(dir, "app", "models", "good.rb"), "class Good < ApplicationRecord\nend\n")
+          File.write(File.join(elsewhere, "secret.rb"), "class Secret < ApplicationRecord\nend\n")
+          File.symlink(File.join(elsewhere, "secret.rb"), File.join(dir, "app", "models", "secret.rb"))
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+          expect(result.keys).to contain_exactly("Good")
+        end
+      end
+    end
+  end
 end

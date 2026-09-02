@@ -625,4 +625,31 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
   end
+
+  describe "the carried file" do
+    let(:source) { "class BillingInvoicesController < ApplicationController\n  def show; end\nend\n" }
+
+    it "is the pack path for a pack controller in the static tier" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "controllers"))
+        File.write(File.join(dir, "packs", "billing", "app", "controllers", "billing_invoices_controller.rb"), source)
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        expect(static[:controllers]["BillingInvoicesController"][:file])
+          .to eq("packs/billing/app/controllers/billing_invoices_controller.rb")
+      end
+    end
+
+    it "is the pack path for a pack controller the booted tier reads from source" do
+      path = File.join(Rails.root, "packs", "billing", "app", "controllers", "billing_invoices_controller.rb")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, source)
+
+      booted = described_class.new(Rails.application).call
+      expect(booted[:controllers]["BillingInvoicesController"][:file])
+        .to eq("packs/billing/app/controllers/billing_invoices_controller.rb")
+    ensure
+      FileUtils.rm_rf(File.join(Rails.root, "packs"))
+    end
+  end
 end

@@ -104,4 +104,19 @@ RSpec.describe RailsAiContext::Introspectors::ConfigIntrospector do
       expect(monitoring_for(lock)).to eq([ "bugsnag" ])
     end
   end
+
+  describe "models in a pack" do
+    let(:pack_model) { File.join(Rails.root, "packs", "billing", "app", "models", "billing", "current.rb") }
+
+    before do
+      FileUtils.mkdir_p(File.dirname(pack_model))
+      File.write(pack_model, "class Billing::Current < ActiveSupport::CurrentAttributes\n  attribute :account\nend\n")
+    end
+
+    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
+
+    it "reports a pack's CurrentAttributes class by its declared name" do
+      expect(described_class.new(Rails.application).call[:current_attributes]).to include("Billing::Current")
+    end
+  end
 end

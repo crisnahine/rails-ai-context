@@ -201,4 +201,25 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       expect(pagination_for(lock)).to be_nil
     end
   end
+
+  describe "controllers in a pack" do
+    let(:pack_controllers) { File.join(Rails.root, "packs", "billing", "app", "controllers") }
+
+    before do
+      FileUtils.mkdir_p(File.join(pack_controllers, "api", "v2"))
+      File.write(File.join(pack_controllers, "api", "v2", "invoices_controller.rb"), <<~RUBY)
+        class Api::V2::InvoicesController < ApplicationController
+          rate_limit to: 10, within: 1.minute
+        end
+      RUBY
+    end
+
+    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
+
+    it "sees a pack's API version and its rate limiting" do
+      result = described_class.new(Rails.application).call
+      expect(result[:api_versioning]).to include("v1", "v2")
+      expect(result[:rate_limiting]).to eq({ rails_rate_limiting: true })
+    end
+  end
 end

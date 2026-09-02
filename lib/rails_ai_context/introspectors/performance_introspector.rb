@@ -52,11 +52,8 @@ module RailsAiContext
       end
 
       def load_model_data
-        models_dir = File.join(root, "app/models")
-        return [] unless Dir.exist?(models_dir)
-
-        Dir.glob(File.join(models_dir, "**/*.rb")).filter_map do |path|
-          ast = SourceIntrospector.walk(path, {
+        SourceScan.each(root, kind: "app/models").filter_map do |record|
+          ast = SourceIntrospector.walk_source(record.source, {
             classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
             includes: -> { Listeners::ChainedCallListener.new(:includes) }
@@ -79,7 +76,7 @@ module RailsAiContext
 
           {
             name: class_name,
-            file: path.sub("#{root}/", ""),
+            file: record.file,
             has_many: has_many,
             belongs_to: belongs_to,
             includes_calls: includes_calls
@@ -97,19 +94,11 @@ module RailsAiContext
 
       def detect_n_plus_one(model_data)
         risks = []
-
-        controllers_dir = File.join(root, "app/controllers")
-        return risks unless Dir.exist?(controllers_dir)
-
         view_contents = preload_view_contents
         model_lookup = model_data.each_with_object({}) { |m, h| h[m[:name]] = m }
 
-        Dir.glob(File.join(controllers_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path)
-          next unless content
-          relative = path.sub("#{root}/", "")
-
-          analyze_controller_n_plus_one(content, relative, model_lookup, view_contents, risks)
+        SourceScan.each(root, kind: "app/controllers").each do |record|
+          analyze_controller_n_plus_one(record.source, record.file, model_lookup, view_contents, risks)
         rescue StandardError
           next
         end
@@ -341,17 +330,9 @@ module RailsAiContext
 
       def detect_model_all_in_controllers
         findings = []
-        controllers_dir = File.join(root, "app/controllers")
-        return findings unless Dir.exist?(controllers_dir)
-
-        models_dir = File.join(root, "app/models")
-        model_names = if Dir.exist?(models_dir)
-          Dir.glob(File.join(models_dir, "**/*.rb")).filter_map do |path|
-            ast = SourceIntrospector.walk(path, { classes: Listeners::ClassDefinitionListener })
-            active_record_class_name(ast[:classes])
-          end
-        else
-          []
+        model_names = SourceScan.each(root, kind: "app/models").filter_map do |record|
+          ast = SourceIntrospector.walk_source(record.source, { classes: Listeners::ClassDefinitionListener })
+          active_record_class_name(ast[:classes])
         end
 
         return findings if model_names.empty?
@@ -362,15 +343,11 @@ module RailsAiContext
         escaped_names = model_names.map { |n| Regexp.escape(n) }
         combined_pattern = /(#{escaped_names.join("|")})\.all\b/
 
-        Dir.glob(File.join(controllers_dir, "**/*.rb")).each do |path|
-          content = RailsAiContext::SafeFile.read(path)
-          next unless content
-          relative = path.sub("#{root}/", "")
-
-          content.scan(combined_pattern).each do |match|
+        SourceScan.each(root, kind: "app/controllers").each do |record|
+          record.source.scan(combined_pattern).each do |match|
             model_name = match[0]
             findings << {
-              controller: relative,
+              controller: record.file,
               model: model_name,
               suggestion: "#{model_name}.all loads all records into memory. Consider pagination or scoping."
             }
@@ -385,11 +362,8 @@ module RailsAiContext
       def detect_eager_load_candidates
         # Find models with multiple has_many that are likely rendered together
         candidates = []
-        models_dir = File.join(root, "app/models")
-        return candidates unless Dir.exist?(models_dir)
-
-        Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          ast = SourceIntrospector.walk(path, {
+        SourceScan.each(root, kind: "app/models").each do |record|
+          ast = SourceIntrospector.walk_source(record.source, {
             classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener
           })

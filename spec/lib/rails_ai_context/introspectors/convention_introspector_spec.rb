@@ -285,4 +285,40 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       expect(introspect(lock).send(:gem_present?, "dry-monads")).to be(false)
     end
   end
+
+  describe "source across every directory of a kind" do
+    it "counts a pack's models in the layer count" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"),
+                   "class Invoice < ApplicationRecord\nend\n")
+
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+        structure = described_class.new(app).call[:directory_structure]
+        expect(structure["app/models"]).to eq(2)
+      end
+    end
+
+    it "detects STI under a namespaced parent" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "app", "models", "admin", "report.rb"),
+                   "class Admin::Report < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "admin", "weekly_report.rb"),
+                   "class Admin::WeeklyReport < Admin::Report\nend\n")
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          create_table "reports" do |t|
+            t.string "type"
+          end
+        RUBY
+
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+        patterns = described_class.new(app).call[:patterns]
+        expect(patterns).to include("sti")
+      end
+    end
+  end
 end
