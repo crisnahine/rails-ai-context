@@ -113,8 +113,12 @@ module RailsAiContext
           view_ivars.merge(Payload.view_ivars(cached_context, "#{snake}/#{tmpl}"))
         end
         view_ivars.merge(action_body ? resolver.rendered_ivars(action_body) : [])
-        ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates, api_only: api_only?)
-        lines << "" << ivar_check if ivar_check
+        # Without the view side's section every controller ivar reads as
+        # unused, so no cross-check is the honest answer.
+        if Payload.section(cached_context, :view_templates)
+          ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates, api_only: api_only?)
+          lines << "" << ivar_check if ivar_check
+        end
 
         # Hydrate: inject schema hints for models referenced in controller + view ivars
         if RailsAiContext.configuration.hydration_enabled

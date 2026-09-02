@@ -128,6 +128,25 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       expect(text).to include("@order")
     end
 
+    it "skips the cross-check when the context carries no view templates" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: { "PostsController" => {
+          actions: %w[new], file: "app/controllers/posts_controller.rb"
+        } } }
+      )
+
+      base = RailsAiContext::Tools::BaseTool
+      allow(RailsAiContext::Tools::GetControllers).to receive(:call)
+        .and_return(base.text_response("# PostsController#new"))
+      allow(RailsAiContext::Tools::GetRoutes).to receive(:call).and_return(base.empty_response("No routes."))
+      allow(RailsAiContext::Tools::GetView).to receive(:call).and_return(base.empty_response("No views."))
+
+      text = described_class.send(:controller_action_context, "PostsController", "new")
+
+      expect(text).not_to include("not used in view")
+      expect(text).not_to include("## Instance Variable Cross-Check")
+    end
+
     it "keeps a section whose own body mentions not found" do
       allow(described_class).to receive(:cached_context).and_return({})
 
