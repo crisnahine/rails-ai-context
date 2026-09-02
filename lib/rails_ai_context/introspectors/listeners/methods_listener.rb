@@ -78,15 +78,15 @@ module RailsAiContext
               # name here is enough.
               args = node.arguments.arguments
               args.each do |arg|
-                method_name = case arg
-                when Prism::SymbolNode then arg.value.to_s
-                when Prism::DefNode then arg.name.to_s
+                case arg
+                when Prism::DefNode
+                  @inline_visibility_stack.last[arg.name.to_s] = node.name
+                when Prism::SymbolNode
+                  method_name = arg.value.to_s
+                  @inline_visibility_stack.last[method_name] = node.name
+                  existing = @results.find { |r| r[:name] == method_name && r[:owner] == @owner_stack }
+                  existing[:visibility] = node.name if existing
                 end
-                next unless method_name
-
-                @inline_visibility_stack.last[method_name] = node.name
-                existing = @results.find { |r| r[:name] == method_name }
-                existing[:visibility] = node.name if existing
               end
             end
           when :class_methods, :included

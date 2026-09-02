@@ -280,6 +280,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
     end
   end
 
+  it "keeps an inline private def to its own class" do
+    methods = parse_and_dispatch("class A\n  def x; end\nend\nclass B\n  private def x; end\nend\n")
+    expect(methods.map { |m| [ m[:owner], m[:visibility] ] }).to eq([ [ %w[A], :public ], [ %w[B], :private ] ])
+  end
+
+  it "flips only the current class's method on private :x" do
+    methods = parse_and_dispatch("class A\n  def x; end\nend\nclass B\n  def x; end\n  private :x\nend\n")
+    expect(methods.map { |m| [ m[:owner], m[:visibility] ] }).to eq([ [ %w[A], :public ], [ %w[B], :private ] ])
+  end
+
   it "records private def as private" do
     methods = parse_and_dispatch("class A\n  private def hidden; end\n  def shown; end\nend\n")
     expect(methods.map { |m| [ m[:name], m[:visibility] ] }).to eq([ [ "hidden", :private ], [ "shown", :public ] ])
