@@ -42,6 +42,15 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       end
     end
 
+    # A path the guard refused is an answer the reader needs to see, not an
+    # empty result the composer drops.
+    it "surfaces a refused file path in the composed text" do
+      text = described_class.call(error: "NoMethodError: undefined method `title` for nil",
+        file: "../../etc/passwd", line: 1).content.first[:text]
+
+      expect(text).to include("Path not allowed")
+    end
+
     it "parses ActiveRecord::RecordNotFound" do
       result = described_class.call(error: "ActiveRecord::RecordNotFound: Couldn't find User with 'id'=999")
       text = result.content.first[:text]
