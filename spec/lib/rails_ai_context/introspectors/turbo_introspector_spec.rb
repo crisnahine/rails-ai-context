@@ -12,11 +12,12 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
       expect(result).not_to have_key(:error)
     end
 
-    it "discovers turbo frames with id and file" do
+    it "discovers turbo frames with id, file and line" do
       expect(result[:turbo_frames]).to be_an(Array)
       frame = result[:turbo_frames].find { |f| f[:id] == "post" }
       expect(frame).not_to be_nil
-      expect(frame[:file]).to eq("posts/show.html.erb")
+      expect(frame[:file]).to eq("app/views/posts/show.html.erb")
+      expect(frame[:line]).to eq(1)
     end
 
     it "discovers turbo stream templates" do
@@ -85,10 +86,12 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
 
       after { FileUtils.rm_f(fixture_model) }
 
-      it "detects model broadcasts" do
-        broadcast = result[:model_broadcasts].find { |b| b[:model] == "Message" }
-        expect(broadcast).not_to be_nil
-        expect(broadcast[:methods]).to include("broadcasts_to", "broadcasts_refreshes_to")
+      it "detects model broadcasts, one entry per macro" do
+        broadcasts = result[:model_broadcasts].select { |b| b[:model] == "Message" }
+        expect(broadcasts.map { |b| b[:macro] }).to eq(%w[broadcasts_to broadcasts_refreshes_to])
+        expect(broadcasts.map { |b| b[:stream] }).to eq(%w[room room])
+        expect(broadcasts.map { |b| b[:line] }).to eq([ 2, 3 ])
+        expect(broadcasts.first[:file]).to eq("app/models/message.rb")
       end
     end
 
@@ -185,11 +188,61 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
       result = described_class.new(app).call
 
       expect(result[:turbo_frames]).to eq([
-        { id: "dom_id", file: "posts/edit.html.erb" },
-        { id: "dom_id", file: "posts/index.html.erb" },
-        { id: "post", file: "posts/show.html.erb" }
+        { id: "dom_id(@post, :edit)", src: nil, file: "app/views/posts/edit.html.erb", line: 1, snippet: "<%= turbo_frame_tag dom_id(@post, :edit) do %>" },
+        { id: "dom_id(@post, :edit)", src: nil, file: "app/views/posts/index.html.erb", line: 2, snippet: "<%= turbo_frame_tag dom_id(@post, :edit) %>" },
+        { id: "post", src: nil, file: "app/views/posts/show.html.erb", line: 1, snippet: "<%= turbo_frame_tag :post do %>" }
       ])
-      expect(result[:model_broadcasts]).to eq([ { model: "Comment", methods: [ "broadcasts_to" ] } ])
+      expect(result[:model_broadcasts]).to eq([
+        { model: "Comment", macro: "broadcasts_to", stream: nil, file: "app/models/comment.rb", line: 7,
+          snippet: "broadcasts_to ->(comment) { [comment.post, :comments] }" }
+      ])
+    end
+
+    it "records every broadcast, subscription and frame with its file and line" do
+      result = described_class.new(app).call
+
+      expect(result[:model_broadcasts]).to include(a_hash_including(model: "Comment", macro: "broadcasts_to", file: "app/models/comment.rb", line: an_instance_of(Integer)))
+      expect(result[:stream_subscriptions]).to include(a_hash_including(stream: "@post", file: "app/views/posts/index.html.erb"))
+      expect(result[:turbo_frames]).to include(a_hash_including(id: "dom_id(@post, :edit)", file: "app/views/posts/index.html.erb"))
+    end
+
+    it "keeps the subscription's line and source" do
+      result = described_class.new(app).call
+
+      expect(result[:stream_subscriptions]).to eq([
+        { stream: "@post", file: "app/views/posts/index.html.erb", line: 1, snippet: "<%= turbo_stream_from @post %>" }
+      ])
+      expect(result[:explicit_broadcasts]).to eq([])
+    end
+  end
+
+  describe "explicit broadcasts" do
+    it "records each broadcast_*_to call with its stream, target and partial, wherever it sits" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "app", "jobs"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            # broadcast_append_to is documented here, not called
+            after_create_commit -> { broadcast_append_to "posts", target: "list", partial: "posts/post" }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "jobs", "refresh_job.rb"), <<~RUBY)
+          class RefreshJob < ApplicationJob
+            def perform(post) = broadcast_replace_to("post_\#{post.id}")
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:explicit_broadcasts]).to eq([
+          { method: "broadcast_append_to", stream: "posts", target: "list", partial: "posts/post",
+            file: "app/models/post.rb", line: 3, snippet: 'broadcast_append_to "posts", target: "list", partial: "posts/post"' },
+          { method: "broadcast_replace_to", stream: "post_{id}", target: nil, partial: nil,
+            file: "app/jobs/refresh_job.rb", line: 2, snippet: 'broadcast_replace_to("post_#{post.id}")' }
+        ])
+        expect(result[:model_broadcasts]).to eq([])
+      end
     end
   end
 

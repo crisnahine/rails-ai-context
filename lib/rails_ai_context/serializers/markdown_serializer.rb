@@ -231,7 +231,9 @@ module RailsAiContext
         end
         if data[:model_broadcasts]&.any?
           lines << "### Model Broadcasts"
-          data[:model_broadcasts].each { |b| lines << "- `#{b[:model]}`: #{b[:methods].join(', ')}" }
+          data[:model_broadcasts].group_by { |b| b[:model] }.each do |model, hits|
+            lines << "- `#{model}`: #{hits.map { |b| b[:macro] }.uniq.join(', ')}"
+          end
         end
         lines.join("\n")
       end
