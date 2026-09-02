@@ -70,7 +70,7 @@ module RailsAiContext
           messages << "[rails-ai-context] Serving static analysis; runtime-only data is marked [UNAVAILABLE]."
           messages << "[rails-ai-context] Run `rails-ai-context doctor` for boot diagnostics."
           restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
-          return enter_static(result.failure_summary, root, messages)
+          return enter_static(result.failure_summary, root, messages, after_boot_failure: true)
         end
 
         restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
@@ -131,7 +131,7 @@ module RailsAiContext
       # against the filesystem, and every tool response carries the tier banner.
       # A broken install cannot load the gem either; the lines collected so
       # far still go out with the error.
-      def self.enter_static(reason, root, messages)
+      def self.enter_static(reason, root, messages, after_boot_failure: false)
         require_gem_without_app!
         RailsAiContext.tier = :static
         RailsAiContext.static_reason = reason
@@ -141,7 +141,10 @@ module RailsAiContext
         Outcome.new(tier: :static, reason: reason, messages: messages)
       rescue StandardError, ScriptError => e
         messages << "Error: #{e.message}"
-        Outcome.new(tier: :absent, reason: reason, messages: messages)
+        # `reason` on an :absent outcome means the app's own boot failed, which
+        # is what the binary hangs the doctor hint on. A --no-boot run booted
+        # nothing, so its failure here carries none.
+        Outcome.new(tier: :absent, reason: after_boot_failure ? reason : nil, messages: messages)
       end
       private_class_method :enter_static
 

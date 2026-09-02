@@ -66,6 +66,21 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       end
     end
 
+    # `reason` on an :absent outcome is what tells the binary a boot failed,
+    # and --no-boot never booted anything.
+    it "carries no reason when --no-boot cannot load the gem" do
+      allow(described_class).to receive(:require_gem_without_app!).and_raise(LoadError, "cannot load such file -- mcp")
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/models"))
+        File.write(File.join(dir, "app/models/widget.rb"), "class Widget; end\n")
+
+        outcome = described_class.call(root: dir, allow_static: true, no_boot: true)
+        expect(outcome.tier).to eq(:absent)
+        expect(outcome.reason).to be_nil
+      end
+    end
+
     it "hands the static tier the root it was given" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/models"))
@@ -112,6 +127,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
           expect(outcome.tier).to eq(:absent)
           expect(outcome.messages).to include(a_string_starting_with("[rails-ai-context] App boot failed:"))
           expect(outcome.messages.last).to eq("Error: cannot load such file -- mcp")
+          expect(outcome.reason).to eq(failed.failure_summary)
         end
       end
     end
