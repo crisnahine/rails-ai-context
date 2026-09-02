@@ -192,6 +192,19 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
           remote: https://rubygems.org/
           specs:
             database_cleaner-active_record (2.2.0)
+              database_cleaner-core (~> 2.0.0)
+            database_cleaner-core (2.0.1)
+      LOCK
+      expect(cleaner_for(lock)).to eq({ detected: true })
+    end
+
+    it "reports database_cleaner for an adapter other than active_record" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            database_cleaner-core (2.0.1)
+            database_cleaner-mongoid (2.0.1)
       LOCK
       expect(cleaner_for(lock)).to eq({ detected: true })
     end

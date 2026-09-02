@@ -125,7 +125,7 @@ module RailsAiContext
 
       private
 
-      # InputSchema#to_h is stable across the mcp gem's >= 0.8, < 2.0 range;
+      # InputSchema#to_h is stable across the mcp gem's >= 0.13, < 2.0 range;
       # the older #schema accessor was removed in mcp 0.20.0. to_h returns a
       # symbol-keyed hash carrying the :properties and :required this runner
       # reads (newer mcp also merges a benign :$schema key we ignore).

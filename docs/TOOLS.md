@@ -484,6 +484,7 @@ Reverse file tail with level filtering and sensitive data redaction.
 | `file` | string | `development.log` | Log file name |
 | `lines` | integer | `50` | Number of lines |
 | `level` | enum | - | Filter: `debug`, `info`, `warn`, `error`, `fatal` |
+| `search` | string | - | Keep lines matching this term. The match runs on the redacted line, so a redacted value cannot be searched for |
 
 ### `rails_diagnose`
 

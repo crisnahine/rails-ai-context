@@ -94,7 +94,7 @@ end
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| MigrationIntrospector | `:migrations` | Migration files, versions, reversibility |
+| MigrationIntrospector | `:migrations` | Migration files, versions, reversibility. `recent` and `pending` entries are `{ version:, name: }`, and the name is the migration class (`CreatePosts`) in both tiers |
 | SeedsIntrospector | `:seeds` | Seed file analysis |
 | DatabaseStatsIntrospector | `:database_stats` | Table sizes, row counts, index stats |
 | MultiDatabaseIntrospector | `:multi_database` | Multi-database configuration |
@@ -104,7 +104,7 @@ end
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
 | StimulusIntrospector | `:stimulus` | Controllers, targets, values, actions |
-| TurboIntrospector | `:turbo` | Turbo Frames, Streams, broadcasts |
+| TurboIntrospector | `:turbo` | Turbo wiring with each entry's file and line: `turbo_frames`, `model_broadcasts`, `explicit_broadcasts`, `stream_subscriptions` |
 | AssetPipelineIntrospector | `:assets` | Asset pipeline configuration, manifests |
 | FrontendFrameworkIntrospector | `:frontend_frameworks` | React/Vue/Svelte/Angular detection |
 | ComponentIntrospector | `:components` | ViewComponent/Phlex: props, slots, previews |
@@ -117,7 +117,7 @@ end
 | GemIntrospector | `:gems` | Notable gems with versions and categories |
 | ConventionIntrospector | `:conventions` | Auth patterns, flash messages, test patterns |
 | I18nIntrospector | `:i18n` | Locale files, translation keys |
-| MiddlewareIntrospector | `:middleware` | Rack middleware stack |
+| MiddlewareIntrospector | `:middleware` | Rack middleware stack. The static tier declares an alternate source rather than an empty stack: without a booted app it answers only the file facts it can read |
 | EngineIntrospector | `:engines` | Mounted engines |
 | EnvConfigIntrospector | `:env_config` | Per-environment config files: notable toggles (`force_ssl`, `eager_load`, caching, queue adapter), assigned config keys |
 | DevopsIntrospector | `:devops` | Dockerfile, CI config, deployment |
@@ -126,7 +126,7 @@ end
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| JobIntrospector | `:jobs` | Background jobs: queue, retries, schedules |
+| JobIntrospector | `:jobs` | Background jobs and mailers: queue, retries, schedules, and the `file:` each one is defined in |
 | RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks |
 
 ### Security & Auth
@@ -172,9 +172,9 @@ These introspectors map directly onto the internal RAILS_NERVOUS_SYSTEM checklis
 
 The **SourceIntrospector** uses Prism AST parsing for model analysis. It is infrastructure shared by the introspectors above rather than an introspector you can enable: there is no `:source` key for `config.introspectors`.
 
-It runs a single-pass Dispatcher that walks the AST once and feeds events to all registered listeners simultaneously. Model analysis uses the seven below by default; the rest are used through targeted walks (schema dumps, migrations, Gemfiles, rake tasks, initializers, components, and so on).
+It runs a single-pass Dispatcher that walks the AST once and feeds events to all registered listeners simultaneously. Model analysis uses the eight below by default; the rest are used through targeted walks (schema dumps, migrations, Gemfiles, rake tasks, initializers, components, and so on).
 
-### The 7 default Prism listeners
+### The 8 default Prism listeners
 
 | Listener | What it detects |
 |:---------|:---------------|
@@ -210,6 +210,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | MailboxRoutingListener | Action Mailbox `routing` and processing callbacks |
 | ModelReferenceListener | Model constants used in controllers: `Post.find`, `params.require(:post)`, ivar writes |
 | VariantCallListener | `variant` calls (ChainedCallListener with `:variant` preset) |
+| MethodCallListener | Call sites by name or pattern anywhere in a file, inside a `def`, a lambda or a block included, with arguments, options, receiver and line. Used by the Turbo introspector for broadcast calls and by `ActionFilters` for the skip macros |
 
 ### Adding a listener
 

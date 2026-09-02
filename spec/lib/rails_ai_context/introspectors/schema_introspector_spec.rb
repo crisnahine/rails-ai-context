@@ -880,7 +880,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           INSERT INTO schema_migrations (version) VALUES ('20240101000000'), ('20240301000000');
         SQL
 
-        expect(static_parse(dir)[:pending_migrations]).to eq([ { version: "20240201000000", name: "Add index" } ])
+        expect(static_parse(dir)[:pending_migrations]).to eq([ { version: "20240201000000", name: "AddIndex" } ])
       end
     end
 
@@ -895,7 +895,7 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
           end
         RUBY
 
-        expect(static_parse(dir)[:pending_migrations]).to eq([ { version: "20240301000000", name: "Create posts" } ])
+        expect(static_parse(dir)[:pending_migrations]).to eq([ { version: "20240301000000", name: "CreatePosts" } ])
       end
     end
 

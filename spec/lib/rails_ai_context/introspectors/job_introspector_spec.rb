@@ -565,5 +565,31 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
         expect(jobs).to contain_exactly(a_hash_including(name: "InvoiceJob", file: "packs/billing/app/jobs/invoice_job.rb"))
       end
     end
+
+    it "is the path the app spells when the pack is a symlink out of the root" do
+      Dir.mktmpdir do |outside|
+        FileUtils.mkdir_p(File.join(outside, "billing", "app", "jobs"))
+        File.write(File.join(outside, "billing", "app", "jobs", "symlinked_pack_job.rb"),
+                   "class SymlinkedPackJob < ActiveJob::Base\n  def perform(id); end\nend\n")
+        link = File.join(Rails.root, "packs")
+        # Only ever remove the link this example makes. A committed packs
+        # fixture would otherwise be deleted by a run of this spec.
+        skip "a real packs directory is checked in" if File.exist?(link) && !File.symlink?(link)
+
+        FileUtils.rm_f(link) if File.symlink?(link)
+        File.symlink(outside, link)
+
+        begin
+          load File.join(link, "billing", "app", "jobs", "symlinked_pack_job.rb")
+          jobs = described_class.new(Rails.application).call[:jobs]
+          expect(jobs).to include(
+            a_hash_including(name: "SymlinkedPackJob", file: "packs/billing/app/jobs/symlinked_pack_job.rb")
+          )
+        ensure
+          FileUtils.rm_f(link) if File.symlink?(link)
+          Object.send(:remove_const, :SymlinkedPackJob) if Object.const_defined?(:SymlinkedPackJob)
+        end
+      end
+    end
   end
 end

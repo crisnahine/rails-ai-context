@@ -5,6 +5,123 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+Defects found by a second survey round over the whole surface, and the
+duplicated mechanisms behind them.
+
+- **A source path was contained without a separator and against an
+  unresolved root.** The frontend framework introspector's own containment
+  check let `/app-old` pass for `/app`. The pre-v5.8.1 bug, still in one
+  place.
+- **`rails_get_env` printed Dockerfile `ENV` and `ARG` values verbatim at
+  detail full.** Every default now leaves through the redaction gate, and a
+  surrounding quote pair is stripped, so `ENV FOO="bar"` prints `bar`.
+- **`rails_read_logs` matched the `search` term before redacting**, so a
+  hidden value could be probed a character at a time. The search runs on the
+  redacted text now.
+- **The middleware introspector fabricated an empty stack in the static
+  tier.** It declares an alternate source and answers only its file facts,
+  rather than reporting an app with no middleware.
+- **`rails_get_config` and `rails-ai-context facts` read gem keys no
+  introspector emits**, so the Auth line and the Key Dependencies section
+  never rendered at all.
+- **Jobs and mailers carry `file:`.** `rails_get_job_pattern` reads the
+  carried file instead of camelizing a basename, and its listing comes from
+  the payload, so a job in a pack lists.
+- **The auth introspector keyed Devise models by basename**, so
+  `app/models/admin/user.rb` overwrote `User`.
+- **An out-of-order migration merge was reported as none pending** by the
+  migrations section while the schema section counted it. Both derive from
+  one applied set now, and an unknown applied set answers no pending key
+  rather than "everything" or "nothing".
+- **Substring lockfile scans reported `bugsnag-capistrano` as Bugsnag** and
+  `database_cleaner-redis` as database_cleaner. One lockfile reader with
+  exact names answers every gem question, across the GEM, GIT and PATH
+  sections.
+- **The hydrators warned about a model they had just resolved in another
+  spelling**, and emitted one hint block twice.
+- **The channel and mailer eager loads had no per-constant recovery**, so a
+  single unloadable file emptied the list.
+- **`YAML.safe_load` refused the `&default` anchors** every stock webpacker
+  or shakapacker config carries, so the source path fell back to the
+  convention.
+- **The `rails://models/{name}` resource hit an exact-match legacy reader.**
+  Every scheme resolves through the VFS now, and the template advertises
+  `rails-ai-context://models/{name}`.
+- **VFS: `controllers/admin/posts` fell into the action handler** and
+  `routes/PostsController` returned zero routes.
+- **`Payload.section` accepted a refused (`unavailable`) section**, so a
+  static-tier context file rendered a bare heading.
+- **Every generated file counts the same controller set.**
+  `config.excluded_controllers` is honoured everywhere, not only by
+  `rails_get_controllers`.
+- **The doctor counted models and controllers under `app/` only.** Packs and
+  engines count, and the freshness check reads the one watch scope.
+- **The watcher stopped noticing `config/routes.rb` and `db/schema.rb`.** The
+  fingerprint, the watcher and the doctor share one scope covering `config`
+  and `db` whole, and the fingerprint mark is taken before the read it
+  protects.
+- **The diagnose tool's git probe ran outside a repository** and leaked its
+  stderr into the response.
+- **`rails_get_stimulus` re-read every controller file** to recompute a
+  lifecycle the payload already carried.
+- **MCP config removal wrote non-atomically**, the dead `AstCache.invalidate`
+  is gone, and the doctor checks that `.codex/config.toml` is gitignored.
+- **Composing tools decided whether a sub-tool answered by scraping its prose
+  for "not found".** A real answer whose body mentioned those words was
+  dropped. Responses carry an empty marker in MCP `meta` now.
+- **`rails_get_test_info` guarded a caller-supplied name with its own
+  containment.** It reads through the shared guard.
+- **The asset pipeline introspector's literal `none` was rendered as if it
+  named a pipeline**, so every generated context file carried
+  `- Assets: none`. The line shows only the parts that name something, and
+  disappears when there are none.
+
+### Changed
+
+- **`RailsAiContext.generate_context(format: nil)` means the recorded AI-tool
+  selection**, and all of them when nothing is recorded. It was `:all`.
+- **Static-tier migration names are the class-style name** (`CreatePosts`),
+  matching what the booted tier reports.
+- **Names in the turbo, auth, attachments and multi-database sections carry
+  their namespace** (`Admin::User`, not `User`), and packs and in-repo
+  engines count everywhere the app's source is walked.
+- **The `.env.example` reader judges a value by its shape and length only.** A
+  default in Ruby source or a Dockerfile is condemned by a secret-shaped name
+  as well.
+- **Turbo wiring lives in the introspector payload with file and line** -
+  frames, model broadcasts, explicit broadcasts and stream subscriptions -
+  and `rails_get_turbo_map` renders it. A `turbo_frame_tag dom_id(@post,
+  :edit)` frame renders as that call, and a symbol `turbo_stream_from :posts`
+  now pairs with its broadcast. A subscription argument that carries its own
+  commas renders whole: `turbo_stream_from [current_user, :notifications]` and
+  `dom_id(@post, :x)` keep every character they were written with.
+- **The public-methods lists come from the parser.** `rails_get_concern`,
+  `rails_get_helper_methods`, `rails_get_model_details` and
+  `rails_get_controllers` read `private def` and `class_methods do`
+  correctly.
+- **The standalone binary boots through `CLI::EntryBoot`**, and presets run
+  through `Presets.run` in both the binary and the rake task.
+- **`rails_get_controllers` and the controller-action resource decide which
+  filters apply through one module, `ActionFilters`.** Every inherited filter
+  carries the `(from Parent)` annotation, after_action and
+  except-constrained ones included; a filter constrained with `except:` shows
+  that constraint; `skip_after_action` and `skip_around_action` count as
+  skips, and a skipped filter is struck through in the whole-controller view
+  as well as the per-action one.
+
+### Removed
+
+- **`SourceLine`, the hand-rolled Ruby lexer.** Every source read goes through
+  Prism.
+- **`Fingerprinter.reset_gem_lib_fingerprint!` and `AstCache.invalidate`** -
+  no callers.
+- **Support for the mcp gem below 0.13.** The gemspec floor is `>= 0.13`, the
+  first release whose tool responses carry `meta`.
+
 ## [5.24.0] - 2026-08-17
 
 ### Fixed

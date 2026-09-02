@@ -179,17 +179,12 @@ module RailsAiContext
               lines << "" << "### #{name}"
               lines << "- **Actions:** #{actions}"
 
-              # Inherited filters from parent controller
-              parent_filters = detect_parent_filters_for_analyze(info[:parent_class], controllers)
-              if parent_filters.any?
-                lines << "- **Inherited filters:** #{parent_filters.map { |f| "#{f[:name]} _(from #{info[:parent_class]})_" }.join(', ')}"
+              split = RailsAiContext::ActionFilters.for_controller(ctx, name)
+              if split[:inherited].any?
+                lines << "- **Inherited filters:** #{split[:inherited].map { |f| "#{f[:name]} _(from #{info[:parent_class]})_" }.join(', ')}"
               end
 
-              # `info[:filters]` is reflection-derived and already includes the
-              # inherited chain, so drop the ones already shown on the Inherited
-              # line to avoid listing them twice (e.g. set_current_user).
-              parent_names = parent_filters.map { |f| f[:name] }.to_set
-              filters = (info[:filters] || []).select { |f| f.is_a?(Hash) && !parent_names.include?(f[:name]) }.map do |f|
+              filters = split[:own].map do |f|
                 label = "#{f[:kind]} #{f[:name]}"
                 label += " only: #{Array(f[:only]).join(', ')}" if f[:only]&.any?
                 label += " except: #{Array(f[:except]).join(', ')}" if f[:except]&.any?
@@ -455,29 +450,6 @@ module RailsAiContext
         rescue => e
           $stderr.puts "[rails-ai-context] discover_test_gaps failed: #{e.message}" if ENV["DEBUG"]
           nil
-        end
-
-        # Detect inherited filters from parent controller
-        def detect_parent_filters_for_analyze(parent_class, all_controllers)
-          return [] unless parent_class
-          parent_data = all_controllers[parent_class]
-          if parent_data
-            return (parent_data[:filters] || []).select { |f| f.is_a?(Hash) && f[:kind] == "before" && !f[:only]&.any? }
-          end
-
-          # Fallback: read source file
-          path = rails_app.root.join("app", "controllers", "#{parent_class.underscore}.rb")
-          return [] unless File.exist?(path)
-          source = RailsAiContext::SafeFile.read(path)
-          return [] unless source
-
-          source.each_line.filter_map do |line|
-            next if line.include?("only:") || line.include?("except:")
-            { name: $1 } if line.match(/\A\s*before_action\s+:(\w+)/)
-          end
-        rescue => e
-          $stderr.puts "[rails-ai-context] detect_parent_filters_for_analyze failed: #{e.message}" if ENV["DEBUG"]
-          []
         end
 
         # --- AF6: Related Models via Associations ---

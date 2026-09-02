@@ -17,7 +17,7 @@ document is aspirational.
 
 - **Ruby:** 3.1 - 4.0 (gemspec: `required_ruby_version >= 3.1.0`, no upper cap)
 - **Rails (railties):** 7.0 - 8.1 (gemspec: `railties >= 7.0, < 9.0`)
-- **mcp gem:** `>= 0.8, < 2.0`
+- **mcp gem:** `>= 0.13, < 2.0`
 - **thor:** `>= 1.0, < 3.0`
 - **prism:** `>= 1.4, < 2.0` (a CI leg pins the floor exactly and runs the suite against it)
 - **concurrent-ruby:** `>= 1.2, < 3.0`

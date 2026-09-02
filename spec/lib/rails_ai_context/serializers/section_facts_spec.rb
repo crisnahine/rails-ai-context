@@ -29,8 +29,14 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
   end
 
   describe ".assets_line" do
-    it "names the pipeline the fixture's assets section reports" do
-      expect(described_class.assets_line(context)).to eq("- Assets: none")
+    it "answers nil for the fixture, whose assets section reports no pipeline" do
+      expect(described_class.assets_line(context)).to be_nil
+    end
+
+    it "drops the no-pipeline word from a line that still has a bundler" do
+      ctx = { assets: { pipeline: "none", js_bundler: "esbuild" } }
+
+      expect(described_class.assets_line(ctx)).to eq("- Assets: esbuild")
     end
 
     it "joins the pipeline, bundler and framework in that order" do

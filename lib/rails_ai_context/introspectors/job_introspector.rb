@@ -82,7 +82,7 @@ module RailsAiContext
         location = Object.const_source_location(job.name)&.first
         return true unless location
 
-        File.realpath(location).start_with?("#{app_root_real}/")
+        SourceScan.under_root?(location, File.realpath(location), app.root.to_s, app_root_real)
       rescue NameError, ArgumentError, TypeError, SystemCallError
         true
       end
@@ -305,9 +305,10 @@ module RailsAiContext
         return nil unless location
 
         real = File.realpath(location)
-        return nil unless real.start_with?("#{app_root_real}/")
+        root = app.root.to_s
+        return nil unless SourceScan.under_root?(location, real, root, app_root_real)
 
-        real.delete_prefix("#{app_root_real}/")
+        SourceScan.relative_file(location, real, root, app_root_real)
       rescue NameError, ArgumentError, TypeError, SystemCallError
         nil
       end

@@ -26,7 +26,7 @@ RSpec.describe RailsAiContext::PendingMigrations do
     # not. Comparing against the max version alone reported nothing pending.
     it "reports an unapplied earlier migration when a later one is applied" do
       pending = described_class.for(migrate_dir: @migrate, applied: %w[20240101000000 20240301000000])
-      expect(pending).to eq([ { version: "20240201000000", name: "Add index" } ])
+      expect(pending).to eq([ { version: "20240201000000", name: "AddIndex" } ])
     end
 
     it "falls back to a max version when that is all the schema records" do
