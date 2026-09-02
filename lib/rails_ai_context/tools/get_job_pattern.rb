@@ -318,39 +318,32 @@ module RailsAiContext
         match[1] if match
       end
 
+      # Options are read off the call, so `wait:` and `attempts:` come back in
+      # one order however they were written, and a `retry_on` in a comment or
+      # a string never counts.
       private_class_method def self.extract_retry_config(source)
-        config = []
+        ast = Introspectors::SourceIntrospector.walk_source(source, {
+          retries: -> { Introspectors::Listeners::GenericMacroListener.new(:retry_on, :discard_on, :sidekiq_options) }
+        })
 
-        # Comments are stripped BEFORE the statement-spanning scan: a trailing
-        # comment after a continuation comma (`retry_on X, wait: 5, # flaky`)
-        # would otherwise end the statement one line early, and comment text
-        # (`# attempts: 3 was flaky`) must never read as real options. The
-        # stripper is string-aware with literal state carried across lines,
-        # so `wait: -> { "#{n}s" }` and multi-line strings survive.
-        stripped = RailsAiContext::SourceLine.strip_comments(source)
-
-        # wait: and attempts: appear in either order in real code, so they are
-        # scanned independently within the retry_on statement rather than with
-        # one ordered pattern (which silently drops whichever comes first).
-        # A statement spans continuation lines while each line ends with a
-        # comma (`retry_on X, wait: :polynomially_longer,\n  attempts: 10`).
-        stripped.scan(/retry_on\s+([\w:]+)((?:[^\n]*,[ \t]*\n)*[^\n]*)/).each do |klass, rest|
-          entry = "retry_on #{klass}"
-          entry += ", attempts: #{Regexp.last_match(1)}" if rest =~ /\battempts:\s*(\d+)/
-          entry += ", wait: #{Regexp.last_match(1).strip}" if rest =~ /\bwait:\s*([^,\n]+)/
-          config << entry
+        ast[:retries].filter_map do |hit|
+          options = hit[:option_nodes]
+          case hit[:macro]
+          when :retry_on
+            entry = "retry_on #{hit[:values].join(', ')}"
+            entry += ", attempts: #{option_source(options[:attempts])}" if options[:attempts]
+            entry += ", wait: #{option_source(options[:wait])}" if options[:wait]
+            entry
+          when :discard_on
+            "discard_on #{hit[:values].join(', ')}"
+          when :sidekiq_options
+            "sidekiq retry: #{option_source(options[:retry])}" if options[:retry]
+          end
         end
+      end
 
-        stripped.scan(/discard_on\s+([\w:]+(?:\s*,\s*[\w:]+)*)/).each do |match|
-          config << "discard_on #{match[0].strip}"
-        end
-
-        # Sidekiq retry count
-        if (match = stripped.match(/sidekiq_options\s+.*retry:\s*(\w+)/))
-          config << "sidekiq retry: #{match[1]}"
-        end
-
-        config
+      private_class_method def self.option_source(node)
+        node.slice.gsub(/\s+/, " ")
       end
 
       private_class_method def self.extract_perform_signature(source)
