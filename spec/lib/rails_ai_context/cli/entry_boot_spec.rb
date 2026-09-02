@@ -80,12 +80,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     context "with a failed boot" do
       let(:failed) { RailsAiContext::BootManager::Result.new(status: :failed, error: RuntimeError.new("boom")) }
 
-      # The real one empties Gem.loaded_specs for the whole process outside
-      # `bundle exec`.
-      before do
-        allow(RailsAiContext::BootManager).to receive(:boot!).and_return(failed)
-        allow(described_class).to receive(:drop_conflicting_gem_activations!)
-      end
+      before { allow(RailsAiContext::BootManager).to receive(:boot!).and_return(failed) }
 
       def failing_app
         Dir.mktmpdir do |dir|
