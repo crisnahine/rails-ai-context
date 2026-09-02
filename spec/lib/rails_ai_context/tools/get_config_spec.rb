@@ -181,7 +181,7 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
         body += specs.map { |line| "    #{line}" }
         body += [ "", "PLATFORMS", "  ruby", "", "DEPENDENCIES", "  rails (~> 8.0)", "" ]
         File.write(File.join(lock_tmpdir, "Gemfile.lock"), body.join("\n"))
-        RailsAiContext::Introspectors::GemIntrospector.new(double("app", root: lock_tmpdir)).call
+        RailsAiContext::Introspectors::GemIntrospector.new(RailsAiContext::StaticApp.new(lock_tmpdir)).call
       end
 
       it "names Sprockets when the lockfile carries sprockets-rails" do
