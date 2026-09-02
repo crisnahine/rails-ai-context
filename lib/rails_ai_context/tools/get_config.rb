@@ -131,19 +131,17 @@ module RailsAiContext
       end
 
       private_class_method def self.detect_auth_framework
-        gems = cached_context[:gems]
-        return nil unless gems.is_a?(Hash)
+        auth = Payload.section(cached_context, :auth)
 
-        all_gems = (gems[:notable] || []) + (gems[:all] || [])
-        gem_names = all_gems.map { |g| g.is_a?(Hash) ? g[:name] : g.to_s }
-
-        if gem_names.include?("devise")
+        if auth&.dig(:authentication, :devise)&.any? || Payload.gem?(cached_context, "devise")
           "Devise"
-        elsif gem_names.include?("rodauth-rails")
+        elsif auth&.dig(:authentication, :rails_auth)
+          "Rails 8 authentication (built-in)"
+        elsif Payload.gem?(cached_context, "rodauth-rails")
           "Rodauth"
-        elsif gem_names.include?("sorcery")
+        elsif Payload.gem?(cached_context, "sorcery")
           "Sorcery"
-        elsif gem_names.include?("clearance")
+        elsif Payload.gem?(cached_context, "clearance")
           "Clearance"
         elsif File.exist?(rails_app.root.join("app/models/concerns/authentication.rb")) ||
               File.exist?(rails_app.root.join("app/controllers/concerns/authentication.rb"))
@@ -155,8 +153,8 @@ module RailsAiContext
         parts = []
 
         # Use frontend framework introspector data when available
-        frontend = cached_context[:frontend_frameworks]
-        if frontend.is_a?(Hash) && !frontend[:error]
+        frontend = Payload.section(cached_context, :frontend_frameworks)
+        if frontend
           # Frameworks (React, Vue, etc.)
           (frontend[:frameworks] || {}).each_key { |fw| parts << fw.to_s.capitalize }
 
@@ -173,9 +171,13 @@ module RailsAiContext
           end
         end
 
-        # Asset pipeline detection (always check - not from introspector)
-        parts << "Propshaft" if defined?(Propshaft)
-        parts << "Sprockets" if defined?(Sprockets) && !defined?(Propshaft)
+        # The gems are read rather than the :assets section: assets is a
+        # full-preset introspector, so the standard preset would lose the line.
+        propshaft = Payload.gem?(cached_context, "propshaft") || defined?(Propshaft)
+        sprockets = Payload.gem?(cached_context, "sprockets-rails") ||
+                    Payload.gem?(cached_context, "sprockets") || defined?(Sprockets)
+        parts << "Propshaft" if propshaft
+        parts << "Sprockets" if sprockets && !propshaft
         parts << "Import Maps" if File.exist?(rails_app.root.join("config/importmap.rb"))
 
         parts.uniq!

@@ -32,16 +32,16 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
   end
 
   let(:gems_data) do
-    {
-      notable: [ { name: "devise" } ],
-      all: []
-    }
+    { notable_gems: [ { name: "devise", version: "4.9.4", category: "auth" } ] }
   end
+
+  let(:auth_data) { { authentication: { devise: [ { model: "User" } ] } } }
 
   before do
     allow(described_class).to receive(:cached_context).and_return({
       config: config_data,
-      gems: gems_data
+      gems: gems_data,
+      auth: auth_data
     })
   end
 
@@ -111,7 +111,7 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       expect(text).to include("Current")
     end
 
-    it "detects auth framework from gems" do
+    it "detects auth framework from the auth section" do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Devise")
@@ -136,6 +136,15 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       expect(text).to include("Vue")
       expect(text).to include("Vite")
       expect(text).to include("Tailwind")
+    end
+
+    it "names the pipeline from the gems the introspector emits" do
+      allow(described_class).to receive(:cached_context).and_return({
+        config: config_data,
+        gems: { notable_gems: [ { name: "propshaft", version: "1.0.0", category: "assets" } ] }
+      })
+
+      expect(described_class.call.content.first[:text]).to include("Propshaft")
     end
 
     it "falls back gracefully when frontend introspector has error" do

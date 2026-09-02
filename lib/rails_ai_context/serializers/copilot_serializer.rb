@@ -45,9 +45,8 @@ module RailsAiContext
         lines.concat(full_preset_stack_lines)
 
         # Gems by category
-        gems = context[:gems]
-        if gems.is_a?(Hash) && !gems[:error]
-          notable = notable_gems_list(gems)
+        notable = Payload.notable_gems(context)
+        if notable.any?
           notable.group_by { |g| g[:category]&.to_s || "other" }.each do |cat, list|
             lines << "- #{cat}: #{list.map { |g| g[:name] }.join(', ')}"
           end

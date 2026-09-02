@@ -150,10 +150,7 @@ module RailsAiContext
       end
 
       def gems_section
-        gems = context[:gems]
-        return if gems[:error]
-
-        notable = notable_gems_list(gems)
+        notable = Payload.notable_gems(context)
         return if notable.empty?
 
         lines = [ "## Notable Gems" ]

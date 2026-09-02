@@ -12,14 +12,8 @@ module RailsAiContext
       def full_preset_stack_lines(ctx = context)
         lines = []
 
-        if (auth = Payload.section(ctx, :auth))
-          parts = []
-          parts << "Devise" if auth.dig(:authentication, :devise)&.any?
-          parts << "Rails 8 auth" if auth.dig(:authentication, :rails_auth)
-          parts << "Pundit" if auth.dig(:authorization, :pundit)&.any?
-          parts << "CanCanCan" if auth.dig(:authorization, :cancancan)
-          lines << "- Auth: #{parts.join(' + ')}" if parts.any?
-        end
+        auth_line = SectionFacts.auth_line(ctx)
+        lines << auth_line if auth_line
 
         parts = []
         frames = Payload.turbo_frames(ctx)
@@ -49,13 +43,8 @@ module RailsAiContext
         rich_text = Payload.rich_text_fields(ctx)
         lines << "- RichText: ActionText (#{count_phrase(rich_text.size, "field")})" if rich_text.any?
 
-        if (assets = Payload.section(ctx, :assets))
-          parts = []
-          parts << assets[:pipeline] if assets[:pipeline]
-          parts << assets[:js_bundler] if assets[:js_bundler]
-          parts << assets[:css_framework] if assets[:css_framework]
-          lines << "- Assets: #{parts.join(', ')}" if parts.any?
-        end
+        assets_line = SectionFacts.assets_line(ctx)
+        lines << assets_line if assets_line
 
         engine_names = Payload.mounted_engines(ctx).map { |e| e[:engine] }.compact.first(5)
         lines << "- Engines: #{engine_names.join(', ')}" if engine_names.any?
@@ -130,12 +119,6 @@ module RailsAiContext
         extras << "scopes: #{scope_names(scopes).join(', ')}" if scopes.any?
         constants.each { |c| extras << "#{c[:name]}: #{c[:values].join(', ')}" }
         "  #{extras.join(' | ')}"
-      end
-
-      # Extract notable gems with triple-fallback for varying introspector output shapes.
-      def notable_gems_list(gems_data)
-        return [] unless gems_data.is_a?(Hash) && !gems_data[:error]
-        gems_data[:notable_gems] || gems_data[:notable] || gems_data[:detected] || []
       end
 
       # Safely resolve architecture labels from GetConventions tool.

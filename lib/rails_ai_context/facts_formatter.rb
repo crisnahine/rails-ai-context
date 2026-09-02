@@ -75,11 +75,8 @@ module RailsAiContext
       end
 
       def dependencies_section(context)
-        gems = context[:gems]
-        return [] unless gems.is_a?(Hash) && !gems[:error]
-
-        notable = gems[:gems]&.select { |g| g[:category] != "other" }&.first(15)
-        return [] unless notable&.any?
+        notable = Payload.notable_gems(context).reject { |g| g[:category] == "other" }.first(15)
+        return [] if notable.empty?
 
         lines = [ "## Key Dependencies" ]
         notable.each { |g| lines << "- #{g[:name]} (#{g[:category]})" }

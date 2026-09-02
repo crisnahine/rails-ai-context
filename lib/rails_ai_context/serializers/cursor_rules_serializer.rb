@@ -84,9 +84,8 @@ module RailsAiContext
           lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}"
         end
 
-        gems = context[:gems]
-        if gems.is_a?(Hash) && !gems[:error]
-          notable = notable_gems_list(gems)
+        notable = Payload.notable_gems(context)
+        if notable.any?
           grouped = notable.group_by { |g| g[:category]&.to_s || "other" }
           grouped.each do |cat, gem_list|
             lines << "- #{cat}: #{gem_list.map { |g| g[:name] }.join(', ')}"

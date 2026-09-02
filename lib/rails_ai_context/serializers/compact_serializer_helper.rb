@@ -86,9 +86,7 @@ module RailsAiContext
       end
 
       def render_notable_gems
-        gems = context[:gems]
-        return [] unless gems.is_a?(Hash) && !gems[:error]
-        notable = notable_gems_list(gems)
+        notable = Payload.notable_gems(context)
         return [] if notable.empty?
 
         lines = [ "## Gems" ]
