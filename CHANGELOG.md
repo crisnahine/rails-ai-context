@@ -93,6 +93,9 @@ duplicated mechanisms behind them.
   cross-check.
 - **The ivar cross-check ran with no view templates section**, reporting every
   controller ivar as unused in the view. It is skipped instead.
+- **Every static-tier context file carried `Rails [UNAVAILABLE: app not
+  booted]` mid-sentence.** The version comes from the lockfile, and the
+  marker is left for a tree whose lockfile does not carry rails.
 - **`rails-ai-context preset " FULL "` exited 1 with the listing.** A preset
   name is matched whatever its case or padding.
 - **A `--no-boot` run that found no app printed the doctor hint**, which asks

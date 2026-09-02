@@ -165,7 +165,9 @@ module RailsAiContext
     def rails_version
       return Rails.version if defined?(Rails) && Rails.respond_to?(:version) && !RailsAiContext.static_tier?
 
-      Confidence.unavailable("app not booted")
+      # The lockfile names what is installed, and this string is written
+      # mid-sentence into files the user commits.
+      GemLock.for(app.root).version("rails") || Confidence.unavailable("app not booted")
     end
 
     def environment_name
