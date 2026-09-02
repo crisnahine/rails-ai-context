@@ -353,6 +353,26 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
       end
     end
 
+    # The write goes through SafeFile.atomic_write; a spy is the only way to
+    # see the helper itself, so this pins the end state it guarantees.
+    it "leaves no temp file behind and writes the trimmed config" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, ".mcp.json")
+        content = {
+          "mcpServers" => {
+            "rails-ai-context" => { "command" => "bundle" },
+            "other-server" => { "command" => "node" }
+          }
+        }
+        File.write(path, JSON.pretty_generate(content))
+
+        described_class.remove(tools: [ :claude ], output_dir: dir)
+
+        expect(Dir.glob(File.join(dir, "*.tmp"), File::FNM_DOTMATCH)).to be_empty
+        expect(JSON.parse(File.read(path))["mcpServers"].keys).to eq([ "other-server" ])
+      end
+    end
+
     it "returns empty array when file does not exist" do
       Dir.mktmpdir do |dir|
         cleaned = described_class.remove(tools: [ :claude ], output_dir: dir)

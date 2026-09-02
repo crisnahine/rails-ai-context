@@ -86,4 +86,13 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
       expect(result[:error]).to be_nil
     end
   end
+
+  it "does not report an empty stack when there is no booted app to ask" do
+    static = described_class.new(RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT)).static_call
+
+    expect(static).not_to have_key(:middleware_stack)
+    expect(static[:custom_middleware]).to be_an(Array)
+    expect(static).to include(:unavailable_sections)
+    expect(static[:unavailable]).to be_nil
+  end
 end

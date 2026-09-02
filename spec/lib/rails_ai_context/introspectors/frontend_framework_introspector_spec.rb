@@ -287,4 +287,30 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
       end
     end
   end
+
+  # A Rails-shaped webpacker config keeps its shared settings behind a YAML
+  # anchor, and a reader that refuses aliases silently falls back to the
+  # convention path.
+  describe "a shakapacker config that uses YAML aliases" do
+    it "reads the source path out of the merged default scope" do
+      require "tmpdir"
+      Dir.mktmpdir do |tmp|
+        root = File.realpath(tmp)
+        FileUtils.mkdir_p(File.join(root, "config"))
+        FileUtils.mkdir_p(File.join(root, "app/frontend"))
+        File.write(File.join(root, "config/shakapacker.yml"), <<~YAML)
+          default: &default
+            source_path: app/frontend
+          development:
+            <<: *default
+        YAML
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).call
+
+        expect(result[:frontend_roots]).to include(
+          a_hash_including(path: "app/frontend", detected_from: "config/shakapacker.yml")
+        )
+      end
+    end
+  end
 end
