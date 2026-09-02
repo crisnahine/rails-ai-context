@@ -66,20 +66,12 @@ module RailsAiContext
         all_migrations.last(count).reverse
       end
 
-      # Detect pending migrations. Prefers the live DB (authoritative - the
-      # actual applied version set) and falls back to comparing migration
-      # filenames against the schema file's recorded version when the
-      # database is unreachable (CI, static analysis, no db:create yet).
+      # Prefers the live database (the actual applied version set) and falls
+      # back to the schema file's recorded version when it is unreachable
+      # (CI, static analysis, no db:create yet).
       def pending_migrations
-        live = RailsAiContext::MigrationStatus.pending(migrate_dir)
-        return live if live
-
-        schema_ver = current_schema_version
-        return [] unless schema_ver
-
-        all_migrations.select { |m| m[:version].to_i > schema_ver.to_i }.map do |m|
-          { version: m[:version], name: m[:name] }
-        end
+        RailsAiContext::PendingMigrations.live(migrate_dir) ||
+          RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: current_schema_version)
       end
 
       def current_schema_version

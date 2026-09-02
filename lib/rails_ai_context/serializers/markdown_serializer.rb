@@ -403,9 +403,10 @@ module RailsAiContext
         lines << "- Total: #{data[:total]}"
         lines << "- Schema version: #{data[:schema_version]}" if data[:schema_version]
 
-        if data[:pending]&.any?
-          lines << "### Pending Migrations (#{data[:pending].size})"
-          data[:pending].each { |m| lines << "- `#{m[:version]}` #{m[:name]}" }
+        pending = Payload.pending_migrations(context)
+        if pending.any?
+          lines << "### Pending Migrations (#{pending.size})"
+          pending.each { |m| lines << "- `#{m[:version]}` #{m[:name]}" }
         end
 
         if data[:recent]&.any?

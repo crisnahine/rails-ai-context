@@ -105,5 +105,22 @@ RSpec.describe RailsAiContext::Introspectors::MigrationIntrospector do
         expect(result[:recent].first[:name]).to eq("Create widgets")
       end
     end
+
+    it "reports files newer than the schema version as pending" do
+      hide_const("ActiveRecord")
+
+      Dir.mktmpdir do |dir|
+        migrate = File.join(dir, "db", "migrate")
+        FileUtils.mkdir_p(migrate)
+        %w[20240101000000_create_users 20240201000000_add_index 20240301000000_create_posts].each do |name|
+          File.write(File.join(migrate, "#{name}.rb"), "class X < ActiveRecord::Migration[7.1]; end\n")
+        end
+        File.write(File.join(dir, "db", "schema.rb"), "ActiveRecord::Schema[7.1].define(version: 2024_02_01_000000) do\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:pending]).to eq([ { version: "20240301000000", name: "Create posts" } ])
+      end
+    end
   end
 end
