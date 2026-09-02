@@ -92,8 +92,8 @@ module RailsAiContext
           end
         end
 
-        conv = context[:conventions]
-        if conv.is_a?(Hash) && !conv[:error]
+        conv = Payload.section(context, :conventions)
+        if conv
           arch_labels = arch_labels_hash
           (conv[:architecture] || []).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
         end
@@ -121,8 +121,8 @@ module RailsAiContext
 
       # Auto-attached when working in app/models/
       def render_models_rule
-        models = context[:models]
-        return nil unless models.is_a?(Hash) && !models[:error] && models.any?
+        models = Payload.models(context)
+        return nil unless models.any?
 
         lines = [
           "---",

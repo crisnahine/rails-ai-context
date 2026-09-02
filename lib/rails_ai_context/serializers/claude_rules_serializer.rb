@@ -48,8 +48,8 @@ module RailsAiContext
           lines << models_line
         end
 
-        routes = context[:routes]
-        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes.is_a?(Hash) && !routes[:error]
+        routes = Payload.section(context, :routes)
+        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes
 
         lines.concat(full_preset_stack_lines)
 
@@ -167,8 +167,8 @@ module RailsAiContext
       end
 
       def render_models_reference
-        models = context[:models]
-        return nil unless models.is_a?(Hash) && !models[:error]
+        models = Payload.models(context)
+        return nil unless models.any?
         return nil if models.empty?
 
         lines = [
@@ -229,8 +229,8 @@ module RailsAiContext
       end
 
       def render_components_reference
-        comp = context[:components]
-        return nil unless comp.is_a?(Hash) && !comp[:error]
+        comp = Payload.section(context, :components)
+        return nil unless comp
         components = comp[:components] || []
         return nil if components.empty?
 

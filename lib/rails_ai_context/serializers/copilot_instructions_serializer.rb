@@ -50,8 +50,8 @@ module RailsAiContext
           lines << models_line
         end
 
-        routes = context[:routes]
-        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes.is_a?(Hash) && !routes[:error]
+        routes = Payload.section(context, :routes)
+        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes
 
         notable = Payload.notable_gems(context)
         if notable.any?
@@ -60,8 +60,8 @@ module RailsAiContext
           end
         end
 
-        conv = context[:conventions]
-        if conv.is_a?(Hash) && !conv[:error]
+        conv = Payload.section(context, :conventions)
+        if conv
           arch_labels = arch_labels_hash
           (conv[:architecture] || []).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
         end
@@ -87,8 +87,8 @@ module RailsAiContext
       end
 
       def render_models_instructions
-        models = context[:models]
-        return nil unless models.is_a?(Hash) && !models[:error] && models.any?
+        models = Payload.models(context)
+        return nil unless models.any?
 
         lines = [
           "---",

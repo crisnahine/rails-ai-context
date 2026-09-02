@@ -29,13 +29,13 @@ module RailsAiContext
         if (db_line = SectionFacts.database_line(context))
           lines << db_line
         end
-        models = context[:models]
+        models = Payload.models(context)
         if (models_line = SectionFacts.models_line(context))
           lines << models_line
         end
 
-        routes = context[:routes]
-        if routes && !routes[:error]
+        routes = Payload.section(context, :routes)
+        if routes
           app_ctrls = RouteCoverage.app_controllers(routes)
           lines << "- Routes: #{count_phrase(RouteCoverage.app_route_count(routes), "app route")} across " \
                    "#{count_phrase(app_ctrls.size, "controller")} " \
@@ -55,7 +55,7 @@ module RailsAiContext
         lines << ""
 
         # Models - Copilot gets more detail (up to 25 with associations)
-        if models.is_a?(Hash) && !models[:error] && models.any?
+        if models.any?
           lines << "## Models (#{models.size})"
           models.keys.sort.first(25).each do |name|
             data = models[name]
@@ -69,8 +69,8 @@ module RailsAiContext
         end
 
         # Architecture
-        conv = context[:conventions]
-        if conv.is_a?(Hash) && !conv[:error]
+        conv = Payload.section(context, :conventions)
+        if conv
           arch = conv[:architecture] || []
           patterns = conv[:patterns] || []
           if arch.any? || patterns.any?

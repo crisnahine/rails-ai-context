@@ -41,8 +41,8 @@ module RailsAiContext
       private
 
       def render_models_reference
-        models = context[:models]
-        return nil unless models.is_a?(Hash) && !models[:error] && models.any?
+        models = Payload.models(context)
+        return nil unless models.any?
 
         lines = [
           "# ActiveRecord Models (#{models.size})",
