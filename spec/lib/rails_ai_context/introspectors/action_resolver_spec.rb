@@ -234,5 +234,12 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
         .to eq(code: "  def show\n    @a = 1\n  end", start_line: 2, end_line: 4)
       expect(described_class.method_body(source, "nope")).to be_nil
     end
+
+    it "answers the same body for an action named in another case" do
+      source = "class C\n  def show\n    @a = 1\n  end\n\n  def edit; end\nend\n"
+
+      expect(described_class.method_body(source, "Show"))
+        .to eq(code: "  def show\n    @a = 1\n  end", start_line: 2, end_line: 4)
+    end
   end
 end

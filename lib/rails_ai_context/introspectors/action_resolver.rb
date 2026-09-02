@@ -113,9 +113,12 @@ module RailsAiContext
       # One method's body out of a file's source, with the lines it occupies.
       # The `end` that closes a `def` sits at the `def`'s own indentation,
       # which reads more reliably than counting block depth.
+      #
+      # The name matches ignoring case, so an action asked for as "Show"
+      # reaches `def show` here the way it does in the controller listing.
       def method_body(source, method_name)
         lines = source.to_s.lines
-        start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/) }
+        start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/i) }
         return nil unless start_idx
 
         indent = lines[start_idx][/\A\s*/].length
