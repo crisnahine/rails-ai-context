@@ -333,6 +333,11 @@ RSpec.describe RailsAiContext::Redaction do
       expect(described_class.value("DATABASE_PASSWORD", "postgres")).to eq("[FILTERED]")
     end
 
+    it "filters a long or credential-shaped example value that reads like a placeholder" do
+      expect(described_class.value("STRIPE_KEY", "todo#{'a' * 50}", placeholder_ok: true)).to eq("[FILTERED]")
+      expect(described_class.value("KEY", "sk_live_changeme", placeholder_ok: true)).to eq("[FILTERED]")
+    end
+
     it "filters anything longer than a config value plausibly is" do
       expect(described_class.value("X", "a" * 41)).to eq("[FILTERED]")
     end
