@@ -93,6 +93,13 @@ duplicated mechanisms behind them.
   cross-check.
 - **The ivar cross-check ran with no view templates section**, reporting every
   controller ivar as unused in the view. It is skipped instead.
+- **`rails-ai-context preset " FULL "` exited 1 with the listing.** A preset
+  name is matched whatever its case or padding.
+- **A `--no-boot` run that found no app printed the doctor hint**, which asks
+  for a boot error that never happened. `doctor` and `init` also accept a
+  tree that has app source but no `config/environment.rb`, and the refusal
+  names that file instead of telling the user to go to the app root they are
+  standing in.
 
 ### Changed
 
