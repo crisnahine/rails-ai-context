@@ -346,43 +346,24 @@ module RailsAiContext
         node.slice.gsub(/\s+/, " ")
       end
 
-      private_class_method def self.extract_perform_signature(source)
-        match = source.match(/def perform\(([^)]*)\)/m)
-        return "perform(#{match[1].strip})" if match
-
-        # No-arg perform
-        return "perform" if source.match?(/def perform\s*$/)
-
-        nil
+      private_class_method def self.perform_method(source)
+        Introspectors::ActionResolver.methods_in(source).find { |m| m[:name] == "perform" && m[:scope] == :instance }
       end
 
+      private_class_method def self.extract_perform_signature(source)
+        perform = perform_method(source)
+        Introspectors::ActionResolver.signature(perform) if perform
+      end
+
+      # The `return` lines inside perform's own body, first ten.
       private_class_method def self.extract_guard_clauses(source)
-        guards = []
-        in_perform = false
-        perform_indent = nil
+        perform = perform_method(source)
+        return [] unless perform
 
-        source.each_line do |line|
-          if line.match?(/\A\s*def perform/)
-            in_perform = true
-            perform_indent = line[/\A\s*/].length
-            next
-          end
-
-          if in_perform
-            # Stop at next method or end of perform
-            break if line.match?(/\A\s{#{perform_indent}}end\b/) && perform_indent
-            break if line.match?(/\A\s{0,#{perform_indent.to_i}}def\s/) && !line.match?(/\A\s*def perform/)
-
-            stripped = line.strip
-            if stripped.match?(/\Areturn\s+(if|unless)\b/)
-              guards << stripped
-            elsif stripped.match?(/\Areturn\b/) && stripped.length < 120
-              guards << stripped
-            end
-          end
-        end
-
-        guards.first(10)
+        body = source.lines[perform[:location]...(perform[:end_location] - 1)] || []
+        body.map(&:strip).select { |line|
+          line.match?(/\Areturn\s+(if|unless)\b/) || (line.match?(/\Areturn\b/) && line.length < 120)
+        }.first(10)
       end
 
       private_class_method def self.extract_dependencies(source, own_class_name)

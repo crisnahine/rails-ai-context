@@ -133,22 +133,8 @@ module RailsAiContext
             end
           end
 
-          # Extract perform method signature from AST
           perform_method = ast[:methods].find { |m| m[:name] == "perform" && m[:scope] == :instance }
-          perform_signature = nil
-          if perform_method && perform_method[:params]&.any?
-            perform_signature = perform_method[:params].map { |p|
-              case p[:type]
-              when :required then p[:name]
-              when :optional then "#{p[:name]} = {}"
-              when :rest then "*#{p[:name]}"
-              when :keyword then "#{p[:name]}:"
-              when :keyword_rest then "**#{p[:name]}"
-              when :block then "&#{p[:name]}"
-              else p[:name]
-              end
-            }.join(", ")
-          end
+          perform_signature = ActionResolver.parameter_list(perform_method) if perform_method && perform_method[:params]&.any?
 
           # Extract job callbacks
           callback_names = %i[before_enqueue after_enqueue before_perform after_perform around_perform around_enqueue]

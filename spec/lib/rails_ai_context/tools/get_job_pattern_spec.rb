@@ -166,6 +166,30 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
       after { FileUtils.remove_entry(tmpdir) }
 
+      it "renders a perform whose parameters span lines on one line, with only its own guards" do
+        File.write(File.join(tmpdir, "app", "jobs", "wide_job.rb"), <<~RUBY)
+          class WideJob < ApplicationJob
+            def perform(user_id,
+                        message:, urgent: false)
+              return if user_id.nil?
+              User.find(user_id)
+            end
+
+            def helper
+              return unless ready?
+            end
+          end
+        RUBY
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+        text = described_class.call(job: "WideJob").content.first[:text]
+
+        expect(text).to include("**Perform:** `perform(user_id, message:, urgent: false)`")
+        expect(text).to include("- `return if user_id.nil?`")
+        expect(text).not_to include("return unless ready?")
+      end
+
       it "reads every retry, discard and sidekiq option as written, and none from a comment" do
         text = described_class.call(job: "SyncJob").content.first[:text]
 

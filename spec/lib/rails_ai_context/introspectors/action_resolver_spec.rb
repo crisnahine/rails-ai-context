@@ -136,4 +136,55 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       expect(described_class.own_methods(methods, "Admin::PostsController").map { |m| m[:name] }).to eq(%w[show])
     end
   end
+
+  describe ".public_methods_from_source" do
+    let(:source) { "class Widget\n  def full_name(sep = ' ')\n  end\n\n  def self.build(attrs)\n  end\n\n  private\n\n  def secret\n  end\nend\n" }
+
+    it "lists the public instance methods with their signatures" do
+      expect(described_class.public_methods_from_source(source)).to eq([ "full_name(sep = ' ')" ])
+    end
+
+    it "lists private and class methods separately" do
+      expect(described_class.private_methods_from_source(source)).to eq(%w[secret])
+      expect(described_class.class_methods_from_source(source)).to eq([ "build(attrs)" ])
+    end
+
+    it "reads a module as the owner and keeps a nested class out of it" do
+      concern = <<~RUBY
+        module Searchable
+          extend ActiveSupport::Concern
+
+          class_methods do
+            def search(query); end
+          end
+
+          class Result
+            def score; end
+          end
+
+          def search_result_title; end
+          def _framework_hook; end
+
+          private def normalize; end
+        end
+      RUBY
+
+      expect(described_class.public_methods_from_source(concern)).to eq(%w[search_result_title])
+      expect(described_class.private_methods_from_source(concern)).to eq(%w[normalize])
+      expect(described_class.class_methods_from_source(concern)).to eq([ "search(query)" ])
+      expect(described_class.public_methods_from_source(concern, owner: "Searchable::Result")).to eq(%w[score])
+    end
+  end
+
+  describe ".signature" do
+    it "renders the method as written, without a self prefix" do
+      methods = RailsAiContext::Introspectors::SourceIntrospector.walk_source(
+        "class Job\n  def self.enqueue(id, wait: 0); end\n  def perform(user_id, options = {}); end\nend\n",
+        { methods: RailsAiContext::Introspectors::Listeners::MethodsListener }
+      )[:methods]
+
+      expect(methods.map { |m| described_class.signature(m) }).to eq([ "enqueue(id, wait: 0)", "perform(user_id, options = {})" ])
+      expect(described_class.parameter_list(methods.last)).to eq("user_id, options = {}")
+    end
+  end
 end

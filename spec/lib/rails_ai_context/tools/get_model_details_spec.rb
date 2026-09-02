@@ -263,7 +263,20 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
         FileUtils.mkdir_p(File.dirname(path))
         File.write(path, <<~RUBY)
           class Invoice < ApplicationRecord
+            USAGE = <<~USAGE
+              def example_usage
+              end
+            USAGE
+
+            def self.overdue
+            end
+
             def overdue_by(days)
+            end
+
+            private
+
+            def internal
             end
           end
         RUBY
@@ -281,7 +294,11 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
       text = described_class.call(model: "Invoice", detail: "full").content.first[:text]
 
-      expect(text).to include("overdue_by")
+      expect(text).to include("- `overdue_by(days)`")
+      expect(text).to include("## Class methods")
+      expect(text).to include("- `overdue`")
+      expect(text).not_to include("example_usage")
+      expect(text).not_to include("- `internal`")
     end
   end
 end

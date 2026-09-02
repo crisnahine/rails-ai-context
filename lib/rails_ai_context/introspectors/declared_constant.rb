@@ -74,7 +74,7 @@ module RailsAiContext
         node.constant_path.slice.delete_prefix("::")
       end
 
-      private_class_method :declared_names, :collect, :descend, :qualify, :segment
+      private_class_method :collect, :descend, :qualify, :segment
     end
   end
 end
