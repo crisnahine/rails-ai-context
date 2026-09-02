@@ -34,6 +34,9 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # What the filters left, in one value: every formatter needs all five.
+      Found = Data.define(:model_broadcasts, :rb_broadcasts, :view_subscriptions, :view_frames, :warnings)
+
       def self.call(detail: "standard", stream: nil, controller: nil, server_context: nil)
         return text_response("Turbo is not installed in this app (no `turbo-rails` gem in Gemfile.lock).") if turbo_rails_absent?
 
@@ -69,13 +72,15 @@ module RailsAiContext
           warnings = detect_mismatches(model_broadcasts, rb_broadcasts, view_subscriptions)
           filter_label = stream ? "stream:\"#{stream}\"" : controller ? "controller:\"#{controller}\"" : nil
 
+          found = Found.new(
+            model_broadcasts: model_broadcasts, rb_broadcasts: rb_broadcasts,
+            view_subscriptions: view_subscriptions, view_frames: view_frames, warnings: warnings
+          )
+
           case detail
-          when "summary"
-            format_summary(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, turbo_data: data, filter_label: filter_label)
-          when "standard"
-            format_standard(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, turbo_data: data, filter_label: filter_label)
-          when "full"
-            format_full(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, turbo_data: data, filter_label: filter_label)
+          when "summary" then format_summary(found, turbo_data: data, filter_label: filter_label)
+          when "standard" then format_standard(found, turbo_data: data, filter_label: filter_label)
+          when "full" then format_full(found, turbo_data: data, filter_label: filter_label)
           end
         end
       end
@@ -89,7 +94,8 @@ module RailsAiContext
         false
       end
 
-      private_class_method def self.format_summary(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, turbo_data:, filter_label: nil)
+      private_class_method def self.format_summary(found, turbo_data:, filter_label: nil)
+        model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings = found.deconstruct
         turbo_stream_response_count = turbo_data[:turbo_stream_responses]&.size.to_i
         turbo_stream_template_count = turbo_data[:turbo_streams]&.size.to_i
 
@@ -111,21 +117,10 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.format_standard(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, turbo_data:, filter_label: nil)
+      private_class_method def self.format_standard(found, turbo_data:, filter_label: nil)
+        model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings = found.deconstruct
         lines = [ "# Turbo Map", "" ]
-
-        # Turbo Drive Configuration
-        drive_parts = []
-        drive_parts << "morph: #{turbo_data[:morph_meta] ? 'yes' : 'no'}" unless turbo_data[:morph_meta].nil?
-        drive_parts << "permanent elements: #{turbo_data[:permanent_elements].size}" if turbo_data[:permanent_elements]&.any?
-        if turbo_data[:turbo_drive_settings].is_a?(Hash) && turbo_data[:turbo_drive_settings].any?
-          turbo_data[:turbo_drive_settings].each { |k, v| drive_parts << "#{k}: #{v}" }
-        end
-        if drive_parts.any?
-          lines << "## Turbo Drive Configuration"
-          drive_parts.each { |p| lines << "- #{p}" }
-          lines << ""
-        end
+        lines.concat(drive_configuration_lines(turbo_data))
 
         # Turbo Stream responses
         if turbo_data[:turbo_stream_responses]&.any?
@@ -148,7 +143,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Model broadcasts
         if model_broadcasts.any?
           lines << "## Model Broadcasts (#{model_broadcasts.size})"
           model_broadcasts.each do |b|
@@ -158,7 +152,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Explicit broadcasts from .rb files
         if rb_broadcasts.any?
           lines << "## Explicit Broadcasts (#{rb_broadcasts.size})"
           rb_broadcasts.each do |b|
@@ -168,7 +161,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # View subscriptions
         if view_subscriptions.any?
           lines << "## Stream Subscriptions (#{view_subscriptions.size})"
           view_subscriptions.each do |s|
@@ -177,7 +169,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Turbo Frames
         if view_frames.any?
           lines << "## Turbo Frames (#{view_frames.size})"
           view_frames.each do |f|
@@ -187,7 +178,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Warnings
         if warnings.any?
           lines << "## Warnings"
           warnings.each { |w| lines << "- #{w}" }
@@ -213,21 +203,23 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.format_full(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, turbo_data:, filter_label: nil)
-        lines = [ "# Turbo Map (Full Detail)", "" ]
-
-        # Turbo Drive Configuration & Stream Responses
-        drive_parts = []
-        drive_parts << "morph: #{turbo_data[:morph_meta] ? 'yes' : 'no'}" unless turbo_data[:morph_meta].nil?
-        drive_parts << "permanent elements: #{turbo_data[:permanent_elements].size}" if turbo_data[:permanent_elements]&.any?
+      # The one Drive section: both formatters render it identically.
+      private_class_method def self.drive_configuration_lines(turbo_data)
+        parts = []
+        parts << "morph: #{turbo_data[:morph_meta] ? 'yes' : 'no'}" unless turbo_data[:morph_meta].nil?
+        parts << "permanent elements: #{turbo_data[:permanent_elements].size}" if turbo_data[:permanent_elements]&.any?
         if turbo_data[:turbo_drive_settings].is_a?(Hash) && turbo_data[:turbo_drive_settings].any?
-          turbo_data[:turbo_drive_settings].each { |k, v| drive_parts << "#{k}: #{v}" }
+          turbo_data[:turbo_drive_settings].each { |k, v| parts << "#{k}: #{v}" }
         end
-        if drive_parts.any?
-          lines << "## Turbo Drive Configuration"
-          drive_parts.each { |p| lines << "- #{p}" }
-          lines << ""
-        end
+        return [] if parts.empty?
+
+        [ "## Turbo Drive Configuration" ] + parts.map { |p| "- #{p}" } + [ "" ]
+      end
+
+      private_class_method def self.format_full(found, turbo_data:, filter_label: nil)
+        model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings = found.deconstruct
+        lines = [ "# Turbo Map (Full Detail)", "" ]
+        lines.concat(drive_configuration_lines(turbo_data))
 
         # Turbo Stream responses
         if turbo_data[:turbo_stream_responses]&.any?
@@ -247,7 +239,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Model broadcasts with full context
         if model_broadcasts.any?
           lines << "## Model Broadcasts (#{model_broadcasts.size})"
           model_broadcasts.each do |b|
@@ -259,7 +250,6 @@ module RailsAiContext
           end
         end
 
-        # Explicit broadcasts with full context
         if rb_broadcasts.any?
           lines << "## Explicit Broadcasts (#{rb_broadcasts.size})"
           rb_broadcasts.each do |b|
@@ -272,7 +262,6 @@ module RailsAiContext
           end
         end
 
-        # View subscriptions with full context
         if view_subscriptions.any?
           lines << "## Stream Subscriptions (#{view_subscriptions.size})"
           view_subscriptions.each do |s|
@@ -284,7 +273,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Turbo Frames with full context
         if view_frames.any?
           lines << "## Turbo Frames (#{view_frames.size})"
           view_frames.each do |f|
@@ -318,7 +306,6 @@ module RailsAiContext
           end
         end
 
-        # Warnings
         if warnings.any?
           lines << "## Warnings"
           warnings.each { |w| lines << "- #{w}" }
