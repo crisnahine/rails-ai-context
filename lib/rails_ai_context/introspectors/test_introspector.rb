@@ -63,12 +63,9 @@ module RailsAiContext
       # minitest, which ships with every Rails app. Returns nil when there is
       # no lockfile or no recognizable test gem.
       def detect_framework_from_lockfile
-        lock_path = File.join(root, "Gemfile.lock")
-        return nil unless File.exist?(lock_path)
-
-        content = RailsAiContext::SafeFile.read(lock_path) || ""
-        return "rspec" if content.match?(/^\s{4}rspec-rails\s/)
-        return "minitest" if content.match?(/^\s{4}minitest\s/)
+        lock = RailsAiContext::GemLock.for(root)
+        return "rspec" if lock.present?("rspec-rails")
+        return "minitest" if lock.present?("minitest")
 
         nil
       rescue => e
@@ -225,12 +222,7 @@ module RailsAiContext
       end
 
       def detect_coverage
-        gemfile_lock = File.join(root, "Gemfile.lock")
-        return nil unless File.exist?(gemfile_lock)
-        content = RailsAiContext::SafeFile.read(gemfile_lock)
-        return nil unless content
-        return "simplecov" if content.include?("simplecov (")
-        nil
+        RailsAiContext::GemLock.for(root).present?("simplecov") ? "simplecov" : nil
       end
 
       def detect_factory_traits
@@ -276,11 +268,7 @@ module RailsAiContext
       end
 
       def detect_database_cleaner
-        gemfile_lock = File.join(root, "Gemfile.lock")
-        return nil unless File.exist?(gemfile_lock)
-        content = RailsAiContext::SafeFile.read(gemfile_lock)
-        return nil unless content
-        if content.include?("database_cleaner")
+        if RailsAiContext::GemLock.for(root).any?("database_cleaner", "database_cleaner-active_record")
           strategy = nil
           %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb].each do |helper|
             path = File.join(root, helper)

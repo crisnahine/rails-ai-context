@@ -119,6 +119,41 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
       end
     end
 
+    context "with a gem only in the GIT section" do
+      before do
+        content = <<~LOCK
+          GIT
+            remote: https://github.com/heartcombo/devise.git
+            revision: 0123456789abcdef0123456789abcdef01234567
+            specs:
+              devise (4.9.4)
+                railties (>= 4.1.0)
+
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rails (8.0.0)
+
+          RUBY VERSION
+             ruby 3.3.4p94
+
+          DEPENDENCIES
+            devise!
+        LOCK
+        File.write(File.join(tmpdir, "Gemfile.lock"), content)
+      end
+
+      it "reports the git gem as notable" do
+        result = introspector.call
+        names = result[:notable_gems].map { |g| g[:name] }
+        expect(names).to include("devise")
+      end
+
+      it "reads the ruby version from the RUBY VERSION section" do
+        expect(introspector.call[:ruby_version]).to eq("3.3.4p94")
+      end
+    end
+
     context "with empty GEM section" do
       before do
         content = <<~LOCK

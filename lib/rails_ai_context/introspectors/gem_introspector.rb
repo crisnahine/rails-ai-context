@@ -156,15 +156,14 @@ module RailsAiContext
 
       # @return [Hash] gem analysis
       def call
-        lock_path = File.join(app.root, "Gemfile.lock")
-        return { error: "No Gemfile.lock found" } unless File.exist?(lock_path)
+        lock = RailsAiContext::GemLock.for(app.root)
+        return { error: "No Gemfile.lock found" } if lock.missing?
 
-        specs = parse_lockfile(lock_path)
-        notable = detect_notable_gems(specs)
+        notable = detect_notable_gems(lock)
 
         {
-          total_gems: specs.size,
-          ruby_version: specs["ruby"]&.first,
+          total_gems: lock.names.size,
+          ruby_version: lock.ruby_version,
           notable_gems: notable,
           categories: categorize_gems(notable),
           local_gems: detect_local_gems,
@@ -211,39 +210,13 @@ module RailsAiContext
         {}
       end
 
-      def parse_lockfile(path)
-        gems = {}
-        in_gems = false
-
-        (RailsAiContext::SafeFile.read(path) || "").lines.each do |line|
-          if line.strip == "GEM"
-            in_gems = true
-            next
-          elsif line.strip.empty? || line.match?(/^\S/)
-            in_gems = false if in_gems && line.match?(/^\S/) && !line.strip.start_with?("remote:", "specs:")
-          end
-
-          if in_gems && (match = line.match(/^\s{4}(\S+)\s+\((.+)\)/))
-            # Bundler writes platform-specific gems as "name (1.2.3-x86_64-linux-musl)",
-            # listing one line per platform in a multi-platform lockfile. Last-write-wins
-            # would otherwise surface an arbitrary, often wrong, platform suffix (e.g.
-            # x86_64-linux-musl on an arm64-darwin machine). RubyGems versions never
-            # contain a hyphen, so the text before the first "-" is the clean version;
-            # the platform tail is an install detail, not useful AI context.
-            gems[match[1]] = match[2].split("-", 2).first
-          end
-        end
-
-        gems
-      end
-
-      def detect_notable_gems(specs)
+      def detect_notable_gems(lock)
         NOTABLE_GEMS.filter_map do |gem_name, info|
-          next unless specs.key?(gem_name)
+          next unless lock.present?(gem_name)
 
           {
             name: gem_name,
-            version: specs[gem_name],
+            version: lock.version(gem_name),
             category: info[:category].to_s,
             note: info[:note]
           }

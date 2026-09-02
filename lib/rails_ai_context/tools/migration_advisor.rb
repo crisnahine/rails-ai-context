@@ -423,11 +423,7 @@ module RailsAiContext
         end
 
         def strong_migrations_gem_present?
-          lock_path = File.join(rails_app.root.to_s, "Gemfile.lock")
-          return false unless File.exist?(lock_path)
-          content = RailsAiContext::SafeFile.read(lock_path)
-          return false unless content
-          content.include?("    strong_migrations (")
+          RailsAiContext::GemLock.for(rails_app.root).present?("strong_migrations")
         rescue => e
           $stderr.puts "[rails-ai-context] strong_migrations_gem_present? failed: #{e.message}" if ENV["DEBUG"]
           false

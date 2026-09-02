@@ -360,15 +360,7 @@ module RailsAiContext
       end
 
       def gem_present?(name)
-        lock_path = File.join(root, "Gemfile.lock")
-        return false unless File.exist?(lock_path)
-        content = RailsAiContext::SafeFile.read(lock_path)
-        return false unless content
-
-        content.include?("    #{name} (")
-      rescue => e
-        $stderr.puts "[rails-ai-context] gem_present? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext::GemLock.for(root).present?(name)
       end
 
       def file_exists?(relative_path)

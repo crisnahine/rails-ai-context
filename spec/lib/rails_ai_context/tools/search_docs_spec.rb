@@ -75,11 +75,15 @@ RSpec.describe RailsAiContext::Tools::SearchDocs do
     allow(RailsAiContext::SafeFile).to receive(:read).and_call_original
     allow(RailsAiContext::SafeFile).to receive(:read).with(described_class::INDEX_PATH).and_return(mock_index_json)
 
-    # Mock Gemfile.lock for Rails version detection
+    # Stand in for the app's Gemfile.lock so Rails version detection has one.
     gemfile_lock_path = Rails.root.join("Gemfile.lock").to_s
     allow(File).to receive(:exist?).with(gemfile_lock_path).and_return(true)
     allow(File).to receive(:file?).with(gemfile_lock_path).and_return(true)
-    allow(RailsAiContext::SafeFile).to receive(:read).with(gemfile_lock_path).and_return("    railties (8.0.1)\n")
+    allow(File).to receive(:mtime).and_call_original
+    allow(File).to receive(:mtime).with(gemfile_lock_path).and_return(Time.at(0))
+    allow(RailsAiContext::SafeFile).to receive(:read)
+      .with(gemfile_lock_path, max_size: anything)
+      .and_return("GEM\n  remote: https://rubygems.org/\n  specs:\n    railties (8.0.1)\n")
   end
 
   describe ".call" do

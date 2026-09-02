@@ -109,19 +109,10 @@ module RailsAiContext
         end
       end
 
-      # True only when a Gemfile.lock exists AND it does not list turbo-rails -
-      # a definite "not installed" signal. When no lock file is present at all
-      # we can't tell either way, so this returns false (matches the
-      # convention_introspector/migration_advisor gem_present? pattern of
-      # trusting the lock file, not guessing when it's absent).
+      # No lockfile means unknown, not absent, so this answers false there.
       private_class_method def self.turbo_rails_absent?
-        lock_path = File.join(rails_app.root.to_s, "Gemfile.lock")
-        return false unless File.exist?(lock_path)
-
-        content = RailsAiContext::SafeFile.read(lock_path)
-        return false unless content
-
-        !content.include?("    turbo-rails (")
+        lock = RailsAiContext::GemLock.for(rails_app.root)
+        !lock.missing? && !lock.present?("turbo-rails")
       rescue => e
         $stderr.puts "[rails-ai-context] turbo_rails_absent? failed: #{e.message}" if ENV["DEBUG"]
         false

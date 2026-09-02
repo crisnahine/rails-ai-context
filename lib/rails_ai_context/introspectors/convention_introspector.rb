@@ -353,14 +353,7 @@ module RailsAiContext
       end
 
       def gem_present?(name)
-        gemfile_lock_content.include?("    #{name} (")
-      end
-
-      def gemfile_lock_content
-        @gemfile_lock_content ||= begin
-          lock_path = File.join(root, "Gemfile.lock")
-          File.exist?(lock_path) ? (RailsAiContext::SafeFile.read(lock_path) || "") : ""
-        end
+        RailsAiContext::GemLock.for(root).present?(name)
       end
     end
   end

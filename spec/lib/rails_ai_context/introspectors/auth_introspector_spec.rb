@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -438,6 +439,36 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
         expect(entry[:scope]).not_to include("#")
         expect(entry[:scope]).to include("only:")
       end
+    end
+  end
+
+  describe "#gem_present?" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def introspect(lock)
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      described_class.new(double("app", root: @root))
+    end
+
+    it "sees a gem in the GIT section" do
+      lock = <<~LOCK
+        GIT
+          remote: https://github.com/heartcombo/devise.git
+          revision: 0123456789abcdef0123456789abcdef01234567
+          specs:
+            devise (4.9.4)
+      LOCK
+      expect(introspect(lock).send(:gem_present?, "devise")).to be(true)
+    end
+
+    it "does not match a longer gem name that starts with the query" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            devise-two-factor (5.0.0)
+      LOCK
+      expect(introspect(lock).send(:gem_present?, "devise")).to be(false)
     end
   end
 end

@@ -134,15 +134,10 @@ module RailsAiContext
         end
 
         def detect_rails_branch
-          lock_path = rails_app.root.join("Gemfile.lock").to_s
-          return "main" unless File.exist?(lock_path)
+          version = RailsAiContext::GemLock.for(rails_app.root).version("railties")
+          return "main" unless version && (match = version.match(/\A(\d+\.\d+)/))
 
-          content = RailsAiContext::SafeFile.read(lock_path)
-          if content && (match = content.match(/railties\s+\((\d+\.\d+)/))
-            "#{match[1].tr('.', '-')}-stable"
-          else
-            "main"
-          end
+          "#{match[1].tr('.', '-')}-stable"
         rescue => e
           $stderr.puts "[rails-ai-context] detect_rails_branch failed: #{e.message}" if ENV["DEBUG"]
           "main"

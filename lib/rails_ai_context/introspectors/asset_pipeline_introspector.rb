@@ -33,9 +33,9 @@ module RailsAiContext
       end
 
       def detect_pipeline
-        lock_content = read_gemfile_lock
-        return "propshaft" if lock_content&.include?("propshaft (")
-        return "sprockets" if lock_content&.include?("sprockets (")
+        lock = gem_lock
+        return "propshaft" if lock.present?("propshaft")
+        return "sprockets" if lock.present?("sprockets")
         "none"
       end
 
@@ -83,11 +83,11 @@ module RailsAiContext
       end
 
       def detect_css_framework
-        lock_content = read_gemfile_lock
-        return nil unless lock_content
+        lock = gem_lock
+        return nil if lock.missing?
 
-        return "tailwindcss" if lock_content.include?("tailwindcss-rails (") || package_json_has?("tailwindcss")
-        return "bootstrap" if lock_content.include?("bootstrap (") || package_json_has?("bootstrap")
+        return "tailwindcss" if lock.present?("tailwindcss-rails") || package_json_has?("tailwindcss")
+        return "bootstrap" if lock.present?("bootstrap") || package_json_has?("bootstrap")
         return "bulma" if package_json_has?("bulma")
         return "foundation" if package_json_has?("foundation-sites")
         return "postcss" if package_json_has?("postcss") && !package_json_has?("tailwindcss")
@@ -112,12 +112,8 @@ module RailsAiContext
         manifests
       end
 
-      def read_gemfile_lock
-        path = File.join(root, "Gemfile.lock")
-        File.exist?(path) ? RailsAiContext::SafeFile.read(path) : nil
-      rescue => e
-        $stderr.puts "[rails-ai-context] read_gemfile_lock failed: #{e.message}" if ENV["DEBUG"]
-        nil
+      def gem_lock
+        RailsAiContext::GemLock.for(root)
       end
 
       def package_json_has?(package)
