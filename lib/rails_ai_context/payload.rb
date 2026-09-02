@@ -24,16 +24,20 @@ module RailsAiContext
       available_locales: %i[i18n available_locales],
       storage_attachments: %i[active_storage attachments],
       rich_text_fields: %i[action_text rich_text_fields],
-      databases: %i[multi_database databases]
+      databases: %i[multi_database databases],
+      notable_gems: %i[gems notable_gems],
+      stimulus_controllers: %i[stimulus controllers],
+      pending_migrations: %i[migrations pending]
     }.freeze
 
     module_function
 
-    # The section, or nil when it is absent or failed - one guard instead of
-    # the hand-rolled `x.is_a?(Hash) && !x[:error]` at every call site.
+    # The section, or nil when it is absent, failed, or refused - one guard
+    # instead of the hand-rolled `x.is_a?(Hash) && !x[:error]` at every call
+    # site.
     def section(ctx, key)
       value = ctx.is_a?(Hash) ? ctx[key] : nil
-      value.is_a?(Hash) && !value[:error] ? value : nil
+      value.is_a?(Hash) && !value[:error] && !value[:unavailable] ? value : nil
     end
 
     def list(ctx, section_key, key)
@@ -42,6 +46,34 @@ module RailsAiContext
 
     LISTS.each do |name, (section_key, key)|
       define_singleton_method(name) { |ctx| list(ctx, section_key, key) }
+    end
+
+    def controllers(ctx)
+      section(ctx, :controllers)&.dig(:controllers).then { |h| h.is_a?(Hash) ? h : {} }
+    end
+
+    # The app's own controllers: the framework ones the configuration names
+    # are dropped here so every listing counts the same set. A lookup by name
+    # still searches everything, so this is a reader, not an introspector rule.
+    def app_controllers(ctx)
+      excluded = RailsAiContext.configuration.excluded_controllers
+      controllers(ctx).reject { |name, _| excluded.include?(name) }
+    end
+
+    def models(ctx)
+      value = ctx.is_a?(Hash) ? ctx[:models] : nil
+      value.is_a?(Hash) && !value[:error] ? value : {}
+    end
+
+    def gem?(ctx, name)
+      notable_gems(ctx).any? { |g| g.is_a?(Hash) && g[:name] == name.to_s }
+    end
+
+    def route_totals(ctx)
+      routes = section(ctx, :routes)
+      return nil unless routes
+
+      { total: routes[:total_routes].to_i, dynamic: routes[:dynamic_routes].to_i }
     end
 
     # The file a controller was read from. Reconstructing it from the class
