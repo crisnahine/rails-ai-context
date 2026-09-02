@@ -35,6 +35,11 @@ module RailsAiContext
         }
       }.freeze
 
+      # The first `=` that assigns. `==`, `!=`, `>=`, `<=` and `=~` are reads
+      # of the ivar on their left, and counting one as an assignment made
+      # every guard clause look like a setter.
+      ASSIGNMENT = /(?<![=!<>~])=(?![=~])/
+
       module_function
 
       def framework?(klass, kind:)
@@ -145,9 +150,10 @@ module RailsAiContext
       # `@a, @b = x` two names.
       def assigned_ivars(action_source)
         action_source.to_s.each_line.flat_map do |line|
-          next [] unless line.include?("=")
+          split_at = line.index(ASSIGNMENT)
+          next [] unless split_at
 
-          line.split("=", 2).first.scan(/@(\w+)/).flatten
+          line[0, split_at].scan(/@(\w+)/).flatten
         end.uniq
       end
 

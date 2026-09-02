@@ -216,6 +216,20 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       expect(described_class.assigned_ivars(action_source)).to eq(%w[post comments authors])
     end
 
+    it "counts an assignment but never a comparison" do
+      body = <<~RUBY
+        def show
+          return unless @post == current_user
+          return if @author != current_user
+          @user ||= find
+          @count += 1
+          @name =~ /x/
+        end
+      RUBY
+
+      expect(described_class.assigned_ivars(body)).to eq(%w[user count])
+    end
+
     it "names the templates the body renders" do
       expect(described_class.rendered_templates(action_source)).to eq(%w[edit])
     end
