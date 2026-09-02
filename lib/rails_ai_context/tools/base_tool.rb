@@ -190,10 +190,6 @@ module RailsAiContext
             SHARED_CACHE.delete(:timestamp)
             SHARED_CACHE.delete(:fingerprint)
           end
-          # Also invalidate the memoized gem-lib fingerprint so active gem
-          # development sees a fresh scan on next call without a process
-          # restart. No-op for production installs.
-          Fingerprinter.reset_gem_lib_fingerprint!
         end
 
         # Reset the shared cache. Used by LiveReload to invalidate on file change.
