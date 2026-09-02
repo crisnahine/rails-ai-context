@@ -112,6 +112,14 @@ duplicated mechanisms behind them.
   that constraint; `skip_after_action` and `skip_around_action` count as
   skips, and a skipped filter is struck through in the whole-controller view
   as well as the per-action one.
+- **A config value longer than 40 characters is filtered on every path.** The
+  Ruby-source and Dockerfile readers capped at 30 before; `.env.example` was
+  already 40.
+- **`schema[:pending_migrations]`, reachable through the `rails://schema`
+  resource, is a list of `{ version:, name: }` entries** rather than version
+  strings.
+- **`rails-ai-context://routes/{controller}` prefers an exact route-key
+  match**, so `routes/posts` no longer also returns `admin/posts`.
 
 ### Removed
 
@@ -121,6 +129,10 @@ duplicated mechanisms behind them.
   no callers.
 - **Support for the mcp gem below 0.13.** The gemspec floor is `>= 0.13`, the
   first release whose tool responses carry `meta`.
+- **`Presets.names` and `Presets.fetch`** - the listing and the run read
+  `DEFINITIONS` directly.
+- **`SchemaHintBuilder.build_many`** - no callers.
+- **The public constant `ChangeWatch::WATCH_DIRS`.**
 
 ## [5.24.0] - 2026-08-17
 
