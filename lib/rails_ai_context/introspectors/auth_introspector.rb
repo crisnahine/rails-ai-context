@@ -166,17 +166,15 @@ module RailsAiContext
         security
       end
 
+      # Keyed by the declared name: `app/models/admin/user.rb` is
+      # `Admin::User`, and keying it by basename overwrote `User`.
       def detect_devise_modules_per_model
-        models_dir = File.join(root, "app/models")
-        return {} unless Dir.exist?(models_dir)
-
         result = {}
-        Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          ast = SourceIntrospector.walk(path, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
+        SourceScan.classes(root, kind: "app/models").each do |model_name, record|
+          ast = SourceIntrospector.walk_source(record.source, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
           hits = ast[:devise]
           next if hits.empty?
 
-          model_name = File.basename(path, ".rb").camelize
           modules = hits.flat_map { |h| h[:args].map(&:to_s) }
           result[model_name] = modules if modules.any?
         end
@@ -321,18 +319,13 @@ module RailsAiContext
       end
 
       def scan_models_for_devise
-        models_dir = File.join(root, "app/models")
-        return [] unless Dir.exist?(models_dir)
-
-        results = []
-        Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          ast = SourceIntrospector.walk(path, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
+        results = SourceScan.classes(root, kind: "app/models").filter_map do |model_name, record|
+          ast = SourceIntrospector.walk_source(record.source, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
           next if ast[:devise].empty?
 
-          model_name = File.basename(path, ".rb").camelize
           # Format matches the same way the old regex did: ":<module>, :<module>, ..."
           matches = ast[:devise].map { |h| h[:args].map { |a| ":#{a}" }.join(", ") }
-          results << { model: model_name, matches: matches }
+          { model: model_name, matches: matches }
         end
         results.sort_by { |r| r[:model] }
       rescue => e
@@ -341,17 +334,11 @@ module RailsAiContext
       end
 
       def scan_models_for_macro(macro_name)
-        models_dir = File.join(root, "app/models")
-        return [] unless Dir.exist?(models_dir)
+        results = SourceScan.classes(root, kind: "app/models").filter_map do |model_name, record|
+          ast = SourceIntrospector.walk_source(record.source, { macros: Listeners::MacrosListener })
+          next if ast[:macros].none? { |m| m[:macro] == macro_name }
 
-        results = []
-        Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          ast = SourceIntrospector.walk(path, { macros: Listeners::MacrosListener })
-          hits = ast[:macros].select { |m| m[:macro] == macro_name }
-          next if hits.empty?
-
-          model_name = File.basename(path, ".rb").camelize
-          results << { model: model_name }
+          { model: model_name }
         end
         results.sort_by { |r| r[:model] }
       rescue => e

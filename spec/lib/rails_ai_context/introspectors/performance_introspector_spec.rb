@@ -366,4 +366,22 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
       expect(actions["index"]).to include("respond_to")
     end
   end
+
+  describe "models and controllers across every source directory" do
+    it "reads a pack's model and controller" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "controllers"))
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"),
+                   "class Invoice < ApplicationRecord\n  has_many :lines\n  has_many :payments\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "controllers", "invoices_controller.rb"),
+                   "class InvoicesController < ApplicationController\n  def index\n    @invoices = Invoice.all\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+        expect(result[:eager_load_candidates].map { |c| c[:model] }).to eq([ "Invoice" ])
+        expect(result[:model_all_in_controllers].map { |f| f[:controller] })
+          .to eq([ "packs/billing/app/controllers/invoices_controller.rb" ])
+      end
+    end
+  end
 end

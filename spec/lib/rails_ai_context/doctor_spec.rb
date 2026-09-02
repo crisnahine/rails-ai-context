@@ -616,4 +616,29 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
   end
+
+  describe "source file checks" do
+    def check_named(dir, name)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).run[:checks].find { |c| c.name == name }
+    end
+
+    it "counts a pack's models and controllers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "controllers"))
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"), "class Invoice; end\n")
+        File.write(File.join(dir, "packs", "billing", "app", "controllers", "invoices_controller.rb"),
+                   "class InvoicesController; end\n")
+
+        expect(check_named(dir, "Models")).to have_attributes(status: :pass, message: "1 model file found")
+        expect(check_named(dir, "Controllers")).to have_attributes(status: :pass, message: "1 controller file found")
+      end
+    end
+
+    it "warns without naming one directory when no model file exists anywhere" do
+      Dir.mktmpdir do |dir|
+        expect(check_named(dir, "Models")).to have_attributes(status: :warn, message: "No model files")
+      end
+    end
+  end
 end

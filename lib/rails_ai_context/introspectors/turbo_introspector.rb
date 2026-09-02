@@ -86,13 +86,8 @@ module RailsAiContext
       end
 
       def extract_model_broadcasts
-        models_dir = File.join(root, "app/models")
-        return [] unless Dir.exist?(models_dir)
-
-        broadcasts = []
-        Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          model_name = File.basename(path, ".rb").camelize
-          ast = SourceIntrospector.walk(path, { macros: Listeners::MacrosListener })
+        broadcasts = SourceScan.classes(root, kind: "app/models").filter_map do |model_name, record|
+          ast = SourceIntrospector.walk_source(record.source, { macros: Listeners::MacrosListener })
           broadcast_hits = ast[:macros].select { |m| %i[broadcasts broadcasts_to broadcasts_refreshes_to].include?(m[:macro]) }
           broadcast_methods = broadcast_hits.map { |h| h[:macro].to_s }.uniq
 
@@ -102,7 +97,7 @@ module RailsAiContext
           # (comments including =begin blocks stripped; `def` lines contribute
           # only an endless method's body, so parameter defaults never count
           # as calls while `def refresh = broadcast_replace_to(...)` does).
-          source = RailsAiContext::SourceLine.strip_comments(RailsAiContext::SafeFile.read(path).to_s)
+          source = RailsAiContext::SourceLine.strip_comments(record.source)
           source.each_line do |line|
             broadcast_methods |= RailsAiContext::SourceLine.executable_part(line).scan(/\bbroadcasts?_\w+_to\b/)
           rescue StandardError
@@ -110,7 +105,7 @@ module RailsAiContext
           end
 
           next if broadcast_methods.empty?
-          broadcasts << { model: model_name, methods: broadcast_methods }
+          { model: model_name, methods: broadcast_methods }
         end
 
         broadcasts.sort_by { |b| b[:model] }

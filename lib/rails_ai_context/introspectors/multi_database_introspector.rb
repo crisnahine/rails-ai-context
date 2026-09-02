@@ -78,20 +78,17 @@ module RailsAiContext
         result[:shard_names] = shard_names if shard_names.any?
 
         # Extract shard config from model source via AST
-        models_dir = File.join(root, "app/models")
-        if Dir.exist?(models_dir)
-          Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-            ast = SourceIntrospector.walk(path, {
-              connects: -> { Listeners::GenericMacroListener.new(:connects_to) }
-            })
-            hit = ast[:connects].find { |h| h[:options][:shards].is_a?(Hash) }
-            next unless hit
+        SourceScan.each(root, kind: "app/models").each do |record|
+          ast = SourceIntrospector.walk_source(record.source, {
+            connects: -> { Listeners::GenericMacroListener.new(:connects_to) }
+          })
+          hit = ast[:connects].find { |h| h[:options][:shards].is_a?(Hash) }
+          next unless hit
 
-            shard_keys = hit[:options][:shards].keys.map(&:to_s)
-            result[:shard_keys] = shard_keys if shard_keys.any?
-            result[:shard_count] = shard_keys.size
-            break
-          end
+          shard_keys = hit[:options][:shards].keys.map(&:to_s)
+          result[:shard_keys] = shard_keys if shard_keys.any?
+          result[:shard_count] = shard_keys.size
+          break
         end
 
         result
@@ -101,14 +98,9 @@ module RailsAiContext
       end
 
       def detect_model_connections
-        models_dir = File.join(root, "app/models")
-        return [] unless Dir.exist?(models_dir)
-
         connections = []
-        Dir.glob(File.join(models_dir, "**/*.rb")).each do |path|
-          model_name = File.basename(path, ".rb").camelize
-
-          ast = SourceIntrospector.walk(path, {
+        SourceScan.classes(root, kind: "app/models").each do |model_name, record|
+          ast = SourceIntrospector.walk_source(record.source, {
             connects_to: -> { Listeners::GenericMacroListener.new(:connects_to) },
             connected_to: -> { Listeners::GenericMacroListener.new(:connected_to) }
           })

@@ -35,13 +35,13 @@ module RailsAiContext
         # own source is only worth reading for the ones it did not - resolving
         # the declared constant up front would read and parse every controller
         # in the app to produce a name this loop throws away.
-        discover_from_filesystem.each do |path_name, path|
+        discover_from_filesystem.each do |path_name, record|
           next if result.key?(path_name)
 
-          name = DeclaredConstant.resolve(RailsAiContext::SafeFile.read(path), path_name)
+          name = DeclaredConstant.resolve(record.source, path_name)
           next if result.key?(name)
 
-          result[name] = extract_details_from_source(path, name)
+          result[name] = extract_details_from_source(record, name)
         end
 
         { controllers: result }
@@ -54,9 +54,9 @@ module RailsAiContext
       def static_call
         # No reflection here, so every file's own source is the only source of
         # its name as well as its details.
-        result = discover_from_filesystem.each_with_object({}) do |(path_name, path), hash|
-          name = DeclaredConstant.resolve(RailsAiContext::SafeFile.read(path), path_name)
-          hash[name] = extract_details_from_source(path, name).merge(confidence: Confidence::STATIC)
+        result = discover_from_filesystem.each_with_object({}) do |(path_name, record), hash|
+          name = DeclaredConstant.resolve(record.source, path_name)
+          hash[name] = extract_details_from_source(record, name).merge(confidence: Confidence::STATIC)
         rescue => e
           hash[path_name] = { error: e.message }
         end
@@ -113,30 +113,26 @@ module RailsAiContext
         end.uniq.sort_by(&:name)
       end
 
-      # Scan filesystem for controller files not yet loaded as classes
+      # Controller files not yet loaded as classes, keyed by the name the path
+      # camelizes to. Callers resolve the constant the source declares where
+      # they need it; doing it here would parse every controller file for
+      # both tiers.
       def discover_from_filesystem
-        RailsAiContext::PathResolver.controller_dirs(app.root).each_with_object({}) do |controllers_dir, result|
-          Dir.glob(File.join(controllers_dir, "**", "*_controller.rb")).sort.each do |path|
-            relative = path.sub("#{controllers_dir}/", "")
-            # The candidate the path camelizes to. Callers resolve the constant
-            # the source declares where they need it; doing it here would read
-            # and parse every controller file for both tiers.
-            path_name = relative.sub(/\.rb\z/, "").split("/").map(&:camelize).join("::")
-            next if path_name == "ApplicationController"
-            next if path_name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
-            result[path_name] ||= path
-          end
+        SourceScan.each(app.root, kind: "app/controllers").each_with_object({}) do |record, result|
+          next unless record.path.end_with?("_controller.rb")
+          next if record.path_name == "ApplicationController"
+          next if record.path_name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
+
+          result[record.path_name] ||= record
         end
       end
 
       # Extract details purely from source file (for controllers not loaded as classes)
-      def extract_details_from_source(path, class_name)
-        source = RailsAiContext::SafeFile.read(path)
-        return { error: "unreadable" } unless source
-
+      def extract_details_from_source(record, class_name)
+        source = record.source
         # Carry the file that was read: the declared name does not round-trip
         # back to a path. See CONTEXT.md, "Declared constant".
-        relative_file = path.to_s.sub("#{app.root}/", "")
+        relative_file = record.file
         parent = extract_parent_class_ast(source)
         rate_limit = rate_limit_entry(source)
         details = {

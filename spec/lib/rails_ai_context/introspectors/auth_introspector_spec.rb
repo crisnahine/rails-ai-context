@@ -471,4 +471,18 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       expect(introspect(lock).send(:gem_present?, "devise")).to be(false)
     end
   end
+
+  describe "Devise models keyed by declared name" do
+    subject(:result) { described_class.new(RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT)).call }
+
+    it "keeps Admin::User apart from User" do
+      per_model = result[:devise_modules_per_model]
+      expect(per_model["User"]).to eq(%w[database_authenticatable registerable])
+      expect(per_model["Admin::User"]).to eq(%w[database_authenticatable])
+    end
+
+    it "lists both models under authentication.devise" do
+      expect(result[:authentication][:devise].map { |d| d[:model] }).to include("User", "Admin::User")
+    end
+  end
 end

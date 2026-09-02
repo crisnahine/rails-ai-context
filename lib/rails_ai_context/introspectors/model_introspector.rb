@@ -157,22 +157,19 @@ module RailsAiContext
         end
 
         known = models.map(&:name).to_set
-        RailsAiContext::PathResolver.model_dirs(app.root.to_s).each do |models_dir|
-          Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
-            relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            class_name = relative.camelize
-            next if known.include?(class_name)
-            next if config.excluded_models.include?(class_name)
+        SourceScan.each(app.root, kind: "app/models").each do |record|
+          class_name = record.path_name
+          next if known.include?(class_name)
+          next if config.excluded_models.include?(class_name)
 
-            begin
-              klass = class_name.constantize
-              next unless klass < ActiveRecord::Base && !klass.abstract_class?
-              models << klass
-              known << class_name
-            rescue NameError, LoadError, ScriptError
-              # Not a valid (or currently loadable) model class - a
-              # syntax-broken file costs itself, not the whole listing.
-            end
+          begin
+            klass = class_name.constantize
+            next unless klass < ActiveRecord::Base && !klass.abstract_class?
+            models << klass
+            known << class_name
+          rescue NameError, LoadError, ScriptError
+            # Not a valid (or currently loadable) model class - a
+            # syntax-broken file costs itself, not the whole listing.
           end
         end
 
