@@ -93,6 +93,10 @@ duplicated mechanisms behind them.
   cross-check.
 - **The ivar cross-check ran with no view templates section**, reporting every
   controller ivar as unused in the view. It is skipped instead.
+- **A second `context` run rewrote `.ai-context.json`** for its timestamp
+  alone, so a repo that commits the context files saw a diff from a run that
+  found nothing new. A JSON file that differs only in `generated_at` is
+  skipped like the others.
 - **The schema listing named one model per table.** A table an STI child or a
   namespaced second model shares listed whichever came first in the payload,
   which could be the emptier one. Every model on the table is listed now,

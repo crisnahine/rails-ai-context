@@ -27,6 +27,20 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
+    # A repo that commits its context files gets a diff on every run
+    # otherwise, carrying no information but the clock.
+    it "skips the JSON file when only its timestamp would change" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        described_class.new(context, format: :json).call
+        later = context.merge(generated_at: (Time.now.utc + 60).iso8601)
+        result = described_class.new(later, format: :json).call
+
+        expect(result[:written]).to be_empty
+        expect(result[:skipped].map { |f| File.basename(f) }).to include(".ai-context.json")
+      end
+    end
+
     it "writes a single format with split rules" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
