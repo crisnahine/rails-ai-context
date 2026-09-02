@@ -148,4 +148,156 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
       expect(text).not_to include("Turbo is not installed")
     end
   end
+
+  # What the static fixture renders, pinned as literals. The introspector
+  # carries the wiring the tool used to scan for itself; these keep that
+  # move honest.
+  describe "rendered against the static fixture" do
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT))
+      allow(described_class).to receive(:cached_context).and_return(IntrospectedFixture.context)
+    end
+
+    def rendered(**args)
+      described_class.call(**args).content.first[:text]
+    end
+
+    it "renders the summary counts" do
+      expect(rendered(detail: "summary")).to eq(<<~'TEXT'.chomp)
+        # Turbo Map
+
+        - **Turbo Stream responses:** 1 (controllers responding with `turbo_stream` format)
+        - **Turbo Stream templates:** 1 (`.turbo_stream.erb` view templates)
+        - **Model broadcasts:** 1 (via `broadcasts`, `broadcasts_to`, etc.)
+        - **Explicit broadcasts:** 0 (via `broadcast_*_to` calls in .rb files)
+        - **Stream subscriptions:** 1 (`turbo_stream_from` in views)
+        - **Turbo Frames:** 3 (`turbo_frame_tag` in views)
+
+        _Use `detail:"standard"` for stream wiring, or `stream:"name"` to filter._
+      TEXT
+    end
+
+    it "renders the standard wiring" do
+      expect(rendered(detail: "standard")).to eq(<<~'TEXT'.chomp)
+        # Turbo Map
+
+        ## Turbo Drive Configuration
+        - morph: yes
+        - permanent elements: 2
+        - data-turbo-false: 0
+        - data-turbo-action: 2
+        - data-turbo-preload: 0
+
+        ## Turbo Stream Responses
+        - `{controller: "PostsController", action: "create"}`
+
+        ## Turbo Stream Templates (1) (actions: append×1)
+        - `posts/create.turbo_stream.erb`
+
+        ## Model Broadcasts (1)
+        - **Comment** `broadcasts_to` (`app/models/comment.rb:7`)
+
+        ## Stream Subscriptions (1)
+        - `turbo_stream_from` `@post` (`app/views/posts/index.html.erb:1`)
+
+        ## Turbo Frames (3)
+        - `turbo_frame_tag` `dom_id(@post` (`app/views/posts/edit.html.erb:1`)
+        - `turbo_frame_tag` `dom_id(@post` (`app/views/posts/index.html.erb:2`)
+        - `turbo_frame_tag` `post` (`app/views/posts/show.html.erb:1`)
+
+        _Use `detail:"full"` for DOM IDs and inline templates, or `stream:"name"` to filter._
+      TEXT
+    end
+
+    it "renders the full detail with snippets and wiring" do
+      expect(rendered(detail: "full")).to eq(<<~'TEXT')
+        # Turbo Map (Full Detail)
+
+        ## Turbo Drive Configuration
+        - morph: yes
+        - permanent elements: 2
+        - data-turbo-false: 0
+        - data-turbo-action: 2
+        - data-turbo-preload: 0
+
+        ## Turbo Stream Responses (1)
+        - `{controller: "PostsController", action: "create"}`
+
+        ## Turbo Stream Templates (1)
+        - `posts/create.turbo_stream.erb`
+        - **Actions used:** append×1
+
+        ## Model Broadcasts (1)
+        ### Comment - `broadcasts_to`
+        - **File:** `app/models/comment.rb:7`
+        - **Snippet:** `broadcasts_to ->(comment) { [comment.post, :comments] }`
+
+        ## Stream Subscriptions (1)
+        - `turbo_stream_from` `@post` - `app/views/posts/index.html.erb:1`
+          ```erb
+          <%= turbo_stream_from @post %>
+          ```
+
+        ## Turbo Frames (3)
+        ### `turbo_frame_tag` `dom_id(@post`
+        - **File:** `app/views/posts/edit.html.erb:1`
+        - **Snippet:** `<%= turbo_frame_tag dom_id(@post, :edit) do %>`
+
+        ### `turbo_frame_tag` `dom_id(@post`
+        - **File:** `app/views/posts/index.html.erb:2`
+        - **Snippet:** `<%= turbo_frame_tag dom_id(@post, :edit) %>`
+
+        ### `turbo_frame_tag` `post`
+        - **File:** `app/views/posts/show.html.erb:1`
+        - **Snippet:** `<%= turbo_frame_tag :post do %>`
+
+        ## Stream Wiring
+        ### Stream: `@post`
+        - **Subscribers:** `app/views/posts/index.html.erb:1`
+        - _No broadcasters found for this stream_
+      TEXT
+    end
+
+    it "keeps the whole map under a controller filter that matches every view" do
+      expect(rendered(detail: "standard", controller: "posts")).to eq(rendered(detail: "standard"))
+    end
+
+    it "filters broadcasts and subscriptions on the stream name or snippet" do
+      expect(rendered(detail: "full", stream: "comments")).to eq(<<~'TEXT')
+        # Turbo Map (Full Detail)
+
+        ## Turbo Drive Configuration
+        - morph: yes
+        - permanent elements: 2
+        - data-turbo-false: 0
+        - data-turbo-action: 2
+        - data-turbo-preload: 0
+
+        ## Turbo Stream Responses (1)
+        - `{controller: "PostsController", action: "create"}`
+
+        ## Turbo Stream Templates (1)
+        - `posts/create.turbo_stream.erb`
+        - **Actions used:** append×1
+
+        ## Model Broadcasts (1)
+        ### Comment - `broadcasts_to`
+        - **File:** `app/models/comment.rb:7`
+        - **Snippet:** `broadcasts_to ->(comment) { [comment.post, :comments] }`
+
+        ## Turbo Frames (3)
+        ### `turbo_frame_tag` `dom_id(@post`
+        - **File:** `app/views/posts/edit.html.erb:1`
+        - **Snippet:** `<%= turbo_frame_tag dom_id(@post, :edit) do %>`
+
+        ### `turbo_frame_tag` `dom_id(@post`
+        - **File:** `app/views/posts/index.html.erb:2`
+        - **Snippet:** `<%= turbo_frame_tag dom_id(@post, :edit) %>`
+
+        ### `turbo_frame_tag` `post`
+        - **File:** `app/views/posts/show.html.erb:1`
+        - **Snippet:** `<%= turbo_frame_tag :post do %>`
+      TEXT
+    end
+  end
 end

@@ -178,6 +178,21 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
     end
   end
 
+  describe "against the static fixture" do
+    let(:app) { RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT) }
+
+    it "records the fixture's frames and model broadcasts" do
+      result = described_class.new(app).call
+
+      expect(result[:turbo_frames]).to eq([
+        { id: "dom_id", file: "posts/edit.html.erb" },
+        { id: "dom_id", file: "posts/index.html.erb" },
+        { id: "post", file: "posts/show.html.erb" }
+      ])
+      expect(result[:model_broadcasts]).to eq([ { model: "Comment", methods: [ "broadcasts_to" ] } ])
+    end
+  end
+
   describe "model broadcasts across every model directory" do
     it "names a pack model and a namespaced model by their declared names" do
       Dir.mktmpdir do |dir|

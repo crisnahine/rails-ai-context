@@ -4,6 +4,8 @@ class Comment < ApplicationRecord
   belongs_to :post, counter_cache: true
   belongs_to :user
 
+  broadcasts_to ->(comment) { [comment.post, :comments] }
+
   validates :body, presence: true
 
   scope :recent, -> { order(created_at: :desc) }
