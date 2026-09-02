@@ -49,6 +49,30 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       end
     end
 
+    # Standing in an app root and being told to go to the app root is the
+    # wrong diagnosis: the tree is an app, it just cannot boot.
+    it "names the missing file for a tree that has source but no environment" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), "")
+        outcome = described_class.call(root: dir, allow_static: false)
+
+        expect(outcome.tier).to eq(:absent)
+        expect(outcome.messages.first).to include("config/environment.rb", dir)
+        expect(outcome.messages.first).not_to include("No Rails app found")
+      end
+    end
+
+    it "names the command in that message when it knows it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"), "")
+        outcome = described_class.call(root: dir, allow_static: false, context: "doctor")
+
+        expect(outcome.messages.first).to eq("Error: doctor needs a bootable app: no config/environment.rb in #{dir}")
+      end
+    end
+
     it "answers :static without booting when --no-boot is passed to a readable app" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/models"))

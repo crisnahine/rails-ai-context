@@ -219,7 +219,7 @@ class RailsAiContextCLI < Thor
     desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml and .mcp.json)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def init
-      unless entry_boot.app_present?(Dir.pwd)
+      unless entry_boot.app_present?(Dir.pwd, allow_source_only: true)
         $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
         $stderr.puts "Run this command from your Rails app root directory."
         exit 1
@@ -471,7 +471,8 @@ class RailsAiContextCLI < Thor
       Dir.chdir(app_root) if app_path_opt
       ENV["RAILS_ENV"] = environment_opt if environment_opt
 
-      outcome = entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot])
+      outcome = entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot],
+                                allow_source_only: context == "doctor", context: context)
       outcome.messages.each { |line| $stderr.puts line }
       return unless outcome.tier == :absent
 
