@@ -79,8 +79,8 @@ module RailsAiContext
           lines << models_line
         end
 
-        routes = context[:routes]
-        if routes && !routes[:error]
+        routes = Payload.section(context, :routes)
+        if routes
           lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}"
         end
 

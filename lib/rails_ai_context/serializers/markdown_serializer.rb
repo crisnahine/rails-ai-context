@@ -114,8 +114,8 @@ module RailsAiContext
       end
 
       def routes_section
-        routes = context[:routes]
-        return if routes[:error]
+        routes = Payload.section(context, :routes)
+        return unless routes
 
         lines = [ "## Routes (#{routes[:total_routes]} total#{RouteCoverage.suffix(routes)})" ]
         routes[:by_controller]&.sort&.each do |ctrl, actions|

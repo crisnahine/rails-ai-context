@@ -53,6 +53,16 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       end
     end
   end
+
+  # A section the static tier refused is not a section with a zero count.
+  describe "a refused section" do
+    it "renders no routes section when the static tier refused routes" do
+      ctx = RailsAiContext.introspect
+      ctx[:routes] = { unavailable: "requires a booted Rails app" }
+
+      expect(described_class.new(ctx).call).not_to include("## Routes")
+    end
+  end
 end
 
 RSpec.describe RailsAiContext::Serializers::ClaudeSerializer do

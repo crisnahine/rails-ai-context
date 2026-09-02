@@ -30,8 +30,8 @@ module RailsAiContext
           lines << models_line
         end
 
-        routes = context[:routes]
-        if routes && !routes[:error]
+        routes = Payload.section(context, :routes)
+        if routes
           app_ctrls = RouteCoverage.app_controllers(routes)
           lines << "- Routes: #{count_phrase(RouteCoverage.app_route_count(routes), "app route")} across " \
                    "#{count_phrase(app_ctrls.size, "controller")} " \
@@ -52,8 +52,7 @@ module RailsAiContext
 
         migrations = Payload.section(context, :migrations)
         if migrations
-          pending = migrations[:pending]
-          lines << "- Migrations: #{migrations[:total]} total, #{pending&.size || 0} pending"
+          lines << "- Migrations: #{migrations[:total]} total, #{Payload.pending_migrations(context).size} pending"
         end
 
         lines.concat(full_preset_stack_lines)
@@ -178,7 +177,7 @@ module RailsAiContext
         end
 
         stimulus = Payload.section(context, :stimulus)
-        if stimulus && (stimulus[:controllers]&.any? || stimulus[:total_controllers]&.positive?)
+        if Payload.stimulus_controllers(context).any? || stimulus&.dig(:total_controllers)&.positive?
           lines << "- Stimulus controllers auto-register - no manual import in controllers/index.js needed"
         end
 

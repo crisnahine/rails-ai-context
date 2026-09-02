@@ -351,8 +351,8 @@ namespace :ai do
     puts "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}"
     puts ""
 
-    if context[:schema] && !context[:schema][:error]
-      puts "📦 Database: #{RailsAiContext::CountPhrase.call(context[:schema][:total_tables], "table")} (#{RailsAiContext::SchemaAdapter.label(context)})"
+    if (schema = RailsAiContext::Payload.section(context, :schema))
+      puts "📦 Database: #{RailsAiContext::CountPhrase.call(schema[:total_tables], "table")} (#{RailsAiContext::SchemaAdapter.label(context)})"
     end
 
     if context[:models] && !context[:models].is_a?(Hash)
@@ -361,8 +361,8 @@ namespace :ai do
       puts "🏗️  Models: #{RailsAiContext::Payload.models(context).size}"
     end
 
-    if context[:routes] && !context[:routes][:error]
-      puts "🛤️  Routes: #{context[:routes][:total_routes]}#{RailsAiContext::RouteCoverage.suffix(context[:routes])}"
+    if (routes = RailsAiContext::Payload.section(context, :routes))
+      puts "🛤️  Routes: #{routes[:total_routes]}#{RailsAiContext::RouteCoverage.suffix(routes)}"
     end
 
     if context[:jobs]
