@@ -11,8 +11,8 @@ module RailsAiContext
       module_function
 
       def models_line(ctx)
-        models = Payload.section(ctx, :models)
-        models&.any? ? "- Models: #{models.size}" : nil
+        models = Payload.models(ctx)
+        models.any? ? "- Models: #{models.size}" : nil
       end
 
       def database_line(ctx)
