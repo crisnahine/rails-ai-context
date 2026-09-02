@@ -168,7 +168,6 @@ module RailsAiContext
 
       def render_models_reference
         models = Payload.models(context)
-        return nil unless models.any?
         return nil if models.empty?
 
         lines = [

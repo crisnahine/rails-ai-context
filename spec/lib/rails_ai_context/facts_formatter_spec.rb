@@ -10,7 +10,7 @@ RSpec.describe RailsAiContext::FactsFormatter do
     expect(text).to include("- devise (auth)")
   end
 
-  it "renders tables, associations and architecture from the fixture" do
+  it "renders the tables and associations the fixture declares" do
     expect(text).to include("## Tables")
     expect(text).to include("## Associations")
   end

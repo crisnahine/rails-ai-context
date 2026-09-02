@@ -116,6 +116,30 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       text = result.content.first[:text]
       expect(text).to include("Devise")
     end
+
+    it "names the Rails 8 built-in auth the section reports" do
+      allow(described_class).to receive(:cached_context).and_return({
+        config: config_data,
+        gems: { notable_gems: [] },
+        auth: { authentication: { rails_auth: { session_model: "Session" } } }
+      })
+
+      expect(described_class.call.content.first[:text]).to include("Rails 8 authentication (built-in)")
+    end
+
+    # Devise is read first on purpose: an app that generated the built-in auth
+    # and then moved to Devise still carries the generated files.
+    it "answers Devise when the section reports both" do
+      allow(described_class).to receive(:cached_context).and_return({
+        config: config_data,
+        gems: gems_data,
+        auth: { authentication: { devise: [ { model: "User" } ], rails_auth: { session_model: "Session" } } }
+      })
+
+      text = described_class.call.content.first[:text]
+      expect(text).to include("**Auth:** Devise")
+      expect(text).not_to include("Rails 8 authentication")
+    end
   end
 
   describe "assets stack from frontend introspector" do

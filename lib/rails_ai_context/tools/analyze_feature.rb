@@ -169,7 +169,7 @@ module RailsAiContext
 
         # --- AF: Controllers ---
         def discover_controllers(ctx, pattern, lines)
-          controllers = ctx.dig(:controllers, :controllers) || {}
+          controllers = Payload.controllers(ctx)
           matched = controllers.select { |name, data| data.is_a?(Hash) && !data[:error] && feature_word_match?(name, pattern) }
 
           if matched.any?

@@ -104,10 +104,21 @@ RSpec.describe "Serializers against a real introspected context" do
       end
     end
 
-    it "rails_get_controllers leaves it out of the listing" do
-      allow(RailsAiContext::Tools::GetControllers).to receive(:cached_context).and_return(context)
+    # Seeded through the shared cache the tools already read, so the tool runs
+    # over the same fixture context as the serializers above with nothing
+    # stubbed. spec_helper clears that cache in a config-level before(:each),
+    # so the seeding has to be a before hook, not an around one.
+    it "rails_get_controllers leaves it out of the listing and the count" do
+      cache = RailsAiContext::Tools::BaseTool::SHARED_CACHE
+      cache[:context] = context.deep_dup
+      cache[:timestamp] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
       text = RailsAiContext::Tools::GetControllers.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("Controllers (1)")
       expect(text).not_to include("Api::V1::BaseController")
+    ensure
+      RailsAiContext::Tools::BaseTool.reset_cache!
     end
   end
 end
