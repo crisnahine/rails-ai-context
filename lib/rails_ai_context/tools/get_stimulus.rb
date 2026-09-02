@@ -182,7 +182,6 @@ module RailsAiContext
         # Turbo event listeners
         lines << "- **Turbo events:** #{ctrl[:turbo_event_listeners].join(', ')}" if ctrl[:turbo_event_listeners]&.any?
 
-        # Detect lifecycle methods from source
         lifecycle = ctrl[:lifecycle]
         lines << "- **Lifecycle:** #{lifecycle.join(', ')}" if lifecycle&.any?
 

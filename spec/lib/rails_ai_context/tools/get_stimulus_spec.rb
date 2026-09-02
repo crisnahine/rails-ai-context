@@ -53,12 +53,15 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
     end
 
     it "renders the lifecycle the introspector recorded without reading the file" do
-      allow(File).to receive(:read).and_call_original
+      allow(RailsAiContext::SafeFile).to receive(:read).and_call_original
 
       text = described_class.call(controller: "hello", detail: "full").content.first[:text]
 
       expect(text).to include("- **Lifecycle:** connect, disconnect")
-      expect(File).not_to have_received(:read).with(a_string_ending_with("hello_controller.js"), anything)
+      # Matched on to_s: the old code passed a Pathname, which a string matcher
+      # would have let through.
+      expect(RailsAiContext::SafeFile).not_to have_received(:read)
+        .with(satisfy { |path| path.to_s.end_with?("hello_controller.js") })
     end
 
     it "supports case-insensitive lookup" do
