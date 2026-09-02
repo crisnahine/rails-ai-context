@@ -85,6 +85,14 @@ duplicated mechanisms behind them.
   disappears when there are none.
 - **`rails_get_view`'s ivar list counted an `@` inside an email address and a
   `@@class_variable`.** Neither is an instance variable.
+- **A controller ivar compared, not assigned, was reported as set.** `return
+  unless @post == current_user` no longer names `@post`; `||=` and `+=` still
+  count.
+- **`rails_get_context` resolved an action name case-sensitively** while
+  `rails_get_controllers` did not, so `action: "Show"` skipped the ivar
+  cross-check.
+- **The ivar cross-check ran with no view templates section**, reporting every
+  controller ivar as unused in the view. It is skipped instead.
 
 ### Changed
 
