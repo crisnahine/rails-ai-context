@@ -250,6 +250,33 @@ RSpec.describe RailsAiContext::Tools::GetApi do
       end
     end
 
+    context "in the static tier" do
+      before do
+        allow(described_class).to receive(:cached_context)
+          .and_return({ api: RailsAiContext::Introspectors::ApiIntrospector.new(
+            RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT)
+          ).send(:static_call) })
+      end
+
+      it "names the versions the fixture's source carries" do
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- **Versioning:** v1")
+      end
+    end
+
+    context "when the section names a key it could not answer" do
+      it "renders it as unavailable rather than as a filesystem finding" do
+        allow(described_class).to receive(:cached_context).and_return(
+          { api: { api_only: false, unavailable_sections: %w[api_versioning] } }
+        )
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- **Versioning:** [UNAVAILABLE")
+        expect(text).not_to include("no app/controllers/api/v* directories")
+      end
+    end
+
     context "with unknown detail level" do
       it "reads an invalid detail level as the default, and says so" do
         text = described_class.call(detail: "verbose").content.first[:text]

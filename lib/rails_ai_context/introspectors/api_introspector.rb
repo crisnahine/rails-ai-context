@@ -8,35 +8,31 @@ module RailsAiContext
       extend StaticTier
       static_tier :alternate_source
 
-      # Everything `call` answers except api_only itself.
-      STATIC_UNAVAILABLE = %w[
-        serializers graphql api_versioning rate_limiting openapi_spec
-        cors_config api_client_generation graphql_details pagination
-      ].freeze
-
       attr_reader :app
 
       def initialize(app)
         @app = app
       end
 
-      # Everything but api_only needs a booted app, but api_only itself is a
-      # plain assignment in config/application.rb - and the view tools already
-      # read it there. Leaving this section wholly unavailable meant one
-      # process answering "this is an API-only app" from get_stimulus and
-      # "cannot say" from get_api.
+      # Only the mode differs between the tiers: `config.api_only` is a
+      # runtime read, and the assignment it comes from is in
+      # config/application.rb, which is what AppKind reads.
       def static_call
-        {
-          api_only: AppKind.api_only?(app.root),
-          unavailable_sections: STATIC_UNAVAILABLE
-        }
+        { api_only: AppKind.api_only?(app.root) }.merge(detections)
       rescue StandardError
         { unavailable: StaticTier.unavailable_reason }
       end
 
       def call
+        { api_only: app.config.api_only }.merge(detections)
+      rescue => e
+        { error: e.message }
+      end
+
+      private
+
+      def detections
         {
-          api_only: app.config.api_only,
           serializers: detect_serializers,
           graphql: detect_graphql,
           api_versioning: detect_versioning,
@@ -47,11 +43,7 @@ module RailsAiContext
           graphql_details: extract_graphql_details,
           pagination: detect_pagination
         }
-      rescue => e
-        { error: e.message }
       end
-
-      private
 
       def root
         app.root.to_s

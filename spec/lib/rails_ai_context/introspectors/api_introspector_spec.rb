@@ -223,13 +223,22 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
     end
   end
 
-  # One shape across every introspector that names what it could not answer.
   describe "#static_call" do
-    it "names the keys the static tier cannot answer, as a list" do
+    it "answers every key the booted tier answers, since only the mode needs a runtime" do
       static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
-      full = described_class.new(Rails.application).call.keys - [ :api_only ]
+      booted = described_class.new(Rails.application).call
 
-      expect(static[:unavailable_sections]).to match_array(full.map(&:to_s))
+      expect(static.keys).to match_array(booted.keys)
+      expect(static).not_to have_key(:unavailable_sections)
+    end
+
+    it "reads the versions, serializers and rate limiting from source" do
+      static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
+      booted = described_class.new(Rails.application).call
+
+      expect(static[:api_versioning]).to eq(booted[:api_versioning])
+      expect(static[:serializers]).to eq(booted[:serializers])
+      expect(static[:rate_limiting]).to eq(booted[:rate_limiting])
     end
   end
 end

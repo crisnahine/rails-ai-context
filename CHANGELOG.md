@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Defects found by a second survey round over the whole surface, and the
 duplicated mechanisms behind them.
 
+- **`rails_get_api` stated a filesystem finding for a section nobody had
+  read.** In the static tier the whole section but the mode was declared
+  unavailable, and nothing read that declaration, so an app with
+  `app/controllers/api/v1/` was told "not detected (no app/controllers/api/v*
+  directories)". Every detection in that section is a file read, so the
+  static tier now answers all of them, and a key a section does name as
+  unanswered renders as `[UNAVAILABLE: ...]` rather than as a negative
+  finding.
 - **`init` refused a tree with app source but no `config/environment.rb`
   after it had already written the config files**, leaving it half set up
   with no `CLAUDE.md`. Every command that can serve the static tier now
