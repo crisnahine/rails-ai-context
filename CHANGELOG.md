@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Defects found by a second survey round over the whole surface, and the
 duplicated mechanisms behind them.
 
+- **The static tier named the app after its directory.** `onboard` and every
+  generated context file were headed "mastodon" for an app that declares
+  `module Mastodon`. The name now comes from the module enclosing
+  `class Application < Rails::Application` in `config/application.rb`, and
+  falls back to the directory only when that file names nothing.
 - **The static tier counted every class under `app/models` as a model.**
   Namespace modules, form objects, filters and plain service classes were
   listed and rendered as models of a table (Mastodon answered 195 models

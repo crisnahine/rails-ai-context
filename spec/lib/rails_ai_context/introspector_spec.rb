@@ -200,6 +200,14 @@ RSpec.describe RailsAiContext::Introspector do
       expect(RailsAiContext::Introspector.new(files_app).call[:rails_version]).to eq("7.2.2")
     end
 
+    # The directory is not the app's name: a checkout of Mastodon is
+    # "mastodon" where the app declares Mastodon, and the name heads onboard
+    # and every generated context file.
+    it "names the app from the module config/application.rb declares" do
+      files_app = RailsAiContext::StaticApp.new(File.expand_path("../../fixtures/static_app", __dir__))
+      expect(RailsAiContext::Introspector.new(files_app).call[:app_name]).to eq("StaticApp")
+    end
+
     it "does not count unavailable sections as warnings" do
       result = RailsAiContext::Introspector.new(static_app).call
       Array(result[:_warnings]).each do |w|
