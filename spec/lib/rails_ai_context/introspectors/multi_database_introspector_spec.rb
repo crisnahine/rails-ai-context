@@ -55,4 +55,20 @@ RSpec.describe RailsAiContext::Introspectors::MultiDatabaseIntrospector do
       expect(animal[:connects_to]).to include("animals")
     end
   end
+
+  describe "model connections across every model directory" do
+    it "finds a pack model's connects_to and names a namespaced model by its declared name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        File.write(File.join(dir, "app", "models", "admin", "record.rb"),
+                   "class Admin::Record < ApplicationRecord\n  connects_to database: { writing: :admin }\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"),
+                   "class Invoice < ApplicationRecord\n  connects_to database: { writing: :billing }\nend\n")
+
+        connections = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:model_connections]
+        expect(connections.map { |c| c[:model] }).to contain_exactly("Admin::Record", "Invoice")
+      end
+    end
+  end
 end

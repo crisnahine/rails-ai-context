@@ -26,6 +26,41 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).to include("Suggested Fix")
     end
 
+    it "says nothing about git, and nothing on stderr, outside a repository" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post; end\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+        text = nil
+        expect {
+          text = described_class.call(error: "NoMethodError: undefined method `title` for nil",
+            file: "app/models/post.rb", line: 1).content.first[:text]
+        }.not_to output.to_stderr_from_any_process
+
+        expect(text).not_to include("Recent Git Changes")
+      end
+    end
+
+    # A path the guard refused is an answer the reader needs to see, not an
+    # empty result the composer drops.
+    it "surfaces a refused file path in the composed text" do
+      text = described_class.call(error: "NoMethodError: undefined method `title` for nil",
+        file: "../../etc/passwd", line: 1).content.first[:text]
+
+      expect(text).to include("Path not allowed")
+    end
+
+    # The section promises the method's definition; a trace that only found
+    # call sites is not that, and the fact comes from the answer's mark.
+    it "renders no method trace when the trace found no definition" do
+      text = described_class.call(
+        error: "NoMethodError: undefined method `zzz_undefined_helper' for nil:NilClass"
+      ).content.first[:text]
+
+      expect(text).not_to include("## Method Trace")
+    end
+
     it "parses ActiveRecord::RecordNotFound" do
       result = described_class.call(error: "ActiveRecord::RecordNotFound: Couldn't find User with 'id'=999")
       text = result.content.first[:text]

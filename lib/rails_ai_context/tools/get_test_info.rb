@@ -35,16 +35,20 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # A candidate whose own resolution left the app root must not have its
+      # directory globbed either, or the miss lists a tree outside the app.
+      ESCAPING_REFUSALS = %i[traversal outside sensitive].freeze
+
       def self.call(model: nil, controller: nil, detail: "standard", server_context: nil)
         fetch_section(:tests, subject: "Test introspection") do |data|
           # Specific model tests
           if model
-            return text_response(find_test_file(model, :model, detail))
+            return find_test_file(model, :model, detail)
           end
 
           # Specific controller tests
           if controller
-            return text_response(find_test_file(controller, :controller, detail))
+            return find_test_file(controller, :controller, detail)
           end
 
           case detail
@@ -229,19 +233,10 @@ module RailsAiContext
           ]
         end
 
+        contained = []
         candidates.each do |rel|
-          path = rails_app.root.join(rel)
-          next unless File.exist?(path)
-          # Path traversal protection
-          begin
-            real_path = File.realpath(path)
-            real_root = File.realpath(rails_app.root)
-            next unless real_path.start_with?(real_root)
-          rescue Errno::ENOENT
-            next
-          end
-          next if File.size(path) > max_test_file_size
-          content = RailsAiContext::SafeFile.read(path)
+          content, resolution = RailsAiContext::SafePath.read(rel, under: rails_app.root.to_s, max_size: max_test_file_size)
+          contained << rel unless ESCAPING_REFUSALS.include?(resolution.refusal)
           next unless content
 
           # Summary/standard: return just test names (saves 2000+ tokens vs full source)
@@ -253,19 +248,40 @@ module RailsAiContext
                 "- #{line.strip}"
               end
             end
-            return "# #{rel} (#{count_phrase(test_names.size, "test")})\n\n#{test_names.join("\n")}"
+            return text_response("# #{rel} (#{count_phrase(test_names.size, "test")})\n\n#{test_names.join("\n")}")
           end
 
-          return "# #{rel}\n\n```ruby\n#{content}\n```"
+          return text_response("# #{rel}\n\n```ruby\n#{content}\n```")
         end
 
-        # List nearby test files to help the agent find the right one
-        test_dirs = candidates.map { |c| File.dirname(rails_app.root.join(c)) }.uniq
-        nearby = test_dirs.flat_map do |dir|
-          Dir.exist?(dir) ? Dir.glob(File.join(dir, "*")).map { |f| f.sub("#{rails_app.root}/", "") }.first(10) : []
+        # A refused candidate was never read, so listing it reads as a search
+        # that happened. When every one was refused, the name is the answer.
+        if contained.empty?
+          return empty_response("No test file found for #{name}: the name was refused, it leaves the app root " \
+                                "or names a sensitive file.")
         end
-        hint = nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
-        "No test file found for #{name}. Searched: #{candidates.join(', ')}#{hint}"
+
+        empty_response("No test file found for #{name}. Searched: #{contained.join(', ')}#{nearby_tests_hint(contained)}")
+      end
+
+      # Nearby test files, to help the agent find the right one. The glob base
+      # is the realpath, so a symlinked test directory cannot widen it.
+      private_class_method def self.nearby_tests_hint(candidates)
+        root = rails_app.root.to_s
+        real_root = File.realpath(root)
+
+        nearby = candidates.map { |rel| File.dirname(File.join(root, rel)) }.uniq.flat_map do |dir|
+          next [] unless File.directory?(dir)
+
+          real_dir = File.realpath(dir)
+          next [] unless RailsAiContext::SafePath.contained?(real_dir, real_root)
+
+          Dir.glob(File.join(real_dir, "*")).map { |f| f.delete_prefix("#{real_root}/") }.first(10)
+        end
+
+        nearby.any? ? "\n\nFiles in test directory: #{nearby.join(', ')}" : ""
+      rescue SystemCallError
+        ""
       end
 
       # Generate a test template based on the app's actual test patterns

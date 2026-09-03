@@ -5,6 +5,30 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
   let(:context) { RailsAiContext.introspect }
 
+  describe "the header against a static-tier context" do
+    around do |example|
+      RailsAiContext.tier = :static
+      example.run
+    ensure
+      RailsAiContext.tier = :runtime
+    end
+
+    it "names the Rails version the lockfile carries" do
+      app = RailsAiContext::StaticApp.new(File.expand_path("../../../fixtures/static_app", __dir__))
+      output = described_class.new(RailsAiContext::Introspector.new(app).call).call
+
+      expect(output).to include("> Rails 7.2.2 | Ruby ")
+    end
+  end
+
+  describe "the Hotwire section against the static fixture" do
+    it "names each model's broadcast macros" do
+      output = described_class.new(IntrospectedFixture.context).call
+
+      expect(output).to include("- `Comment`: broadcasts_to")
+    end
+  end
+
   describe "#call" do
     subject(:output) { described_class.new(context).call }
 
@@ -51,6 +75,37 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
       it "does not render a Warnings section" do
         expect(output).not_to include("## Warnings")
       end
+    end
+  end
+
+  # A section the static tier refused is not a section with a zero count.
+  describe "a refused section" do
+    it "renders no routes section when the static tier refused routes" do
+      ctx = RailsAiContext.introspect
+      ctx[:routes] = { unavailable: "requires a booted Rails app" }
+
+      expect(described_class.new(ctx).call).not_to include("## Routes")
+    end
+
+    it "renders no conventions section when conventions failed" do
+      ctx = RailsAiContext.introspect
+      ctx[:conventions] = { error: "boom", directory_structure: { "app/models" => 3 } }
+
+      expect(described_class.new(ctx).call).not_to include("## Project Structure")
+    end
+
+    it "renders no configuration section when the static tier refused config" do
+      ctx = RailsAiContext.introspect
+      ctx[:config] = { unavailable: "runtime only" }
+
+      expect(described_class.new(ctx).call).not_to include("## Configuration")
+    end
+
+    it "renders no schema section when schema failed" do
+      ctx = RailsAiContext.introspect
+      ctx[:schema] = { error: "boom", total_tables: 3 }
+
+      expect(described_class.new(ctx).call).not_to include("## Database Schema")
     end
   end
 end

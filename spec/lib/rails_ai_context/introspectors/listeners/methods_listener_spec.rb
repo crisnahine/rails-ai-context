@@ -279,4 +279,55 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MethodsListener do
       expect(results.first[:owner]).to eq([])
     end
   end
+
+  it "keeps an inline private def to its own class" do
+    methods = parse_and_dispatch("class A\n  def x; end\nend\nclass B\n  private def x; end\nend\n")
+    expect(methods.map { |m| [ m[:owner], m[:visibility] ] }).to eq([ [ %w[A], :public ], [ %w[B], :private ] ])
+  end
+
+  it "flips only the current class's method on private :x" do
+    methods = parse_and_dispatch("class A\n  def x; end\nend\nclass B\n  def x; end\n  private :x\nend\n")
+    expect(methods.map { |m| [ m[:owner], m[:visibility] ] }).to eq([ [ %w[A], :public ], [ %w[B], :private ] ])
+  end
+
+  it "records private def as private" do
+    methods = parse_and_dispatch("class A\n  private def hidden; end\n  def shown; end\nend\n")
+    expect(methods.map { |m| [ m[:name], m[:visibility] ] }).to eq([ [ "hidden", :private ], [ "shown", :public ] ])
+  end
+
+  it "records methods inside class_methods and included blocks with their scope" do
+    source = <<~RUBY
+      module Searchable
+        extend ActiveSupport::Concern
+        included do
+          def from_included; end
+        end
+        class_methods do
+          def search; end
+        end
+        def own; end
+      end
+    RUBY
+    methods = parse_and_dispatch(source)
+    expect(methods.find { |m| m[:name] == "search" }[:scope]).to eq(:class)
+    expect(methods.find { |m| m[:name] == "from_included" }[:scope]).to eq(:instance)
+    expect(methods.find { |m| m[:name] == "own" }[:scope]).to eq(:instance)
+  end
+
+  it "keeps a private section inside class_methods to that block" do
+    source = <<~RUBY
+      module Importable
+        class_methods do
+          def import; end
+          private
+          def parse; end
+        end
+        def own; end
+      end
+    RUBY
+    methods = parse_and_dispatch(source)
+    expect(methods.map { |m| [ m[:name], m[:scope], m[:visibility] ] }).to eq([
+      [ "import", :class, :public ], [ "parse", :class, :private ], [ "own", :instance, :public ]
+    ])
+  end
 end

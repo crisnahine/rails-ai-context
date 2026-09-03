@@ -13,6 +13,13 @@ RSpec.describe RailsAiContext::AppKind do
     end
   end
 
+  it "detects Mongoid when it is a git gem" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "Gemfile.lock"), "GIT\n  remote: https://github.com/mongodb/mongoid.git\n  specs:\n    mongoid (9.0.4)\n")
+      expect(described_class.mongoid?(dir)).to be(true)
+    end
+  end
+
   it "detects Mongoid via Gemfile.lock" do
     Dir.mktmpdir do |dir|
       File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n    mongoid (9.0.4)\n")

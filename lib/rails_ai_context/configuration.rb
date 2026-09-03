@@ -39,6 +39,7 @@ module RailsAiContext
         key_sym = key.to_sym
         next unless YAML_KEYS.include?(key_sym)
         next if value.nil?
+        next if config.block_assigned_keys.include?(key_sym)
 
         begin
           config.public_send(:"#{key_sym}=", coerce_value(key_sym, value))
@@ -53,21 +54,37 @@ module RailsAiContext
     rescue Psych::SyntaxError, Psych::DisallowedClass => e
       $stderr.puts "[rails-ai-context] WARNING: #{path} has invalid YAML (#{e.message}). Using defaults."
       nil
+    rescue SystemCallError => e
+      # File.exist? is true for a directory and for a file the process cannot
+      # read, and this runs inside an engine initializer on every boot.
+      $stderr.puts "[rails-ai-context] WARNING: #{path} could not be read (#{e.message}). Using defaults."
+      nil
     end
 
-    # Auto-load config from .rails-ai-context.yml if no initializer configure block ran.
-    # Safe to call multiple times (idempotent). Called by the engine on boot
-    # and by the standalone binary, so the documented precedence (initializer,
-    # then YAML, then defaults) holds on every entry point.
-    def self.auto_load!(dir = nil)
-      return if RailsAiContext.configured_via_block?
+    # Load .rails-ai-context.yml as the base over the defaults, once per
+    # configuration. A second call is a no-op, so an initializer that edits a
+    # key in place keeps the edit; a block that runs before the load keeps the
+    # keys it assigns.
+    def self.load_config_file!(dir = nil)
+      config = RailsAiContext.configuration
+      return if config.config_file_applied?
 
       dir ||= defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
       yaml_path = File.join(dir, CONFIG_FILENAME)
+      # An absent file is applied too: the file is read at boot, not whenever
+      # one appears mid-process.
+      config.config_file_applied!
       return unless File.exist?(yaml_path)
 
       $stderr.puts "[rails-ai-context] Loading configuration from #{CONFIG_FILENAME}" if ENV["DEBUG"]
       load_from_yaml(yaml_path)
+    end
+
+    # The entry points that reach the config after the app's initializers have
+    # run - the standalone binary and the CLI's boot path. On a booted
+    # in-Gemfile app the engine already applied the file, so this is a no-op.
+    def self.auto_load!(dir = nil)
+      load_config_file!(dir)
     end
 
     def self.coerce_value(key, value)
@@ -80,6 +97,43 @@ module RailsAiContext
       end
     end
     private_class_method :coerce_value
+
+    # Keys a `RailsAiContext.configure` block assigned. The YAML load skips
+    # them, so the block wins key by key whether it sits in an initializer,
+    # config/application.rb or an environment file.
+    def block_assigned_keys
+      @block_assigned_keys ||= []
+    end
+
+    def config_file_applied?
+      @config_file_applied || false
+    end
+
+    def config_file_applied!
+      @config_file_applied = true
+    end
+
+    # Saved and restored, not cleared: a nested configure block must not
+    # disarm the outer one for the assignments that follow it.
+    def recording_block_assignments
+      was_recording = @recording_block_assignments
+      @recording_block_assignments = true
+      yield self
+    ensure
+      @recording_block_assignments = was_recording
+    end
+
+    # The writer is what records, so assigning a key its default value still
+    # claims it for the block; comparing values around the block would not.
+    BLOCK_ASSIGNMENT_RECORDER = Module.new do
+      YAML_KEYS.each do |key|
+        define_method(:"#{key}=") do |value|
+          block_assigned_keys << key if @recording_block_assignments
+          super(value)
+        end
+      end
+    end
+    prepend BLOCK_ASSIGNMENT_RECORDER
 
     PRESETS = {
       standard: %i[schema models routes jobs gems conventions controllers tests migrations stimulus
@@ -175,8 +229,9 @@ module RailsAiContext
     attr_accessor :max_file_size          # Per-file read limit for tools (default: 2MB)
     attr_accessor :max_test_file_size     # Test file read limit (default: 500KB)
     attr_accessor :max_schema_file_size   # schema.rb / structure.sql parse limit (default: 10MB)
-    attr_accessor :max_view_total_size    # Total aggregated view content for template scanning (default: 5MB)
-    attr_accessor :max_view_file_size     # Per-view file during aggregation (default: 500KB)
+    # Doctor thresholds, not read caps: the view tools do not stop at them.
+    attr_accessor :max_view_total_size    # Size of app/views doctor warns past (default: 10MB)
+    attr_accessor :max_view_file_size     # Named in that warning's fix line (default: 1MB)
     attr_accessor :max_search_results     # Max search results per call (default: 100)
     attr_accessor :max_validate_files     # Max files per validate call (default: 20)
 
@@ -352,7 +407,7 @@ module RailsAiContext
     def preset=(name)
       name = name.to_sym
       raise ArgumentError, "Unknown preset: #{name}. Valid presets: #{PRESETS.keys.join(", ")}" unless PRESETS.key?(name)
-      @introspectors = PRESETS[name].dup
+      self.introspectors = PRESETS[name].dup
     end
 
     # A tool name is a String, and both the MCP server and the CLI compare

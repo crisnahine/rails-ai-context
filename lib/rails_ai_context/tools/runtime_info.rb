@@ -120,7 +120,7 @@ module RailsAiContext
               lines << "" << "**Migrations:** all up to date"
             else
               lines << "" << "**Pending migrations:** #{pending.size}"
-              pending.each { |m| lines << "- #{m}" }
+              pending.each { |m| lines << "- #{m[:version]} #{m[:name]}" }
             end
           end
 
@@ -204,11 +204,7 @@ module RailsAiContext
         end
 
         def gather_pending_migrations
-          migrate_dir = File.join(rails_app.root, "db/migrate")
-          pending = RailsAiContext::MigrationStatus.pending(migrate_dir)
-          return nil unless pending
-
-          pending.map { |m| "#{m[:version]} - #{m[:name]}" }
+          RailsAiContext::PendingMigrations.live(File.join(rails_app.root, "db/migrate"))
         end
 
         def gather_index_usage(conn, adapter)

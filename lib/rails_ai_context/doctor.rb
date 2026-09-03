@@ -81,7 +81,7 @@ module RailsAiContext
     def check_pending_migrations
       return nil unless defined?(ActiveRecord::Base)
 
-      pending = RailsAiContext::MigrationStatus.pending(File.join(app.root, "db/migrate"))
+      pending = RailsAiContext::PendingMigrations.live(RailsAiContext::PendingMigrations.migrate_dir_for(app.root))
       return nil unless pending
 
       if pending.empty?
@@ -94,12 +94,11 @@ module RailsAiContext
     end
 
     def check_models
-      models_dir = File.join(app.root, "app/models")
-      if Dir.exist?(models_dir) && Dir.glob(File.join(models_dir, "**/*.rb")).any?
-        count = Dir.glob(File.join(models_dir, "**/*.rb")).size
+      count = Introspectors::SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).count
+      if count > 0
         Check.new(name: "Models", status: :pass, message: "#{count_phrase(count, "model file")} found", fix: nil)
       else
-        Check.new(name: "Models", status: :warn, message: "No model files in app/models/", fix: "Generate models with `rails generate model`")
+        Check.new(name: "Models", status: :warn, message: "No model files", fix: "Generate models with `rails generate model`")
       end
     end
 
@@ -122,9 +121,8 @@ module RailsAiContext
     end
 
     def check_controllers
-      dir = File.join(app.root, "app/controllers")
-      if Dir.exist?(dir) && Dir.glob(File.join(dir, "**/*.rb")).any?
-        count = Dir.glob(File.join(dir, "**/*.rb")).size
+      count = Introspectors::SourceScan.paths(app.root, kind: "app/controllers", skip_concerns: false).count
+      if count > 0
         Check.new(name: "Controllers", status: :pass, message: "#{count_phrase(count, "controller file")} found", fix: nil)
       else
         Check.new(name: "Controllers", status: :warn, message: "No controller files", fix: nil)
@@ -213,15 +211,10 @@ module RailsAiContext
       else
         File.mtime(context_file)
       end
-      # Check if any source file changed after context was generated.
-      # Exclude our own initializer - it's written during install and would
-      # always appear newer than context files generated in the same run.
-      stale_dirs = %w[app/models app/controllers app/views config db/migrate].select do |dir|
-        full = File.join(app.root, dir)
-        Dir.exist?(full) && Dir.glob(File.join(full, "**/*.rb"))
-          .reject { |f| f.end_with?("initializers/rails_ai_context.rb") }
-          .any? { |f| File.mtime(f) > generated_at }
-      end
+      # Freshness is measured over the same scope the watcher and the tool
+      # cache use, so a service or a pack cannot change unnoticed.
+      stale_dirs = Fingerprinter.changed_since(app.root, generated_at)
+        .reject { |dir| only_our_initializer_newer?(dir, generated_at) }
 
       if stale_dirs.empty?
         Check.new(name: "Context files", status: :pass, message: "#{context_label} is up to date", fix: nil)
@@ -230,6 +223,17 @@ module RailsAiContext
           message: "#{context_label} may be stale - #{stale_dirs.join(', ')} changed since last generation",
           fix: "Run `rails ai:context` to regenerate")
       end
+    end
+
+    # Install writes our initializer in the same run that generates the
+    # context files, so on its own it never means the context is stale.
+    def only_our_initializer_newer?(dir, generated_at)
+      return false unless dir == "config"
+
+      newer = Dir.glob(File.join(app.root, dir, Fingerprinter::WATCHED_EXTENSIONS))
+        .select { |path| File.mtime(path) > generated_at }
+
+      newer.any? && newer.all? { |path| path.end_with?("initializers/rails_ai_context.rb") }
     end
 
     # A guard written before the respond_to? check was added only tests
@@ -499,6 +503,8 @@ module RailsAiContext
       sensitive_files = []
       sensitive_files << ".env" if File.exist?(File.join(app.root, ".env"))
       sensitive_files << "config/master.key" if File.exist?(File.join(app.root, "config/master.key"))
+      # Written by our own install, and it embeds this machine's PATH and GEM_HOME.
+      sensitive_files << ".codex/config.toml" if File.exist?(File.join(app.root, ".codex/config.toml"))
 
       return Check.new(name: "Secrets in .gitignore", status: :pass, message: "No sensitive files to check", fix: nil) if sensitive_files.empty?
 
@@ -512,6 +518,7 @@ module RailsAiContext
       issues = []
       issues << ".env exists but not in .gitignore" if sensitive_files.include?(".env") && !gitignore_covers?(gitignore, ".env")
       issues << "config/master.key not in .gitignore" if sensitive_files.include?("config/master.key") && !gitignore_covers?(gitignore, "config/master.key")
+      issues << ".codex/config.toml not in .gitignore" if sensitive_files.include?(".codex/config.toml") && !gitignore_covers?(gitignore, ".codex/config.toml")
 
       if issues.empty?
         Check.new(name: "Secrets in .gitignore", status: :pass, message: "Sensitive files properly gitignored", fix: nil)

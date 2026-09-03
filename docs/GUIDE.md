@@ -1033,7 +1033,9 @@ In addition to tools, the gem registers static MCP resources that AI clients can
 | `rails://tests` | Test infrastructure details (JSON) |
 | `rails://migrations` | Migration history and statistics (JSON) |
 | `rails://engines` | Mounted engines with paths and descriptions (JSON) |
-| `rails://models/{name}` | Per-model details (resource template) |
+| `rails-ai-context://models/{name}` | Per-model details (resource template) |
+
+The legacy `rails://models/{name}` form is still accepted.
 
 ### Dynamic Resource Templates (VFS)
 
@@ -1268,10 +1270,10 @@ if defined?(RailsAiContext)
     # schema.rb / structure.sql parse limit (default: 10MB)
     # config.max_schema_file_size = 10_000_000
 
-    # Total aggregated view content for UI patterns (default: 10MB)
+    # app/views size the doctor warns past - not a read cap (default: 10MB)
     # config.max_view_total_size = 10_000_000
 
-    # Per-view file during aggregation (default: 1MB)
+    # Named in that doctor warning's fix line (default: 1MB)
     # config.max_view_file_size = 1_000_000
 
     # Max search results per call (default: 200)
@@ -1343,8 +1345,8 @@ end
 | `max_file_size` | Integer | `5_000_000` | Per-file read limit for tools (5MB) |
 | `max_test_file_size` | Integer | `1_000_000` | Test file read limit (1MB) |
 | `max_schema_file_size` | Integer | `10_000_000` | schema.rb / structure.sql parse limit (10MB) |
-| `max_view_total_size` | Integer | `10_000_000` | Total aggregated view content for UI patterns (10MB) |
-| `max_view_file_size` | Integer | `1_000_000` | Per-view file during aggregation (1MB) |
+| `max_view_total_size` | Integer | `10_000_000` | Doctor threshold: app/views above this warns (10MB). Not a read cap |
+| `max_view_file_size` | Integer | `1_000_000` | Named in that doctor warning's fix line (1MB). Not a read cap |
 | `max_search_results` | Integer | `200` | Max search results per call |
 | `max_validate_files` | Integer | `50` | Max files per validate call |
 | `excluded_controllers` | Array | `DeviseController`, etc. | Controller classes hidden from listings |
@@ -1385,7 +1387,7 @@ Core Rails structure only. Use `config.preset = :standard` for a lighter footpri
 | Introspector | What it discovers |
 |-------------|-------------------|
 | `schema` | Tables, columns, types, indexes, foreign keys, primary keys. Falls back to `db/schema.rb` parsing when no DB connected. |
-| `models` | Associations, validations, scopes, enums, callbacks, concerns, instance methods, class methods. Source-level macros via Prism AST (single-pass, 7 listeners): `has_secure_password`, `encrypts`, `normalizes`, `delegate`, `serialize`, `store`, `generates_token_for`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `broadcasts_to`. Every result tagged `[VERIFIED]` or `[INFERRED]`. |
+| `models` | Associations, validations, scopes, enums, callbacks, concerns, instance methods, class methods. Source-level macros via Prism AST (single-pass, 8 listeners): `has_secure_password`, `encrypts`, `normalizes`, `delegate`, `serialize`, `store`, `generates_token_for`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `broadcasts_to`. Every result tagged `[VERIFIED]` or `[INFERRED]`. |
 | `routes` | All routes with HTTP verbs, paths, controller actions, route names, API namespaces, mounted engines. |
 | `jobs` | ActiveJob classes with queue names. Mailers with action methods. Action Cable channels. |
 | `gems` | 70+ notable gems categorized: auth, background_jobs, admin, monitoring, search, pagination, forms, file_upload, testing, linting, security, api, frontend, utilities. |

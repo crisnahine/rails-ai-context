@@ -39,7 +39,7 @@ preset: full
 ### Precedence
 
 > [!IMPORTANT]
-> Initializer > YAML > Defaults. If the initializer runs, YAML is skipped entirely. Corrupted YAML degrades gracefully with a warning.
+> `configure` block > YAML > Defaults, merged key by key. The file is read once, at boot, before `config/initializers`, so an initializer may assign a key or edit it in place (`config.skip_tools << "rails_query"`) and both survive. A block that runs *before* the file - in `config/application.rb` or an environment file - must assign a key to keep it (`config.skip_tools = ["rails_query"]`), because an in-place edit there is replaced when the file loads. A key no block assigns keeps the YAML value. Corrupted YAML degrades gracefully with a warning.
 
 ---
 
@@ -104,8 +104,8 @@ preset: full
 | `max_file_size` | Integer | `5_000_000` (5 MB) | General file read limit |
 | `max_test_file_size` | Integer | `1_000_000` (1 MB) | Test file read limit |
 | `max_schema_file_size` | Integer | `10_000_000` (10 MB) | Schema file read limit |
-| `max_view_total_size` | Integer | `10_000_000` (10 MB) | Total view file size limit |
-| `max_view_file_size` | Integer | `1_000_000` (1 MB) | Single view file limit |
+| `max_view_total_size` | Integer | `10_000_000` (10 MB) | Doctor threshold: `app/views` above this warns. Not a read cap |
+| `max_view_file_size` | Integer | `1_000_000` (1 MB) | Named in that doctor warning's fix line. Not a read cap |
 
 ### Search
 

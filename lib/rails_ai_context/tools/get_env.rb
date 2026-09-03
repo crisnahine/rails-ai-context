@@ -293,7 +293,7 @@ module RailsAiContext
           next unless name.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
 
           var = { name: name, line: entry[:location] }
-          var[:default] = sanitize_default(entry[:default]) if entry[:default]
+          var[:default] = RailsAiContext::Redaction.value(name, entry[:default]) if entry[:default]
           var
         end
       rescue => e
@@ -332,7 +332,7 @@ module RailsAiContext
               end
 
               # Don't expose actual secret values - only show structure
-              example_value = sanitize_example_value(example_value)
+              example_value = RailsAiContext::Redaction.value(match[1], example_value, placeholder_ok: true).to_s
 
               vars << { name: match[1], example_value: example_value, comment: comment }
             end
@@ -361,15 +361,15 @@ module RailsAiContext
 
             # ENV KEY=value or ENV KEY value
             if (match = stripped.match(/\AENV\s+([A-Z_][A-Z0-9_]*)\s*=?\s*(.*)/))
-              default = match[2].strip
-              default = nil if default.empty?
+              default = RailsAiContext::Redaction.value(match[1], match[2])
+              default = nil if default.to_s.empty?
               vars << { type: "ENV", name: match[1], default: default, file: name }
             end
 
             # ARG KEY=default
             if (match = stripped.match(/\AARG\s+([A-Z_][A-Z0-9_]*)(?:\s*=\s*(.*))?/))
-              default = match[2]&.strip
-              default = nil if default&.empty?
+              default = RailsAiContext::Redaction.value(match[1], match[2])
+              default = nil if default.to_s.empty?
               vars << { type: "ARG", name: match[1], default: default, file: name }
             end
           end
@@ -642,35 +642,6 @@ module RailsAiContext
           end
         end
         nil
-      end
-
-      private_class_method def self.sanitize_default(value)
-        return nil unless value
-        stripped = value.strip.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
-        # Over the length a config value plausibly has, or shaped like a
-        # credential. The shape test is the module's, so a new prefix lands
-        # once rather than in each of these two nearly-identical checks.
-        if stripped.length > 30 || RailsAiContext::Redaction.secret_value?(stripped)
-          RailsAiContext::Redaction::FILTERED
-        else
-          stripped
-        end
-      end
-
-      private_class_method def self.sanitize_example_value(value)
-        return "" unless value
-        stripped = value.strip.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
-        # Show placeholder/example values, redact anything that looks real
-        if stripped.match?(/\Ayour_|\Aexample_|xxx|changeme|TODO|REPLACE/i) || stripped.empty?
-          stripped
-        # Narrower than the `.env` test on purpose: an example file's values
-        # are placeholders, and one saying "secret" is a label rather than a
-        # credential. Only a real credential shape is worth hiding here.
-        elsif stripped.length > 40 || RailsAiContext::Redaction.credential_shaped?(stripped)
-          RailsAiContext::Redaction::FILTERED
-        else
-          stripped
-        end
       end
     end
   end

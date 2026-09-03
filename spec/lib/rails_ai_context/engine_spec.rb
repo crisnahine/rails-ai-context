@@ -24,6 +24,10 @@ RSpec.describe RailsAiContext::Engine do
       expect(initializer_names).to include("rails_ai_context.middleware")
     end
 
+    it "registers the config file initializer" do
+      expect(initializer_names).to include("rails_ai_context.config_file")
+    end
+
     it "mounts the middleware after user initializers have run" do
       initializer = RailsAiContext::Engine.initializers.find { |i| i.name == "rails_ai_context.middleware" }
       expect(initializer).not_to be_nil

@@ -32,6 +32,11 @@ RSpec.describe "Listener registration properties" do
 
           macro :name, option: true
 
+          class_methods do
+            def built_in_block
+            end
+          end
+
           def run
             @state = 1
             scope.where(id: 1).order(:id)

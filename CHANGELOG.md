@@ -5,6 +5,257 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.25.0] - 2026-09-03
+
+### Added
+
+- **`sprockets-rails`, `sprockets`, `sorcery` and `clearance` join the notable
+  gem table**, so `rails_get_gems` lists them and the `rails_get_config` assets
+  and auth lines name them from the lockfile rather than from a loaded
+  constant.
+
+### Fixed
+
+Defects found by a second survey round over the whole surface, and the
+duplicated mechanisms behind them.
+
+- **`max_view_total_size` and `max_view_file_size` said they capped view
+  reads.** Only `doctor` reads either one, as the threshold for its view-size
+  warning; the config comments and the docs rows now say that.
+- **`excluded_concerns` hid a concern from a model's list but not from the
+  catalogue.** `rails_get_concern` and the `rails_get_active_support` concern
+  registry still listed and counted a concern the key names; all three now
+  apply the same predicate.
+- **An in-Gemfile app's `.rails-ai-context.yml` was inert.** The generated
+  initializer holds a `configure` block, and the YAML was skipped whenever one
+  had run, so a booted command took the defaults while `--no-boot` read the
+  file and the two disagreed (45 tools against 43 with `skip_tools` set).
+  Precedence is a merge: the file is applied once, before
+  `config/initializers`, so an initializer may assign a key or edit it in
+  place and both survive; a later call from the standalone binary or the
+  CLI's boot path is a no-op. A block wins the keys it assigns wherever it
+  lives, so one in `config/application.rb` or an environment file, which runs
+  before the load, keeps them too.
+- **The static tier named the app after its directory.** `onboard` and every
+  generated context file were headed "mastodon" for an app that declares
+  `module Mastodon`. The name now comes from the module enclosing
+  `class Application < Rails::Application` in `config/application.rb`, and
+  falls back to the directory only when that file names nothing.
+- **The static tier counted every class under `app/models` as a model.**
+  Namespace modules, form objects, filters and plain service classes were
+  listed and rendered as models of a table (Mastodon answered 195 models
+  against 117 booted). A static model is now a class whose superclass chain
+  reaches `ApplicationRecord`, a namespaced `*ApplicationRecord` or
+  `ActiveRecord::Base`, STI subclasses included.
+- **An unreadable `.rails-ai-context.yml` aborted the boot.** A directory or a
+  file the process cannot read at that path raised out of the engine
+  initializer; it now warns and keeps the defaults, the way broken YAML does.
+- **A model under a per-connection abstract base was missing from the static
+  list.** The multi-database shape - `class AnimalsRecord < ApplicationRecord;
+  self.abstract_class = true` in its own file, then `class Dog <
+  AnimalsRecord` - dropped every model on that connection from the static
+  list, the count and the schema listing. An abstract base is still walked so
+  chains resolve through it; it is left out of the result, as before.
+- **`rails_get_api` stated a filesystem finding for a section nobody had
+  read.** In the static tier the whole section but the mode was declared
+  unavailable, and nothing read that declaration, so an app with
+  `app/controllers/api/v1/` was told "not detected (no app/controllers/api/v*
+  directories)". Every detection in that section is a file read, so the
+  static tier now answers all of them, and a key a section does name as
+  unanswered renders as `[UNAVAILABLE: ...]` rather than as a negative
+  finding.
+- **An existing `.ai-context.json` holding anything but a JSON object
+  aborted the whole generation run.** The skip check reads it as a file to
+  replace.
+- **`rails_get_schema`'s table heading named every model on the table**, so
+  an STI table with thirty subclasses filled the cheap summary with one
+  heading. It names five and counts the rest, the way the file's other lists
+  do.
+- **`rails_get_test_info` blamed the app root for a name it refused as
+  sensitive.** The refusal names what the check covers: the name leaves the
+  app root or names a sensitive file.
+- **`rails_onboard`'s Getting Started block told the reader to `cd` into the
+  app's class name underscored**, which is not the directory the clone lands
+  in. It names the app directory.
+- **`init` refused a tree with app source but no `config/environment.rb`
+  after it had already written the config files**, leaving it half set up
+  with no `CLAUDE.md`. Every command that can serve the static tier now
+  reads such a tree, the way `--no-boot` already did.
+- **A tree with app source but no `config/environment.rb` printed a boot
+  failure before falling back to static analysis.** No boot can succeed
+  without that file, so the static tier now takes over at once and its banner
+  names the missing file; `doctor` refuses the same tree with that reason.
+  The banner calls that tree static mode rather than a boot failure, since
+  no boot ran.
+- **`rails_runtime_info` and `rails_query` told a tree with no
+  `config/environment.rb` to fix a boot failure or drop `--no-boot`**, neither
+  of which had happened. Such a tree now reads "This tree has no
+  `config/environment.rb`; add one (or run from the app root) for runtime
+  data."
+- **A source path was contained without a separator and against an
+  unresolved root.** The frontend framework introspector's own containment
+  check let `/app-old` pass for `/app`. The pre-v5.8.1 bug, still in one
+  place.
+- **`rails_get_env` printed Dockerfile `ENV` and `ARG` values verbatim at
+  detail full.** Every default now leaves through the redaction gate, and a
+  surrounding quote pair is stripped, so `ENV FOO="bar"` prints `bar`.
+- **`rails_read_logs` matched the `search` term before redacting**, so a
+  hidden value could be probed a character at a time. The search runs on the
+  redacted text now.
+- **The middleware introspector fabricated an empty stack in the static
+  tier.** It declares an alternate source and answers only its file facts,
+  rather than reporting an app with no middleware.
+- **`rails_get_config` and `rails-ai-context facts` read gem keys no
+  introspector emits**, so the Auth line and the Key Dependencies section
+  never rendered at all.
+- **Jobs and mailers carry `file:`.** `rails_get_job_pattern` reads the
+  carried file instead of camelizing a basename, and its listing comes from
+  the payload, so a job in a pack lists.
+- **The auth introspector keyed Devise models by basename**, so
+  `app/models/admin/user.rb` overwrote `User`.
+- **An out-of-order migration merge was reported as none pending** by the
+  migrations section while the schema section counted it. Both derive from
+  one applied set now, and an unknown applied set answers no pending key
+  rather than "everything" or "nothing".
+- **Substring lockfile scans reported `bugsnag-capistrano` as Bugsnag** and
+  `database_cleaner-redis` as database_cleaner. One lockfile reader with
+  exact names answers every gem question, across the GEM, GIT and PATH
+  sections.
+- **The hydrators warned about a model they had just resolved in another
+  spelling**, and emitted one hint block twice.
+- **The channel and mailer eager loads had no per-constant recovery**, so a
+  single unloadable file emptied the list.
+- **`YAML.safe_load` refused the `&default` anchors** every stock webpacker
+  or shakapacker config carries, so the source path fell back to the
+  convention.
+- **VFS: `controllers/admin/posts` fell into the action handler** and
+  `routes/PostsController` returned zero routes.
+- **`Payload.section` accepted a refused (`unavailable`) section**, so a
+  static-tier context file rendered a bare heading.
+- **Every generated file counts the same controller set.**
+  `config.excluded_controllers` is honoured everywhere, not only by
+  `rails_get_controllers`.
+- **The doctor counted models and controllers under `app/` only.** Packs and
+  engines count, and the freshness check reads the one watch scope.
+- **The watcher stopped noticing `config/routes.rb` and `db/schema.rb`.** The
+  fingerprint, the watcher and the doctor share one scope covering `config`
+  and `db` whole, and the fingerprint mark is taken before the read it
+  protects.
+- **The diagnose tool's git probe ran outside a repository** and leaked its
+  stderr into the response.
+- **`rails_get_stimulus` re-read every controller file** to recompute a
+  lifecycle the payload already carried.
+- **MCP config removal wrote non-atomically**, the dead `AstCache.invalidate`
+  is gone, and the doctor checks that `.codex/config.toml` is gitignored.
+- **Composing tools decided whether a sub-tool answered by scraping its prose
+  for "not found".** A real answer whose body mentioned those words was
+  dropped. Responses carry an empty marker in MCP `meta` now.
+- **`rails_get_test_info` guarded a caller-supplied name with its own
+  containment.** It reads through the shared guard.
+- **The asset pipeline introspector's literal `none` was rendered as if it
+  named a pipeline**, so every generated context file carried
+  `- Assets: none`. The line shows only the parts that name something, and
+  disappears when there are none.
+- **`rails_get_view`'s ivar list counted an `@` inside an email address and a
+  `@@class_variable`.** Neither is an instance variable.
+- **A controller ivar compared, not assigned, was reported as set.** `return
+  unless @post == current_user` no longer names `@post`; `||=`, `+=`, `<<=` and
+  `>>=` still count.
+- **`rails_get_context` resolved an action name case-sensitively** while
+  `rails_get_controllers` did not, so `action: "Show"` skipped the ivar
+  cross-check.
+- **The ivar cross-check ran with no view templates section**, reporting every
+  controller ivar as unused in the view. It is skipped instead.
+- **`rails_get_turbo_map` printed a Turbo Stream response as a Ruby hash.**
+  It renders `PostsController#create`, the way the file's other sections name
+  a controller action.
+- **A second `context` run rewrote the generated files** for their timestamp
+  alone, so a repo that commits the context files saw a diff from a run that
+  found nothing new. One rule now covers them all: a file that differs only
+  in its `generated_at` key, or in the full-mode header's `> Generated:`
+  line, is skipped.
+- **The schema listing named one model per table.** A table an STI child or a
+  namespaced second model shares listed whichever came first in the payload,
+  which could be the emptier one. Every model on the table is listed now,
+  the one carrying the most detail first.
+- **Every static-tier context file carried `Rails [UNAVAILABLE: app not
+  booted]` mid-sentence.** The version comes from the lockfile, and the
+  marker is left for a tree whose lockfile does not carry rails.
+- **`rails-ai-context preset " FULL "` exited 1 with the listing.** A preset
+  name is matched whatever its case or padding.
+- **A `--no-boot` run that found no app printed the doctor hint**, which asks
+  for a boot error that never happened. `doctor` and `init` also accept a
+  tree that has app source but no `config/environment.rb`, and the refusal
+  names that file instead of telling the user to go to the app root they are
+  standing in.
+
+### Changed
+
+- **`RailsAiContext.generate_context(format: nil)` means the recorded AI-tool
+  selection**, and all of them when nothing is recorded. It was `:all`.
+- **Static-tier migration names are the class-style name** (`CreatePosts`),
+  matching what the booted tier reports.
+- **Names in the turbo, auth, attachments and multi-database sections carry
+  their namespace** (`Admin::User`, not `User`), and packs and in-repo
+  engines count everywhere the app's source is walked.
+- **The `.env.example` reader judges a value by its shape and length only.** A
+  default in Ruby source or a Dockerfile is condemned by a secret-shaped name
+  as well.
+- **Turbo wiring lives in the introspector payload with file and line** -
+  frames, model broadcasts, explicit broadcasts and stream subscriptions -
+  and `rails_get_turbo_map` renders it. A `turbo_frame_tag dom_id(@post,
+  :edit)` frame renders as that call, and a symbol `turbo_stream_from :posts`
+  now pairs with its broadcast. A subscription argument that carries its own
+  commas renders whole: `turbo_stream_from [current_user, :notifications]` and
+  `dom_id(@post, :x)` keep every character they were written with.
+- **The public-methods lists come from the parser.** `rails_get_concern`,
+  `rails_get_helper_methods`, `rails_get_model_details` and
+  `rails_get_controllers` read `private def` and `class_methods do`
+  correctly.
+- **The standalone binary boots through `CLI::EntryBoot`**, and presets run
+  through `Presets.run` in both the binary and the rake task.
+- **`rails_get_controllers` and the controller-action resource decide which
+  filters apply through one module, `ActionFilters`.** Every inherited filter
+  carries the `(from Parent)` annotation, after_action and
+  except-constrained ones included; a filter constrained with `except:` shows
+  that constraint; `skip_after_action` and `skip_around_action` count as
+  skips, and a skipped filter is struck through in the whole-controller view
+  as well as the per-action one.
+- **A config value longer than 40 characters is filtered on every path.** The
+  Ruby-source and Dockerfile readers capped at 30 before; `.env.example` was
+  already 40.
+- **`schema[:pending_migrations]`, reachable through the `rails://schema`
+  resource, is a list of `{ version:, name: }` entries** rather than version
+  strings.
+- **`rails-ai-context://routes/{controller}` prefers an exact route-key
+  match**, so `routes/posts` no longer also returns `admin/posts`.
+- **`unavailable_sections`, where a section carries it, is a list of
+  section keys**, not a reason string. The middleware section's static
+  answer is the one that still emits it.
+- **The models resource template advertises
+  `rails-ai-context://models/{name}`**, and every scheme resolves through the
+  VFS rather than an exact-match legacy reader. `rails://models/{name}` is
+  still accepted.
+- **`controllers[:controllers]` can carry `{ error: "unreadable" }` entries**
+  for a file over the size cap or otherwise unreadable, and the listing and
+  the count include them.
+
+### Removed
+
+- **`SourceLine`, the hand-rolled Ruby lexer.** Every source read goes through
+  Prism.
+- **`Fingerprinter.reset_gem_lib_fingerprint!` and `AstCache.invalidate`** -
+  no callers.
+- **Support for the mcp gem below 0.13.** The gemspec floor is `>= 0.13`, the
+  first release whose tool responses carry `meta`.
+- **`Presets.names` and `Presets.fetch`** - the listing and the run read
+  `DEFINITIONS` directly.
+- **`SchemaHintBuilder.build_many`** - no callers.
+- **`Fingerprinter.changed?`** - no callers; `stale?` answers the question.
+- **The public constant `ChangeWatch::WATCH_DIRS`.**
+- **`RailsAiContext.configured_via_block?`** - no callers once the config file
+  applies once per configuration and a block wins its keys by name.
+
 ## [5.24.0] - 2026-08-17
 
 ### Fixed

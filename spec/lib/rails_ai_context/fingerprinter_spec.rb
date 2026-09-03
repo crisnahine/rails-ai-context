@@ -1,8 +1,20 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Fingerprinter do
+  # A throwaway copy of the fixture app: these examples push mtimes into the
+  # future, which must not follow the suite back into spec/internal.
+  let(:app) do
+    @tmp_app_root = Dir.mktmpdir
+    FileUtils.cp_r(File.join(Rails.root.to_s, "."), @tmp_app_root)
+    FileUtils.touch(File.join(@tmp_app_root, "Gemfile.lock"))
+    RailsAiContext::StaticApp.new(@tmp_app_root)
+  end
+
+  after { FileUtils.remove_entry(@tmp_app_root) if @tmp_app_root && Dir.exist?(@tmp_app_root) }
+
   describe ".compute" do
     it "returns a hex digest string" do
       result = described_class.compute(Rails.application)
@@ -107,31 +119,38 @@ RSpec.describe RailsAiContext::Fingerprinter do
     end
   end
 
-  describe ".changed?" do
-    it "returns false when fingerprint matches" do
-      current = described_class.compute(Rails.application)
-      expect(described_class.changed?(Rails.application, current)).to be false
+  describe ".mark and .stale?" do
+    it "is not stale until a watched file changes" do
+      mark = described_class.mark(app)
+      expect(described_class.stale?(app, mark)).to be false
+
+      path = File.join(app.root, "app/models/post.rb")
+      File.utime(Time.now + 5, Time.now + 5, path)
+      expect(described_class.stale?(app, mark)).to be true
     end
 
-    it "returns true when fingerprint differs" do
-      expect(described_class.changed?(Rails.application, "stale")).to be true
+    # config/routes.rb is covered by the config directory, not by a file entry.
+    it "goes stale when config/routes.rb changes" do
+      mark = described_class.mark(app)
+      path = File.join(app.root, "config/routes.rb")
+      File.utime(Time.now + 5, Time.now + 5, path)
+
+      expect(described_class.stale?(app, mark)).to be true
     end
   end
 
-  describe ".reset_gem_lib_fingerprint!" do
-    after { described_class.reset_gem_lib_fingerprint! }
-
-    it "clears the memoized ivar so the next compute recomputes it" do
-      described_class.compute(Rails.application)
-      described_class.reset_gem_lib_fingerprint!
-      expect(described_class.instance_variable_get(:@gem_lib_fingerprint)).to be_nil
+  describe ".changed_since" do
+    it "names the directories with a file newer than the time, root-relative" do
+      path = File.join(app.root, "app/models/post.rb")
+      File.utime(Time.now + 5, Time.now + 5, path)
+      expect(described_class.changed_since(app.root, Time.now)).to include("app/models")
+      expect(described_class.changed_since(app.root, Time.now + 10)).to eq([])
     end
+  end
 
-    it "allows a successful compute after reset" do
-      described_class.compute(Rails.application)
-      described_class.reset_gem_lib_fingerprint!
-      result = described_class.compute(Rails.application)
-      expect(result).to match(/\A[a-f0-9]{64}\z/)
+  describe ".watched_files" do
+    it "lists the root manifests that exist" do
+      expect(described_class.watched_files(app.root)).to include(File.join(app.root, "Gemfile.lock"))
     end
   end
 end

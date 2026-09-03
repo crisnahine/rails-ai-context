@@ -60,6 +60,16 @@ RSpec.describe RailsAiContext::Tools::GetApi do
         expect(text).to include("API-only app (config.api_only = true)")
         expect(text).to include("Not detected: serializers, GraphQL, API versioning, rate limiting, CORS config, pagination gems.")
       end
+
+      it "renders an unanswered section without a doubled colon" do
+        allow(described_class).to receive(:cached_context).and_return(
+          { api: { api_only: false, unavailable_sections: %w[serializers graphql] } }
+        )
+        result = described_class.call(detail: "summary")
+        text = result.content.first[:text]
+
+        expect(text).to include("Not answered without a booted app: serializers, GraphQL [UNAVAILABLE")
+      end
     end
 
     context "with detail:standard" do
@@ -247,6 +257,33 @@ RSpec.describe RailsAiContext::Tools::GetApi do
 
         expect(text).to include("No API layer data available")
         expect(text).to include(":api")
+      end
+    end
+
+    context "in the static tier" do
+      before do
+        allow(described_class).to receive(:cached_context)
+          .and_return({ api: RailsAiContext::Introspectors::ApiIntrospector.new(
+            RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT)
+          ).send(:static_call) })
+      end
+
+      it "names the versions the fixture's source carries" do
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- **Versioning:** v1")
+      end
+    end
+
+    context "when the section names a key it could not answer" do
+      it "renders it as unavailable rather than as a filesystem finding" do
+        allow(described_class).to receive(:cached_context).and_return(
+          { api: { api_only: false, unavailable_sections: %w[api_versioning] } }
+        )
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("- **Versioning:** [UNAVAILABLE")
+        expect(text).not_to include("no app/controllers/api/v* directories")
       end
     end
 

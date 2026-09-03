@@ -77,7 +77,7 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
       let(:tmpdir) { Dir.mktmpdir }
 
       before do
-        File.write(File.join(tmpdir, "Gemfile.lock"), "    rails (7.1.0)\n")
+        File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
         allow(Bundler).to receive(:root).and_return(Pathname.new(tmpdir))
       end
 
@@ -228,6 +228,12 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
         instance = context_class.new(api: { api_only: false }, conventions: { architecture: %w[hotwire] })
         expect(instance.api_only?).to be false
       end
+
+      # A failed section carries no architecture, whatever else is in it.
+      it "is false when the conventions section failed" do
+        instance = context_class.new(conventions: { error: "boom", architecture: %w[api_only] })
+        expect(instance.api_only?).to be false
+      end
     end
   end
 
@@ -323,12 +329,12 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     after  { FileUtils.remove_entry(tmpdir) }
 
     it "is false when the Gemfile.lock lists rails-ai-context" do
-      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails-ai-context (5.13.0)\n")
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")
       expect(helper.standalone_install?).to be(false)
     end
 
     it "is true when the Gemfile.lock does not list rails-ai-context" do
-      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails (7.1.0)\n")
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
       expect(helper.standalone_install?).to be(true)
     end
 
@@ -337,10 +343,10 @@ RSpec.describe RailsAiContext::Serializers::ToolGuideHelper do
     end
 
     it "memoizes the result for the lifetime of the instance" do
-      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails (7.1.0)\n")
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n")
       expect(helper.standalone_install?).to be(true)
 
-      File.write(File.join(tmpdir, "Gemfile.lock"), "    rails-ai-context (5.13.0)\n")
+      File.write(File.join(tmpdir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails-ai-context (5.13.0)\n")
       expect(helper.standalone_install?).to be(true), "expected the memoized value to stick within one instance"
     end
   end

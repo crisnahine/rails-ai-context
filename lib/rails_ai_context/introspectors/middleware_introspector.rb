@@ -6,12 +6,25 @@ module RailsAiContext
     # middleware inserted via initializers.
     class MiddlewareIntrospector
       extend StaticTier
-      static_tier :files_only
+      static_tier :alternate_source
 
       attr_reader :app
 
       def initialize(app)
         @app = app
+      end
+
+      # Only the two file facts. The stack and the count come from
+      # app.middleware, and answering them from a rescue reported an app
+      # with no middleware at all rather than an app nobody could ask.
+      def static_call
+        {
+          custom_middleware: discover_custom_middleware,
+          middleware_from_initializers: detect_middleware_from_initializers,
+          unavailable_sections: %w[middleware_stack middleware_count]
+        }
+      rescue StandardError
+        { unavailable: StaticTier.unavailable_reason }
       end
 
       # @return [Hash] custom middleware files and middleware stack analysis

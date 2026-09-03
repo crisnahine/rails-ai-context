@@ -129,8 +129,8 @@ module RailsAiContext
 
         # Schema columns - inline from schema introspection
         if data[:table_name]
-          schema = cached_context[:schema]
-          if schema.is_a?(Hash) && !schema[:error] && schema[:tables]&.key?(data[:table_name])
+          schema = Payload.section(cached_context, :schema)
+          if schema && schema[:tables]&.key?(data[:table_name])
             table_data = schema[:tables][data[:table_name]]
             cols = table_data[:columns] || []
             if cols.any?
@@ -357,7 +357,7 @@ module RailsAiContext
         end
 
         # Class methods - only show methods defined in the actual model file
-        source_class_methods = extract_source_defined_methods(name, class_methods: true)
+        source_class_methods = extract_source_class_methods(name)
         if source_class_methods&.any?
           lines << "" << "## Class methods"
           source_class_methods.first(25).each { |m| lines << "- `#{m}`" }
@@ -432,57 +432,26 @@ module RailsAiContext
         {}
       end
 
-      # Extract class methods defined in the model source (not inherited)
-      private_class_method def self.extract_source_defined_methods(model_name, class_methods: false)
+      # The model's own source, nil when the file is missing or too large.
+      private_class_method def self.model_source(model_name)
         path = model_source_path(model_name)
-        return nil unless File.exist?(path)
-        return nil if File.size(path) > max_file_size
+        return nil unless File.exist?(path) && File.size(path) <= max_file_size
 
-        source = RailsAiContext::SafeFile.read(path)
-        return nil unless source
-        methods = []
-        pattern = class_methods ? /\A\s*def\s+self\.(\w+[?!]?(?:\([^)]*\))?)/ : /\A\s*def\s+((?!self\.)[\w?!]+(?:\([^)]*\))?)/
+        RailsAiContext::SafeFile.read(path)
+      end
 
-        source.each_line do |line|
-          if (match = line.match(pattern))
-            methods << match[1]
-          end
-        end
-
+      private_class_method def self.extract_source_class_methods(model_name)
+        source = model_source(model_name) or return nil
+        methods = Introspectors::ActionResolver.class_methods_from_source(source, owner: model_name)
         methods.empty? ? nil : methods
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_source_defined_methods failed: #{e.message}" if ENV["DEBUG"]
-        nil
       end
 
-      # Extract public method signatures (name + params) from model source
       private_class_method def self.extract_method_signatures(model_name)
-        path = model_source_path(model_name)
-        return nil unless File.exist?(path)
-        return nil if File.size(path) > max_file_size
-
-        source = RailsAiContext::SafeFile.read(path)
-        return nil unless source
-        signatures = []
-        in_private = false
-
-        source.each_line do |line|
-          in_private = true if line.match?(/\A\s*private\s*$/)
-          next if in_private
-
-          if (match = line.match(/\A\s*def\s+((?!self\.)[\w?!]+(?:\(([^)]*)\))?)/))
-            name = match[1]
-            signatures << name unless name.start_with?("initialize")
-          end
-        end
-
-        signatures
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_method_signatures failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        source = model_source(model_name) or return nil
+        Introspectors::ActionResolver.public_methods_from_source(source, owner: model_name)
       end
 
-      # Extract public method names from a concern's source file
+      # Public method names from a concern's source file
       private_class_method def self.extract_concern_methods(concern_name)
         max_size = RailsAiContext.configuration.max_file_size
         path = ConcernPaths.find_file(rails_app.root.to_s, concern_name)
@@ -491,23 +460,9 @@ module RailsAiContext
 
         source = RailsAiContext::SafeFile.read(path)
         return nil unless source
-        methods = []
-        in_private = false
 
-        source.each_line do |line|
-          in_private = true if line.match?(/\A\s*(private|protected)\s*$/)
-          in_private = false if line.match?(/\A\s*public\s*$/)
-          next if in_private
-
-          if (match = line.match(/\A\s*def\s+([\w?!]+)/))
-            methods << match[1] unless match[1].start_with?("_")
-          end
-        end
-
+        methods = Introspectors::ActionResolver.public_methods_from_source(source).map { |m| m.split("(").first }
         methods.empty? ? nil : methods
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_concern_methods failed: #{e.message}" if ENV["DEBUG"]
-        nil
       end
 
       private_class_method def self.extract_model_structure(model_name)

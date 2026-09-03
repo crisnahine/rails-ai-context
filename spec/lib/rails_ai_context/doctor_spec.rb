@@ -438,6 +438,37 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.status).to eq(:pass)
       end
     end
+
+    # The Codex config carries this machine's PATH and GEM_HOME, which is why
+    # install gitignores it; the check never asked whether that survived.
+    context "when .codex/config.toml is committed" do
+      def gitignore_check_for(root)
+        described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_security_gitignore)
+      end
+
+      it "reports the Codex config as unignored" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          File.write(File.join(dir, ".codex/config.toml"), "[mcp_servers.rails-ai-context]\n")
+          File.write(File.join(dir, ".gitignore"), "log/\n")
+
+          check = gitignore_check_for(dir)
+
+          expect(check.status).to eq(:fail)
+          expect(check.message).to include(".codex/config.toml")
+        end
+      end
+
+      it "passes once .gitignore covers it" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          File.write(File.join(dir, ".codex/config.toml"), "[mcp_servers.rails-ai-context]\n")
+          File.write(File.join(dir, ".gitignore"), ".codex/config.toml\n")
+
+          expect(gitignore_check_for(dir).status).to eq(:pass)
+        end
+      end
+    end
   end
 
   describe "#check_context_freshness" do
@@ -519,39 +550,104 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
-    context "when context file is stale" do
-      before do
+    # The freshness check read five hardcoded directories while the watch
+    # scope read many more, so an edit in a service or a pack left the
+    # context reported as up to date.
+    context "against a real app tree" do
+      def freshness_for(root)
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[claude])
-        allow(File).to receive(:exist?).and_call_original
-        allow(Dir).to receive(:exist?).and_call_original
+        described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_context_freshness)
+      end
 
-        claude_path = File.join(app.root, "CLAUDE.md")
-        allow(File).to receive(:exist?).with(claude_path).and_return(true)
-        allow(File).to receive(:directory?).and_call_original
-        allow(File).to receive(:directory?).with(claude_path).and_return(false)
-        # Context generated 1 hour ago
-        allow(File).to receive(:mtime).and_call_original
-        allow(File).to receive(:mtime).with(claude_path).and_return(Time.now - 3600)
+      def write_context_file(root)
+        path = File.join(root, "CLAUDE.md")
+        File.write(path, "context")
+        File.utime(Time.now - 3600, Time.now - 3600, path)
+      end
 
-        # app/models exists and has a file newer than context
-        models_dir = File.join(app.root, "app/models")
-        allow(Dir).to receive(:exist?).with(models_dir).and_return(true)
-        model_file = File.join(models_dir, "user.rb")
-        allow(Dir).to receive(:glob).and_call_original
-        allow(Dir).to receive(:glob).with(File.join(models_dir, "**/*.rb")).and_return([ model_file ])
-        allow(File).to receive(:mtime).with(model_file).and_return(Time.now)
+      it "names any directory the watch scope covers" do
+        Dir.mktmpdir do |root|
+          write_context_file(root)
+          FileUtils.mkdir_p(File.join(root, "app/services"))
+          File.write(File.join(root, "app/services/billing.rb"), "class Billing; end")
 
-        # Other dirs don't exist
-        %w[app/controllers app/views config db/migrate].each do |dir|
-          allow(Dir).to receive(:exist?).with(File.join(app.root, dir)).and_return(false)
+          check = freshness_for(root)
+
+          expect(check.status).to eq(:warn)
+          expect(check.message).to include("app/services")
         end
       end
 
-      it "returns warn with stale message" do
-        expect(check.status).to eq(:warn)
-        expect(check.message).to include("stale")
-        expect(check.message).to include("app/models")
+      it "calls the context stale when a model is newer than it" do
+        Dir.mktmpdir do |root|
+          write_context_file(root)
+          FileUtils.mkdir_p(File.join(root, "app/models"))
+          File.write(File.join(root, "app/models/user.rb"), "class User; end")
+
+          check = freshness_for(root)
+
+          expect(check.status).to eq(:warn)
+          expect(check.message).to include("stale")
+          expect(check.message).to include("app/models")
+        end
       end
+
+      it "warns after a routes edit, which the config directory covers" do
+        Dir.mktmpdir do |root|
+          write_context_file(root)
+          FileUtils.mkdir_p(File.join(root, "config"))
+          File.write(File.join(root, "config/routes.rb"), "Rails.application.routes.draw {}")
+
+          check = freshness_for(root)
+
+          expect(check.status).to eq(:warn)
+          expect(check.message).to include("config")
+        end
+      end
+
+      it "ignores our own initializer, which install writes in the same run" do
+        Dir.mktmpdir do |root|
+          write_context_file(root)
+          FileUtils.mkdir_p(File.join(root, "config/initializers"))
+          File.write(File.join(root, "config/initializers/rails_ai_context.rb"), "# installed")
+
+          expect(freshness_for(root).status).to eq(:pass)
+        end
+      end
+    end
+  end
+
+  describe "source file checks" do
+    def check_named(dir, name)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).run[:checks].find { |c| c.name == name }
+    end
+
+    it "counts a pack's models and controllers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "controllers"))
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"), "class Invoice; end\n")
+        File.write(File.join(dir, "packs", "billing", "app", "controllers", "invoices_controller.rb"),
+                   "class InvoicesController; end\n")
+
+        expect(check_named(dir, "Models")).to have_attributes(status: :pass, message: "1 model file found")
+        expect(check_named(dir, "Controllers")).to have_attributes(status: :pass, message: "1 controller file found")
+      end
+    end
+
+    it "warns without naming one directory when no model file exists anywhere" do
+      Dir.mktmpdir do |dir|
+        expect(check_named(dir, "Models")).to have_attributes(status: :warn, message: "No model files")
+      end
+    end
+  end
+
+  describe "model count" do
+    it "is what SourceScan.paths resolves for the fixture, concerns included" do
+      root = IntrospectedFixture::ROOT
+      expected = RailsAiContext::Introspectors::SourceScan.paths(root, kind: "app/models", skip_concerns: false).count
+      check = described_class.new(RailsAiContext::StaticApp.new(root)).run[:checks].find { |c| c.name == "Models" }
+      expect(check.message).to eq("#{expected} model files found")
     end
   end
 end

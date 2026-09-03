@@ -83,4 +83,20 @@ RSpec.describe RailsAiContext::Introspectors::ActiveStorageIntrospector do
       expect(result[:installed]).to be(true).or be(false)
     end
   end
+
+  describe "attachments across every model directory" do
+    it "finds a pack model's attachment and names a namespaced model by its declared name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        File.write(File.join(dir, "app", "models", "admin", "profile.rb"),
+                   "class Admin::Profile < ApplicationRecord\n  has_one_attached :avatar\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"),
+                   "class Invoice < ApplicationRecord\n  has_many_attached :receipts\nend\n")
+
+        attachments = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:attachments]
+        expect(attachments.map { |a| a[:model] }).to contain_exactly("Admin::Profile", "Invoice")
+      end
+    end
+  end
 end

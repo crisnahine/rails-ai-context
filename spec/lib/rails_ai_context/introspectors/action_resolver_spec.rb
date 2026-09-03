@@ -136,4 +136,132 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       expect(described_class.own_methods(methods, "Admin::PostsController").map { |m| m[:name] }).to eq(%w[show])
     end
   end
+
+  describe ".public_methods_from_source" do
+    let(:source) { "class Widget\n  def full_name(sep = ' ')\n  end\n\n  def self.build(attrs)\n  end\n\n  private\n\n  def secret\n  end\nend\n" }
+
+    it "lists the public instance methods with their signatures" do
+      expect(described_class.public_methods_from_source(source)).to eq([ "full_name(sep = ' ')" ])
+    end
+
+    it "lists private and class methods separately" do
+      expect(described_class.private_methods_from_source(source)).to eq(%w[secret])
+      expect(described_class.class_methods_from_source(source)).to eq([ "build(attrs)" ])
+    end
+
+    it "reads a module as the owner and keeps a nested class out of it" do
+      concern = <<~RUBY
+        module Searchable
+          extend ActiveSupport::Concern
+
+          class_methods do
+            def search(query); end
+          end
+
+          class Result
+            def score; end
+          end
+
+          def search_result_title; end
+          def _framework_hook; end
+
+          private def normalize; end
+        end
+      RUBY
+
+      expect(described_class.public_methods_from_source(concern)).to eq(%w[search_result_title])
+      expect(described_class.private_methods_from_source(concern)).to eq(%w[normalize])
+      expect(described_class.class_methods_from_source(concern)).to eq([ "search(query)" ])
+      expect(described_class.public_methods_from_source(concern, owner: "Searchable::Result")).to eq(%w[score])
+    end
+  end
+
+  describe ".public_methods_from_source on a concern that defines a method twice" do
+    it "lists the signature once" do
+      concern = "module Trackable\n  included do\n    def track; end\n  end\n\n  def track; end\nend\n"
+
+      expect(described_class.public_methods_from_source(concern)).to eq(%w[track])
+    end
+  end
+
+  describe ".signature" do
+    it "renders the method as written, without a self prefix" do
+      methods = RailsAiContext::Introspectors::SourceIntrospector.walk_source(
+        "class Job\n  def self.enqueue(id, wait: 0); end\n  def perform(user_id, options = {}); end\nend\n",
+        { methods: RailsAiContext::Introspectors::Listeners::MethodsListener }
+      )[:methods]
+
+      expect(methods.map { |m| described_class.signature(m) }).to eq([ "enqueue(id, wait: 0)", "perform(user_id, options = {})" ])
+      expect(described_class.parameter_list(methods.last)).to eq("user_id, options = {}")
+    end
+  end
+
+  describe "what an action assigns and renders" do
+    let(:action_source) do
+      <<~RUBY
+        def update
+          @post = Post.find(params[:id])
+          @comments, @authors = @post.comments, @post.authors
+          if @post.update(post_params)
+            render json: @post
+          else
+            render :edit
+            render json: @post.errors
+          end
+        end
+      RUBY
+    end
+
+    it "names the instance variables the body assigns" do
+      expect(described_class.assigned_ivars(action_source)).to eq(%w[post comments authors])
+    end
+
+    it "counts an assignment but never a comparison" do
+      body = <<~RUBY
+        def show
+          return unless @post == current_user
+          return if @author != current_user
+          @user ||= find
+          @count += 1
+          @name =~ /x/
+        end
+      RUBY
+
+      expect(described_class.assigned_ivars(body)).to eq(%w[user count])
+    end
+
+    # A doubled angle bracket is a shift-assign; a single one is a comparison.
+    it "counts a shift assignment" do
+      expect(described_class.assigned_ivars("@buffer <<= x\n")).to eq(%w[buffer])
+      expect(described_class.assigned_ivars("@shift >>= x\n")).to eq(%w[shift])
+      expect(described_class.assigned_ivars("@a <= b\n")).to eq([])
+      expect(described_class.assigned_ivars("@a >= b\n")).to eq([])
+    end
+
+    it "names the templates the body renders" do
+      expect(described_class.rendered_templates(action_source)).to eq(%w[edit])
+    end
+
+    it "names the instance variables a json or xml response consumes" do
+      expect(described_class.rendered_ivars(action_source)).to eq(%w[post])
+      expect(described_class.rendered_ivars("render xml: @widget")).to eq(%w[widget])
+      expect(described_class.rendered_ivars("render json: @order, status: :created")).to eq(%w[order])
+      expect(described_class.rendered_ivars('redirect_to @post, notice: "ok"')).to eq([])
+    end
+
+    it "answers the body of the named method with the lines it occupies" do
+      source = "class C\n  def show\n    @a = 1\n  end\n\n  def edit; end\nend\n"
+
+      expect(described_class.method_body(source, "show"))
+        .to eq(code: "  def show\n    @a = 1\n  end", start_line: 2, end_line: 4)
+      expect(described_class.method_body(source, "nope")).to be_nil
+    end
+
+    it "answers the same body for an action named in another case" do
+      source = "class C\n  def show\n    @a = 1\n  end\n\n  def edit; end\nend\n"
+
+      expect(described_class.method_body(source, "Show"))
+        .to eq(code: "  def show\n    @a = 1\n  end", start_line: 2, end_line: 4)
+    end
+  end
 end

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::AssetPipelineIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -69,6 +70,46 @@ RSpec.describe RailsAiContext::Introspectors::AssetPipelineIntrospector do
       it "detects vite as js_bundler" do
         expect(result[:js_bundler]).to eq("vite")
       end
+    end
+  end
+
+  describe "gem detection through the lockfile" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def introspect(lock)
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      described_class.new(double("app", root: @root))
+    end
+
+    it "does not report propshaft for a gem whose name merely contains it" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            propshaft-rails (0.1.0)
+      LOCK
+      expect(introspect(lock).send(:detect_pipeline)).to eq("none")
+    end
+
+    it "reports propshaft from the PATH section" do
+      lock = <<~LOCK
+        PATH
+          remote: vendor/propshaft
+          specs:
+            propshaft (1.1.0)
+      LOCK
+      expect(introspect(lock).send(:detect_pipeline)).to eq("propshaft")
+    end
+
+    it "reports tailwindcss from the GIT section" do
+      lock = <<~LOCK
+        GIT
+          remote: https://github.com/rails/tailwindcss-rails.git
+          revision: 0123456789abcdef0123456789abcdef01234567
+          specs:
+            tailwindcss-rails (3.0.0)
+      LOCK
+      expect(introspect(lock).send(:detect_css_framework)).to eq("tailwindcss")
     end
   end
 end

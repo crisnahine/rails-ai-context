@@ -344,10 +344,9 @@ module RailsAiContext
               begin
                 ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
                 result = GetControllers.call(controller: ctrl_class, action: act)
-                text = result.content.first[:text]
-                unless text.include?("not found")
+                unless empty?(result)
                   lines << "## Controller Context"
-                  lines << text
+                  lines << response_text(result)
                   lines << ""
                 end
               rescue => e
@@ -362,10 +361,9 @@ module RailsAiContext
           if file && line
             begin
               result = GetEditContext.call(file: file, near: parsed[:method_name] || line.to_s)
-              text = result.content.first[:text]
-              unless text.include?("not found") || text.include?("not allowed")
+              unless empty?(result)
                 lines << "## Code Context"
-                lines << text
+                lines << response_text(result)
                 lines << ""
               end
             rescue => e
@@ -382,10 +380,9 @@ module RailsAiContext
             if table
               begin
                 result = GetSchema.call(table: table)
-                text = result.content.first[:text]
-                unless text.include?("not found")
+                unless empty?(result)
                   lines << "## Schema Context"
-                  lines << text
+                  lines << response_text(result)
                   lines << ""
                 end
               rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
@@ -401,10 +398,9 @@ module RailsAiContext
             if model_name
               begin
                 result = GetModelDetails.call(model: model_name)
-                text = result.content.first[:text]
-                unless text.include?("not found")
+                unless empty?(result)
                   lines << "## Model Context"
-                  lines << text
+                  lines << response_text(result)
                   lines << ""
                 end
               rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
@@ -415,10 +411,11 @@ module RailsAiContext
           if parsed[:method_name] && lines.none? { |l| l.include?("Code Context") }
             begin
               result = SearchCode.call(pattern: parsed[:method_name], match_type: "trace")
-              text = result.content.first[:text]
-              unless text.include?("No results") || text.include?("No definition")
+              # A trace that found callers but no `def` is still not the
+              # method's definition, which is what this section promises.
+              unless empty?(result) || definition_missing?(result)
                 lines << "## Method Trace"
-                lines << text
+                lines << response_text(result)
                 lines << ""
               end
             rescue => e; $stderr.puts "[rails-ai-context] Diagnosis step skipped: #{e.message}" if ENV["DEBUG"]; end
@@ -443,7 +440,7 @@ module RailsAiContext
             if method && file
               begin
                 ctx = GetEditContext.call(file: file, near: method)
-                code = ctx.content.first[:text]
+                code = response_text(ctx)
                 # Find the receiver: something.method_name
                 receiver_match = code.match(/(\w+)\.#{Regexp.escape(method)}/)
                 if receiver_match
@@ -463,7 +460,7 @@ module RailsAiContext
               begin
                 ctrl_class = ctrl.end_with?("Controller") ? ctrl : "#{ctrl.camelize}Controller"
                 result = GetControllers.call(controller: ctrl_class, action: act)
-                text = result.content.first[:text]
+                text = response_text(result)
                 if text.include?("set_") && text.include?("find")
                   return "The `set_*` before_action uses `.find` which raises RecordNotFound. " \
                          "The record with the given ID doesn't exist or doesn't belong to the current user. " \
@@ -482,12 +479,13 @@ module RailsAiContext
 
           files_to_check = [ file, *file_refs.map { |r| r[:file] } ].compact.uniq.first(3)
           return lines if files_to_check.empty?
+          return lines unless git_repository?(root)
 
           git_output = []
           files_to_check.each do |f|
             full = File.join(root, f)
             next unless File.exist?(full)
-            output, status = Open3.capture2("git", "log", "--oneline", "-5", "--", f, chdir: root)
+            output, status = Open3.capture2("git", "log", "--oneline", "-5", "--", f, chdir: root, err: File::NULL)
             if status.success? && !output.strip.empty?
               git_output << "**#{f}:**\n#{output.strip}"
             end
@@ -505,15 +503,23 @@ module RailsAiContext
           []
         end
 
+        # A `.git` entry is a file in a worktree and a submodule, so ask git
+        # rather than stat the path. Child stderr goes to File::NULL: git's
+        # "fatal: not a git repository" would otherwise land on the server
+        # terminal for an app that simply is not in one.
+        def git_repository?(root)
+          _, status = Open3.capture2("git", "rev-parse", "--git-dir", chdir: root, err: File::NULL)
+          status.success?
+        end
+
         def gather_log_context(exception_class)
           return [] unless exception_class
 
           begin
             result = ReadLogs.call(level: "ERROR", lines: 15, search: exception_class)
-            text = result.content.first[:text]
-            return [] if text.include?("Log file is empty") || text.include?("not found") || text.include?("No entries")
+            return [] if empty?(result)
 
-            [ "## Recent Error Logs", text, "" ]
+            [ "## Recent Error Logs", response_text(result), "" ]
           rescue => e
             $stderr.puts "[rails-ai-context] gather_log_context failed: #{e.message}" if ENV["DEBUG"]
             []

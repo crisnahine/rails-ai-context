@@ -1,0 +1,13 @@
+# frozen_string_literal: true
+
+# The gemspec's mcp floor, pinned. Trimmed to what the suite needs so a dev
+# dependency cannot quietly resolve mcp upward and turn the floor claim into a
+# test of whatever version happened to win.
+
+source "https://rubygems.org"
+
+gemspec path: ".."
+
+gem "mcp", "= 0.13.0"
+
+eval_gemfile "rails.gemfile"

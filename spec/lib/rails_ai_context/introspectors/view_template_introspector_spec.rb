@@ -146,4 +146,22 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(introspector.send(:extract_partial_refs, source)).to be_empty
     end
   end
+
+  describe ".ivars_in" do
+    it "reads the ivars a template uses" do
+      expect(described_class.ivars_in("<%= @post.title %> <%= @user %>")).to eq(%w[post user])
+    end
+
+    it "drops the locals ERB sets itself" do
+      expect(described_class.ivars_in("<%= @output_buffer %><%= @post %>")).to eq(%w[post])
+    end
+
+    it "does not read an email address as an ivar" do
+      expect(described_class.ivars_in("Mail us at user@example.com")).to eq([])
+    end
+
+    it "does not read a class variable as an ivar" do
+      expect(described_class.ivars_in("<%= @@count %>")).to eq([])
+    end
+  end
 end

@@ -18,22 +18,30 @@ module RailsAiContext
       turbo_frames: %i[turbo turbo_frames],
       turbo_streams: %i[turbo turbo_streams],
       model_broadcasts: %i[turbo model_broadcasts],
+      explicit_broadcasts: %i[turbo explicit_broadcasts],
+      stream_subscriptions: %i[turbo stream_subscriptions],
       jobs: %i[jobs jobs],
       channels: %i[jobs channels],
       mailers: %i[jobs mailers],
       available_locales: %i[i18n available_locales],
       storage_attachments: %i[active_storage attachments],
       rich_text_fields: %i[action_text rich_text_fields],
-      databases: %i[multi_database databases]
+      databases: %i[multi_database databases],
+      notable_gems: %i[gems notable_gems],
+      stimulus_controllers: %i[stimulus controllers],
+      architecture: %i[conventions architecture],
+      patterns: %i[conventions patterns],
+      pending_migrations: %i[migrations pending]
     }.freeze
 
     module_function
 
-    # The section, or nil when it is absent or failed - one guard instead of
-    # the hand-rolled `x.is_a?(Hash) && !x[:error]` at every call site.
+    # The section, or nil when it is absent, failed, or refused - one guard
+    # instead of the hand-rolled `x.is_a?(Hash) && !x[:error]` at every call
+    # site.
     def section(ctx, key)
       value = ctx.is_a?(Hash) ? ctx[key] : nil
-      value.is_a?(Hash) && !value[:error] ? value : nil
+      value.is_a?(Hash) && !value[:error] && !value[:unavailable] ? value : nil
     end
 
     def list(ctx, section_key, key)
@@ -42,6 +50,29 @@ module RailsAiContext
 
     LISTS.each do |name, (section_key, key)|
       define_singleton_method(name) { |ctx| list(ctx, section_key, key) }
+    end
+
+    def controllers(ctx)
+      section(ctx, :controllers)&.dig(:controllers).then { |h| h.is_a?(Hash) ? h : {} }
+    end
+
+    # The app's own controllers: the framework ones the configuration names
+    # are dropped here so every listing counts the same set. A lookup by name
+    # still searches everything, so this is a reader, not an introspector rule.
+    def app_controllers(ctx)
+      excluded = RailsAiContext.configuration.excluded_controllers
+      controllers(ctx).reject { |name, _| excluded.include?(name) }
+    end
+
+    def models(ctx)
+      value = ctx.is_a?(Hash) ? ctx[:models] : nil
+      value.is_a?(Hash) && !value[:error] ? value : {}
+    end
+
+    # Answers only for gems in GemIntrospector::NOTABLE_GEMS - a gem missing
+    # from that table reads as absent here however the app depends on it.
+    def gem?(ctx, name)
+      notable_gems(ctx).any? { |g| g.is_a?(Hash) && g[:name] == name.to_s }
     end
 
     # The file a controller was read from. Reconstructing it from the class
@@ -62,6 +93,16 @@ module RailsAiContext
       carried = models.dig(name.to_s, :file) if models.is_a?(Hash) && !models[:error]
 
       carried || "app/models/#{name.to_s.underscore}.rb"
+    end
+
+    # The file a job or mailer was read from, nil when the tier recorded
+    # none: a job in a pack has no conventional path to fall back to.
+    def job_file(ctx, name)
+      jobs(ctx).find { |job| job.is_a?(Hash) && job[:name] == name.to_s }&.dig(:file)
+    end
+
+    def mailer_file(ctx, name)
+      mailers(ctx).find { |mailer| mailer.is_a?(Hash) && mailer[:name] == name.to_s }&.dig(:file)
     end
 
     # The model a file declares, as [name, data].
@@ -88,16 +129,40 @@ module RailsAiContext
       controllers = section(ctx, :controllers)&.dig(:controllers)
       return nil unless controllers.is_a?(Hash)
 
-      # One slot, holding the hash it indexed: keeping the reference is what
-      # makes identity safe to compare on, and it drops as soon as the next
-      # context arrives.
-      unless @indexed_controllers.equal?(controllers)
-        @route_key_index = controllers.to_h { |name, _| [ controller_route_key(ctx, name), name ] }
-        @indexed_controllers = controllers
+      # One slot holding the hash and the index built from it, read into a
+      # local once and swapped as a single reference. Two threads serving two
+      # contexts then cost at most a rebuild, never an index belonging to the
+      # other one's controllers.
+      memo = @route_key_memo
+      unless memo && memo[0].equal?(controllers)
+        memo = [ controllers, controllers.to_h { |name, _| [ controller_route_key(ctx, name), name ] } ].freeze
+        @route_key_memo = memo
       end
 
-      name = @route_key_index[key.to_s]
+      name = memo[1][key.to_s]
       name ? [ name, controllers[name] ] : nil
+    end
+
+    # The ivars a template reads, across every format that renders the same
+    # action. Scraping them back out of GetView's rendered "ivars:" line made
+    # the cross-check hostage to that line's wording, and it re-read files the
+    # payload had already parsed.
+    def view_ivars(ctx, template)
+      templates = section(ctx, :view_templates)&.dig(:templates)
+      return Set.new unless templates.is_a?(Hash)
+
+      wanted = template.to_s
+      templates.each_with_object(Set.new) do |(path, entry), found|
+        next unless entry.is_a?(Hash) && template_key(path) == wanted
+
+        found.merge(Array(entry[:ivars]).map(&:to_s))
+      end
+    end
+
+    # A template path without its format and handler suffixes:
+    # "posts/create.turbo_stream.erb" is the "posts/create" action.
+    def template_key(path)
+      path.to_s.sub(%r{(?:\.[^./]+)+\z}, "")
     end
 
     # The key Rails routes a controller by: its path, minus the controllers

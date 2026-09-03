@@ -349,7 +349,10 @@ module RailsAiContext
 
         raw = RailsAiContext::SafeFile.read(path)
         return nil unless raw
-        data = YAML.safe_load(raw, permitted_classes: [])
+        # A webpacker config keeps its shared settings behind an anchor, so
+        # refusing aliases loses the source path. Aliases control graph
+        # structure only; permitted_classes still bounds instantiation.
+        data = YAML.safe_load(raw, permitted_classes: [], aliases: true)
         return nil unless data.is_a?(Hash)
 
         default_scope = data["default"]
@@ -415,9 +418,8 @@ module RailsAiContext
       end
 
       def safe_path?(full_path)
-        real = File.realpath(full_path)
-        real.start_with?(root)
-      rescue Errno::ENOENT, Errno::EACCES
+        SafePath.contained?(File.realpath(full_path), File.realpath(root))
+      rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
         false
       end
 

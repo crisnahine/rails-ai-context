@@ -71,58 +71,21 @@ module RailsAiContext
             next
           end
 
-          # Block sensitive files on the caller-supplied string BEFORE any
-          # filesystem stat. Closes the existence-oracle side channel where
-          # an attacker could distinguish "file not found" from "access denied"
-          # for a path like config/master.key. Mirrors get_edit_context.rb
-          # ordering. v5.8.1 round 2 hardening.
-          if sensitive_file?(file)
-            results << "\u2717 #{file} - access denied (sensitive file)"
-            total += 1
-            next
-          end
-
-          full_path = rails_app.root.join(file)
-
-          unless File.exist?(full_path)
+          located = RailsAiContext::SafePath.locate(file, under: rails_app.root.to_s)
+          case located.refusal
+          when :sensitive then results << "\u2717 #{file} - access denied (sensitive file)"
+          when :traversal, :outside then results << "\u2717 #{file} - path not allowed (outside Rails root)"
+          when :too_large then results << "\u2717 #{file} - file too large"
+          when :missing
             suggestion = find_file_suggestion(file)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
             results << "\u2717 #{file} - file not found.#{hint}"
-            total += 1
-            next
-          end
-
-          begin
-            real = File.realpath(full_path).to_s
-            rails_root_real = File.realpath(rails_app.root).to_s
-            # Separator-aware containment - matches the v5.8.1-r2 hardening in
-            # get_view.rb / vfs.rb. Without `+ File::SEPARATOR`, a sibling-dir
-            # like `/app/rails_evil/...` would prefix-match a Rails root at
-            # `/app/rails`. Same bug class as the original C1.
-            unless real == rails_root_real || real.start_with?(rails_root_real + File::SEPARATOR)
-              results << "\u2717 #{file} - path not allowed (outside Rails root)"
-              total += 1
-              next
-            end
-            # Defense-in-depth: re-run sensitive_file? on the resolved path.
-            # Catches symlinks pointing into sensitive territory from a
-            # non-sensitive caller string (e.g. app/views/leak.html.erb →
-            # ../../config/master.key).
-            relative_real = real.sub("#{rails_root_real}/", "")
-            if sensitive_file?(relative_real)
-              results << "\u2717 #{file} - access denied (resolves to sensitive file)"
-              total += 1
-              next
-            end
-          rescue Errno::ENOENT
-            results << "\u2717 #{file} - file not found"
-            total += 1
-            next
           end
 
           total += 1
+          next unless located.ok?
 
-          real_path = Pathname.new(real)
+          real_path = Pathname.new(located.realpath)
           ok, msg, warnings = if file.end_with?(".rb")
             validate_ruby(real_path)
           elsif file.end_with?(".html.erb") || file.end_with?(".erb")

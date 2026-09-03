@@ -528,4 +528,68 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       end
     end
   end
+
+  describe "a mailer file that cannot load" do
+    let(:broken) { File.join(Rails.root, "app", "mailers", "zz_broken_mailer.rb") }
+
+    before { File.write(broken, "class ZzBrokenMailer < ApplicationMailer\n  def oops(\nend\n") }
+    after { FileUtils.rm_f(broken) }
+
+    it "costs itself, not the mailers list" do
+      mailers = described_class.new(Rails.application).call[:mailers]
+      expect(mailers.map { |m| m[:name] }).to include("UserMailer", "NotificationMailer")
+      expect(mailers.map { |m| m[:name] }).not_to include("ZzBrokenMailer")
+    end
+  end
+
+  describe "the carried file" do
+    it "is recorded by the static tier for jobs and mailers" do
+      result = described_class.new(RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT)).static_call
+      expect(result[:jobs].find { |j| j[:name] == "ExampleJob" }[:file]).to eq("app/jobs/example_job.rb")
+      expect(result[:mailers].find { |m| m[:name] == "UserMailer" }[:file]).to eq("app/mailers/user_mailer.rb")
+    end
+
+    it "is recorded by the booted tier for jobs and mailers" do
+      result = described_class.new(Rails.application).call
+      expect(result[:jobs].find { |j| j[:name] == "ExampleJob" }[:file]).to eq("app/jobs/example_job.rb")
+      expect(result[:mailers].find { |m| m[:name] == "UserMailer" }[:file]).to eq("app/mailers/user_mailer.rb")
+    end
+
+    it "is the pack path for a job in a pack" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "jobs"))
+        File.write(File.join(dir, "packs", "billing", "app", "jobs", "invoice_job.rb"),
+                   "class InvoiceJob < ApplicationJob\n  def perform(id); end\nend\n")
+
+        jobs = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:jobs]
+        expect(jobs).to contain_exactly(a_hash_including(name: "InvoiceJob", file: "packs/billing/app/jobs/invoice_job.rb"))
+      end
+    end
+
+    it "is the path the app spells when the pack is a symlink out of the root" do
+      Dir.mktmpdir do |outside|
+        FileUtils.mkdir_p(File.join(outside, "billing", "app", "jobs"))
+        File.write(File.join(outside, "billing", "app", "jobs", "symlinked_pack_job.rb"),
+                   "class SymlinkedPackJob < ActiveJob::Base\n  def perform(id); end\nend\n")
+        link = File.join(Rails.root, "packs")
+        # Only ever remove the link this example makes. A committed packs
+        # fixture would otherwise be deleted by a run of this spec.
+        skip "a real packs directory is checked in" if File.exist?(link) && !File.symlink?(link)
+
+        FileUtils.rm_f(link) if File.symlink?(link)
+        File.symlink(outside, link)
+
+        begin
+          load File.join(link, "billing", "app", "jobs", "symlinked_pack_job.rb")
+          jobs = described_class.new(Rails.application).call[:jobs]
+          expect(jobs).to include(
+            a_hash_including(name: "SymlinkedPackJob", file: "packs/billing/app/jobs/symlinked_pack_job.rb")
+          )
+        ensure
+          FileUtils.rm_f(link) if File.symlink?(link)
+          Object.send(:remove_const, :SymlinkedPackJob) if Object.const_defined?(:SymlinkedPackJob)
+        end
+      end
+    end
+  end
 end

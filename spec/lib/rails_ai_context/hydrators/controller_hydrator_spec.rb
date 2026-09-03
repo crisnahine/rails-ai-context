@@ -15,6 +15,11 @@ RSpec.describe RailsAiContext::Hydrators::ControllerHydrator do
           table_name: "comments",
           associations: [ { name: "post", type: "belongs_to", class_name: "Post" } ],
           validations: []
+        },
+        "OAuthClientConfig" => {
+          table_name: "oauth_client_configs",
+          associations: [],
+          validations: []
         }
       },
       schema: {
@@ -31,6 +36,10 @@ RSpec.describe RailsAiContext::Hydrators::ControllerHydrator do
               { name: "id", type: "integer", null: false },
               { name: "body", type: "text" }
             ],
+            primary_key: "id"
+          },
+          "oauth_client_configs" => {
+            columns: [ { name: "id", type: "integer", null: false } ],
             primary_key: "id"
           }
         }
@@ -111,6 +120,26 @@ RSpec.describe RailsAiContext::Hydrators::ControllerHydrator do
 
       result = described_class.call(path, context: context)
       expect(result.hints.map(&:model_name)).to include("Post")
+    end
+
+    it "hints once, without a warning, for a model the acronym inflects two ways" do
+      path = write_controller(<<~RUBY)
+        class ConfigsController < ApplicationController
+          def create
+            @config = OAuthClientConfig.create!(config_params)
+          end
+
+          private
+
+          def config_params
+            params.require(:oauth_client_config).permit(:name)
+          end
+        end
+      RUBY
+
+      result = described_class.call(path, context: context)
+      expect(result.hints.map(&:model_name)).to eq([ "OAuthClientConfig" ])
+      expect(result.warnings).to eq([])
     end
 
     it "respects hydration_max_hints configuration" do

@@ -8,22 +8,6 @@ module RailsAiContext
         "Use when: debugging Turbo Stream delivery, adding real-time updates, or understanding broadcast→subscription wiring. " \
         "Filter with stream:\"notifications\" for a specific stream, or controller:\"messages\" for one controller's Turbo usage."
 
-      BROADCAST_METHODS = %w[
-        broadcast_replace_to
-        broadcast_append_to
-        broadcast_prepend_to
-        broadcast_remove_to
-        broadcast_update_to
-        broadcast_action_to
-      ].freeze
-
-      MODEL_BROADCAST_MACROS = %w[
-        broadcasts
-        broadcasts_to
-        broadcasts_refreshes
-        broadcasts_refreshes_to
-      ].freeze
-
       input_schema(
         properties: {
           detail: {
@@ -50,89 +34,70 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # What the filters left, in one value: every formatter needs all five.
+      Found = Data.define(:model_broadcasts, :rb_broadcasts, :view_subscriptions, :view_frames, :warnings)
+
       def self.call(detail: "standard", stream: nil, controller: nil, server_context: nil)
         return text_response("Turbo is not installed in this app (no `turbo-rails` gem in Gemfile.lock).") if turbo_rails_absent?
 
-        root = rails_app.root.to_s
+        fetch_section(:turbo, subject: "Turbo introspection") do |data|
+          model_broadcasts = Payload.model_broadcasts(cached_context)
+          rb_broadcasts = Payload.explicit_broadcasts(cached_context)
+          view_subscriptions = Payload.stream_subscriptions(cached_context)
+          view_frames = Payload.turbo_frames(cached_context)
 
-        # Collect all Turbo data
-        model_broadcasts = scan_model_broadcasts(root)
-        rb_broadcasts = scan_rb_broadcasts(root)
-        view_subscriptions = scan_view_subscriptions(root)
-        view_frames = scan_view_frames(root)
+          if stream
+            stream_lower = stream.downcase
+            mentions = ->(entry) { entry[:stream]&.downcase&.include?(stream_lower) || entry[:snippet]&.downcase&.include?(stream_lower) }
+            model_broadcasts = model_broadcasts.select(&mentions)
+            rb_broadcasts = rb_broadcasts.select(&mentions)
+            view_subscriptions = view_subscriptions.select(&mentions)
+          end
 
-        # Apply filters
-        if stream
-          stream_lower = stream.downcase
-          model_broadcasts = model_broadcasts.select { |b|
-            b[:stream]&.downcase&.include?(stream_lower) ||
-            b[:snippet]&.downcase&.include?(stream_lower)
-          }
-          rb_broadcasts = rb_broadcasts.select { |b|
-            b[:stream]&.downcase&.include?(stream_lower) ||
-            b[:snippet]&.downcase&.include?(stream_lower)
-          }
-          view_subscriptions = view_subscriptions.select { |s|
-            s[:stream]&.downcase&.include?(stream_lower) ||
-            s[:snippet]&.downcase&.include?(stream_lower)
-          }
-        end
+          if controller
+            ctrl_lower = controller.downcase
+            view_subscriptions = view_subscriptions.select { |s| s[:file]&.downcase&.include?(ctrl_lower) }
+            view_frames = view_frames.select { |f| f[:file]&.downcase&.include?(ctrl_lower) }
 
-        if controller
-          ctrl_lower = controller.downcase
-          # Filter subscriptions and frames by controller path
-          view_subscriptions = view_subscriptions.select { |s| s[:file]&.downcase&.include?(ctrl_lower) }
-          view_frames = view_frames.select { |f| f[:file]&.downcase&.include?(ctrl_lower) }
+            # A broadcast belongs to the controller when it sits in its path or
+            # feeds a stream one of its surviving views subscribes to (a job
+            # broadcasting to a stream the controller's views listen on).
+            matched_streams = view_subscriptions.map { |s| s[:stream] }.compact
+            rb_broadcasts = rb_broadcasts.select { |b|
+              b[:file]&.downcase&.include?(ctrl_lower) ||
+                (b[:stream] && matched_streams.any? { |ss| streams_match?(b[:stream], ss) })
+            }
+          end
 
-          # For broadcasts: include those in the controller path OR those whose
-          # stream matches any subscription that survived the filter (e.g. jobs
-          # broadcasting to streams that the controller's views subscribe to)
-          matched_streams = view_subscriptions.map { |s| s[:stream] }.compact
-          rb_broadcasts = rb_broadcasts.select { |b|
-            b[:file]&.downcase&.include?(ctrl_lower) ||
-              (b[:stream] && matched_streams.any? { |ss| streams_match?(b[:stream], ss) })
-          }
-        end
+          warnings = detect_mismatches(model_broadcasts, rb_broadcasts, view_subscriptions)
+          filter_label = stream ? "stream:\"#{stream}\"" : controller ? "controller:\"#{controller}\"" : nil
 
-        # Detect mismatches
-        warnings = detect_mismatches(model_broadcasts, rb_broadcasts, view_subscriptions)
+          found = Found.new(
+            model_broadcasts: model_broadcasts, rb_broadcasts: rb_broadcasts,
+            view_subscriptions: view_subscriptions, view_frames: view_frames, warnings: warnings
+          )
 
-        filter_label = stream ? "stream:\"#{stream}\"" : controller ? "controller:\"#{controller}\"" : nil
-
-        case detail
-        when "summary"
-          format_summary(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: filter_label)
-        when "standard"
-          format_standard(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: filter_label)
-        when "full"
-          format_full(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: filter_label)
+          case detail
+          when "summary" then format_summary(found, turbo_data: data, filter_label: filter_label)
+          when "standard" then format_standard(found, turbo_data: data, filter_label: filter_label)
+          when "full" then format_full(found, turbo_data: data, filter_label: filter_label)
+          end
         end
       end
 
-      # True only when a Gemfile.lock exists AND it does not list turbo-rails -
-      # a definite "not installed" signal. When no lock file is present at all
-      # we can't tell either way, so this returns false (matches the
-      # convention_introspector/migration_advisor gem_present? pattern of
-      # trusting the lock file, not guessing when it's absent).
+      # No lockfile means unknown, not absent, so this answers false there.
       private_class_method def self.turbo_rails_absent?
-        lock_path = File.join(rails_app.root.to_s, "Gemfile.lock")
-        return false unless File.exist?(lock_path)
-
-        content = RailsAiContext::SafeFile.read(lock_path)
-        return false unless content
-
-        !content.include?("    turbo-rails (")
+        lock = RailsAiContext::GemLock.for(rails_app.root)
+        !lock.missing? && !lock.present?("turbo-rails")
       rescue => e
         $stderr.puts "[rails-ai-context] turbo_rails_absent? failed: #{e.message}" if ENV["DEBUG"]
         false
       end
 
-      private_class_method def self.format_summary(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: nil)
-        total_broadcasts = model_broadcasts.size + rb_broadcasts.size
-        turbo_data = cached_context[:turbo]
-        turbo_usable = turbo_data.is_a?(Hash) && !turbo_data[:error]
-        turbo_stream_response_count = turbo_usable ? turbo_data[:turbo_stream_responses]&.size.to_i : 0
-        turbo_stream_template_count = turbo_usable ? turbo_data[:turbo_streams]&.size.to_i : 0
+      private_class_method def self.format_summary(found, turbo_data:, filter_label: nil)
+        found.to_h => { model_broadcasts:, rb_broadcasts:, view_subscriptions:, view_frames:, warnings: }
+        turbo_stream_response_count = turbo_data[:turbo_stream_responses]&.size.to_i
+        turbo_stream_template_count = turbo_data[:turbo_streams]&.size.to_i
 
         lines = [ "# Turbo Map", "" ]
         lines << "- **Turbo Stream responses:** #{turbo_stream_response_count} (controllers responding with `turbo_stream` format)" if turbo_stream_response_count > 0
@@ -146,56 +111,38 @@ module RailsAiContext
           lines << "" << "**Warnings:** #{warnings.size} potential mismatch(es) detected"
         end
 
-        note = unavailable_note(turbo_data)
-        lines << "" << note if note
-
         lines << ""
         lines << "_Use `detail:\"standard\"` for stream wiring, or `stream:\"name\"` to filter._"
 
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.format_standard(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: nil)
+      private_class_method def self.format_standard(found, turbo_data:, filter_label: nil)
+        found.to_h => { model_broadcasts:, rb_broadcasts:, view_subscriptions:, view_frames:, warnings: }
         lines = [ "# Turbo Map", "" ]
+        lines.concat(drive_configuration_lines(turbo_data))
 
-        # Turbo Drive Configuration
-        turbo_data = cached_context[:turbo]
-        if turbo_data.is_a?(Hash) && !turbo_data[:error]
-          drive_parts = []
-          drive_parts << "morph: #{turbo_data[:morph_meta] ? 'yes' : 'no'}" unless turbo_data[:morph_meta].nil?
-          drive_parts << "permanent elements: #{turbo_data[:permanent_elements].size}" if turbo_data[:permanent_elements]&.any?
-          if turbo_data[:turbo_drive_settings].is_a?(Hash) && turbo_data[:turbo_drive_settings].any?
-            turbo_data[:turbo_drive_settings].each { |k, v| drive_parts << "#{k}: #{v}" }
+        # Turbo Stream responses
+        if turbo_data[:turbo_stream_responses]&.any?
+          lines << "## Turbo Stream Responses"
+          turbo_data[:turbo_stream_responses].first(15).each do |resp|
+            lines << "- `#{stream_response_label(resp)}`"
           end
-          if drive_parts.any?
-            lines << "## Turbo Drive Configuration"
-            drive_parts.each { |p| lines << "- #{p}" }
-            lines << ""
-          end
-
-          # Turbo Stream responses
-          if turbo_data[:turbo_stream_responses]&.any?
-            lines << "## Turbo Stream Responses"
-            turbo_data[:turbo_stream_responses].first(15).each do |resp|
-              lines << "- `#{resp}`"
-            end
-            lines << ""
-          end
-
-          # .turbo_stream.erb response templates - the most common scaffold-style
-          # Turbo Stream pattern. The introspector collects these via its view
-          # scan; without rendering them here, an app whose streams are driven
-          # entirely by templates wrongly reports "no Turbo Streams detected".
-          if turbo_data[:turbo_streams]&.any?
-            actions = turbo_data[:stream_actions]
-            action_summary = actions.is_a?(Hash) && actions.any? ? " (actions: #{actions.map { |a, n| "#{a}×#{n}" }.join(', ')})" : ""
-            lines << "## Turbo Stream Templates (#{turbo_data[:turbo_streams].size})#{action_summary}"
-            turbo_data[:turbo_streams].first(20).each { |tpl| lines << "- `#{tpl}`" }
-            lines << ""
-          end
+          lines << ""
         end
 
-        # Model broadcasts
+        # .turbo_stream.erb response templates - the most common scaffold-style
+        # Turbo Stream pattern. The introspector collects these via its view
+        # scan; without rendering them here, an app whose streams are driven
+        # entirely by templates wrongly reports "no Turbo Streams detected".
+        if turbo_data[:turbo_streams]&.any?
+          actions = turbo_data[:stream_actions]
+          action_summary = actions.is_a?(Hash) && actions.any? ? " (actions: #{actions.map { |a, n| "#{a}×#{n}" }.join(', ')})" : ""
+          lines << "## Turbo Stream Templates (#{turbo_data[:turbo_streams].size})#{action_summary}"
+          turbo_data[:turbo_streams].first(20).each { |tpl| lines << "- `#{tpl}`" }
+          lines << ""
+        end
+
         if model_broadcasts.any?
           lines << "## Model Broadcasts (#{model_broadcasts.size})"
           model_broadcasts.each do |b|
@@ -205,7 +152,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Explicit broadcasts from .rb files
         if rb_broadcasts.any?
           lines << "## Explicit Broadcasts (#{rb_broadcasts.size})"
           rb_broadcasts.each do |b|
@@ -215,7 +161,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # View subscriptions
         if view_subscriptions.any?
           lines << "## Stream Subscriptions (#{view_subscriptions.size})"
           view_subscriptions.each do |s|
@@ -224,7 +169,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Turbo Frames
         if view_frames.any?
           lines << "## Turbo Frames (#{view_frames.size})"
           view_frames.each do |f|
@@ -234,15 +178,14 @@ module RailsAiContext
           lines << ""
         end
 
-        # Warnings
         if warnings.any?
           lines << "## Warnings"
           warnings.each { |w| lines << "- #{w}" }
           lines << ""
         end
 
-        has_turbo_stream_responses = turbo_data.is_a?(Hash) && turbo_data[:turbo_stream_responses]&.any?
-        has_stream_templates = turbo_data.is_a?(Hash) && turbo_data[:turbo_streams]&.any?
+        has_turbo_stream_responses = turbo_data[:turbo_stream_responses]&.any?
+        has_stream_templates = turbo_data[:turbo_streams]&.any?
 
         if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
           note = api_only_note("the Turbo Streams/Frames surface")
@@ -253,53 +196,57 @@ module RailsAiContext
           else
             lines << "_No Turbo Streams or Frames detected in this app._"
           end
-        else
-          lines << "_Use `detail:\"full\"` for DOM IDs and inline templates, or `stream:\"name\"` to filter._"
+          return empty_response(lines.join("\n"))
         end
-        note = unavailable_note(turbo_data)
-        lines << note if note
 
+        lines << "_Use `detail:\"full\"` for DOM IDs and inline templates, or `stream:\"name\"` to filter._"
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.format_full(model_broadcasts, rb_broadcasts, view_subscriptions, view_frames, warnings, filter_label: nil)
+      # The entries are `{ controller:, action: }`; the rest of the file names
+      # a controller action `PostsController#create`, so this section does too.
+      private_class_method def self.stream_response_label(resp)
+        return resp.to_s unless resp.is_a?(Hash)
+
+        "#{resp[:controller]}##{resp[:action]}"
+      end
+
+      # The one Drive section: both formatters render it identically.
+      private_class_method def self.drive_configuration_lines(turbo_data)
+        parts = []
+        parts << "morph: #{turbo_data[:morph_meta] ? 'yes' : 'no'}" unless turbo_data[:morph_meta].nil?
+        parts << "permanent elements: #{turbo_data[:permanent_elements].size}" if turbo_data[:permanent_elements]&.any?
+        if turbo_data[:turbo_drive_settings].is_a?(Hash) && turbo_data[:turbo_drive_settings].any?
+          turbo_data[:turbo_drive_settings].each { |k, v| parts << "#{k}: #{v}" }
+        end
+        return [] if parts.empty?
+
+        [ "## Turbo Drive Configuration" ] + parts.map { |p| "- #{p}" } + [ "" ]
+      end
+
+      private_class_method def self.format_full(found, turbo_data:, filter_label: nil)
+        found.to_h => { model_broadcasts:, rb_broadcasts:, view_subscriptions:, view_frames:, warnings: }
         lines = [ "# Turbo Map (Full Detail)", "" ]
+        lines.concat(drive_configuration_lines(turbo_data))
 
-        # Turbo Drive Configuration & Stream Responses
-        turbo_data = cached_context[:turbo]
-        if turbo_data.is_a?(Hash) && !turbo_data[:error]
-          drive_parts = []
-          drive_parts << "morph: #{turbo_data[:morph_meta] ? 'yes' : 'no'}" unless turbo_data[:morph_meta].nil?
-          drive_parts << "permanent elements: #{turbo_data[:permanent_elements].size}" if turbo_data[:permanent_elements]&.any?
-          if turbo_data[:turbo_drive_settings].is_a?(Hash) && turbo_data[:turbo_drive_settings].any?
-            turbo_data[:turbo_drive_settings].each { |k, v| drive_parts << "#{k}: #{v}" }
+        # Turbo Stream responses
+        if turbo_data[:turbo_stream_responses]&.any?
+          lines << "## Turbo Stream Responses (#{turbo_data[:turbo_stream_responses].size})"
+          turbo_data[:turbo_stream_responses].each do |resp|
+            lines << "- `#{stream_response_label(resp)}`"
           end
-          if drive_parts.any?
-            lines << "## Turbo Drive Configuration"
-            drive_parts.each { |p| lines << "- #{p}" }
-            lines << ""
-          end
-
-          # Turbo Stream responses
-          if turbo_data[:turbo_stream_responses]&.any?
-            lines << "## Turbo Stream Responses (#{turbo_data[:turbo_stream_responses].size})"
-            turbo_data[:turbo_stream_responses].each do |resp|
-              lines << "- `#{resp}`"
-            end
-            lines << ""
-          end
-
-          # .turbo_stream.erb response templates (scaffold-style Turbo Streams).
-          if turbo_data[:turbo_streams]&.any?
-            lines << "## Turbo Stream Templates (#{turbo_data[:turbo_streams].size})"
-            turbo_data[:turbo_streams].each { |tpl| lines << "- `#{tpl}`" }
-            actions = turbo_data[:stream_actions]
-            lines << "- **Actions used:** #{actions.map { |a, n| "#{a}×#{n}" }.join(', ')}" if actions.is_a?(Hash) && actions.any?
-            lines << ""
-          end
+          lines << ""
         end
 
-        # Model broadcasts with full context
+        # .turbo_stream.erb response templates (scaffold-style Turbo Streams).
+        if turbo_data[:turbo_streams]&.any?
+          lines << "## Turbo Stream Templates (#{turbo_data[:turbo_streams].size})"
+          turbo_data[:turbo_streams].each { |tpl| lines << "- `#{tpl}`" }
+          actions = turbo_data[:stream_actions]
+          lines << "- **Actions used:** #{actions.map { |a, n| "#{a}×#{n}" }.join(', ')}" if actions.is_a?(Hash) && actions.any?
+          lines << ""
+        end
+
         if model_broadcasts.any?
           lines << "## Model Broadcasts (#{model_broadcasts.size})"
           model_broadcasts.each do |b|
@@ -311,7 +258,6 @@ module RailsAiContext
           end
         end
 
-        # Explicit broadcasts with full context
         if rb_broadcasts.any?
           lines << "## Explicit Broadcasts (#{rb_broadcasts.size})"
           rb_broadcasts.each do |b|
@@ -324,7 +270,6 @@ module RailsAiContext
           end
         end
 
-        # View subscriptions with full context
         if view_subscriptions.any?
           lines << "## Stream Subscriptions (#{view_subscriptions.size})"
           view_subscriptions.each do |s|
@@ -336,7 +281,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Turbo Frames with full context
         if view_frames.any?
           lines << "## Turbo Frames (#{view_frames.size})"
           view_frames.each do |f|
@@ -370,15 +314,14 @@ module RailsAiContext
           end
         end
 
-        # Warnings
         if warnings.any?
           lines << "## Warnings"
           warnings.each { |w| lines << "- #{w}" }
           lines << ""
         end
 
-        has_turbo_stream_responses = turbo_data.is_a?(Hash) && turbo_data[:turbo_stream_responses]&.any?
-        has_stream_templates = turbo_data.is_a?(Hash) && turbo_data[:turbo_streams]&.any?
+        has_turbo_stream_responses = turbo_data[:turbo_stream_responses]&.any?
+        has_stream_templates = turbo_data[:turbo_streams]&.any?
 
         if model_broadcasts.empty? && rb_broadcasts.empty? && view_subscriptions.empty? && view_frames.empty? && !has_turbo_stream_responses && !has_stream_templates
           note = api_only_note("the Turbo Streams/Frames surface")
@@ -389,286 +332,10 @@ module RailsAiContext
           else
             lines << "_No Turbo Streams or Frames detected in this app._"
           end
+          return empty_response(lines.join("\n"))
         end
-        note = unavailable_note(turbo_data)
-        lines << note if note
 
         text_response(lines.join("\n"))
-      end
-
-      # Scan models for broadcasts, broadcasts_to, broadcasts_refreshes, broadcasts_refreshes_to
-      private_class_method def self.scan_model_broadcasts(root)
-        results = []
-        models_dir = File.join(root, "app", "models")
-        return results unless Dir.exist?(models_dir)
-
-        real_root = File.realpath(root).to_s
-        safe_glob(models_dir, "**/*.rb", real_root).sort.each do |file|
-          next if File.size(file) > max_file_size
-          source = safe_read(file)
-          next unless source
-
-          relative = file.sub("#{real_root}/", "")
-          model_name = extract_class_name(source) || File.basename(file, ".rb").camelize
-
-          # Comments (including =begin blocks) are stripped up front with
-          # literal state carried across lines; `def` lines contribute only
-          # an endless method's body, so a macro name in a comment or a
-          # parameter default never counts. Line numbers are preserved.
-          stripped = RailsAiContext::SourceLine.strip_comments(source)
-          stripped.each_line.with_index(1) do |line, line_num|
-            scannable = RailsAiContext::SourceLine.executable_part(line)
-
-            MODEL_BROADCAST_MACROS.each do |macro|
-              next unless scannable.match?(/\b#{macro}\b/)
-
-              stream = extract_stream_name_from_macro(scannable, macro)
-              results << {
-                model: model_name,
-                macro: macro,
-                stream: stream,
-                file: relative,
-                line: line_num,
-                snippet: line.strip
-              }
-            end
-          end
-        end
-
-        results
-      end
-
-      # Scan all .rb files for explicit broadcast_*_to calls
-      # Handles multi-line calls by joining the method line with subsequent lines
-      private_class_method def self.scan_rb_broadcasts(root)
-        results = []
-        real_root = File.realpath(root).to_s
-        search_dirs = %w[app/controllers app/models app/services app/jobs app/workers app/channels].map { |d| File.join(root, d) }
-
-        search_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-
-          safe_glob(dir, "**/*.rb", real_root).sort.each do |file|
-            next if File.size(file) > max_file_size
-            source = safe_read(file)
-            next unless source
-
-            relative = file.sub("#{real_root}/", "")
-            # Comments (including =begin blocks) stripped up front with
-            # literal state carried across lines; line count is preserved.
-            lines = RailsAiContext::SourceLine.strip_comments(source).lines
-
-            lines.each_with_index do |line, idx|
-              line_num = idx + 1
-              # A `def` line contributes only an endless method's body, so a
-              # broadcast name in a parameter default never counts as a call.
-              scannable = RailsAiContext::SourceLine.executable_part(line)
-
-              BROADCAST_METHODS.each do |method|
-                next unless scannable.include?(method)
-
-                # Join up to 3 subsequent lines for multi-line calls.
-                # delete("\r"): CRLF sources must not leak carriage returns
-                # into snippets or captured stream names.
-                context_lines = lines[idx, 4].join.delete("\r").tr("\n", " ")
-
-                stream = extract_stream_from_broadcast(context_lines, method)
-                target = extract_target_from_broadcast(context_lines)
-                partial = extract_partial_from_broadcast(context_lines)
-
-                results << {
-                  method: method,
-                  stream: stream,
-                  target: target,
-                  partial: partial,
-                  file: relative,
-                  line: line_num,
-                  snippet: context_lines.squeeze(" ").strip[0, 200]
-                }
-              end
-            end
-          end
-        end
-
-        results
-      end
-
-      # Scan view files for turbo_stream_from tags
-      private_class_method def self.scan_view_subscriptions(root)
-        results = []
-        views_dir = File.join(root, "app", "views")
-        return results unless Dir.exist?(views_dir)
-
-        real_root = File.realpath(root).to_s
-        safe_glob(views_dir, "**/*.{erb,haml,slim}", real_root).sort.each do |file|
-          next if File.size(file) > max_file_size
-          source = safe_read(file)
-          next unless source
-
-          relative = file.sub("#{real_root}/", "")
-
-          source.each_line.with_index(1) do |line, line_num|
-            next unless line.include?("turbo_stream_from")
-
-            stream = extract_stream_from_subscription(line)
-            results << {
-              stream: stream,
-              file: relative,
-              line: line_num,
-              snippet: line.strip
-            }
-          end
-        end
-
-        results
-      end
-
-      # Scan view files for turbo_frame_tag
-      private_class_method def self.scan_view_frames(root)
-        results = []
-        views_dir = File.join(root, "app", "views")
-        return results unless Dir.exist?(views_dir)
-
-        real_root = File.realpath(root).to_s
-        safe_glob(views_dir, "**/*.{erb,haml,slim}", real_root).sort.each do |file|
-          next if File.size(file) > max_file_size
-          source = safe_read(file)
-          next unless source
-
-          relative = file.sub("#{real_root}/", "")
-
-          source.each_line.with_index(1) do |line, line_num|
-            next unless line.include?("turbo_frame_tag")
-
-            id = extract_frame_id(line)
-            src = extract_frame_src(line)
-            results << {
-              id: id,
-              src: src,
-              file: relative,
-              line: line_num,
-              snippet: line.strip
-            }
-          end
-        end
-
-        results
-      end
-
-      # Extract stream name from model broadcast macro line
-      private_class_method def self.extract_stream_name_from_macro(line, macro)
-        case macro
-        when "broadcasts"
-          # broadcasts - stream name is typically the model's plural name
-          # broadcasts inserts_by: :prepend
-          "self (model plural)"
-        when "broadcasts_to"
-          # broadcasts_to :room, inserts_by: :prepend
-          match = line.match(/broadcasts_to\s+:?(\w+)/)
-          match ? match[1] : nil
-        when "broadcasts_refreshes"
-          "self (model plural, refreshes)"
-        when "broadcasts_refreshes_to"
-          match = line.match(/broadcasts_refreshes_to\s+:?(\w+)/)
-          match ? match[1] : nil
-        end
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_stream_name_from_macro failed: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      # Extract stream name from broadcast_*_to call
-      private_class_method def self.extract_stream_from_broadcast(line, method)
-        # Try string interpolation first: "post_#{post.id}" → "post_#{id}"
-        interp_pattern = /#{Regexp.escape(method)}\s*\(?\s*["']([^"']*#\{[^}]+\}[^"']*)["']/
-        interp_match = line.match(interp_pattern)
-        if interp_match
-          # Normalize: "post_#{post.id}" → "post_{id}", "post_#{@post.id}" → "post_{id}"
-          return interp_match[1].gsub(/#\{(.+?)\}/) { |_|
-            expr = $1.strip
-            # Extract the last method call: "@post.id" → "id", "post.id" → "id", "id" → "id"
-            last_method = expr.split(".").last
-            "{#{last_method}}"
-          }
-        end
-
-        # Try symbol: :stream_name
-        # Try plain string: "stream_name"
-        # Try bare identifier: stream_name
-        pattern = /#{Regexp.escape(method)}\s*\(?\s*:?["']?(\w+)["']?/
-        match = line.match(pattern)
-        match ? match[1] : "(dynamic)"
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_stream_from_broadcast failed: #{e.message}" if ENV["DEBUG"]
-        "(dynamic)"
-      end
-
-      # Extract target: from a broadcast call
-      private_class_method def self.extract_target_from_broadcast(line)
-        match = line.match(/target:\s*["'](\w+)["']/)
-        match ? match[1] : nil
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_target_from_broadcast failed: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      # Extract partial: from a broadcast call
-      private_class_method def self.extract_partial_from_broadcast(line)
-        match = line.match(/partial:\s*["']([^"']+)["']/)
-        match ? match[1] : nil
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_partial_from_broadcast failed: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      # Extract stream name from turbo_stream_from call
-      private_class_method def self.extract_stream_from_subscription(line)
-        # turbo_stream_from :notifications
-        # turbo_stream_from "notifications"
-        # turbo_stream_from @room
-        # turbo_stream_from current_user, :notifications
-        # turbo_stream_from "post_#{@post.id}"
-        match = line.match(/turbo_stream_from\s+(.+?)(?:\s*%>|\s*$|\s*do\b)/)
-        return "(dynamic)" unless match
-
-        args = match[1].strip
-
-        # Handle string interpolation: "post_#{@post.id}" → "post_{id}"
-        if args.include?("#")
-          normalized = args.gsub(/["']/, "").gsub(/#\{(.+?)\}/) { |_|
-            expr = $1.strip
-            last_method = expr.split(".").last
-            "{#{last_method}}"
-          }
-          return normalized
-        end
-
-        # Clean up and return meaningful stream name
-        args.gsub(/["']/, "").gsub(/\s*,\s*/, ", ").strip
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_stream_from_subscription failed: #{e.message}" if ENV["DEBUG"]
-        "(dynamic)"
-      end
-
-      # Extract frame ID from turbo_frame_tag call
-      private_class_method def self.extract_frame_id(line)
-        # turbo_frame_tag "frame_id"
-        # turbo_frame_tag :frame_id
-        # turbo_frame_tag dom_id(@model)
-        match = line.match(/turbo_frame_tag\s+["':]*([^"',\s)]+)/)
-        match ? match[1] : "(dynamic)"
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_frame_id failed: #{e.message}" if ENV["DEBUG"]
-        "(dynamic)"
-      end
-
-      # Extract src: from turbo_frame_tag
-      private_class_method def self.extract_frame_src(line)
-        match = line.match(/src:\s*["']?([^"',\s)]+)["']?/)
-        match ? match[1] : nil
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_frame_src failed: #{e.message}" if ENV["DEBUG"]
-        nil
       end
 
       # Detect mismatches between broadcasts and subscriptions
@@ -757,14 +424,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] build_stream_wiring failed: #{e.message}" if ENV["DEBUG"]
         {}
-      end
-
-      private_class_method def self.extract_class_name(source)
-        match = source.match(/class\s+([\w:]+)/)
-        match[1] if match
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_class_name failed: #{e.message}" if ENV["DEBUG"]
-        nil
       end
     end
   end

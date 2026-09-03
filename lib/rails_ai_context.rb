@@ -46,12 +46,7 @@ module RailsAiContext
     end
 
     def configure
-      @configured_via_block = true
-      yield(configuration)
-    end
-
-    def configured_via_block?
-      @configured_via_block || false
+      configuration.recording_block_assignments { |config| yield(config) }
     end
 
     # Warn through Rails.logger when available, stderr otherwise. Introspection
@@ -84,6 +79,10 @@ module RailsAiContext
     # summary, or a note that --no-boot was requested). Nil in runtime tier.
     attr_accessor :static_reason
 
+    # Why the static tier is active: :requested (--no-boot), :source_only
+    # (no config/environment.rb) or :boot_failed. Nil in runtime tier.
+    attr_accessor :static_kind
+
     # Quick access to introspect the current Rails app
     # Returns a hash of all discovered context
     def introspect(app = nil)
@@ -91,9 +90,14 @@ module RailsAiContext
       Introspector.new(app).call
     end
 
-    # Generate context files (CLAUDE.md, .cursor/rules/, etc.)
-    def generate_context(app = nil, format: :all)
+    # Generate context files (CLAUDE.md, .cursor/rules/, etc.).
+    # format: nil means the recorded selection; all when nothing is recorded.
+    # Always one serializer call for every format: opencode and codex share
+    # AGENTS.md, and generating one format at a time defeats that dedup.
+    def generate_context(app = nil, format: nil)
       app ||= default_app
+      selected = configuration.ai_tools
+      format ||= selected.nil? || selected.empty? ? :all : selected
       context = introspect(app)
       Serializers::ContextFileSerializer.new(context, format: format).call
     end

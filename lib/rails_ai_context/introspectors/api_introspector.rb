@@ -14,23 +14,25 @@ module RailsAiContext
         @app = app
       end
 
-      # Everything but api_only needs a booted app, but api_only itself is a
-      # plain assignment in config/application.rb - and the view tools already
-      # read it there. Leaving this section wholly unavailable meant one
-      # process answering "this is an API-only app" from get_stimulus and
-      # "cannot say" from get_api.
+      # Only the mode differs between the tiers: `config.api_only` is a
+      # runtime read, and the assignment it comes from is in
+      # config/application.rb, which is what AppKind reads.
       def static_call
-        {
-          api_only: AppKind.api_only?(app.root),
-          unavailable_sections: StaticTier.unavailable_reason
-        }
+        { api_only: AppKind.api_only?(app.root) }.merge(detections)
       rescue StandardError
         { unavailable: StaticTier.unavailable_reason }
       end
 
       def call
+        { api_only: app.config.api_only }.merge(detections)
+      rescue => e
+        { error: e.message }
+      end
+
+      private
+
+      def detections
         {
-          api_only: app.config.api_only,
           serializers: detect_serializers,
           graphql: detect_graphql,
           api_versioning: detect_versioning,
@@ -41,11 +43,7 @@ module RailsAiContext
           graphql_details: extract_graphql_details,
           pagination: detect_pagination
         }
-      rescue => e
-        { error: e.message }
       end
-
-      private
 
       def root
         app.root.to_s
@@ -83,12 +81,9 @@ module RailsAiContext
       end
 
       def detect_versioning
-        controllers_dir = File.join(root, "app/controllers")
-        return [] unless Dir.exist?(controllers_dir)
-
-        Dir.glob(File.join(controllers_dir, "api/v*/")).filter_map do |path|
-          File.basename(path)
-        end.sort
+        RailsAiContext::PathResolver.controller_dirs(root).flat_map do |controllers_dir|
+          Dir.glob(File.join(controllers_dir, "api/v*/")).map { |path| File.basename(path) }
+        end.uniq.sort
       end
 
       def detect_openapi_specs
@@ -157,16 +152,14 @@ module RailsAiContext
       end
 
       def detect_pagination
-        gemfile_lock = File.join(app.root, "Gemfile.lock")
-        return nil unless File.exist?(gemfile_lock)
-        content = RailsAiContext::SafeFile.read(gemfile_lock)
-        return nil unless content
+        lock = RailsAiContext::GemLock.for(app.root)
+        return nil if lock.missing?
 
         strategies = []
-        strategies << "pagy" if content.match?(/^    pagy \(/)
-        strategies << "kaminari" if content.match?(/^    kaminari \(/)
-        strategies << "will_paginate" if content.match?(/^    will_paginate \(/)
-        strategies << "cursor" if content.match?(/^    graphql-pro \(/) # cursor-based pagination
+        strategies << "pagy" if lock.present?("pagy")
+        strategies << "kaminari" if lock.present?("kaminari")
+        strategies << "will_paginate" if lock.present?("will_paginate")
+        strategies << "cursor" if lock.present?("graphql-pro") # cursor-based pagination
         strategies.empty? ? nil : strategies
       rescue => e
         $stderr.puts "[rails-ai-context] detect_pagination failed: #{e.message}" if ENV["DEBUG"]
@@ -179,14 +172,11 @@ module RailsAiContext
         return { rack_attack: true } if File.exist?(init_path)
 
         # Rails 8 rate limiting - use AST to detect rate_limit macro calls
-        controllers_dir = File.join(root, "app/controllers")
-        if Dir.exist?(controllers_dir)
-          Dir.glob(File.join(controllers_dir, "**/*.rb")).each do |path|
-            ast_data = SourceIntrospector.walk(path, {
-              rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
-            })
-            return { rails_rate_limiting: true } if ast_data[:rate_limit].any?
-          end
+        SourceScan.each(root, kind: "app/controllers").each do |record|
+          ast_data = SourceIntrospector.walk_source(record.source, {
+            rate_limit: -> { Listeners::GenericMacroListener.new(:rate_limit) }
+          })
+          return { rails_rate_limiting: true } if ast_data[:rate_limit].any?
         end
 
         {}

@@ -33,6 +33,12 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
         expect(hello[:actions]).to include("greet", "clear", "toggle")
       end
 
+      it "records the lifecycle hooks the controller defines" do
+        result = introspector.call
+        hello = result[:controllers].find { |c| c[:name] == "hello" }
+        expect(hello[:lifecycle]).to eq(%w[connect])
+      end
+
       it "extracts outlets" do
         result = introspector.call
         hello = result[:controllers].find { |c| c[:name] == "hello" }

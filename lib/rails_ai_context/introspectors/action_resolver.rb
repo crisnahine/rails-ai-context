@@ -35,6 +35,12 @@ module RailsAiContext
         }
       }.freeze
 
+      # The first `=` that assigns. `==`, `!=`, `>=`, `<=` and `=~` are reads
+      # of the ivar on their left, and counting one as an assignment made
+      # every guard clause look like a setter. A doubled bracket is the
+      # shift-assign, which does assign.
+      ASSIGNMENT = /(?<![=!<>~])=(?![=~])|(?<![<>])(?:<<|>>)=/
+
       module_function
 
       def framework?(klass, kind:)
@@ -70,11 +76,122 @@ module RailsAiContext
       end
 
       def actions_from_source(source, class_name:, skip_underscored: true)
-        walked = SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })
-        own_actions(walked[:methods] || [], class_name: class_name, skip_underscored: skip_underscored)
+        own_actions(methods_in(source), class_name: class_name, skip_underscored: skip_underscored)
       rescue => e
         $stderr.puts "[rails-ai-context] ActionResolver.actions_from_source failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # The same reading with signatures, for the tools that show a file's
+      # interface: an owner's public instance methods, its private ones, and
+      # its class methods, each as written (`full_name(sep = ' ')`). The owner
+      # defaults to the constant the file declares.
+      def public_methods_from_source(source, owner: nil, skip_underscored: true)
+        methods = own_methods_in(source, owner).select { |m| m[:scope] == :instance && m[:visibility] == :public }
+        methods = methods.reject { |m| m[:name].start_with?("_") } if skip_underscored
+        methods.map { |m| signature(m) }.uniq
+      end
+
+      def private_methods_from_source(source, owner: nil)
+        own_methods_in(source, owner)
+          .select { |m| m[:scope] == :instance && m[:visibility] != :public }
+          .map { |m| signature(m) }.uniq
+      end
+
+      # A bare `private` never reaches `def self.x`; it does reach a def
+      # inside `class_methods do` or `class << self`.
+      def class_methods_from_source(source, owner: nil)
+        own_methods_in(source, owner)
+          .select { |m| m[:scope] == :class && (m[:visibility] == :public || m[:signature].to_s.start_with?("self.")) }
+          .map { |m| signature(m) }.uniq
+      end
+
+      # The method as written, minus a `self.` receiver: `build(attrs)`.
+      def signature(method)
+        method[:signature].to_s.delete_prefix("self.")
+      end
+
+      # What sits between the parentheses, "" for a bare name.
+      def parameter_list(method)
+        signature(method)[/\A[^(]*\((.*)\)\z/m, 1].to_s
+      end
+
+      # One method's body out of a file's source, with the lines it occupies.
+      # The `end` that closes a `def` sits at the `def`'s own indentation,
+      # which reads more reliably than counting block depth.
+      #
+      # The name matches ignoring case, so an action asked for as "Show"
+      # reaches `def show` here the way it does in the controller listing.
+      def method_body(source, method_name)
+        lines = source.to_s.lines
+        start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/i) }
+        return nil unless start_idx
+
+        indent = lines[start_idx][/\A\s*/].length
+        body = []
+        end_idx = start_idx
+        lines[start_idx..].each_with_index do |line, i|
+          body << line.rstrip
+          end_idx = start_idx + i
+          break if i.positive? && line.match?(/\A\s{#{indent}}end\b/)
+        end
+
+        { code: body.join("\n"), start_line: start_idx + 1, end_line: end_idx + 1 }
+      rescue => e
+        $stderr.puts "[rails-ai-context] ActionResolver.method_body failed: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      # What an action body assigns and what it renders. One owner for the
+      # question, so a tool answers it from the source rather than from
+      # another tool's rendered prose.
+      #
+      # Only the left of an assignment counts, which is what tells `@post =`
+      # apart from a read of `@post` on the right and what makes
+      # `@a, @b = x` two names.
+      def assigned_ivars(action_source)
+        action_source.to_s.each_line.flat_map do |line|
+          split_at = line.index(ASSIGNMENT)
+          next [] unless split_at
+
+          line[0, split_at].scan(/@(\w+)/).flatten
+        end.uniq
+      end
+
+      # A template the action renders instead of its own, `create` falling
+      # back to `:new` being the case that matters.
+      def rendered_templates(action_source)
+        action_source.to_s.scan(/render\s+:(\w+)/).flatten.uniq
+      end
+
+      # An ivar a `render json:`/`render xml:` response consumes. There is no
+      # template to cross-reference it against, so the call itself is the
+      # only evidence it was used. `render json: @post.errors` counts `@post`.
+      def rendered_ivars(action_source)
+        action_source.to_s.scan(/render\s+(?:json|xml):\s*@(\w+)/).flatten.uniq
+      end
+
+      def methods_in(source)
+        SourceIntrospector.walk_source(source, { methods: Listeners::MethodsListener })[:methods] || []
+      end
+
+      def own_methods_in(source, owner)
+        methods = methods_in(source)
+        own_methods(methods, owner || default_owner(source, methods))
+      rescue => e
+        $stderr.puts "[rails-ai-context] ActionResolver.own_methods_in failed: #{e.message}" if ENV["DEBUG"]
+        []
+      end
+
+      # The outermost owner the methods sit in: the file's class, or its
+      # module when it is a concern or a helper, whichever a nested class sits
+      # inside. With no methods at all, the first class the file declares.
+      # Shortest owner path wins; two siblings at the same depth tie and the
+      # one whose method comes first in the file is it.
+      def default_owner(source, methods)
+        methods.map { |m| Array(m[:owner]) }.reject(&:empty?).min_by(&:length)&.join("::") ||
+          DeclaredConstant.declared_names(source).first ||
+          ""
       end
 
       # The full booted chain: the class's own source first, then the nearest

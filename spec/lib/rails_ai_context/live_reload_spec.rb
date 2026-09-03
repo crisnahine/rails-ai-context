@@ -24,8 +24,8 @@ RSpec.describe RailsAiContext::LiveReload do
 
     context "when fingerprint has changed" do
       before do
-        allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_return(true)
-        allow(RailsAiContext::Fingerprinter).to receive(:compute).and_return("new_fingerprint")
+        allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(true)
+        allow(RailsAiContext::Fingerprinter).to receive(:mark).and_return(RailsAiContext::Fingerprinter::Mark.new(digest: "new_fingerprint"))
         allow(mcp_server).to receive(:notify_resources_list_changed)
         allow(mcp_server).to receive(:notify_log_message)
         allow($stderr).to receive(:puts)
@@ -78,7 +78,7 @@ RSpec.describe RailsAiContext::LiveReload do
 
     context "when fingerprint has not changed" do
       before do
-        allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_return(false)
+        allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(false)
       end
 
       it "skips cache invalidation and notifications" do
@@ -90,7 +90,7 @@ RSpec.describe RailsAiContext::LiveReload do
 
     context "when an error occurs" do
       before do
-        allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_raise(StandardError, "disk error")
+        allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_raise(StandardError, "disk error")
         allow($stderr).to receive(:puts)
       end
 
@@ -225,13 +225,10 @@ RSpec.describe RailsAiContext::LiveReload do
   end
 
   describe "the shared watch list" do
-    it "covers everything the fingerprint reads, so a change cannot be fingerprinted but unwatched" do
-      RailsAiContext::Fingerprinter::WATCHED_DIRS.each do |dir|
-        covered = RailsAiContext::ChangeWatch::WATCH_DIRS.any? do |watched|
-          dir == watched || dir.start_with?("#{watched}/")
-        end
-        expect(covered).to be(true), "#{dir} is fingerprinted but not watched"
-      end
+    it "leaves the app root unwatched, since Listen recurses into node_modules" do
+      dirs = live_reload.instance_variable_get(:@watch).watched_dirs
+
+      expect(dirs).not_to include(app.root.to_s)
     end
   end
 end

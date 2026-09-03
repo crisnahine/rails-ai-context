@@ -11,15 +11,38 @@ module RailsAiContext
       module_function
 
       def models_line(ctx)
-        models = Payload.section(ctx, :models)
-        models&.any? ? "- Models: #{models.size}" : nil
+        models = Payload.models(ctx)
+        models.any? ? "- Models: #{models.size}" : nil
       end
 
       def database_line(ctx)
         schema = Payload.section(ctx, :schema)
-        return nil unless SectionGuard.usable?(schema)
+        return nil unless schema
 
         "- Database: #{SchemaAdapter.label(ctx)} - #{CountPhrase.call(schema[:total_tables].to_i, "table")}"
+      end
+
+      def auth_line(ctx)
+        auth = Payload.section(ctx, :auth)
+        return nil unless auth
+
+        parts = []
+        parts << "Devise" if auth.dig(:authentication, :devise)&.any?
+        parts << "Rails 8 auth" if auth.dig(:authentication, :rails_auth)
+        parts << "Pundit" if auth.dig(:authorization, :pundit)&.any?
+        parts << "CanCanCan" if auth.dig(:authorization, :cancancan)
+        parts.any? ? "- Auth: #{parts.join(' + ')}" : nil
+      end
+
+      def assets_line(ctx)
+        assets = Payload.section(ctx, :assets)
+        return nil unless assets
+
+        # The pipeline introspector says "none" rather than nil, which reads as
+        # a pipeline named none once it is joined with the rest.
+        parts = [ assets[:pipeline], assets[:js_bundler], assets[:css_framework] ].compact
+        parts.delete("none")
+        parts.any? ? "- Assets: #{parts.join(', ')}" : nil
       end
 
       def associations_list(model_data)

@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetControllers do
   before { described_class.reset_cache! }
@@ -195,6 +197,87 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("## UsersController")
       expect(text).to include("Filters:")
       expect(text).to include("authenticate_user!")
+    end
+  end
+
+  describe "an action calling a protected method" do
+    it "inlines it under Private Methods Called" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "controllers"))
+        File.write(File.join(root, "app", "controllers", "widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            def show
+              load_widget
+            end
+
+            protected
+
+            def load_widget
+              @widget = Widget.find(params[:id])
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "WidgetsController" => {
+            actions: %w[show], filters: [], parent_class: "ApplicationController", file: "app/controllers/widgets_controller.rb"
+          } } }
+        )
+
+        text = described_class.call(controller: "WidgetsController", action: "show").content.first[:text]
+
+        expect(text).to include("## Private Methods Called")
+        expect(text).to include("### load_widget")
+      end
+    end
+
+    it "inlines the body of a private method the action calls" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers"))
+        File.write(File.join(root, "app/controllers/widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            def show
+              load_widget
+            end
+
+            private
+
+            def load_widget
+              @widget = Widget.find(params[:id])
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+        allow(described_class).to receive(:cached_context).and_return(
+          controllers: { controllers: { "WidgetsController" => {
+            actions: %w[show], filters: [], parent_class: "ApplicationController",
+            file: "app/controllers/widgets_controller.rb"
+          } } }
+        )
+
+        text = described_class.call(controller: "WidgetsController", action: "show").content.first[:text]
+
+        expect(text).to include("## Private Methods Called")
+        expect(text).to include("### load_widget")
+        expect(text).to include("@widget = Widget.find(params[:id])")
+      end
+    end
+
+    # An inherited filter names where it was declared, not whichever class
+    # happens to be the direct parent.
+    it "names the grandparent an inherited filter was declared on" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: {
+          "ApplicationController" => { actions: [], filters: [ { kind: "before_action", name: "authenticate" } ] },
+          "Admin::BaseController" => { actions: [], filters: [], parent_class: "ApplicationController" },
+          "Admin::PostsController" => { actions: %w[index], filters: [], parent_class: "Admin::BaseController" }
+        } }
+      )
+
+      text = described_class.call(controller: "Admin::PostsController").content.first[:text]
+
+      expect(text).to include("_(from ApplicationController)_")
+      expect(text).not_to include("_(from Admin::BaseController)_")
     end
   end
 end

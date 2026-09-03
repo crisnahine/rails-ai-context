@@ -83,6 +83,35 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       expect(text).to include("post_excerpt")
     end
 
+    context "with a def inside a heredoc" do
+      it "lists only the methods the helper really defines" do
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "app", "helpers"))
+          File.write(File.join(root, "app", "helpers", "docs_helper.rb"), <<~RUBY)
+            module DocsHelper
+              USAGE = <<~USAGE
+                def example_usage
+                end
+              USAGE
+
+              def visible(name); end
+
+              private
+
+              def hidden; end
+            end
+          RUBY
+          allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+          text = described_class.call(helper: "DocsHelper").content.first[:text]
+
+          expect(text).to include("## Methods (1)")
+          expect(text).to include("- `visible(name)`")
+          expect(text).not_to include("example_usage")
+        end
+      end
+    end
+
     context "when an API-only app has no app/helpers directory" do
       it "answers not applicable instead of not found" do
         Dir.mktmpdir do |root|

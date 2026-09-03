@@ -94,6 +94,11 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
         allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
         allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+        # Files written after boot are not autoloadable, so the booted
+        # introspector cannot record them; the static tier's reading is what
+        # a real run over this directory would carry.
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
       end
 
       after { FileUtils.remove_entry(tmpdir) }
@@ -130,6 +135,68 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         expect(text).to include("Queues:")
         expect(text).to include("mailers")
         expect(text).to include("maintenance")
+      end
+    end
+
+    context "with a job whose retry configuration is parenthesised and spans lines" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        jobs_dir = File.join(tmpdir, "app", "jobs")
+        FileUtils.mkdir_p(jobs_dir)
+        File.write(File.join(jobs_dir, "sync_job.rb"), <<~RUBY)
+          class SyncJob < ApplicationJob
+            # retry_on Net::OpenTimeout, attempts: 9 was flaky
+            retry_on(
+              Net::OpenTimeout, Timeout::Error,
+              wait: :polynomially_longer,
+              attempts: 3
+            )
+            discard_on ActiveJob::DeserializationError, ActiveRecord::RecordNotFound
+            sidekiq_options retry: 5
+
+            def perform; end
+          end
+        RUBY
+
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "renders a perform whose parameters span lines on one line, with only its own guards" do
+        File.write(File.join(tmpdir, "app", "jobs", "wide_job.rb"), <<~RUBY)
+          class WideJob < ApplicationJob
+            def perform(user_id,
+                        message:, urgent: false)
+              return if user_id.nil?
+              User.find(user_id)
+            end
+
+            def helper
+              return unless ready?
+            end
+          end
+        RUBY
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
+
+        text = described_class.call(job: "WideJob").content.first[:text]
+
+        expect(text).to include("**Perform:** `perform(user_id, message:, urgent: false)`")
+        expect(text).to include("- `return if user_id.nil?`")
+        expect(text).not_to include("return unless ready?")
+      end
+
+      it "reads every retry, discard and sidekiq option as written, and none from a comment" do
+        text = described_class.call(job: "SyncJob").content.first[:text]
+
+        expect(text).to include("- retry_on Net::OpenTimeout, Timeout::Error, attempts: 3, wait: :polynomially_longer")
+        expect(text).to include("- discard_on ActiveJob::DeserializationError, ActiveRecord::RecordNotFound")
+        expect(text).to include("- sidekiq retry: 5")
+        expect(text).not_to include("attempts: 9")
       end
     end
 
@@ -179,7 +246,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       it "still works when no jobs exist but channels do" do
         result = described_class.call
         text = result.content.first[:text]
-        expect(text).not_to include("No app/jobs/ directory")
+        expect(text).not_to include("No jobs found")
         expect(text).to include("ChatChannel")
       end
     end
@@ -187,47 +254,40 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     context "with no jobs and no channels" do
       before do
         allow(described_class).to receive(:cached_context).and_return(jobs: { jobs: [], mailers: [], channels: [] })
-        allow(Dir).to receive(:exist?).and_call_original
-        allow(Dir).to receive(:exist?).with(File.join(Rails.root.to_s, "app", "jobs")).and_return(false)
       end
 
       it "returns the no-async-stuff message" do
         result = described_class.call
         text = result.content.first[:text]
-        expect(text).to include("No app/jobs/ directory")
-        expect(text).to include("no Action Cable channels detected")
+        expect(text).to include("No jobs found, and no Action Cable channels detected")
       end
     end
 
-    context "when app/jobs/ exists but has no job classes beyond ApplicationJob" do
+    # The payload decides, not the directory: an app/jobs/ holding only
+    # ApplicationJob and no app/jobs/ at all are the same answer.
+    context "when the payload records no job" do
       let(:tmpdir) { Dir.mktmpdir }
-      let(:jobs_dir) { File.join(tmpdir, "app", "jobs") }
 
       before do
-        FileUtils.mkdir_p(jobs_dir)
-        File.write(File.join(jobs_dir, "application_job.rb"), <<~RUBY)
-          class ApplicationJob < ActiveJob::Base
-          end
-        RUBY
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "jobs"))
+        File.write(File.join(tmpdir, "app", "jobs", "application_job.rb"), "class ApplicationJob < ActiveJob::Base\nend\n")
 
         allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
-        allow(described_class).to receive(:cached_context).and_return(jobs: { jobs: [], mailers: [], channels: [] })
+        static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(jobs: static)
       end
 
       after { FileUtils.remove_entry(tmpdir) }
 
-      it "says the directory exists but has no job classes, not that it's missing" do
-        result = described_class.call
-        text = result.content.first[:text]
-        expect(text).not_to include("No app/jobs/ directory")
-        expect(text).to include("No job classes in app/jobs/ beyond ApplicationJob")
+      it "says no jobs were found" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("No jobs found")
+        expect(text).to include("Sidekiq::Worker in app/workers/")
       end
 
-      it "gives the same truthful message for a specific job lookup" do
-        result = described_class.call(job: "SendWelcomeEmail")
-        text = result.content.first[:text]
-        expect(text).not_to include("No app/jobs/ directory")
-        expect(text).to include("No job classes in app/jobs/ beyond ApplicationJob")
+      it "gives the same answer for a specific job lookup" do
+        text = described_class.call(job: "SendWelcomeEmail").content.first[:text]
+        expect(text).to include("No jobs found")
       end
     end
 
@@ -240,8 +300,6 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       before do
         allow(described_class).to receive(:cached_context)
           .and_return(jobs: { jobs: [], mailers: [], channels: [], sidekiq_config: sidekiq_config })
-        allow(Dir).to receive(:exist?).and_call_original
-        allow(Dir).to receive(:exist?).with(File.join(Rails.root.to_s, "app", "jobs")).and_return(false)
       end
 
       it "names the queues it found" do
@@ -256,7 +314,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
       it "keeps saying what it did check" do
         text = described_class.call.content.first[:text]
-        expect(text).to include("No app/jobs/ directory")
+        expect(text).to include("No jobs found")
       end
 
       it "says the same on a specific job lookup" do
@@ -267,20 +325,26 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       # A count of what app/jobs/ holds is still a claim about the app's async
       # work, and on an app running most of it through Sidekiq that count is
       # the small half.
-      context "and app/jobs/ does have a job" do
+      # A job reflection found with no source location still lists: the
+      # payload carries its name and queue, and the source adds the rest only
+      # when there is one.
+      context "and the payload does have a job" do
         before do
-          allow(Dir).to receive(:exist?).with(File.join(Rails.root.to_s, "app", "jobs")).and_return(true)
+          allow(described_class).to receive(:cached_context).and_return(
+            jobs: { jobs: [ { name: "PushJob", queue: "push" } ], mailers: [], channels: [], sidekiq_config: sidekiq_config }
+          )
         end
 
         it "names the queues beside the job listing" do
           text = described_class.call.content.first[:text]
-          expect(text).to include("# Background Jobs")
+          expect(text).to include("# Background Jobs (1)")
+          expect(text).to include("**PushJob** [push]")
           expect(text).to include("config/sidekiq.yml declares 3 queues: default, push, mailers")
         end
 
-        it "says the listing does not cover workers outside app/jobs/" do
+        it "says the listing does not cover workers the introspector never saw" do
           text = described_class.call.content.first[:text]
-          expect(text).to include("Workers outside app/jobs/ are not covered by this tool.")
+          expect(text).to include("Workers the introspector did not see are not covered by this tool.")
         end
       end
 
@@ -301,6 +365,70 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
           expect(text).not_to include("config/sidekiq.yml")
         end
       end
+    end
+  end
+
+  # The job's name does not rebuild its path: a pack job lives where the
+  # introspector found it, and the tool reads that file through the payload.
+  describe "a job in a pack" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      jobs_dir = File.join(tmpdir, "packs", "billing", "app", "jobs")
+      FileUtils.mkdir_p(jobs_dir)
+      File.write(File.join(jobs_dir, "invoice_job.rb"), <<~RUBY)
+        class InvoiceJob < ApplicationJob
+          queue_as :billing
+
+          def perform(invoice_id); end
+        end
+      RUBY
+
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "finds the job by name and reports the file it was read from" do
+      text = described_class.call(job: "InvoiceJob").content.first[:text]
+      expect(text).to include("# InvoiceJob")
+      expect(text).to include("**File:** `packs/billing/app/jobs/invoice_job.rb`")
+      expect(text).to include("billing")
+    end
+
+    it "finds the job by its snake_case name" do
+      text = described_class.call(job: "invoice").content.first[:text]
+      expect(text).to include("# InvoiceJob")
+    end
+
+    it "lists the recorded jobs when the name matches none" do
+      text = described_class.call(job: "Nope").content.first[:text]
+      expect(text).to include("not found")
+      expect(text).to include("InvoiceJob")
+    end
+  end
+
+  # The listing reads the same payload the single-job lookup does, so a job
+  # in a pack is listed where it was read from.
+  describe "the listing over the fixture payload" do
+    before do
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(IntrospectedFixture::ROOT))
+      allow(described_class).to receive(:cached_context).and_return(IntrospectedFixture.context)
+    end
+
+    it "lists the pack job with the file it was read from" do
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).to include("## InvoiceJob")
+      expect(text).to include("`packs/billing/app/jobs/invoice_job.rb`")
+      expect(text).to include("## ExampleJob")
+    end
+
+    it "counts the pack job in the summary" do
+      text = described_class.call(detail: "summary").content.first[:text]
+      expect(text).to include("# Background Jobs (2)")
+      expect(text).to include("- InvoiceJob [billing]")
     end
   end
 end

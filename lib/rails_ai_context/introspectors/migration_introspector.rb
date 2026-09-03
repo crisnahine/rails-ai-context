@@ -16,13 +16,17 @@ module RailsAiContext
 
       # @return [Hash] migration info including recent, pending, and stats
       def call
-        {
+        info = {
           total: all_migrations.size,
           recent: recent_migrations(10),
-          pending: pending_migrations,
           schema_version: current_schema_version,
           migration_stats: migration_stats
         }
+        # No key at all when nothing says what has been applied - an empty
+        # list would read as "up to date".
+        pending = pending_migrations
+        info[:pending] = pending if pending
+        info
       rescue => e
         { error: e.message }
       end
@@ -37,28 +41,20 @@ module RailsAiContext
         File.join(root, "db/migrate")
       end
 
-      # Parse all migration files from db/migrate/
+      # The same file scan the pending derivation runs, with each file's
+      # actions read on top.
       def all_migrations
-        @all_migrations ||= begin
-          return [] unless Dir.exist?(migrate_dir)
+        @all_migrations ||= RailsAiContext::PendingMigrations.migration_files(migrate_dir).map do |file|
+          content = RailsAiContext::SafeFile.read(file[:path])
 
-          Dir.glob(File.join(migrate_dir, "*.rb")).sort.map do |path|
-            filename = File.basename(path, ".rb")
-            version = filename.split("_").first
-            name = filename.sub(/\A\d+_/, "").tr("_", " ").capitalize
-
-            content = RailsAiContext::SafeFile.read(path)
-            actions = content ? detect_migration_actions(content) : []
-
-            {
-              version: version,
-              name: name,
-              filename: File.basename(path),
-              actions: actions
-            }
-          rescue => e
-            { version: "unknown", name: File.basename(path), error: e.message }
-          end
+          {
+            version: file[:version],
+            name: file[:name],
+            filename: File.basename(file[:path]),
+            actions: content ? detect_migration_actions(content) : []
+          }
+        rescue => e
+          { version: file[:version], name: File.basename(file[:path]), error: e.message }
         end
       end
 
@@ -66,20 +62,21 @@ module RailsAiContext
         all_migrations.last(count).reverse
       end
 
-      # Detect pending migrations. Prefers the live DB (authoritative - the
-      # actual applied version set) and falls back to comparing migration
-      # filenames against the schema file's recorded version when the
-      # database is unreachable (CI, static analysis, no db:create yet).
+      # Prefers the live database (the actual applied version set) and falls
+      # back to the schema file's recorded version when it is unreachable
+      # (CI, static analysis, no db:create yet).
       def pending_migrations
-        live = RailsAiContext::MigrationStatus.pending(migrate_dir)
-        return live if live
+        RailsAiContext::PendingMigrations.live(migrate_dir) ||
+          RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied_versions)
+      end
 
-        schema_ver = current_schema_version
-        return [] unless schema_ver
-
-        all_migrations.select { |m| m[:version].to_i > schema_ver.to_i }.map do |m|
-          { version: m[:version], name: m[:name] }
-        end
+      # structure.sql records the whole applied set, which catches an
+      # out-of-order merge; schema.rb records only the newest version.
+      def applied_versions
+        RailsAiContext::SchemaVersion.applied(root) || current_schema_version
+      rescue => e
+        $stderr.puts "[rails-ai-context] applied_versions failed: #{e.message}" if ENV["DEBUG"]
+        current_schema_version
       end
 
       def current_schema_version

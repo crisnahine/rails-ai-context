@@ -172,14 +172,18 @@ module RailsAiContext
             # TTL expired: re-validate via fingerprint before re-introspecting.
             # If fingerprint is unchanged, bump the timestamp and reuse the
             # cached context - saves re-running all 40 introspectors.
-            if SHARED_CACHE[:context] && !Fingerprinter.changed?(rails_app, SHARED_CACHE[:fingerprint])
+            if SHARED_CACHE[:context] && !Fingerprinter.stale?(rails_app, SHARED_CACHE[:fingerprint])
               SHARED_CACHE[:timestamp] = now
               return SHARED_CACHE[:context].deep_dup
             end
 
+            # Marked before the walk, not after: a mark taken afterwards
+            # covers edits made while the 40 introspectors ran, and the next
+            # caller reads a stale context as fresh.
+            mark = Fingerprinter.mark(rails_app)
             SHARED_CACHE[:context] = RailsAiContext.introspect
             SHARED_CACHE[:timestamp] = now
-            SHARED_CACHE[:fingerprint] = Fingerprinter.compute(rails_app)
+            SHARED_CACHE[:fingerprint] = mark
             SHARED_CACHE[:context].deep_dup
           end
         end
@@ -190,10 +194,6 @@ module RailsAiContext
             SHARED_CACHE.delete(:timestamp)
             SHARED_CACHE.delete(:fingerprint)
           end
-          # Also invalidate the memoized gem-lib fingerprint so active gem
-          # development sees a fresh scan on next call without a process
-          # restart. No-op for production installs.
-          Fingerprinter.reset_gem_lib_fingerprint!
         end
 
         # Reset the shared cache. Used by LiveReload to invalidate on file change.
@@ -320,7 +320,54 @@ module RailsAiContext
           lines << "Did you mean '#{suggestion}'?" if suggestion
           lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}" if available.any?
           lines << "_Recovery: #{recovery_tool}_" if recovery_tool
-          text_response(lines.join("\n"))
+          empty_response(lines.join("\n"))
+        end
+
+        # A tool ran, answered honestly, and found nothing. Renders exactly
+        # like text_response - the mark rides in `_meta`, where a composing
+        # tool can read it and a reader never sees it.
+        def empty_response(text, suffix: nil)
+          marked_response(text, :empty, suffix: suffix)
+        end
+
+        # The mark is the contract between a sub-tool and a composer: the
+        # answer says whether it found anything, and no composer decides that
+        # by matching the sentence the sub-tool happened to render.
+        def empty?(response)
+          marked?(response, :empty)
+        end
+
+        # A trace that found call sites but no `def`. The answer is real, so
+        # it is not empty; the fact rides in `_meta` beside `empty` so a
+        # composer asks instead of matching the sentence this tool renders.
+        def definition_missing_response(text)
+          marked_response(text, :definition_missing)
+        end
+
+        def definition_missing?(response)
+          marked?(response, :definition_missing)
+        end
+
+        def marked_response(text, key, suffix: nil)
+          answered = text_response(text, suffix: suffix)
+          MCP::Tool::Response.new(answered.content, error: answered.error?, meta: { key => true })
+        end
+
+        def marked?(response, key)
+          response_meta(response)[key] ? true : false
+        end
+        private :marked_response, :marked?
+
+        def response_meta(response)
+          meta = response.meta if response.respond_to?(:meta)
+          meta.is_a?(Hash) ? meta : {}
+        end
+
+        # A sub-tool's text. A response can carry no text content at all, so
+        # the composers do not index into `content` themselves.
+        def response_text(response)
+          first = response.content.first
+          first.is_a?(Hash) ? first[:text].to_s : ""
         end
 
         # One-line banner listing introspectors that failed during context
@@ -385,12 +432,11 @@ module RailsAiContext
           return nil unless RailsAiContext.static_tier?
 
           reason = RailsAiContext.static_reason
-          headline = if reason.to_s.include?("--no-boot")
-            "Static mode (#{reason})"
-          elsif reason
-            "App boot failed (#{reason})"
-          else
-            "Static mode"
+          # Only a boot that actually ran can be called a failure; the other
+          # kinds describe the tree or the flag they were asked for.
+          headline = case RailsAiContext.static_kind
+          when :requested, :source_only then "Static mode (#{reason})"
+          else reason ? "App boot failed (#{reason})" : "Static mode"
           end
           "\n\n---\n_[STATIC] #{headline}. Serving static analysis; runtime-only data is marked " \
             "[UNAVAILABLE]. Run `rails-ai-context doctor` for details._"
@@ -404,10 +450,14 @@ module RailsAiContext
           return nil unless RailsAiContext.static_tier?
 
           reason = RailsAiContext.static_reason
+          remedy = case RailsAiContext.static_kind
+          when :requested then "Rerun without `--no-boot`."
+          when :source_only then "This tree has no `config/environment.rb`; add one (or run from the app root) for runtime data."
+          else "Fix the boot failure (see `rails-ai-context doctor`)."
+          end
           text_response(
             "[UNAVAILABLE: static tier] #{capability} requires a booted Rails app" \
-            "#{reason ? " (static tier active: #{reason})" : ""}. " \
-            "Fix the boot failure (see `rails-ai-context doctor`) or rerun without `--no-boot`."
+            "#{reason ? " (static tier active: #{reason})" : ""}. #{remedy}"
           )
         end
 
@@ -439,7 +489,7 @@ module RailsAiContext
 
         # Cache key for paginated responses - lets agents detect stale data between pages
         def cache_key
-          SHARED_CACHE[:fingerprint] || "none"
+          SHARED_CACHE[:fingerprint]&.digest || "none"
         end
 
         # Case-insensitive fuzzy key lookup for hashes keyed by class/table names.
@@ -607,13 +657,7 @@ module RailsAiContext
 
         # Shared utility: check if a relative path matches sensitive file patterns.
         def sensitive_file?(relative_path)
-          patterns = RailsAiContext.configuration.sensitive_patterns
-          basename = File.basename(relative_path)
-          flags = File::FNM_DOTMATCH | File::FNM_CASEFOLD
-          patterns.any? do |pattern|
-            File.fnmatch(pattern, relative_path, flags) ||
-              File.fnmatch(pattern, basename, flags)
-          end
+          RailsAiContext::SafePath.sensitive?(relative_path)
         end
 
         # Resolve a Dir.glob result to a realpath that is:
@@ -625,7 +669,7 @@ module RailsAiContext
         # file operations on the returned realpath, not the original glob path.
         def safe_glob_realpath(file_path, real_dir, real_root)
           real = File.realpath(file_path).to_s
-          return nil unless real == real_dir || real.start_with?(real_dir + File::SEPARATOR)
+          return nil unless RailsAiContext::SafePath.contained?(real, real_dir)
           relative = real.sub("#{real_root}/", "")
           return nil if sensitive_file?(relative)
           real

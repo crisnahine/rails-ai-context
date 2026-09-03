@@ -26,7 +26,7 @@ RSpec.describe "Standalone pre-boot load" do
   end
 
   it "names the files init loads before the boot" do
-    expect(files).to include("install/ai_tool", "install/selection_record")
+    expect(files).to include("install/ai_tool", "install/selection_record", "gem_lock")
   end
 
   # Whether a constant happens to be there depends on what the host already
@@ -75,6 +75,21 @@ RSpec.describe "Standalone pre-boot load" do
 
     expect(output).to include("CLEAN"),
       "init's pre-boot files pull in a framework, which breaks the app's autoloader once it boots:\n#{output}"
+  end
+
+  # The file that decides whether the gem entry may load runs before it in
+  # every boot, so it is held to the same rule.
+  it "loads the entry boot with no framework in the process" do
+    script = [ "require_relative #{File.join(root, 'lib/rails_ai_context/cli/entry_boot').inspect}" ]
+    script << 'leaked = $LOADED_FEATURES.grep(%r{/(zeitwerk|active_support)/})'
+    script << 'puts leaked.empty? ? "CLEAN" : "LEAKED: #{leaked.first(5).join(", ")}"'
+
+    output = Bundler.with_unbundled_env do
+      `ruby -e #{script.join("\n").shellescape} 2>&1`
+    end
+
+    expect(output).to include("CLEAN"),
+      "entry_boot.rb pulls in a framework before the app boots:\n#{output}"
   end
 
   def constant_reads(node, names = [])

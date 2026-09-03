@@ -17,7 +17,7 @@ module RailsAiContext
     # sit in an interpolation, a heredoc or a bare string, and no node type
     # marks one - the words are the signal.
     SECRET_WORD = /password|passwd|secret|token|api_key|apikey|access_key|private_key|credentials|
-                   pepper|salt|master_key|signing_key|encryption_key|deterministic_key/x
+                   pepper|salt|master_key|signing_key|encryption_key|deterministic_key/xi
 
     # `primary_key` is ordinary ActiveRecord vocabulary; under
     # `active_record.encryption` it is a credential. Only the path tells them
@@ -58,6 +58,9 @@ module RailsAiContext
     # real `.env`, wrong for a `.env.example`, whose placeholders exist to be
     # read and often say "secret" precisely because they are not one.
     SECRET_VALUE = /#{CREDENTIAL_SHAPE}|key_|secret/i
+
+    # A config value longer than this is a credential by size alone.
+    VALUE_LIMIT = 40
 
     ANSI_ESCAPE = /\e\[[0-9;]*[mGKHF]/
     EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/i
@@ -173,6 +176,34 @@ module RailsAiContext
         LOG_PATTERNS.each { |pattern, replacement| result.gsub!(pattern, replacement) }
 
         result
+      end
+
+      # The one place a name and value pair leaves the process. Normally the
+      # name condemns a value on its own, and so does the value's shape.
+      # `placeholder_ok` says this is an example file, whose names are
+      # secret-ish by convention and whose values exist to be read: there a
+      # placeholder stays whole and only shape and length can condemn it.
+      def value(name, value, placeholder_ok: false)
+        return nil if value.nil?
+
+        stripped = value.to_s.strip.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
+        return FILTERED if stripped.length > VALUE_LIMIT || credential_shaped?(stripped)
+        return stripped if placeholder_ok
+        return FILTERED if secret_name?(name) || secret_value?(stripped)
+
+        stripped
+      end
+
+      # Redacting before the search means a term can only match text the
+      # reader would see; matching the original told a caller whether a
+      # secret was there by whether a line came back.
+      def redact_log_lines(lines, search: nil)
+        redacted = Array(lines).map { |line| redact_log_line(line) }
+        term = search.to_s.strip
+        return redacted if term.empty?
+
+        needle = term.downcase
+        redacted.select { |line| line.downcase.include?(needle) }
       end
 
       private

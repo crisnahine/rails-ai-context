@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -438,6 +439,74 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
         expect(entry[:scope]).not_to include("#")
         expect(entry[:scope]).to include("only:")
       end
+    end
+  end
+
+  describe "#gem_present?" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def introspect(lock)
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      described_class.new(double("app", root: @root))
+    end
+
+    it "sees a gem in the GIT section" do
+      lock = <<~LOCK
+        GIT
+          remote: https://github.com/heartcombo/devise.git
+          revision: 0123456789abcdef0123456789abcdef01234567
+          specs:
+            devise (4.9.4)
+      LOCK
+      expect(introspect(lock).send(:gem_present?, "devise")).to be(true)
+    end
+
+    it "does not match a longer gem name that starts with the query" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            devise-two-factor (5.0.0)
+      LOCK
+      expect(introspect(lock).send(:gem_present?, "devise")).to be(false)
+    end
+  end
+
+  describe "Devise models keyed by declared name" do
+    subject(:result) { described_class.new(RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT)).call }
+
+    it "keeps Admin::User apart from User" do
+      per_model = result[:devise_modules_per_model]
+      expect(per_model["User"]).to eq(%w[database_authenticatable registerable])
+      expect(per_model["Admin::User"]).to eq(%w[database_authenticatable])
+    end
+
+    it "lists both models under authentication.devise" do
+      expect(result[:authentication][:devise].map { |d| d[:model] }).to include("User", "Admin::User")
+    end
+  end
+
+  describe "controllers in a pack" do
+    let(:pack_controller) { File.join(Rails.root, "packs", "billing", "app", "controllers", "invoices_controller.rb") }
+
+    before do
+      FileUtils.mkdir_p(File.dirname(pack_controller))
+      File.write(pack_controller, <<~RUBY)
+        class InvoicesController < ApplicationController
+          before_action :authenticate
+
+          def authenticate
+            authenticate_or_request_with_http_token { |token, _| token == "x" }
+          end
+        end
+      RUBY
+    end
+
+    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
+
+    it "reports token auth from a pack controller" do
+      result = described_class.new(Rails.application).call
+      expect(result[:token_auth][:http_token_auth]).to include("packs/billing/app/controllers/invoices_controller.rb")
     end
   end
 end

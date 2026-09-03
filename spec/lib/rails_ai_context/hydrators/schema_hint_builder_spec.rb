@@ -90,23 +90,4 @@ RSpec.describe RailsAiContext::Hydrators::SchemaHintBuilder do
       expect(hint.columns).to eq([])
     end
   end
-
-  describe ".build_many" do
-    it "builds hints for multiple known models" do
-      hints = described_class.build_many(%w[Post User], context: context)
-      expect(hints.size).to eq(2)
-      expect(hints.map(&:model_name)).to eq(%w[Post User])
-    end
-
-    it "skips unknown models" do
-      hints = described_class.build_many(%w[Post Nonexistent User], context: context)
-      expect(hints.size).to eq(2)
-      expect(hints.map(&:model_name)).to eq(%w[Post User])
-    end
-
-    it "respects max parameter" do
-      hints = described_class.build_many(%w[Post User], context: context, max: 1)
-      expect(hints.size).to eq(1)
-    end
-  end
 end

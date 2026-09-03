@@ -18,6 +18,11 @@ module RailsAiContext
           @singleton_depth = 0
           @inline_visibility_stack = [ {} ] # stack of { method_name => visibility }
           @owner_stack = []
+          # `class_methods do` and `included do` bodies, keyed by their block
+          # node so the block's own enter/leave can open and close a scope.
+          @concern_blocks = {}.compare_by_identity
+          @open_blocks = []
+          @scope_stack = []
         end
 
         # Reset visibility when entering a new class/module scope
@@ -68,23 +73,50 @@ module RailsAiContext
               @visibility_stack[-1] = node.name
             else
               # Inline form: `private :method_name` - retroactively update
-              # already-recorded methods and mark for future defs
+              # already-recorded methods and mark for future defs. The def in
+              # `private def x` is visited after this call, so marking its
+              # name here is enough.
               args = node.arguments.arguments
               args.each do |arg|
-                if arg.is_a?(Prism::SymbolNode)
+                case arg
+                when Prism::DefNode
+                  @inline_visibility_stack.last[arg.name.to_s] = node.name
+                when Prism::SymbolNode
                   method_name = arg.value.to_s
                   @inline_visibility_stack.last[method_name] = node.name
-                  # Retroactively fix already-recorded result
-                  existing = @results.find { |r| r[:name] == method_name }
+                  existing = @results.find { |r| r[:name] == method_name && r[:owner] == @owner_stack }
                   existing[:visibility] = node.name if existing
                 end
               end
             end
+          when :class_methods, :included
+            @concern_blocks[node.block] = node.name if node.block.is_a?(Prism::BlockNode)
           end
         end
 
+        # A concern block is a visibility scope of its own: a `private` inside
+        # `class_methods do` does not reach the module's instance methods.
+        def on_block_node_enter(node)
+          kind = @concern_blocks.delete(node)
+          return unless kind
+
+          @open_blocks.push(node)
+          @scope_stack.push(kind)
+          @visibility_stack.push(:public)
+          @inline_visibility_stack.push({})
+        end
+
+        def on_block_node_leave(node)
+          return unless @open_blocks.last.equal?(node)
+
+          @open_blocks.pop
+          @scope_stack.pop
+          @visibility_stack.pop
+          @inline_visibility_stack.pop
+        end
+
         def on_def_node_enter(node)
-          is_class_method = @in_singleton_class || node.receiver&.is_a?(Prism::SelfNode)
+          is_class_method = @in_singleton_class || node.receiver&.is_a?(Prism::SelfNode) || @scope_stack.last == :class_methods
           method_name = node.name.to_s
 
           return if method_name == "initialize" && !is_class_method && !@include_initialize

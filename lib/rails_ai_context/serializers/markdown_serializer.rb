@@ -21,31 +21,31 @@ module RailsAiContext
         sections = []
         sections << header
         sections << app_overview
-        sections << schema_section if context[:schema]
-        sections << models_section if context[:models]
-        sections << routes_section if context[:routes]
-        sections << jobs_section if context[:jobs]
-        sections << gems_section if context[:gems]
-        sections << conventions_section if context[:conventions]
-        sections << controllers_section if context[:controllers]
-        sections << views_section if context[:views]
-        sections << turbo_section if context[:turbo]
-        sections << active_storage_section if context[:active_storage]
-        sections << action_text_section if context[:action_text]
-        sections << i18n_section if context[:i18n]
-        sections << config_section if context[:config]
-        sections << assets_section if context[:assets]
-        sections << auth_section if context[:auth]
-        sections << api_section if context[:api]
-        sections << tests_section if context[:tests]
-        sections << rake_tasks_section if context[:rake_tasks]
-        sections << devops_section if context[:devops]
-        sections << action_mailbox_section if context[:action_mailbox]
-        sections << migrations_section if context[:migrations]
-        sections << seeds_section if context[:seeds]
-        sections << middleware_section if context[:middleware]
-        sections << engines_section if context[:engines]
-        sections << multi_database_section if context[:multi_database]
+        sections << schema_section if Payload.section(context, :schema)
+        sections << models_section if Payload.section(context, :models)
+        sections << routes_section if Payload.section(context, :routes)
+        sections << jobs_section if Payload.section(context, :jobs)
+        sections << gems_section if Payload.section(context, :gems)
+        sections << conventions_section if Payload.section(context, :conventions)
+        sections << controllers_section if Payload.section(context, :controllers)
+        sections << views_section if Payload.section(context, :views)
+        sections << turbo_section if Payload.section(context, :turbo)
+        sections << active_storage_section if Payload.section(context, :active_storage)
+        sections << action_text_section if Payload.section(context, :action_text)
+        sections << i18n_section if Payload.section(context, :i18n)
+        sections << config_section if Payload.section(context, :config)
+        sections << assets_section if Payload.section(context, :assets)
+        sections << auth_section if Payload.section(context, :auth)
+        sections << api_section if Payload.section(context, :api)
+        sections << tests_section if Payload.section(context, :tests)
+        sections << rake_tasks_section if Payload.section(context, :rake_tasks)
+        sections << devops_section if Payload.section(context, :devops)
+        sections << action_mailbox_section if Payload.section(context, :action_mailbox)
+        sections << migrations_section if Payload.section(context, :migrations)
+        sections << seeds_section if Payload.section(context, :seeds)
+        sections << middleware_section if Payload.section(context, :middleware)
+        sections << engines_section if Payload.section(context, :engines)
+        sections << multi_database_section if Payload.section(context, :multi_database)
         sections << warnings_section if context[:_warnings]&.any?
         sections << footer
         sections.compact.join("\n\n")
@@ -67,9 +67,8 @@ module RailsAiContext
       end
 
       def app_overview
-        conv = context[:conventions] || {}
-        arch = conv[:architecture] || []
-        patterns = conv[:patterns] || []
+        arch = Payload.architecture(context)
+        patterns = Payload.patterns(context)
 
         arch_labels = arch_labels_hash
         pattern_labels = pattern_labels_hash
@@ -81,8 +80,7 @@ module RailsAiContext
       end
 
       def schema_section
-        schema = context[:schema]
-        return unless SectionGuard.usable?(schema)
+        schema = Payload.section(context, :schema)
 
         lines = [ "## Database Schema (#{count_phrase(schema[:total_tables], "table")})" ]
         schema[:tables]&.each do |name, data|
@@ -94,8 +92,8 @@ module RailsAiContext
       end
 
       def models_section
-        models = context[:models]
-        return if models.is_a?(Hash) && models[:error]
+        models = Payload.models(context)
+        return if models.empty?
 
         lines = [ "## Models (#{models.size})" ]
         models.each do |name, data|
@@ -114,8 +112,8 @@ module RailsAiContext
       end
 
       def routes_section
-        routes = context[:routes]
-        return if routes[:error]
+        routes = Payload.section(context, :routes)
+        return unless routes
 
         lines = [ "## Routes (#{routes[:total_routes]} total#{RouteCoverage.suffix(routes)})" ]
         routes[:by_controller]&.sort&.each do |ctrl, actions|
@@ -128,7 +126,7 @@ module RailsAiContext
       end
 
       def jobs_section
-        jobs = context[:jobs]
+        jobs = Payload.section(context, :jobs)
         parts = []
 
         if jobs[:jobs]&.any?
@@ -150,10 +148,7 @@ module RailsAiContext
       end
 
       def gems_section
-        gems = context[:gems]
-        return if gems[:error]
-
-        notable = notable_gems_list(gems)
+        notable = Payload.notable_gems(context)
         return if notable.empty?
 
         lines = [ "## Notable Gems" ]
@@ -165,8 +160,8 @@ module RailsAiContext
       end
 
       def conventions_section
-        conv = context[:conventions]
-        return unless conv[:directory_structure]&.any?
+        conv = Payload.section(context, :conventions)
+        return unless conv && conv[:directory_structure]&.any?
 
         lines = [ "## Project Structure" ]
         conv[:directory_structure].sort.each do |dir, count|
@@ -176,10 +171,7 @@ module RailsAiContext
       end
 
       def controllers_section
-        data = context[:controllers]
-        return if data[:error]
-
-        controllers = data[:controllers] || {}
+        controllers = Payload.app_controllers(context)
         return if controllers.empty?
 
         lines = [ "## Controllers (#{controllers.size})" ]
@@ -198,8 +190,7 @@ module RailsAiContext
       end
 
       def views_section
-        data = context[:views]
-        return if data[:error]
+        data = Payload.section(context, :views)
 
         lines = [ "## Views" ]
         lines << "- Layouts: #{data[:layouts].join(', ')}" if data[:layouts]&.any?
@@ -222,8 +213,7 @@ module RailsAiContext
       end
 
       def turbo_section
-        data = context[:turbo]
-        return if data[:error]
+        data = Payload.section(context, :turbo)
         return if data[:turbo_frames]&.empty? && data[:turbo_streams]&.empty? && data[:model_broadcasts]&.empty?
 
         lines = [ "## Hotwire / Turbo" ]
@@ -237,14 +227,15 @@ module RailsAiContext
         end
         if data[:model_broadcasts]&.any?
           lines << "### Model Broadcasts"
-          data[:model_broadcasts].each { |b| lines << "- `#{b[:model]}`: #{b[:methods].join(', ')}" }
+          data[:model_broadcasts].group_by { |b| b[:model] }.each do |model, hits|
+            lines << "- `#{model}`: #{hits.map { |b| b[:macro] }.uniq.join(', ')}"
+          end
         end
         lines.join("\n")
       end
 
       def active_storage_section
-        data = context[:active_storage]
-        return if data[:error]
+        data = Payload.section(context, :active_storage)
         return unless data[:attachments]&.any?
 
         lines = [ "## Active Storage" ]
@@ -254,8 +245,7 @@ module RailsAiContext
       end
 
       def action_text_section
-        data = context[:action_text]
-        return if data[:error]
+        data = Payload.section(context, :action_text)
         return unless data[:rich_text_fields]&.any?
 
         lines = [ "## Action Text" ]
@@ -264,8 +254,7 @@ module RailsAiContext
       end
 
       def i18n_section
-        data = context[:i18n]
-        return if data[:error]
+        data = Payload.section(context, :i18n)
 
         lines = [ "## Internationalization" ]
         lines << "- Default locale: #{data[:default_locale]}"
@@ -275,8 +264,7 @@ module RailsAiContext
       end
 
       def config_section
-        data = context[:config]
-        return if data[:error]
+        data = Payload.section(context, :config)
 
         lines = [ "## Configuration" ]
         lines << "- Cache store: #{data[:cache_store]}" if data[:cache_store]
@@ -289,8 +277,7 @@ module RailsAiContext
       end
 
       def assets_section
-        data = context[:assets]
-        return if data[:error]
+        data = Payload.section(context, :assets)
 
         lines = [ "## Asset Pipeline" ]
         lines << "- Pipeline: #{data[:pipeline]}" if data[:pipeline]
@@ -303,8 +290,7 @@ module RailsAiContext
       end
 
       def auth_section
-        data = context[:auth]
-        return if data[:error]
+        data = Payload.section(context, :auth)
 
         authn = data[:authentication] || {}
         authz = data[:authorization] || {}
@@ -326,8 +312,7 @@ module RailsAiContext
       end
 
       def api_section
-        data = context[:api]
-        return if data[:error]
+        data = Payload.section(context, :api)
 
         lines = [ "## API Layer" ]
         lines << "- API-only mode: #{data[:api_only]}"
@@ -348,8 +333,7 @@ module RailsAiContext
       end
 
       def tests_section
-        data = context[:tests]
-        return if data[:error]
+        data = Payload.section(context, :tests)
 
         lines = [ "## Testing" ]
         lines << "- Framework: #{data[:framework]}"
@@ -362,8 +346,7 @@ module RailsAiContext
       end
 
       def rake_tasks_section
-        data = context[:rake_tasks]
-        return if data[:error]
+        data = Payload.section(context, :rake_tasks)
         return unless data[:tasks]&.any?
 
         lines = [ "## Rake Tasks" ]
@@ -375,8 +358,7 @@ module RailsAiContext
       end
 
       def devops_section
-        data = context[:devops]
-        return if data[:error]
+        data = Payload.section(context, :devops)
 
         lines = [ "## DevOps" ]
         if data[:puma]
@@ -392,8 +374,7 @@ module RailsAiContext
       end
 
       def action_mailbox_section
-        data = context[:action_mailbox]
-        return if data[:error]
+        data = Payload.section(context, :action_mailbox)
         return unless data[:mailboxes]&.any?
 
         lines = [ "## Action Mailbox" ]
@@ -402,16 +383,16 @@ module RailsAiContext
       end
 
       def migrations_section
-        data = context[:migrations]
-        return if data[:error]
+        data = Payload.section(context, :migrations)
 
         lines = [ "## Migrations" ]
         lines << "- Total: #{data[:total]}"
         lines << "- Schema version: #{data[:schema_version]}" if data[:schema_version]
 
-        if data[:pending]&.any?
-          lines << "### Pending Migrations (#{data[:pending].size})"
-          data[:pending].each { |m| lines << "- `#{m[:version]}` #{m[:name]}" }
+        pending = Payload.pending_migrations(context)
+        if pending.any?
+          lines << "### Pending Migrations (#{pending.size})"
+          pending.each { |m| lines << "- `#{m[:version]}` #{m[:name]}" }
         end
 
         if data[:recent]&.any?
@@ -426,8 +407,7 @@ module RailsAiContext
       end
 
       def seeds_section
-        data = context[:seeds]
-        return if data[:error]
+        data = Payload.section(context, :seeds)
 
         lines = [ "## Database Seeds" ]
         if data[:seeds_file]
@@ -446,8 +426,7 @@ module RailsAiContext
       end
 
       def middleware_section
-        data = context[:middleware]
-        return if data[:error]
+        data = Payload.section(context, :middleware)
 
         lines = [ "## Custom Middleware" ]
         if data[:custom_middleware]&.any?
@@ -464,8 +443,7 @@ module RailsAiContext
       end
 
       def engines_section
-        data = context[:engines]
-        return if data[:error]
+        data = Payload.section(context, :engines)
 
         lines = [ "## Mounted Engines" ]
         if data[:mounted_engines]&.any?
@@ -481,8 +459,7 @@ module RailsAiContext
       end
 
       def multi_database_section
-        data = context[:multi_database]
-        return if data[:error]
+        data = Payload.section(context, :multi_database)
         return unless data[:multi_db]
 
         lines = [ "## Multi-Database" ]
@@ -551,8 +528,8 @@ module RailsAiContext
       end
 
       def architecture_summary
-        arch = context.dig(:conventions, :architecture)
-        arch&.any? ? arch.join(", ") : nil
+        arch = Payload.architecture(context)
+        arch.any? ? arch.join(", ") : nil
       end
     end
   end

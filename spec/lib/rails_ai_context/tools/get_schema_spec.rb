@@ -75,6 +75,51 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  # An STI child or a namespaced second model shares its parent's table, and
+  # the emptier of the two used to win the listing line on payload order.
+  describe "a table more than one model maps to" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: tables, total_tables: 3 },
+        models: {
+          "Admin::User" => { table_name: "users", associations: [], validations: [] },
+          "User" => {
+            table_name: "users",
+            associations: [ { name: "posts" }, { name: "comments" } ],
+            validations: [ { field: "email" } ]
+          }
+        }
+      })
+    end
+
+    it "names every model, the one carrying the most detail first" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("### users → **User** (2 assoc, 1 val), **Admin::User** (0 assoc, 0 val)")
+    end
+  end
+
+  # An STI table with dozens of subclasses turned one heading into a wall of
+  # names, in the view that exists to be cheap.
+  describe "a table many models map to" do
+    before do
+      models = (1..7).to_h do |i|
+        [ "Kind#{i}", { table_name: "users", associations: [], validations: [] } ]
+      end
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: tables, total_tables: 3 },
+        models: models
+      })
+    end
+
+    it "names the first five and counts the rest" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**Kind5** (0 assoc, 0 val) (+2 more)")
+      expect(text).not_to include("**Kind6**")
+    end
+  end
+
   describe ".call with specific table" do
     it "returns full detail for a specific table" do
       result = described_class.call(table: "users")

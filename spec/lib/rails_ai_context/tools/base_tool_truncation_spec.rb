@@ -43,8 +43,9 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
         models: { "User" => { associations: [], validations: [] } },
         schema: { tables: { "users" => { columns: [ { name: "id", type: "integer" } ] } } }
       })
-      allow(RailsAiContext::Fingerprinter).to receive(:changed?).and_return(false)
-      allow(RailsAiContext::Fingerprinter).to receive(:compute).and_return("abc123")
+      allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(false)
+      allow(RailsAiContext::Fingerprinter).to receive(:mark)
+        .and_return(RailsAiContext::Fingerprinter::Mark.new(digest: "abc123"))
     end
 
     after { described_class.reset_cache! }
@@ -64,6 +65,16 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       ctx2 = described_class.cached_context
       expect(ctx2[:models]).to have_key("User")
       expect(ctx2[:models]["User"][:associations]).to be_empty
+    end
+
+    # A mark taken after the introspection covers edits the answer never
+    # read, so the next caller trusts a context that is already stale.
+    it "marks the app before it introspects" do
+      expect(RailsAiContext::Fingerprinter).to receive(:mark).ordered
+        .and_return(RailsAiContext::Fingerprinter::Mark.new(digest: "abc123"))
+      expect(RailsAiContext).to receive(:introspect).ordered.and_return({})
+
+      described_class.cached_context
     end
 
     it "deep copies nested arrays" do
@@ -161,10 +172,12 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     around do |example|
       RailsAiContext.tier = :static
       RailsAiContext.static_reason = "RuntimeError: FATAL_ENV_MISSING"
+      RailsAiContext.static_kind = :boot_failed
       example.run
     ensure
       RailsAiContext.tier = :runtime
       RailsAiContext.static_reason = nil
+      RailsAiContext.static_kind = nil
     end
 
     it "appends the banner to every response" do
@@ -193,8 +206,69 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
 
     it "describes --no-boot mode when there is no boot failure" do
       RailsAiContext.static_reason = "static mode requested with --no-boot"
+      RailsAiContext.static_kind = :requested
       response = RailsAiContext::Tools::GetSchema.text_response("body")
-      expect(response.content.first[:text]).to include("static mode requested with --no-boot")
+      expect(response.content.first[:text]).to include("Static mode (static mode requested with --no-boot)")
+    end
+
+    # A tree with no config/environment.rb never attempted a boot, so calling
+    # it a boot failure sends the reader after an error that was never raised.
+    it "names the missing file rather than a boot failure when nothing booted" do
+      RailsAiContext.static_reason = "no config/environment.rb in /tmp/app"
+      RailsAiContext.static_kind = :source_only
+      text = RailsAiContext::Tools::GetSchema.text_response("body").content.first[:text]
+      expect(text).to include("Static mode (no config/environment.rb in /tmp/app)")
+      expect(text).not_to include("App boot failed")
+    end
+
+    # The kind decides the headline, not the shape of the reason string.
+    it "reads the kind rather than the reason text" do
+      RailsAiContext.static_reason = "no config/environment.rb in /tmp/app"
+      RailsAiContext.static_kind = :boot_failed
+      text = RailsAiContext::Tools::GetSchema.text_response("body").content.first[:text]
+      expect(text).to include("App boot failed (no config/environment.rb in /tmp/app)")
+    end
+  end
+
+  describe "static tier refusal" do
+    around do |example|
+      RailsAiContext.tier = :static
+      example.run
+    ensure
+      RailsAiContext.tier = :runtime
+      RailsAiContext.static_reason = nil
+      RailsAiContext.static_kind = nil
+    end
+
+    def refusal_text
+      RailsAiContext::Tools::GetSchema.send(:static_tier_refusal, "Live runtime state").content.first[:text]
+    end
+
+    it "sends a --no-boot run back without the flag" do
+      RailsAiContext.static_reason = "static mode requested with --no-boot"
+      RailsAiContext.static_kind = :requested
+      text = refusal_text
+      expect(text).to include("Rerun without `--no-boot`.")
+      expect(text).not_to include("boot failure")
+    end
+
+    it "sends a failed boot to doctor" do
+      RailsAiContext.static_reason = "RuntimeError: FATAL_ENV_MISSING"
+      RailsAiContext.static_kind = :boot_failed
+      text = refusal_text
+      expect(text).to include("Fix the boot failure (see `rails-ai-context doctor`).")
+      expect(text).not_to include("--no-boot")
+    end
+
+    # Neither remedy applies to a tree that never booted and was never asked
+    # to skip booting.
+    it "tells a source-only tree what it is missing" do
+      RailsAiContext.static_reason = "no config/environment.rb in /tmp/app"
+      RailsAiContext.static_kind = :source_only
+      text = refusal_text
+      expect(text).to include("This tree has no `config/environment.rb`; add one (or run from the app root) for runtime data.")
+      expect(text).not_to include("--no-boot")
+      expect(text).not_to include("boot failure")
     end
   end
 
@@ -263,10 +337,12 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       around do |example|
         RailsAiContext.tier = :static
         RailsAiContext.static_reason = "RuntimeError: FATAL_ENV_MISSING"
+        RailsAiContext.static_kind = :boot_failed
         example.run
       ensure
         RailsAiContext.tier = :runtime
         RailsAiContext.static_reason = nil
+        RailsAiContext.static_kind = nil
       end
 
       it "appends the tier banner so a failing tool keeps degradation context" do

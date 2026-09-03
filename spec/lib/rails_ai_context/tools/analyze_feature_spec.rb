@@ -311,4 +311,113 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
   end
+
+  # get_controllers already strikes a skipped filter through; a reader must
+  # not have to open the other tool to learn one was skipped.
+  describe "a skipped filter" do
+    let(:controller_path) { File.join(Rails.root, "app", "controllers", "widgets_controller.rb") }
+
+    before do
+      FileUtils.mkdir_p(File.dirname(controller_path))
+      File.write(controller_path, <<~RUBY)
+        class WidgetsController < ApplicationController
+          skip_before_action :authenticate_widget
+
+          def index; end
+        end
+      RUBY
+
+      allow(described_class).to receive(:rails_app).and_return(double(root: Rails.root))
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: {
+          controllers: {
+            "ApplicationController" => {
+              actions: [],
+              filters: [ { kind: "before", name: "authenticate_widget" } ]
+            },
+            "WidgetsController" => {
+              actions: [ "index" ],
+              filters: [],
+              parent_class: "ApplicationController",
+              file: "app/controllers/widgets_controller.rb"
+            }
+          }
+        }
+      )
+    end
+
+    after { FileUtils.rm_f(controller_path) }
+
+    it "is struck through in the controller's entry" do
+      text = described_class.call(feature: "widget").content.first[:text]
+
+      expect(text).to include("- **Skipped filters:** ~~authenticate_widget~~")
+    end
+  end
+
+  describe "an inherited filter" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: {
+          controllers: {
+            "ApplicationController" => {
+              actions: [],
+              filters: [ { kind: "before", name: "authenticate_widget", only: [ "index" ] } ]
+            },
+            "WidgetsController" => {
+              actions: [ "index" ],
+              filters: [
+                { kind: "before", name: "set_widget" },
+                { kind: "before", name: "authenticate_widget", only: [ "index" ] }
+              ],
+              parent_class: "ApplicationController"
+            }
+          }
+        }
+      )
+    end
+
+    it "is listed once, annotated with the parent it comes from" do
+      text = described_class.call(feature: "widget").content.first[:text]
+
+      expect(text).to include("- **Inherited filters:** authenticate_widget _(from ApplicationController)_")
+      expect(text.scan("authenticate_widget").size).to eq(1)
+      expect(text).to include("- **Filters:** before set_widget")
+    end
+
+    # The deliberate trade: a parent the payload does not carry answers no
+    # inherited filters. Rebuilding its path from the class name breaks on
+    # every app inflection, so nothing is guessed.
+    it "is absent when the payload does not carry the parent at all" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: {
+          controllers: {
+            "WidgetsController" => {
+              actions: [ "index" ],
+              filters: [ { kind: "before", name: "set_widget" } ],
+              parent_class: "ApplicationController"
+            }
+          }
+        }
+      )
+
+      text = described_class.call(feature: "widget").content.first[:text]
+
+      expect(text).not_to include("Inherited filters")
+      expect(text).to include("- **Filters:** before set_widget")
+    end
+
+    # Exclusion hides a controller from the listings, not from the filter
+    # chain: ActionFilters reads every controller the payload carries.
+    it "still names a parent the configuration excludes from listings" do
+      original = RailsAiContext.configuration.excluded_controllers
+      RailsAiContext.configuration.excluded_controllers = %w[ApplicationController]
+
+      text = described_class.call(feature: "widget").content.first[:text]
+
+      expect(text).to include("- **Inherited filters:** authenticate_widget _(from ApplicationController)_")
+    ensure
+      RailsAiContext.configuration.excluded_controllers = original
+    end
+  end
 end

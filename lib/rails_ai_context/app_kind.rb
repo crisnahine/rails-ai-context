@@ -6,17 +6,12 @@ module RailsAiContext
   module AppKind
     module_function
 
-    # The four-space indent plus "(" matches Bundler's resolved-spec line
-    # exactly, so gems that merely contain the name do not false-positive.
     def mongoid?(root)
       root = root.to_s
       return true if File.exist?(File.join(root, "config", "mongoid.yml"))
 
-      lock = File.join(root, "Gemfile.lock")
-      if File.exist?(lock)
-        content = RailsAiContext::SafeFile.read(lock)
-        return !!content&.include?("    mongoid (")
-      end
+      lock = RailsAiContext::GemLock.for(root)
+      return lock.present?("mongoid") unless lock.missing?
 
       # No lockfile yet (fresh checkout, bare directory): fall back to the
       # Gemfile's own declaration so the app still gets Mongoid treatment

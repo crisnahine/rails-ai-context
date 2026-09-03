@@ -28,6 +28,24 @@ Two senses, one per module, and neither is bare "path" in a name.
 
 **How a path is written down** - `PortablePath` rewrites one so it means the same thing on another machine, because what it touches ends up in `.ai-context.json` and the app commits that file. App paths go app-relative, gem paths keep the gem and version and drop the install prefix. "Relativize" always means this.
 
+## Safe path
+
+A caller-supplied path resolved once, through `SafePath`, before anything reads it. Its refusal order is the contract, not an implementation detail: traversal, sensitive name, realpath, containment, sensitive realpath, file, size. A caller that reorders those checks, or repeats one of them itself, gets a different answer on a symlink or a dotfile than every other tool does, which is the divergence the module exists to end. `safe_glob` is the globbed-path form: the same guard applied to each path a pattern yields.
+
+Not the same as a path that merely looks harmless, and not a caller's own containment check - "the tool guards this parameter" means it hands the parameter to `SafePath` and renders whatever refusal comes back.
+
+## Carried path
+
+A path the payload already holds because the gem's own walk found it - a controller's or a model's `file:`. It is re-read with `SafeFile.read(File.join(root, relative))`, which applies the size cap and nothing else. The reason is the walk: `SourceScan` deliberately keeps the spelling the app uses rather than the realpath, so a pack or an in-repo engine symlinked out of the root is spelled inside it, and `SafePath`'s realpath containment would refuse the very file the payload just named - the source comes back nil and a section silently empties.
+
+Not an exception to the **safe path** rule, the other side of it: a caller-supplied path is untrusted and goes through `SafePath`; a carried path was produced by this gem and only needs the cap.
+
+## Source scan
+
+The one walk over a kind of app source, across every directory `PathResolver` resolves for it: conventional layout, packs, in-repo engines. `SourceScan.paths` stats only, `each` reads the source on top of it, and `classes` names each file by its declared constant. An introspector that globs `app/<kind>` itself is the mistake this entry exists to name: it misses every pack and engine, and it names files by their path rather than by what they declare.
+
+Distinct from the **eager load** of the booted tier (`EagerLoad`), which makes constants exist rather than reading files, and from a **targeted walk** - one named file handed to `SourceIntrospector` with the listeners that file needs.
+
 ## Declared constant
 
 What a source file calls its own class, as opposed to the **path name** - the constant its path camelizes to. The two differ wherever the app registers an inflection, because Zeitwerk resolves a path through the app's own inflector and the static tier has never loaded it: `app/controllers/activitypub/` is `ActivityPub` in Mastodon, and `Oauth` is a constant nothing defines. `DeclaredConstant` reads the class the source declares, and since an inflection only ever changes case, the declaration that names a file is the one equal to the path name ignoring case. Anything else - a second class in the file, a nested error class, a tree Prism recovered from a syntax error - is not this file's class, and there the path name stays the answer: it is the only thing carrying the namespace when the source does not.

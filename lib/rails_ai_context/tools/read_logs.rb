@@ -6,7 +6,8 @@ module RailsAiContext
       tool_name "rails_read_logs"
       description "Read recent log entries with level filtering and sensitive data redaction. " \
         "Use when: debugging errors, checking recent activity, investigating failed requests. " \
-        "Key params: lines (default 50), level (ERROR/WARN/INFO/DEBUG/FATAL/all), file, search."
+        "Key params: lines (default 50), level (ERROR/WARN/INFO/DEBUG/FATAL/all), file, search. " \
+        "Search matches the redacted line, so a filtered value cannot be searched for."
 
       input_schema(
         properties: {
@@ -81,31 +82,24 @@ module RailsAiContext
           else
             "No log files found in log/. Your app may log to stdout (common in Docker/container environments)."
           end
-          return text_response(msg)
+          return empty_response(msg)
         end
 
         # Tail the file
         raw_lines = tail_file(path, lines)
         if raw_lines.empty?
-          return text_response("# Log: #{File.basename(path)}\nLog file is empty.\n\n---\nAvailable log files: #{available.join(', ')}")
+          return empty_response("# Log: #{File.basename(path)}\nLog file is empty.\n\n---\nAvailable log files: #{available.join(', ')}")
         end
 
         # Detect format and filter by level
         format = detect_format(raw_lines)
         filtered = filter_by_level(raw_lines, level, format)
 
-        # Apply search filter
-        if search && !search.strip.empty?
-          search_term = search.strip
-          filtered = filtered.select { |line| line.downcase.include?(search_term.downcase) }
-        end
+        redacted = RailsAiContext::Redaction.redact_log_lines(filtered, search: search)
 
-        if filtered.empty?
-          return text_response("# Log: #{File.basename(path)}\nNo entries matching level:#{level}#{" search:\"#{search}\"" if search}.\n\n---\nAvailable log files: #{available.join(', ')}")
+        if redacted.empty?
+          return empty_response("# Log: #{File.basename(path)}\nNo entries matching level:#{level}#{" search:\"#{search}\"" if search}.\n\n---\nAvailable log files: #{available.join(', ')}")
         end
-
-        # Redact sensitive data
-        redacted = filtered.map { |line| RailsAiContext::Redaction.redact_log_line(line) }
 
         # Format output
         file_size = File.size(path)
@@ -136,39 +130,15 @@ module RailsAiContext
       # ── Log file resolution ─────────────────────────────────────────
 
       private_class_method def self.resolve_log_file(file_name)
-        root = rails_app.root.to_s
-
-        if file_name
-          # Strip .log suffix if provided, then re-add; sanitize null bytes and path separators
-          name = file_name.to_s.strip.delete("\0").delete_suffix(".log")
-          name = File.basename(name) # Prevent directory traversal via slashes
-          path = File.join(root, "log", "#{name}.log")
+        name = if file_name
+          File.basename(file_name.to_s.strip.delete("\0").delete_suffix(".log"))
         else
-          path = File.join(root, "log", "#{rails_env_name}.log")
+          rails_env_name
         end
 
-        # Path traversal protection: separator-aware containment so a sibling
-        # directory (e.g. `/var/app/myapp_evil/log.log` vs `/var/app/myapp/`)
-        # cannot pass `start_with?("/var/app/myapp")`. Return the realpath so
-        # downstream callers (tail_file, File.size) operate on the canonical
-        # path, closing the TOCTOU window between this check and the open().
-        return nil unless File.exist?(path)
-        real = File.realpath(path)
-        real_root = File.realpath(root)
-        return nil unless real == real_root || real.start_with?(real_root + File::SEPARATOR)
-
-        # Post-realpath sensitive recheck (Rule 3 of the file-reading
-        # conventions): a symlink placed inside `log/` pointing at a
-        # sensitive file still under Rails.root (e.g. `log/sneak.log ->
-        # ../config/master.key`) would otherwise pass the containment
-        # check above and be read by `tail_file`. Reject anything whose
-        # real path matches `sensitive_patterns`.
-        relative_real = real.sub("#{real_root}/", "")
-        return nil if sensitive_file?(relative_real)
-
-        real
-      rescue Errno::ENOENT
-        nil
+        # A log is tailed, never read whole, so the per-file cap does not apply.
+        located = RailsAiContext::SafePath.locate(File.join("log", "#{name}.log"), under: rails_app.root.to_s, max_size: Float::INFINITY)
+        located.ok? ? located.realpath : nil
       end
 
       # ── Reverse tail ────────────────────────────────────────────────

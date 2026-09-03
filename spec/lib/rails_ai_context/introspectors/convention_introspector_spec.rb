@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -252,6 +253,71 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
 
       it "does NOT detect async_queries (comments are not real usage)" do
         expect(result[:patterns]).not_to include("async_queries")
+      end
+    end
+  end
+
+  describe "#gem_present?" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def introspect(lock)
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      described_class.new(double("app", root: @root))
+    end
+
+    it "sees a gem in the PATH section" do
+      lock = <<~LOCK
+        PATH
+          remote: engines/billing
+          specs:
+            dry-monads (1.6.0)
+      LOCK
+      expect(introspect(lock).send(:gem_present?, "dry-monads")).to be(true)
+    end
+
+    it "does not match a gem whose name merely starts with the query" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            dry-monads-extras (1.0.0)
+      LOCK
+      expect(introspect(lock).send(:gem_present?, "dry-monads")).to be(false)
+    end
+  end
+
+  describe "source across every directory of a kind" do
+    it "counts a pack's models in the layer count" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "packs", "billing", "app", "models"))
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "packs", "billing", "app", "models", "invoice.rb"),
+                   "class Invoice < ApplicationRecord\nend\n")
+
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+        structure = described_class.new(app).call[:directory_structure]
+        expect(structure["app/models"]).to eq(2)
+      end
+    end
+
+    it "detects STI under a namespaced parent" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "app", "models", "admin", "report.rb"),
+                   "class Admin::Report < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "admin", "weekly_report.rb"),
+                   "class Admin::WeeklyReport < Admin::Report\nend\n")
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          create_table "reports" do |t|
+            t.string "type"
+          end
+        RUBY
+
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+        patterns = described_class.new(app).call[:patterns]
+        expect(patterns).to include("sti")
       end
     end
   end

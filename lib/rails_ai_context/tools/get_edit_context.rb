@@ -45,16 +45,12 @@ module RailsAiContext
           return text_response("The `near` parameter is required. Provide a method name, keyword, or string to find.")
         end
 
-        full_path = rails_app.root.join(file)
-
-        # Block access to sensitive files (secrets, keys, credentials)
-        if sensitive_file?(file)
-          return text_response("Access denied: #{file} is a sensitive file (secrets/keys/credentials).")
-        end
-
-        # Path traversal protection (resolves symlinks)
-        unless File.exist?(full_path)
-          # Try to find a matching file to suggest
+        located = RailsAiContext::SafePath.locate(file, under: rails_app.root.to_s)
+        case located.refusal
+        when :traversal, :outside then return text_response("Path not allowed: #{file}")
+        when :sensitive then return text_response("Access denied: #{file} is a sensitive file (secrets/keys/credentials).")
+        when :too_large then return text_response("File too large: #{file}")
+        when :missing
           basename = File.basename(file)
           candidates = Dir.glob(File.join(rails_app.root, "app", "**", basename)).first(5)
           hint = if candidates.any?
@@ -63,33 +59,9 @@ module RailsAiContext
           else
             " Use the full path relative to Rails root (e.g., 'app/models/#{basename}')."
           end
-          return text_response("File not found: #{file}.#{hint}")
+          return empty_response("File not found: #{file}.#{hint}")
         end
-        begin
-          real = File.realpath(full_path).to_s
-          rails_root_real = File.realpath(rails_app.root).to_s
-          # Separator-aware containment - matches the v5.8.1-r2 hardening in
-          # get_view.rb / vfs.rb. Without `+ File::SEPARATOR`, a sibling-dir
-          # like `/app/rails_evil/...` would prefix-match a Rails root at
-          # `/app/rails`. Same bug class as the original C1.
-          unless real == rails_root_real || real.start_with?(rails_root_real + File::SEPARATOR)
-            return text_response("Path not allowed: #{file}")
-          end
-          # Re-run the sensitive_file? check on the realpath. Defense against
-          # symlinks that point at sensitive files from a non-sensitive path
-          # (e.g. app/models/notes.rb -> ../../config/master.key). The initial
-          # check above runs on the caller-supplied string, not the resolved
-          # target. See v5.8.1 security review.
-          relative_real = real.sub("#{rails_root_real}/", "")
-          if sensitive_file?(relative_real)
-            return text_response("Access denied: #{file} resolves to a sensitive file (secrets/keys/credentials).")
-          end
-        rescue Errno::ENOENT
-          return text_response("File not found: #{file}")
-        end
-        if File.size(real) > max_file_size
-          return text_response("File too large: #{file}")
-        end
+        real = located.realpath
 
         source_lines = (RailsAiContext::SafeFile.read(real) || "").lines
         context_lines = [ context_lines.to_i, 0 ].max
@@ -101,7 +73,7 @@ module RailsAiContext
         end
 
         if matches.empty?
-          return text_response("'#{near}' not found in #{file} (#{count_phrase(source_lines.size, "line")}).\n\nAvailable methods:\n#{extract_methods(source_lines)}")
+          return empty_response("'#{near}' not found in #{file} (#{count_phrase(source_lines.size, "line")}).\n\nAvailable methods:\n#{extract_methods(source_lines)}")
         end
 
         # Build context window around first match

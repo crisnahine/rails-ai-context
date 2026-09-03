@@ -8,6 +8,16 @@ module RailsAiContext
       extend StaticTier
       static_tier :runtime_only
 
+      ERROR_MONITORS = {
+        "sentry" => %w[sentry-ruby sentry-rails],
+        "bugsnag" => %w[bugsnag],
+        "honeybadger" => %w[honeybadger],
+        "rollbar" => %w[rollbar],
+        "airbrake" => %w[airbrake],
+        "appsignal" => %w[appsignal]
+      }.freeze
+      private_constant :ERROR_MONITORS
+
       attr_reader :app
 
       def initialize(app)
@@ -124,20 +134,13 @@ module RailsAiContext
       end
 
       def detect_current_attributes
-        models_dir = File.join(root, "app/models")
-        return [] unless Dir.exist?(models_dir)
-
         target_bases = %w[ActiveSupport::CurrentAttributes Rails::CurrentAttributes]
 
-        Dir.glob(File.join(models_dir, "**/*.rb")).filter_map do |path|
-          parse_result = AstCache.parse(path)
-          class_node = find_first_class_node(parse_result.value)
+        SourceScan.classes(root, kind: "app/models").filter_map do |name, record|
+          class_node = find_first_class_node(AstCache.parse_string(record.source).value)
           next unless class_node&.superclass
 
-          superclass_name = constant_path_to_string(class_node.superclass)
-          if target_bases.include?(superclass_name)
-            File.basename(path, ".rb").camelize
-          end
+          name if target_bases.include?(constant_path_to_string(class_node.superclass))
         rescue => _e
           next
         end
@@ -171,18 +174,10 @@ module RailsAiContext
       end
 
       def detect_error_monitoring
-        gemfile_lock = File.join(app.root, "Gemfile.lock")
-        return nil unless File.exist?(gemfile_lock)
-        content = RailsAiContext::SafeFile.read(gemfile_lock)
-        return nil unless content
+        lock = RailsAiContext::GemLock.for(app.root)
+        return nil if lock.missing?
 
-        tools = []
-        tools << "sentry" if content.include?("sentry-ruby") || content.include?("sentry-rails")
-        tools << "bugsnag" if content.include?("bugsnag")
-        tools << "honeybadger" if content.include?("honeybadger")
-        tools << "rollbar" if content.include?("rollbar")
-        tools << "airbrake" if content.include?("airbrake")
-        tools << "appsignal" if content.include?("appsignal")
+        tools = ERROR_MONITORS.filter_map { |tool, gems| tool if lock.any?(*gems) }
         tools.empty? ? nil : tools
       rescue => e
         $stderr.puts "[rails-ai-context] detect_error_monitoring failed: #{e.message}" if ENV["DEBUG"]

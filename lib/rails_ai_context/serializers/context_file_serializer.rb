@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "json"
 require "securerandom"
 require "set"
 
@@ -110,12 +111,25 @@ module RailsAiContext
 
       # JSON and other formats that don't support HTML comments
       def write_plain(filepath, content, written, skipped)
-        if File.exist?(filepath) && File.read(filepath) == content
+        if File.exist?(filepath) && same_payload?(File.read(filepath), content)
           skipped << filepath
         else
           RailsAiContext::SafeFile.atomic_write(filepath, content)
           written << filepath
         end
+      end
+
+      # The JSON carries the run's own timestamp, so a run that found nothing
+      # new still rewrote the file and put a diff in a repo that commits it.
+      def same_payload?(existing, content)
+        return true if existing == content
+
+        parsed = JSON.parse(existing)
+        return false unless parsed.is_a?(Hash)
+
+        parsed.except("generated_at") == JSON.parse(content).except("generated_at")
+      rescue JSON::ParserError
+        false
       end
 
       # Wrap content in section markers so user content is preserved.

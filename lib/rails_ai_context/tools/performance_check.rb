@@ -44,13 +44,15 @@ module RailsAiContext
 
           # Validate model exists if specified
           if model && !model.empty?
-            models_data = cached_context[:models]
-            if models_data.is_a?(Hash) && !models_data[:error]
+            models_data = Payload.models(cached_context)
+            if models_data.any?
               model_names = models_data.keys.map(&:to_s)
-              unless model_names.any? { |m| m.downcase == model.downcase }
+              key = fuzzy_find_key(model_names, model)
+              unless key
                 return not_found_response("Model", model, model_names,
                   recovery_tool: "Call rails_performance_check() without model filter to see all issues")
               end
+              model = key
             end
           end
 

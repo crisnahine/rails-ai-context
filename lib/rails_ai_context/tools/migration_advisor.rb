@@ -78,13 +78,13 @@ module RailsAiContext
           return text_response("**Error:** Unknown action `#{action}`.#{hint} Valid actions: #{VALID_ACTIONS.join(', ')}")
         end
 
-        schema = cached_context[:schema]
-        models = cached_context[:models]
+        schema = Payload.section(cached_context, :schema)
+        models = Payload.models(cached_context)
 
         lines = [ "# Migration Advisor", "" ]
 
         # Check if table exists
-        table_exists = schema.is_a?(Hash) && !schema[:error] && schema[:tables]&.key?(table)
+        table_exists = schema && schema[:tables]&.key?(table)
 
         case action
         when "add_column"
@@ -165,7 +165,7 @@ module RailsAiContext
 
           lines = []
 
-          table_exists = schema.is_a?(Hash) && !schema[:error] && schema[:tables]&.key?(table)
+          table_exists = schema && schema[:tables]&.key?(table)
           unless table_exists
             lines << "**Warning:** Table `#{table}` not found in current schema. This migration will fail."
             lines << ""
@@ -423,11 +423,7 @@ module RailsAiContext
         end
 
         def strong_migrations_gem_present?
-          lock_path = File.join(rails_app.root.to_s, "Gemfile.lock")
-          return false unless File.exist?(lock_path)
-          content = RailsAiContext::SafeFile.read(lock_path)
-          return false unless content
-          content.include?("    strong_migrations (")
+          RailsAiContext::GemLock.for(rails_app.root).present?("strong_migrations")
         rescue => e
           $stderr.puts "[rails-ai-context] strong_migrations_gem_present? failed: #{e.message}" if ENV["DEBUG"]
           false
@@ -436,7 +432,7 @@ module RailsAiContext
         def show_affected_models(table, models)
           lines = [ "", "## Affected Models", "" ]
 
-          return lines unless models.is_a?(Hash) && !models[:error]
+          return lines if models.empty?
 
           model_name = table.singularize.camelize
           if models.key?(model_name.to_sym) || models.key?(model_name)

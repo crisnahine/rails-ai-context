@@ -29,7 +29,14 @@ module RailsAiContext
       return false if FRAMEWORK_PREFIXES.any? { |prefix| name.start_with?(prefix) }
       return false if GENERATED.any? { |g| name == g || name.end_with?("::#{g}") }
 
-      RailsAiContext.configuration.excluded_concerns.none? { |pattern| name.match?(pattern) }
+      !excluded?(name)
+    end
+
+    # The `excluded_concerns` patterns alone, for a catalogue whose entries
+    # are already known to be concerns. The key hides a concern everywhere,
+    # not only where one class's list would have named it.
+    def excluded?(name)
+      RailsAiContext.configuration.excluded_concerns.any? { |pattern| name.to_s.match?(pattern) }
     end
 
     def payload(names)

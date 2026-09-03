@@ -135,7 +135,7 @@ module RailsAiContext
               # Detect encrypted columns from model data
               encrypted_cols = Set.new
               model_refs = models_for_table(name)
-              models_data = cached_context[:models] || {}
+              models_data = Payload.models(cached_context)
               model_refs.each do |model_name|
                 (models_data.dig(model_name, :encrypts) || []).each { |f| encrypted_cols.add(f) }
               end
@@ -155,16 +155,22 @@ module RailsAiContext
                   "#{c[:name]}:#{c[:type]}#{hint_str}"
                 end.join(", ")
               # Inline model info so AI doesn't need a separate get_model_details call
-              model_info = ""
-              if model_refs.any?
-                model_refs.each do |mname|
-                  md = models_data[mname]
-                  next unless md.is_a?(Hash) && !md[:error]
-                  assoc_count = md[:associations]&.size || 0
-                  val_count = md[:validations]&.size || 0
-                  model_info = " → **#{mname}** (#{assoc_count} assoc, #{val_count} val)"
-                  break
-                end
+              # Every model on the table, richest first: an STI child or a
+              # namespaced second model shares the table, and stopping at the
+              # first in payload order can name the emptier one.
+              usable = model_refs.filter_map do |mname|
+                md = models_data[mname]
+                next unless md.is_a?(Hash) && !md[:error]
+
+                [ mname, md[:associations]&.size || 0, md[:validations]&.size || 0 ]
+              end
+              usable = usable.sort_by.with_index { |(_, a, v), i| [ -(a + v), i ] }
+              model_info = if usable.any?
+                shown = usable.first(5).map { |mname, a, v| "**#{mname}** (#{a} assoc, #{v} val)" }.join(", ")
+                more = usable.size > 5 ? " (+#{usable.size - 5} more)" : ""
+                " → #{shown}#{more}"
+              else
+                ""
               end
               lines << "### #{name}#{model_info}"
               lines << cols
@@ -214,10 +220,7 @@ module RailsAiContext
       end
 
       private_class_method def self.models_for_table(table_name)
-        models = cached_context[:models]
-        return [] unless models.is_a?(Hash)
-
-        models.select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
+        Payload.models(cached_context).select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
       rescue => e
         $stderr.puts "[rails-ai-context] models_for_table failed: #{e.message}" if ENV["DEBUG"]
         []
@@ -237,7 +240,7 @@ module RailsAiContext
         if schema[:pending_migrations].is_a?(Array)
           pending = schema[:pending_migrations]
           if pending.any?
-            shown = pending.first(5).join(", ")
+            shown = pending.first(5).map { |m| m[:version] }.join(", ")
             more = pending.size > 5 ? " (+#{pending.size - 5} more)" : ""
             lines << "**Pending migrations:** #{pending.size} - #{shown}#{more}"
           elsif schema[:schema_version]

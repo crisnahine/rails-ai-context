@@ -13,8 +13,7 @@ module RailsAiContext
         schema_data = context[:schema]
         return nil unless models_data.is_a?(Hash) && schema_data.is_a?(Hash)
 
-        # Find model in models context (case-insensitive)
-        model_key = models_data.keys.find { |k| k.to_s.casecmp?(model_name) }
+        model_key = Tools::BaseTool.fuzzy_find_key(models_data.keys, model_name)
         return nil unless model_key
 
         model_info = models_data[model_key]
@@ -61,12 +60,6 @@ module RailsAiContext
           primary_key: primary_key.to_s,
           confidence: confidence
         )
-      end
-
-      # Build SchemaHints for multiple model names.
-      # Returns only the ones that resolved successfully.
-      def self.build_many(model_names, context:, max: 5)
-        model_names.first(max).filter_map { |name| build(name, context: context) }
       end
     end
   end

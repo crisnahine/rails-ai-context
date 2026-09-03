@@ -27,6 +27,50 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
+    # A repo that commits its context files gets a diff on every run
+    # otherwise, carrying no information but the clock.
+    it "skips the JSON file when only its timestamp would change" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        described_class.new(context, format: :json).call
+        later = context.merge(generated_at: (Time.now.utc + 60).iso8601)
+        result = described_class.new(later, format: :json).call
+
+        expect(result[:written]).to be_empty
+        expect(result[:skipped].map { |f| File.basename(f) }).to include(".ai-context.json")
+      end
+    end
+
+    # A hand-edited or half-written file need not hold a JSON object, and the
+    # skip check asked it for a key either way.
+    it "rewrites a JSON file that does not parse to an object" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        path = File.join(dir, ".ai-context.json")
+        File.write(path, "[1,2]")
+
+        result = described_class.new(context, format: :json).call
+
+        expect(result[:written].map { |f| File.basename(f) }).to include(".ai-context.json")
+        expect(JSON.parse(File.read(path))).to be_a(Hash)
+      end
+    end
+
+    # Only the full-mode header carries the run's own clock; the compact one
+    # never did, which is why it was already skipped.
+    it "skips a markdown file when only its timestamp would change" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        allow(RailsAiContext.configuration).to receive(:context_mode).and_return(:full)
+        described_class.new(context, format: :claude).call
+        later = context.merge(generated_at: (Time.now.utc + 60).iso8601)
+        result = described_class.new(later, format: :claude).call
+
+        expect(result[:written]).to be_empty
+        expect(result[:skipped].map { |f| File.basename(f) }).to include("CLAUDE.md")
+      end
+    end
+
     it "writes a single format with split rules" do
       Dir.mktmpdir do |dir|
         allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)

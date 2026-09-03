@@ -85,6 +85,20 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
 
   describe ".call" do
     context "listing all concerns" do
+      # The key hid a concern from a model's own concern list and nowhere
+      # else, so the catalogue kept listing and counting it.
+      it "leaves an excluded concern out of the listing and the count" do
+        original = RailsAiContext.configuration.excluded_concerns
+        RailsAiContext.configuration.excluded_concerns = [ /Searchable/ ]
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).not_to include("Searchable")
+        expect(text).to include("# Concerns (1)")
+      ensure
+        RailsAiContext.configuration.excluded_concerns = original
+      end
+
       it "lists both model and controller concerns" do
         result = described_class.call
         text = result.content.first[:text]
@@ -265,27 +279,69 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to match(/not allowed/)
       end
 
+      # The refusal belongs to the name, not to any directory, so an app with
+      # no concern directory to loop over must still answer with it.
+      it "rejects a traversal even with no concern directories to search" do
+        empty_dir = Dir.mktmpdir
+        allow(described_class).to receive(:rails_app).and_return(
+          double("app", root: Pathname.new(empty_dir))
+        )
+
+        text = described_class.call(name: "../../config/master.key").content.first[:text]
+        expect(text).to match(/not allowed/)
+      ensure
+        FileUtils.remove_entry(empty_dir) if empty_dir
+      end
+
+      # The name is benign, so only the post-realpath check catches it; the
+      # directory loop has to render that refusal rather than search on.
+      it "rejects a concern file symlinked to a sensitive path" do
+        skip "symlinks unavailable" unless File.respond_to?(:symlink?)
+
+        secret = File.join(model_concerns_dir, "buried.key")
+        File.write(secret, "should-never-leak-from-symlink")
+        link = File.join(model_concerns_dir, "secret_helper.rb")
+        File.symlink(secret, link)
+
+        text = described_class.call(name: "secret_helper").content.first[:text]
+        expect(text).to match(/not allowed/)
+        expect(text).to include("sensitive file")
+        expect(text).not_to include("should-never-leak-from-symlink")
+      ensure
+        FileUtils.rm_f([ link, secret ].compact)
+      end
+
       it "rejects null bytes in the name parameter" do
         result = described_class.call(name: "searchable\0.rb")
         text = result.content.first[:text]
         expect(text).to match(/not allowed/)
       end
+    end
 
-      it "blocks symlinks inside concerns dir that escape to sensitive files" do
-        # A symlink at app/models/concerns/sneaky.rb -> config/master.key
-        # passes the bare File.exist? check and, without the post-realpath
-        # recheck, would leak the secret. Fix: realpath containment +
-        # sensitive_file? recheck.
-        secret = File.join(tmpdir, "config", "master.key")
-        FileUtils.mkdir_p(File.dirname(secret))
-        File.write(secret, "should-never-leak-as-concern")
+    context "a def inside a heredoc or behind an inline private" do
+      before do
+        File.write(File.join(model_concerns_dir, "documented.rb"), <<~RUBY)
+          module Documented
+            extend ActiveSupport::Concern
 
-        symlink = File.join(model_concerns_dir, "sneaky.rb")
-        File.symlink(secret, symlink)
+            USAGE = <<~USAGE
+              def example_usage
+              end
+            USAGE
 
-        result = described_class.call(name: "Sneaky")
-        text = result.content.first[:text]
-        expect(text).not_to include("should-never-leak-as-concern")
+            def visible; end
+
+            private def hidden_helper; end
+          end
+        RUBY
+      end
+
+      it "lists only the methods the module really defines as public" do
+        text = described_class.call(name: "Documented", detail: "standard").content.first[:text]
+
+        expect(text).to include("- `visible`")
+        expect(text).not_to include("example_usage")
+        expect(text).not_to include("hidden_helper")
       end
     end
 

@@ -79,24 +79,22 @@ module RailsAiContext
           lines << models_line
         end
 
-        routes = context[:routes]
-        if routes && !routes[:error]
+        routes = Payload.section(context, :routes)
+        if routes
           lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}"
         end
 
-        gems = context[:gems]
-        if gems.is_a?(Hash) && !gems[:error]
-          notable = notable_gems_list(gems)
+        notable = Payload.notable_gems(context)
+        if notable.any?
           grouped = notable.group_by { |g| g[:category]&.to_s || "other" }
           grouped.each do |cat, gem_list|
             lines << "- #{cat}: #{gem_list.map { |g| g[:name] }.join(', ')}"
           end
         end
 
-        conv = context[:conventions]
-        if conv.is_a?(Hash) && !conv[:error]
+        if Payload.section(context, :conventions)
           arch_labels = arch_labels_hash
-          (conv[:architecture] || []).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
+          Payload.architecture(context).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
         end
 
         lines.concat(full_preset_stack_lines)
@@ -122,8 +120,8 @@ module RailsAiContext
 
       # Auto-attached when working in app/models/
       def render_models_rule
-        models = context[:models]
-        return nil unless models.is_a?(Hash) && !models[:error] && models.any?
+        models = Payload.models(context)
+        return nil unless models.any?
 
         lines = [
           "---",
@@ -156,9 +154,7 @@ module RailsAiContext
 
       # Auto-attached when working in app/controllers/
       def render_controllers_rule
-        data = context[:controllers]
-        return nil unless data.is_a?(Hash) && !data[:error]
-        controllers = data[:controllers] || {}
+        controllers = Payload.app_controllers(context)
         return nil if controllers.empty?
 
         lines = [

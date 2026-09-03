@@ -38,21 +38,16 @@ module RailsAiContext
           return text_response("The `partial` parameter is required. Provide a partial path relative to app/views (e.g. 'shared/status_badge').")
         end
 
-        # Reject path traversal attempts
-        if partial.include?("..") || partial.start_with?("/")
-          return text_response("Path not allowed: #{partial}")
-        end
-
-        # Rule 1 (security conventions): reject sensitive-file names on the
-        # caller-supplied string BEFORE any filesystem stat. Without this,
-        # the "not found" vs "access denied" distinction leaks whether
-        # `app/views/.env` / `app/views/master.key` exists.
-        if sensitive_file?(partial)
-          return text_response("Path not allowed: #{partial} (sensitive file)")
-        end
-
         root = rails_app.root.to_s
         views_dir = File.join(root, "app", "views")
+
+        # Only the caller string is judged here; the candidate search below
+        # decides whether the partial exists.
+        guard = RailsAiContext::SafePath.locate(partial, under: views_dir, root: root)
+        case guard.refusal
+        when :traversal then return text_response("Path not allowed: #{partial}")
+        when :sensitive then return text_response("Path not allowed: #{partial} (sensitive file)")
+        end
 
         unless Dir.exist?(views_dir)
           note = api_only_note("app/views")
@@ -61,29 +56,24 @@ module RailsAiContext
           return text_response("No app/views/ directory found.")
         end
 
-        # Resolve partial to actual file path
-        file_path = resolve_partial_path(views_dir, partial)
+        located = resolve_partial_path(views_dir, partial)
 
-        unless file_path
+        unless located
           available = find_available_partials(views_dir, root)
           return not_found_response("Partial", partial, available,
             recovery_tool: "Call rails_get_view(detail:\"summary\") to see all views and partials")
         end
 
-        # Derive display-string bases from the realpath that resolve_partial_path
-        # already computed internally - keeps all path operations on realpaths.
-        real_root = File.realpath(root)
-        real_views_dir = File.realpath(views_dir)
-
-        if File.size(file_path) > max_file_size
+        file_path = located.realpath
+        if located.refusal == :too_large
           return text_response("Partial file too large: #{file_path} (#{File.size(file_path)} bytes, max: #{max_file_size})")
         end
 
         source = safe_read(file_path)
         return text_response("Could not read partial file.") unless source
 
-        relative_path = file_path.sub("#{real_root}/", "")
-        partial_name = file_path.sub("#{real_views_dir}/", "")
+        relative_path = located.relative
+        partial_name = relative_path.delete_prefix("app/views/")
 
         # Parse the partial's interface
         magic_locals = extract_magic_comment_locals(source)
@@ -266,22 +256,8 @@ module RailsAiContext
 
         return nil unless found
 
-        # Path traversal protection: separator-aware containment + post-realpath
-        # sensitive recheck. Returns real_found (the resolved realpath) so the
-        # caller reads from the same path that was security-checked - TOCTOU closed.
-        begin
-          real_found = File.realpath(found).to_s
-          real_base = File.realpath(views_dir).to_s
-          unless real_found == real_base || real_found.start_with?(real_base + File::SEPARATOR)
-            return nil
-          end
-          relative_real = real_found.sub("#{real_base}/", "")
-          return nil if sensitive_file?(relative_real) || sensitive_file?(partial)
-        rescue Errno::ENOENT
-          return nil
-        end
-
-        real_found
+        located = RailsAiContext::SafePath.locate(found.delete_prefix(views_dir + File::SEPARATOR), under: views_dir, root: rails_app.root.to_s)
+        located.ok? || located.refusal == :too_large ? located : nil
       end
 
       # Extract locals declared via Rails 7.1+ magic comment: <%# locals: (name:, title: "default") %>

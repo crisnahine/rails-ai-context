@@ -144,8 +144,8 @@ module RailsAiContext
             # config.max_file_size = 5_000_000         # Per-file read (5MB)
             # config.max_test_file_size = 1_000_000    # Test file read (1MB)
             # config.max_schema_file_size = 10_000_000 # schema.rb parse (10MB)
-            # config.max_view_total_size = 10_000_000  # Aggregated view content (10MB)
-            # config.max_view_file_size = 1_000_000    # Per-view file (1MB)
+            # config.max_view_total_size = 10_000_000  # Doctor view-size threshold (10MB)
+            # config.max_view_file_size = 1_000_000    # Named in that doctor fix line (1MB)
             # config.max_search_results = 200          # Max search results per call
             # config.max_validate_files = 50           # Max files per validate call
         SECTION
@@ -520,10 +520,6 @@ module RailsAiContext
           @selected_formats, root: Rails.root
         )
 
-        # Generate every selected format in ONE call so ContextFileSerializer's
-        # cross-format dedup applies (opencode and codex share AGENTS.md and
-        # its split rules - generating them one format at a time defeats that
-        # dedup and reports the same file as both written and unchanged).
         begin
           result = RailsAiContext.generate_context(format: @selected_formats)
           (result[:written] || []).each { |f| say "  ✅ #{f}", :green }

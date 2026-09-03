@@ -17,7 +17,7 @@ document is aspirational.
 
 - **Ruby:** 3.1 - 4.0 (gemspec: `required_ruby_version >= 3.1.0`, no upper cap)
 - **Rails (railties):** 7.0 - 8.1 (gemspec: `railties >= 7.0, < 9.0`)
-- **mcp gem:** `>= 0.8, < 2.0`
+- **mcp gem:** `>= 0.13, < 2.0`
 - **thor:** `>= 1.0, < 3.0`
 - **prism:** `>= 1.4, < 2.0` (a CI leg pins the floor exactly and runs the suite against it)
 - **concurrent-ruby:** `>= 1.2, < 3.0`
@@ -74,14 +74,14 @@ Prism AST layer for source-level facts (scopes, callbacks, strong params).
 introspectors answer here; each declares which of three kinds it is
 (ADR-0002), so what a tier can say is a declaration rather than a guess.
 
-**files-only** (23) run unchanged against the static app handle, because they
+**files-only** (22) run unchanged against the static app handle, because they
 only ever read files: `gems`, `views`, `view_templates`, `turbo`, `stimulus`,
 `active_storage`, `action_text`, `auth`, `tests`, `rake_tasks`, `assets`,
-`devops`, `action_mailbox`, `migrations`, `seeds`, `middleware`, `env_config`,
+`devops`, `action_mailbox`, `migrations`, `seeds`, `env_config`,
 `multi_database`, `components`, `performance`, `frontend_frameworks`,
 `credentials` and `env`.
 
-**alternate-source** (9) have a `static_call` that reads a different source
+**alternate-source** (10) have a `static_call` that reads a different source
 from the booted path:
 
 | Introspector | Static source |
@@ -92,9 +92,10 @@ from the booted path:
 | `controllers` | `app/controllers/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
 | `jobs` | `app/jobs`, `app/mailers` and `app/channels` parsed for classes and their public methods |
 | `i18n` | every top-level key across `config/locales`, and the default locale read from `config/` |
-| `api` | serializers, API controllers and route constraints read from source |
+| `api` | every detection but the mode is a file read and runs unchanged; `config.api_only` comes from the assignment in `config/application.rb` |
 | `engines` | `config/routes.rb` mounts, plus the Gemfile |
 | `active_support` | concern and core-extension use read from source |
+| `middleware` | `app/middleware` and `config/initializers`; the booted stack and its count are declared unavailable |
 
 **runtime-only** (8) report `{ unavailable: reason }` here, and only these:
 `conventions`, `database_stats`, `config`, `initializers`, `autoload`,
@@ -158,7 +159,9 @@ Proof sources:
 1. `spec/e2e/in_gemfile_install_spec.rb`, `standalone_install_spec.rb`,
    `zero_config_install_spec.rb` (schema, routes, model_details, and controllers
    exercised across the install-path suite - in-Gemfile, standalone, zero-config);
-   real Rails 8.0 apps in the v5.14.0 release QA (`blog`, `sandbox`).
+   real Rails 8.0 apps in the v5.14.0 release QA (`blog`, `sandbox`); Mastodon
+   (Rails 8.1, Ruby 3.4) in the v5.25.0 release QA, booted and static tiers,
+   standalone and in-Gemfile installs.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

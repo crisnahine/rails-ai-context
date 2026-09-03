@@ -53,6 +53,13 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       expect(text).to include("1 low")
     end
 
+    it "accepts a plural lower-case model name" do
+      response = described_class.call(model: "posts")
+      text = response.content.first[:text]
+      expect(text).not_to include("not found")
+      expect(text).to include("includes(:comments)")
+    end
+
     it "returns standard detail with suggestions" do
       response = described_class.call(detail: "standard")
       text = response.content.first[:text]

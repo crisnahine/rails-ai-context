@@ -46,6 +46,12 @@ module RailsAiContext
 
         concern_dirs = resolve_concern_dirs(root, type)
 
+        # The name is refused on its own terms. Deciding this inside the
+        # directory loop meant an app with no concern directory answered
+        # "not found" for a traversal.
+        refused = refuse_name(name, root)
+        return refused if refused
+
         if concern_dirs.empty?
           return text_response("No concern directories found. Searched: #{searched_dirs(type).join(', ')}")
         end
@@ -57,6 +63,20 @@ module RailsAiContext
 
         # List all concerns
         list_concerns(concern_dirs, root, max_size)
+      end
+
+      private_class_method def self.refuse_name(name, root)
+        return nil if name.nil? || name.to_s.empty?
+
+        located = RailsAiContext::SafePath.locate(concern_relative(name), under: root, root: root)
+        case located.refusal
+        when :traversal then text_response("Path not allowed: #{name}")
+        when :sensitive then text_response("Path not allowed: #{name} (sensitive file)")
+        end
+      end
+
+      private_class_method def self.concern_relative(name)
+        "#{name.to_s.underscore}.rb"
       end
 
       private_class_method def self.resolve_concern_dirs(root, type)
@@ -74,57 +94,26 @@ module RailsAiContext
       end
 
       private_class_method def self.show_concern(name, concern_dirs, root, max_size, detail = "standard")
-        # Rule 1 (security conventions): reject path traversal and sensitive
-        # names on the caller-supplied string BEFORE any filesystem stat.
-        # `String#underscore` only maps CamelCase → snake_case; it does NOT
-        # sanitize `../` or slashes, so a bare `File.join + File.exist?` on
-        # `name.underscore` would resolve `name: "../../config/initializers/devise"`
-        # and read arbitrary .rb files under Rails.root.
         if name.nil? || name.to_s.empty?
           return text_response("The `name` parameter is required.")
         end
-        if name.to_s.include?("..") || name.to_s.include?("\0") || name.to_s.start_with?("/")
-          return text_response("Path not allowed: #{name}")
-        end
-        if sensitive_file?(name.to_s)
-          return text_response("Path not allowed: #{name} (sensitive file)")
-        end
 
-        # Find the concern file - try underscore variants and nested paths
-        underscore = name.underscore
-        # Re-check traversal on the post-underscore string in case `underscore`
-        # introduces unexpected transformations on future AS versions.
-        if underscore.include?("..") || underscore.start_with?("/")
-          return text_response("Path not allowed: #{name}")
-        end
-
+        relative = concern_relative(name)
         file_path = nil
+        relative_path = nil
         concern_type = nil
 
         concern_dirs.each do |dir|
-          candidate = File.join(dir, "#{underscore}.rb")
-          next unless File.exist?(candidate)
+          located = RailsAiContext::SafePath.locate(relative, under: dir, root: root, max_size: max_size)
+          case located.refusal
+          when :too_large
+            return text_response("Concern file too large: #{located.realpath} (#{File.size(located.realpath)} bytes, max: #{max_size})")
+          when :sensitive then return text_response("Path not allowed: #{name} (sensitive file)")
+          when :missing, :outside then next
+          end
 
-          # Rules 2-5: realpath + separator-aware containment under the
-          # concern dir, post-realpath sensitive recheck, then use the
-          # realpath for all subsequent file operations. A symlink inside
-          # app/models/concerns/ pointing at config/master.key would pass
-          # the bare existence check without this.
-          real =
-            begin
-              File.realpath(candidate).to_s
-            rescue Errno::ENOENT
-              nil
-            end
-          next unless real
-
-          real_dir = File.realpath(dir).to_s
-          next unless real == real_dir || real.start_with?(real_dir + File::SEPARATOR)
-
-          relative_real = real.sub("#{File.realpath(root)}/", "")
-          next if sensitive_file?(relative_real)
-
-          file_path = real
+          file_path = located.realpath
+          relative_path = located.relative
           concern_type = ConcernPaths.type_for(dir)
           break
         end
@@ -136,14 +125,8 @@ module RailsAiContext
             recovery_tool: "Call rails_get_concern() to see all concerns")
         end
 
-        if File.size(file_path) > max_size
-          return text_response("Concern file too large: #{file_path} (#{File.size(file_path)} bytes, max: #{max_size})")
-        end
-
         source = RailsAiContext::SafeFile.read(file_path)
         return text_response("Could not read concern file: #{file_path}") unless source
-        relative_path = file_path.sub("#{File.realpath(root)}/", "")
-
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
         lines << "**Type:** #{concern_type} concern"
@@ -166,7 +149,7 @@ module RailsAiContext
         end
 
         # Parse public methods with signatures
-        public_methods = parse_public_methods(source)
+        public_methods = Introspectors::ActionResolver.public_methods_from_source(source)
         if public_methods.any?
           lines << "" << "## Public Methods"
           if RailsAiContext::DetailLevel.full?(detail)
@@ -189,7 +172,7 @@ module RailsAiContext
         end
 
         # Parse class methods (inside class_methods block or def self.)
-        class_methods = parse_class_methods(source)
+        class_methods = Introspectors::ActionResolver.class_methods_from_source(source)
         if class_methods.any?
           lines << "" << "## Class Methods"
           if RailsAiContext::DetailLevel.full?(detail)
@@ -268,13 +251,14 @@ module RailsAiContext
 
             relative = real.sub("#{real_root}/", "")
             concern_name = real.sub("#{real_dir}/", "").sub(/\.rb$/, "").camelize
+            next if ConcernMembership.excluded?(concern_name)
 
             method_count = 0
             if File.size(real) <= max_size
               source = RailsAiContext::SafeFile.read(real)
               if source
-                public_methods = parse_public_methods(source)
-                class_methods = parse_class_methods(source)
+                public_methods = Introspectors::ActionResolver.public_methods_from_source(source)
+                class_methods = Introspectors::ActionResolver.class_methods_from_source(source)
                 method_count = public_methods.size + class_methods.size
               end
             end
@@ -320,90 +304,6 @@ module RailsAiContext
             file_path.sub("#{dir}/", "").sub(/\.rb$/, "").camelize
           end
         end.sort
-      end
-
-      private_class_method def self.parse_public_methods(source)
-        methods = []
-        in_private = false
-        in_class_methods = false
-        class_methods_depth = 0
-
-        source.each_line do |line|
-          # Track class_methods block
-          if line.match?(/\A\s*class_methods\s+do/)
-            in_class_methods = true
-            class_methods_depth = line[/\A\s*/].length
-          end
-          if in_class_methods && line.match?(/\A\s{#{class_methods_depth}}end\b/)
-            in_class_methods = false
-          end
-          next if in_class_methods
-
-          in_private = true if line.match?(/\A\s*(private|protected)\s*$/)
-          in_private = false if line.match?(/\A\s*public\s*$/)
-          # Reset private on included/class_methods blocks
-          if line.match?(/\A\s*included\s+do/)
-            in_private = false
-          end
-
-          next if in_private
-
-          if (match = line.match(/\A\s*def\s+((?!self\.)[\w?!]+(?:\([^)]*\))?)/))
-            method_sig = match[1]
-            methods << method_sig unless method_sig.start_with?("_")
-          end
-        end
-
-        methods
-      rescue => e
-        $stderr.puts "[rails-ai-context] parse_public_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      private_class_method def self.parse_class_methods(source)
-        methods = []
-
-        # Methods inside class_methods do ... end block
-        in_class_methods = false
-        in_private = false
-
-        class_methods_indent = 0
-
-        source.each_line do |line|
-          if line.match?(/\A\s*class_methods\s+do/)
-            in_class_methods = true
-            in_private = false
-            class_methods_indent = line[/\A\s*/].length
-            next
-          end
-
-          if in_class_methods
-            in_private = true if line.match?(/\A\s*(private|protected)\s*$/)
-
-            if line.match?(/\A\s*end\s*$/)
-              current_indent = line[/\A\s*/].length
-              if current_indent <= class_methods_indent
-                in_class_methods = false
-                in_private = false
-                next
-              end
-            end
-
-            if !in_private && (match = line.match(/\A\s*def\s+([\w?!]+(?:\([^)]*\))?)/))
-              methods << match[1]
-            end
-          end
-
-          # Also catch def self.method_name outside class_methods blocks
-          if !in_class_methods && (match = line.match(/\A\s*def\s+self\.([\w?!]+(?:\([^)]*\))?)/))
-            methods << match[1]
-          end
-        end
-
-        methods
-      rescue => e
-        $stderr.puts "[rails-ai-context] parse_class_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
       end
 
       private_class_method def self.parse_concern_macros(source)

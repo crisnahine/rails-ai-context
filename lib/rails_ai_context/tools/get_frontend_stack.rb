@@ -31,7 +31,7 @@ module RailsAiContext
         fetch_section(:frontend_frameworks, unusable_message:
           "No frontend framework data available. Ensure the :frontend_frameworks introspector is enabled in your " \
           "rails_ai_context configuration.\n\n" \
-          "Example:\n```ruby\nRailsAiContext.configure do |config|\n  config.introspectors << :frontend_frameworks\nend\n```") do |data|
+          "Example:\n```ruby\nRailsAiContext.configure do |config|\n  config.introspectors += [ :frontend_frameworks ]\nend\n```") do |data|
           case detail
           when "summary"
             text_response(build_summary(data))
@@ -78,10 +78,8 @@ module RailsAiContext
         end
 
         def build_hotwire_summary
-          stimulus = cached_context[:stimulus]
-          gems = cached_context[:gems]
-
-          notable = gems.is_a?(Hash) && !gems[:error] ? (gems[:notable_gems] || []) : []
+          stimulus = Payload.section(cached_context, :stimulus)
+          notable = Payload.notable_gems(cached_context)
           has_turbo = notable.any? { |g| g[:name] == "turbo-rails" }
           has_stimulus = notable.any? { |g| g[:name] == "stimulus-rails" }
           has_importmap = notable.any? { |g| g[:name] == "importmap-rails" }
@@ -96,7 +94,7 @@ module RailsAiContext
 
           parts << "with importmap-rails" if has_importmap
 
-          if stimulus.is_a?(Hash) && !stimulus[:error]
+          if stimulus
             count = stimulus[:total_controllers] || stimulus[:controllers]&.size || 0
             parts << count_phrase(count, "Stimulus controller") if count > 0
           end
@@ -255,12 +253,9 @@ module RailsAiContext
 
         # For Hotwire/importmap apps, pull Stimulus and Turbo data from context
         def enrich_with_hotwire(lines)
-          stimulus = cached_context[:stimulus]
-          turbo = cached_context[:turbo]
-          gems = cached_context[:gems]
-
-          # Check if this is a Hotwire app (has turbo-rails or stimulus-rails)
-          notable = gems.is_a?(Hash) && !gems[:error] ? (gems[:notable_gems] || []) : []
+          stimulus = Payload.section(cached_context, :stimulus)
+          turbo = Payload.section(cached_context, :turbo)
+          notable = Payload.notable_gems(cached_context)
           has_turbo = notable.any? { |g| g[:name] == "turbo-rails" }
           has_stimulus = notable.any? { |g| g[:name] == "stimulus-rails" }
           has_importmap = notable.any? { |g| g[:name] == "importmap-rails" }
@@ -274,7 +269,7 @@ module RailsAiContext
           lines << "- **Stimulus:** stimulus-rails" if has_stimulus
           lines << "- **Asset delivery:** importmap-rails (no JS bundler)" if has_importmap
 
-          if stimulus.is_a?(Hash) && !stimulus[:error]
+          if stimulus
             count = stimulus[:total_controllers] || stimulus[:controllers]&.size || 0
             if count > 0
               names = (stimulus[:controllers] || []).map { |c| c[:name] || c[:file]&.gsub("_controller.js", "") }.compact.sort
@@ -282,7 +277,7 @@ module RailsAiContext
             end
           end
 
-          if turbo.is_a?(Hash) && !turbo[:error]
+          if turbo
             broadcasts = turbo[:model_broadcasts]&.size || 0
             frames = turbo[:turbo_frames]&.size || 0
             parts = []

@@ -859,4 +859,59 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
   end
+
+  describe "pending migrations" do
+    def static_parse(dir)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+    end
+
+    def write_migrations(dir, names)
+      migrate = File.join(dir, "db", "migrate")
+      FileUtils.mkdir_p(migrate)
+      names.each { |name| File.write(File.join(migrate, "#{name}.rb"), "class X < ActiveRecord::Migration[7.1]; end\n") }
+    end
+
+    it "reports an out-of-order migration the structure.sql dump has not recorded" do
+      Dir.mktmpdir do |dir|
+        write_migrations(dir, %w[20240101000000_create_users 20240201000000_add_index 20240301000000_create_posts])
+        File.write(File.join(dir, "db", "structure.sql"), <<~SQL)
+          CREATE TABLE public.users (id bigint NOT NULL);
+
+          INSERT INTO schema_migrations (version) VALUES ('20240101000000'), ('20240301000000');
+        SQL
+
+        expect(static_parse(dir)[:pending_migrations]).to eq([ { version: "20240201000000", name: "AddIndex" } ])
+      end
+    end
+
+    it "reports files newer than a schema.rb version as entries" do
+      Dir.mktmpdir do |dir|
+        write_migrations(dir, %w[20240301000000_create_posts])
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.1].define(version: 2024_02_01_000000) do
+            create_table "users", force: :cascade do |t|
+              t.string "email"
+            end
+          end
+        RUBY
+
+        expect(static_parse(dir)[:pending_migrations]).to eq([ { version: "20240301000000", name: "CreatePosts" } ])
+      end
+    end
+
+    it "omits the key when the schema.rb records no version" do
+      Dir.mktmpdir do |dir|
+        write_migrations(dir, %w[20240301000000_create_posts])
+        File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema.define do
+            create_table "users", force: :cascade do |t|
+              t.string "email"
+            end
+          end
+        RUBY
+
+        expect(static_parse(dir)).not_to have_key(:pending_migrations)
+      end
+    end
+  end
 end

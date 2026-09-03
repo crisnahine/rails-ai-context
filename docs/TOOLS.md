@@ -484,6 +484,7 @@ Reverse file tail with level filtering and sensitive data redaction.
 | `file` | string | `development.log` | Log file name |
 | `lines` | integer | `50` | Number of lines |
 | `level` | enum | - | Filter: `debug`, `info`, `warn`, `error`, `fatal` |
+| `search` | string | - | Keep lines matching this term. The match runs on the redacted line, so a redacted value cannot be searched for |
 
 ### `rails_diagnose`
 
@@ -534,7 +535,9 @@ In addition to tools, AI clients can read structured data through **resource tem
 | `rails-ai-context://controllers/{name}/{action}` | Action source with applicable filters |
 | `rails-ai-context://views/{path}` | View template content |
 | `rails-ai-context://routes/{controller}` | Live route map for controller |
-| `rails://models/{name}` | Model details: associations, validations, schema |
+| `rails-ai-context://models/{name}` | Model details: associations, validations, schema |
+
+The legacy `rails://models/{name}` form is still accepted.
 
 Plus 9 static resources (schema, routes, conventions, gems, controllers, config, tests, migrations, engines).
 

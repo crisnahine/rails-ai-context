@@ -135,14 +135,12 @@ module RailsAiContext
         end
 
         begin
-          real_search = File.realpath(search_path)
           real_root = File.realpath(root)
-          unless real_search == real_root || real_search.start_with?(real_root + File::SEPARATOR)
-            return text_response("Path not allowed: #{path}")
-          end
-        rescue Errno::ENOENT
+          real_search = File.realpath(search_path)
+        rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
           return text_response("Path not found: #{path}")
         end
+        return text_response("Path not allowed: #{path}") unless RailsAiContext::SafePath.contained?(real_search, real_root)
 
         # Fetch all results (capped at 200 for safety)
         all_results = if ripgrep_available?
@@ -155,7 +153,7 @@ module RailsAiContext
         all_results.reject! { |r| r[:content].match?(/\A\s*def\s/) } if match_type == "call"
 
         if all_results.empty?
-          return text_response("No results found for '#{original_pattern}' in #{path || 'app'}.")
+          return empty_response("No results found for '#{original_pattern}' in #{path || 'app'}.")
         end
 
         # Smart default limit: <10 → all, 10-100 → half, >100 → 100
@@ -470,6 +468,8 @@ module RailsAiContext
           lines << "## Called from"
           lines << "_No call sites found (method may be unused or called dynamically)_"
         end
+
+        return definition_missing_response(lines.join("\n")) if def_results.empty?
 
         text_response(lines.join("\n"))
       rescue => e

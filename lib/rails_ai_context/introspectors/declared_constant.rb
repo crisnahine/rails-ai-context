@@ -19,6 +19,8 @@ module RailsAiContext
     # the namespace when the source does not, which is what
     # `application_cable/channel.rb` needs.
     module DeclaredConstant
+      Declaration = Data.define(:name, :superclass)
+
       module_function
 
       # @param source [String] the file's source
@@ -37,6 +39,13 @@ module RailsAiContext
       # Fully qualified name of every class the source declares, module
       # nesting included. Empty when nothing parses.
       def declared_names(source)
+        declarations(source).map(&:name)
+      end
+
+      # Every class the source declares, with the superclass it names -
+      # nil for a class with no superclass or a computed one. A module
+      # declares no class and so appears here not at all.
+      def declarations(source)
         return [] unless source
 
         root = AstCache.parse_string(source)&.value
@@ -51,7 +60,7 @@ module RailsAiContext
       def collect(node, scope, found)
         case node
         when Prism::ClassNode
-          found << qualify(scope, node)
+          found << Declaration.new(name: qualify(scope, node), superclass: superclass_name(node.superclass))
           descend(node, scope + [ segment(node) ], found)
         when Prism::ModuleNode
           descend(node, scope + [ segment(node) ], found)
@@ -74,7 +83,14 @@ module RailsAiContext
         node.constant_path.slice.delete_prefix("::")
       end
 
-      private_class_method :declared_names, :collect, :descend, :qualify, :segment
+      # nil for an anonymous or computed superclass (`< Struct.new(:a)`).
+      def superclass_name(node)
+        return nil unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
+
+        node.slice.delete_prefix("::")
+      end
+
+      private_class_method :collect, :descend, :qualify, :segment, :superclass_name
     end
   end
 end

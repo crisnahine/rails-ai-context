@@ -73,10 +73,10 @@ module RailsAiContext
 
         noted = [ first.merge(text: "#{first[:text]}#{note}") ] + content[1..].to_a
 
-        # `meta` arrived in mcp 1.0 and the gemspec supports >= 0.8, so both
-        # the reader and the keyword have to be asked for rather than assumed.
-        # Getting this wrong turns a good answer into a NoMethodError that
-        # SafeCall's own rescue then reports as a tool failure.
+        # `meta` arrived in mcp 0.13, which is the gemspec floor, but the
+        # reader is still asked for rather than assumed: getting it wrong
+        # turns a good answer into a NoMethodError that SafeCall's own rescue
+        # then reports as a tool failure.
         extra = { structured_content: response.structured_content }
         extra[:meta] = response.meta if response.respond_to?(:meta)
 

@@ -58,14 +58,6 @@ module RailsAiContext
       STORE.compute_if_absent(key) { Prism.parse(source) }
     end
 
-    # Invalidate all cached entries for a given path.
-    def self.invalidate(path)
-      prefix = "#{path}:"
-      STORE.each_key do |k|
-        STORE.delete(k) if k.start_with?(prefix)
-      end
-    end
-
     # Clear the entire cache.
     def self.clear
       STORE.clear

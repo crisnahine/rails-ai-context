@@ -14,6 +14,13 @@ module RailsAiContext
       extend StaticTier
       static_tier :files_only
 
+      # The buffer and path locals ERB itself sets are not the controller's.
+      RENDER_LOCALS = %w[output_buffer virtual_path _request].freeze
+
+      # A word character before the `@` makes it an address, and a second `@`
+      # makes it a class variable; neither is an ivar the controller assigned.
+      IVAR = /(?<![\w@])@(\w+)/
+
       attr_reader :app
 
       def initialize(app)
@@ -49,6 +56,7 @@ module RailsAiContext
           if phlex_view?(path, content)
             entry = {
               lines: content.lines.count,
+              ivars: extract_ivars(content),
               partials: extract_partial_refs(content),
               stimulus: extract_stimulus_refs(content),
               components: extract_phlex_component_renders(content),
@@ -60,6 +68,7 @@ module RailsAiContext
           else
             entry = {
               lines: content.lines.count,
+              ivars: extract_ivars(content),
               partials: extract_partial_refs(content),
               stimulus: extract_stimulus_refs(content)
             }
@@ -68,6 +77,16 @@ module RailsAiContext
           end
         end
         templates
+      end
+
+      # The one reader of a template's ivars, so `get_view` and this
+      # introspector cannot disagree about what a template uses.
+      def self.ivars_in(content)
+        content.to_s.scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
+      end
+
+      def extract_ivars(content)
+        self.class.ivars_in(content)
       end
 
       def scan_partials(views_dir)

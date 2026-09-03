@@ -209,8 +209,7 @@ module RailsAiContext
             model_name = File.basename(file, ".rb").camelize
             begin
               result = GetModelDetails.call(model: model_name, detail: "standard")
-              text = result.content.first[:text]
-              lines << "" << "**Model context:** #{model_name}" unless text.include?("not found")
+              lines << "" << "**Model context:** #{model_name}" unless empty?(result)
             rescue => e; $stderr.puts "[rails-ai-context] Context lookup skipped: #{e.message}" if ENV["DEBUG"]; end
 
           when :controller
@@ -218,8 +217,7 @@ module RailsAiContext
             snake = ctrl_name.underscore.delete_suffix("_controller")
             begin
               result = GetRoutes.call(controller: snake, detail: "summary")
-              text = result.content.first[:text]
-              lines << "" << "**Routes:**" << text unless text.include?("not found") || text.include?("No routes")
+              lines << "" << "**Routes:**" << response_text(result) unless empty?(result)
             rescue => e; $stderr.puts "[rails-ai-context] Context lookup skipped: #{e.message}" if ENV["DEBUG"]; end
 
           when :migration
@@ -234,8 +232,7 @@ module RailsAiContext
                   tables.first(2).each do |t|
                     begin
                       result = GetSchema.call(table: t, detail: "summary")
-                      text = result.content.first[:text]
-                      lines << "  #{t}: #{text.lines.first&.strip}" unless text.include?("not found")
+                      lines << "  #{t}: #{response_text(result).lines.first&.strip}" unless empty?(result)
                     rescue => e; $stderr.puts "[rails-ai-context] Context lookup skipped: #{e.message}" if ENV["DEBUG"]; end
                   end
                 end
@@ -245,7 +242,7 @@ module RailsAiContext
           when :routes
             begin
               result = GetRoutes.call(detail: "summary")
-              lines << "" << "**Current routes:** #{result.content.first[:text].lines.first&.strip}"
+              lines << "" << "**Current routes:** #{response_text(result).lines.first&.strip}"
             rescue => e; $stderr.puts "[rails-ai-context] Context lookup skipped: #{e.message}" if ENV["DEBUG"]; end
           end
 

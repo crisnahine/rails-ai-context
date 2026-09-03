@@ -23,7 +23,7 @@ module RailsAiContext
 
       # @return [Hash] model metadata keyed by model name
       def call
-        eager_load_models!
+        EagerLoad.dir(app.root, kind: "app/models")
         models = discover_models
 
         result = models.each_with_object({}) do |model, hash|
@@ -60,34 +60,97 @@ module RailsAiContext
       def static_call
         return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
 
-        RailsAiContext::PathResolver.model_dirs(app.root).each_with_object({}) do |models_dir, result|
-          Dir.glob(File.join(models_dir, "**", "*.rb")).sort.each do |path|
-            relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            next if relative == "application_record"
-
-            begin
-              # SafeFile.read answers nil for both "too big" and "cannot read
-              # it", and those are different answers: a model the process
-              # cannot stat is an error entry rather than one that quietly is
-              # not there. The count is an answer too.
-              next if File.size(path) > RailsAiContext.configuration.max_file_size
-
-              source = model_source(path)
-              next if source.nil? || mixin_path?(relative, source) || abstract_class?(source)
-
-              class_name = declared_model_name(source, relative.camelize)
-              next if result.key?(class_name)
-              next if config.excluded_models.include?(class_name)
-
-              result[class_name] = static_model_details(path, class_name)
-            rescue => e
-              result[relative.camelize] = { error: e.message }
-            end
+        candidates = static_candidates
+        candidates.each_with_object({}) do |(class_name, candidate), result|
+          if candidate[:error]
+            result[class_name] = { error: candidate[:error] }
+            next
           end
+
+          # An abstract base is dropped from the result but not from the walk:
+          # a per-connection base like Analytics::Record is how its models
+          # reach ApplicationRecord.
+          next if candidate[:abstract]
+          next unless model_class?(class_name, candidates)
+
+          result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file])
         end
       end
 
       private
+
+      # Every class file under the model directories, by declared name, with
+      # the superclass it names. Modelhood is decided over the whole walk
+      # afterwards, because STI reaches its base through another file.
+      #
+      # The stat-only walk: SafeFile.read answers nil for both "too big" and
+      # "cannot read it", and those are different answers. A model the
+      # process cannot stat is an error entry rather than one that quietly
+      # is not there. The count is an answer too.
+      def static_candidates
+        SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each_with_object({}) do |record, found|
+          next if record.path_name == "ApplicationRecord"
+
+          begin
+            next if File.size(record.path) > RailsAiContext.configuration.max_file_size
+
+            source = model_source(record.path)
+            next if source.nil? || mixin_path?(record.path_name.underscore, source)
+
+            declarations = DeclaredConstant.declarations(source)
+            class_name = declarations.map(&:name).find { |name| name.casecmp?(record.path_name) } || record.path_name
+            next if found.key?(class_name)
+            next if config.excluded_models.include?(class_name)
+
+            found[class_name] = {
+              path: record.path,
+              file: record.file,
+              superclass: declarations.find { |d| d.name == class_name }&.superclass,
+              abstract: abstract_class?(source)
+            }
+          rescue => e
+            found[record.path_name] = { error: e.message }
+          end
+        end
+      end
+
+      # A model is a class whose superclass chain reaches a model base. A form
+      # object, a filter or a namespaced calculator under app/models has no
+      # superclass, or one the chain never resolves, so it is not a model.
+      def model_class?(class_name, candidates, seen = [])
+        return false if seen.include?(class_name)
+
+        parent = candidates.dig(class_name, :superclass)
+        return false unless parent
+        return true if model_base?(parent)
+
+        resolved = resolve_superclass(parent, class_name, candidates)
+        return false unless resolved
+
+        model_class?(resolved, candidates, seen + [ class_name ])
+      end
+
+      # ApplicationRecord, or the namespaced base a large app declares -
+      # GitLab has Ci::ApplicationRecord and SecApplicationRecord.
+      def model_base?(name)
+        name == "ActiveRecord::Base" || name.split("::").last.end_with?("ApplicationRecord")
+      end
+
+      # Ruby resolves a bare superclass from the enclosing namespace outward,
+      # so `Admin::Report < Post` means the top-level Post unless Admin
+      # declares one.
+      def resolve_superclass(name, from, candidates)
+        return name if candidates.key?(name)
+
+        scope = from.split("::")[0..-2]
+        while scope.any?
+          qualified = (scope + [ name ]).join("::")
+          return qualified if candidates.key?(qualified)
+
+          scope.pop
+        end
+        nil
+      end
 
       # Zeitwerk resolves a path through the app's own inflector, which the
       # static tier never loads, so camelizing invents `Activitypub::` for an
@@ -96,10 +159,10 @@ module RailsAiContext
         DeclaredConstant.resolve(source, path_name)
       end
 
-      # The booted tier rejects `abstract_class?`, and a namespaced base class -
-      # GitLab has Ci::ApplicationRecord, PackageMetadata::ApplicationRecord and
-      # SecApplicationRecord - is one. Excluding only the root
-      # application_record by path gave the same app two model counts.
+      # The booted tier rejects `abstract_class?`, so the static tier must too
+      # or the same app gets two model counts. A namespaced base is one of
+      # these - GitLab has Ci::ApplicationRecord and SecApplicationRecord - and
+      # the root application_record is not the only one to leave out.
       def abstract_class?(source)
         source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/)
       end
@@ -116,37 +179,6 @@ module RailsAiContext
         !DeclaredConstant.declares_class?(source)
       end
 
-      def eager_load_models!
-        return if Rails.application.config.eager_load
-
-        models_path = File.join(app.root, "app", "models")
-        if defined?(Zeitwerk) && Dir.exist?(models_path) &&
-           Rails.autoloaders.respond_to?(:main) && Rails.autoloaders.main.respond_to?(:eager_load_dir)
-          Rails.autoloaders.main.eager_load_dir(models_path)
-        else
-          Rails.application.eager_load!
-        end
-      rescue StandardError, ScriptError => e
-        # eager_load_dir aborts at the first unloadable file (SyntaxError is a
-        # ScriptError, so it escaped the old bare rescue and killed the whole
-        # process). Load the rest one constant at a time so a single broken
-        # model costs only itself.
-        $stderr.puts "[rails-ai-context] eager_load_models! failed: #{e.message}" if ENV["DEBUG"]
-        eager_load_models_individually!(models_path)
-        nil
-      end
-
-      def eager_load_models_individually!(models_path)
-        return unless Dir.exist?(models_path)
-
-        Dir.glob(File.join(models_path, "**/*.rb")).sort.each do |file|
-          const_name = file.sub("#{models_path}/", "").sub(/\.rb\z/, "").camelize
-          const_name.constantize
-        rescue StandardError, ScriptError
-          next
-        end
-      end
-
       def discover_models
         return [] unless defined?(ActiveRecord::Base)
 
@@ -157,22 +189,25 @@ module RailsAiContext
         end
 
         known = models.map(&:name).to_set
-        RailsAiContext::PathResolver.model_dirs(app.root.to_s).each do |models_dir|
-          Dir.glob(File.join(models_dir, "**", "*.rb")).each do |path|
-            relative = path.sub("#{models_dir}/", "").sub(/\.rb\z/, "")
-            class_name = relative.camelize
-            next if known.include?(class_name)
-            next if config.excluded_models.include?(class_name)
+        # Concerns stay in: a nested concerns directory is a namespace, so a
+        # class declared under one is a model and constantize sorts the mixins
+        # out. A top-level `app/models/concerns` is an autoload root instead,
+        # so its files declare no `Concerns::` prefix and that path name never
+        # constantizes.
+        SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each do |record|
+          class_name = record.path_name
+          next if class_name.start_with?("Concerns::")
+          next if known.include?(class_name)
+          next if config.excluded_models.include?(class_name)
 
-            begin
-              klass = class_name.constantize
-              next unless klass < ActiveRecord::Base && !klass.abstract_class?
-              models << klass
-              known << class_name
-            rescue NameError, LoadError, ScriptError
-              # Not a valid (or currently loadable) model class - a
-              # syntax-broken file costs itself, not the whole listing.
-            end
+          begin
+            klass = class_name.constantize
+            next unless klass < ActiveRecord::Base && !klass.abstract_class?
+            models << klass
+            known << class_name
+          rescue NameError, LoadError, ScriptError
+            # Not a valid (or currently loadable) model class - a
+            # syntax-broken file costs itself, not the whole listing.
           end
         end
 
@@ -609,7 +644,7 @@ module RailsAiContext
                .transform_values(&:to_s)
       end
 
-      def static_model_details(path, class_name)
+      def static_model_details(path, class_name, file: relative_to_root(path))
         data = SourceIntrospector.call(path)
         {
           confidence: Confidence::STATIC,
@@ -631,7 +666,7 @@ module RailsAiContext
           concerns: static_concerns(data[:mixins]),
           macros: data[:macros],
           methods: ActionResolver.own_methods(data[:methods], class_name),
-          file: relative_to_root(path)
+          file: file
         }
       end
 

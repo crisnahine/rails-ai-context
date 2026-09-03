@@ -43,4 +43,20 @@ RSpec.describe RailsAiContext::Introspectors::ActionTextIntrospector do
       end
     end
   end
+
+  describe "models in a pack" do
+    let(:pack_model) { File.join(Rails.root, "packs", "billing", "app", "models", "invoice.rb") }
+
+    before do
+      FileUtils.mkdir_p(File.dirname(pack_model))
+      File.write(pack_model, "class Invoice < ApplicationRecord\n  has_rich_text :notes\nend\n")
+    end
+
+    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
+
+    it "reports a pack model's rich text field" do
+      fields = described_class.new(Rails.application).call[:rich_text_fields]
+      expect(fields).to include(model: "Invoice", field: "notes")
+    end
+  end
 end

@@ -35,12 +35,42 @@ module RailsAiContext
       }
     }.freeze
 
-    def self.names
-      DEFINITIONS.keys
+    # The one place a typed name becomes a definition key, so the binary's
+    # guard and the run accept exactly the same spellings.
+    # @return [String, nil] the key, or nil for a name no preset carries
+    def self.resolve(name)
+      key = name.to_s.strip.downcase
+      DEFINITIONS.key?(key) ? key : nil
     end
 
-    def self.fetch(name)
-      DEFINITIONS[name]
+    # Framing goes to err and tool output to out so a pipe keeps its order;
+    # one failing tool costs itself, not the rest of the preset.
+    def self.run(name, out: $stdout, err: $stderr)
+      key = resolve(name)
+      return false unless key
+
+      preset = DEFINITIONS[key]
+
+      err.puts "=" * 60
+      err.puts " Preset: #{name} - #{preset[:desc]}"
+      err.puts "=" * 60
+      err.puts ""
+      preset[:tools].each do |tool_spec|
+        err.puts "-" * 40
+        err.puts "Running: #{tool_spec[:name]}"
+        err.puts "-" * 40
+        out.puts CLI::ToolRunner.new(tool_spec[:name], tool_spec[:params]).run
+        out.puts ""
+      rescue => e
+        err.puts "  [error] #{tool_spec[:name]}: #{e.message}"
+      end
+      true
+    end
+
+    def self.listing(invocation:)
+      lines = [ "Available presets:", "" ]
+      DEFINITIONS.each { |key, info| lines << "  #{invocation.call(key)}".ljust(45) + "# #{info[:desc]}" }
+      lines.join("\n") + "\n"
     end
   end
 end

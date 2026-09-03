@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -168,6 +169,76 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
           expect(tools).to include("openapi-typescript", "@graphql-codegen/cli", "orval")
         end
       end
+    end
+  end
+
+  describe "#detect_pagination" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def pagination_for(lock)
+      File.write(File.join(@root, "Gemfile.lock"), lock)
+      described_class.new(double("app", root: @root)).send(:detect_pagination)
+    end
+
+    it "sees pagy in the GIT section" do
+      lock = <<~LOCK
+        GIT
+          remote: https://github.com/ddnexus/pagy.git
+          revision: 0123456789abcdef0123456789abcdef01234567
+          specs:
+            pagy (9.3.3)
+      LOCK
+      expect(pagination_for(lock)).to eq([ "pagy" ])
+    end
+
+    it "does not report kaminari for kaminari-actionview alone" do
+      lock = <<~LOCK
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            kaminari-actionview (1.2.2)
+      LOCK
+      expect(pagination_for(lock)).to be_nil
+    end
+  end
+
+  describe "controllers in a pack" do
+    let(:pack_controllers) { File.join(Rails.root, "packs", "billing", "app", "controllers") }
+
+    before do
+      FileUtils.mkdir_p(File.join(pack_controllers, "api", "v2"))
+      File.write(File.join(pack_controllers, "api", "v2", "invoices_controller.rb"), <<~RUBY)
+        class Api::V2::InvoicesController < ApplicationController
+          rate_limit to: 10, within: 1.minute
+        end
+      RUBY
+    end
+
+    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
+
+    it "sees a pack's API version and its rate limiting" do
+      result = described_class.new(Rails.application).call
+      expect(result[:api_versioning]).to include("v1", "v2")
+      expect(result[:rate_limiting]).to eq({ rails_rate_limiting: true })
+    end
+  end
+
+  describe "#static_call" do
+    it "answers every key the booted tier answers, since only the mode needs a runtime" do
+      static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
+      booted = described_class.new(Rails.application).call
+
+      expect(static.keys).to match_array(booted.keys)
+      expect(static).not_to have_key(:unavailable_sections)
+    end
+
+    it "reads the versions, serializers and rate limiting from source" do
+      static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
+      booted = described_class.new(Rails.application).call
+
+      expect(static[:api_versioning]).to eq(booted[:api_versioning])
+      expect(static[:serializers]).to eq(booted[:serializers])
+      expect(static[:rate_limiting]).to eq(booted[:rate_limiting])
     end
   end
 end

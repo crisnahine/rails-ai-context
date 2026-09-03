@@ -97,5 +97,17 @@ RSpec.describe RailsAiContext::Configuration do
       # Reset
       RailsAiContext.configuration = RailsAiContext::Configuration.new
     end
+
+    # An inner block must not disarm the outer one for what follows it.
+    it "keeps recording after a nested configure block returns" do
+      RailsAiContext.configure do |c|
+        RailsAiContext.configure { |inner| inner.server_name = "inner" }
+        c.cache_ttl = 120
+      end
+
+      expect(RailsAiContext.configuration.block_assigned_keys).to include(:cache_ttl)
+    ensure
+      RailsAiContext.configuration = RailsAiContext::Configuration.new
+    end
   end
 end

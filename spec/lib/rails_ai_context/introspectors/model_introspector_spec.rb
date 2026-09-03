@@ -511,6 +511,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result["User"][:associations]).not_to be_empty
       end
     end
+
+    it "counts only classes descending from a model base, STI included" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "form"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "trends"))
+        File.write(File.join(dir, "app", "models", "post.rb"),
+                   "class Post < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "admin", "report.rb"),
+                   "class Admin::Report < Post\nend\n")
+        File.write(File.join(dir, "app", "models", "form", "batch.rb"),
+                   "class Form::Batch\n  include ActiveModel::Model\nend\n")
+        File.write(File.join(dir, "app", "models", "admin.rb"),
+                   "module Admin\nend\n")
+        File.write(File.join(dir, "app", "models", "trends", "statuses.rb"),
+                   "class Trends::Statuses\n  def call = nil\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Post", "Admin::Report")
+      end
+    end
   end
 
   describe "Mongoid apps" do
@@ -724,6 +746,37 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result.keys).to contain_exactly("Widget")
       end
     end
+
+    # The multi-database guide's own shape: a per-connection abstract base in
+    # its own file, with the connection's models under it. Dropping the base
+    # from the walk loses every model on that connection.
+    it "still reaches a model whose base is an abstract class in another file" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "analytics"))
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "analytics", "record.rb"), <<~RUBY)
+          module Analytics
+            class Record < ApplicationRecord
+              self.abstract_class = true
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "analytics", "event.rb"), <<~RUBY)
+          module Analytics
+            class Event < Record
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Analytics::Event")
+      end
+    end
   end
 
   # Rebuilding app/models/<underscored>.rb from the name is wrong for a model
@@ -758,6 +811,22 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         expect(result.keys).to include("ActivityPub::Activity")
         expect(result["ActivityPub::Activity"][:file]).to eq("app/models/activitypub/activity.rb")
+      end
+    end
+  end
+
+  describe "#static_call containment" do
+    it "refuses a symlink that leaves the models directory" do
+      Dir.mktmpdir do |dir|
+        Dir.mktmpdir do |elsewhere|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          File.write(File.join(dir, "app", "models", "good.rb"), "class Good < ApplicationRecord\nend\n")
+          File.write(File.join(elsewhere, "secret.rb"), "class Secret < ApplicationRecord\nend\n")
+          File.symlink(File.join(elsewhere, "secret.rb"), File.join(dir, "app", "models", "secret.rb"))
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+          expect(result.keys).to contain_exactly("Good")
+        end
       end
     end
   end
