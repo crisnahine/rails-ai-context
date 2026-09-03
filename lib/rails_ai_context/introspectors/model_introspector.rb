@@ -114,10 +114,9 @@ module RailsAiContext
         end
       end
 
-      # A model is a class whose superclass chain reaches a model base. A
-      # module declares no class and never gets here; a form object, a filter
-      # or a namespaced calculator has no superclass or a superclass that is
-      # not one, and the static tier used to report all of them as models.
+      # A model is a class whose superclass chain reaches a model base. A form
+      # object, a filter or a namespaced calculator under app/models has no
+      # superclass, or one the chain never resolves, so it is not a model.
       def model_class?(class_name, candidates, seen = [])
         return false if seen.include?(class_name)
 

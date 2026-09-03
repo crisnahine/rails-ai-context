@@ -3,9 +3,7 @@
 module RailsAiContext
   class Engine < ::Rails::Engine
     # The YAML is the base a configure block overrides key by key, so it has
-    # to be in place before config/initializers runs. Loaded afterwards, the
-    # generated initializer's block made every YAML key inert on a booted run
-    # while `--no-boot` still read them, and the two tiers disagreed.
+    # to be in place before config/initializers runs.
     initializer "rails_ai_context.config_file", before: :load_config_initializers do |_app|
       RailsAiContext::Configuration.load_config_file!
     end
