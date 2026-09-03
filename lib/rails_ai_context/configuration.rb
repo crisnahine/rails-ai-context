@@ -113,11 +113,14 @@ module RailsAiContext
       @config_file_applied = true
     end
 
+    # Saved and restored, not cleared: a nested configure block must not
+    # disarm the outer one for the assignments that follow it.
     def recording_block_assignments
+      was_recording = @recording_block_assignments
       @recording_block_assignments = true
       yield self
     ensure
-      @recording_block_assignments = false
+      @recording_block_assignments = was_recording
     end
 
     # The writer is what records, so assigning a key its default value still
