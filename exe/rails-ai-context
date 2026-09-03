@@ -106,7 +106,7 @@ class RailsAiContextCLI < Thor
       @app_path_override = extract_value_flag!(args, "--app-path")
       @environment_override = extract_value_flag!(args, "--environment")
 
-      boot_rails!(context: "tool", allow_static: true, no_boot: no_boot)
+      boot_rails!(command: "tool", allow_static: true, no_boot: no_boot)
 
       runner = ::RailsAiContext::CLI::ToolRunner.new(name, args, json_mode: json_mode)
       puts runner.run
@@ -123,7 +123,7 @@ class RailsAiContextCLI < Thor
     option :port, type: :numeric, default: 6029, desc: "HTTP port (only for http transport)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def serve
-      boot_rails!(context: "serve", allow_static: true)
+      boot_rails!(command: "serve", allow_static: true)
 
       transport = options[:transport].to_sym
       if transport == :http
@@ -146,7 +146,7 @@ class RailsAiContextCLI < Thor
       # for, and it is the case least likely to boot. Every command that reads
       # the app degrades the way `tool` does; doctor, whose job is diagnosing
       # the boot, is the one that still fails.
-      boot_rails!(context: "context", allow_static: true)
+      boot_rails!(command: "context", allow_static: true)
 
       if options[:format]
         cleanup_tools = options[:format] == "all" ? nil : [ options[:format].to_sym ]
@@ -170,7 +170,7 @@ class RailsAiContextCLI < Thor
     desc "inspect", "Print introspection summary"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def inspect_app
-      boot_rails!(context: "inspect", allow_static: true)
+      boot_rails!(command: "inspect", allow_static: true)
       require "json"
 
       context = ::RailsAiContext.introspect
@@ -186,14 +186,17 @@ class RailsAiContextCLI < Thor
     desc "watch", "Watch for changes and auto-regenerate context files"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def watch
-      boot_rails!(context: "watch", allow_static: true)
+      boot_rails!(command: "watch", allow_static: true)
       ::RailsAiContext::Watcher.new.start
     end
 
     desc "doctor", "Run diagnostic checks and report AI readiness score"
     option :strict, type: :boolean, default: false, desc: "Exit 1 when any check fails (CI gate)"
     def doctor
-      boot_rails!(context: "doctor")
+      # Diagnosing a boot failure needs the app, so doctor never serves the
+      # static tier; it does read a source-only tree, to name what is missing.
+      boot_rails!(command: "doctor", allow_source_only: true,
+                  boot_failure_hint: "  doctor needs a bootable app; fix the boot error above first.")
       result = ::RailsAiContext::Doctor.new.run
       # The report is the command's product - it belongs on stdout so
       # `doctor > report.txt` captures it. stderr stays for errors only.
@@ -253,7 +256,7 @@ class RailsAiContextCLI < Thor
       # The config files are already on disk by now, so failing here leaves the
       # app half set up and calls the whole thing a failure. Setup is exactly
       # what you run on a repo you have just cloned.
-      boot_rails!(context: "init", allow_static: true)
+      boot_rails!(command: "init", allow_static: true)
 
       $stderr.puts ""
       $stderr.puts "Generating AI context files..."
@@ -277,7 +280,7 @@ class RailsAiContextCLI < Thor
         return
       end
 
-      boot_rails!(context: "preset", allow_static: true)
+      boot_rails!(command: "preset", allow_static: true)
       exit 1 unless ::RailsAiContext::Presets.run(name)
     rescue SystemExit
       raise
@@ -289,7 +292,7 @@ class RailsAiContextCLI < Thor
     desc "facts", "Print concise schema facts summary (tables, associations, dependencies)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def facts
-      boot_rails!(context: "facts", allow_static: true)
+      boot_rails!(command: "facts", allow_static: true)
 
       context = ::RailsAiContext.introspect
       puts ::RailsAiContext::FactsFormatter.render(context, inspect_hint: "rails-ai-context inspect")
@@ -441,7 +444,7 @@ class RailsAiContextCLI < Thor
     # subcommands don't have a fallback so they call boot_rails! directly and
     # let that exit propagate.
     def try_boot_for_list
-      boot_rails!(context: "tool")
+      boot_rails!(command: "tool")
       true
     rescue SystemExit
       false
@@ -462,9 +465,12 @@ class RailsAiContextCLI < Thor
       nil
     end
 
-    # `context` is the name the user types, which the refusal message quotes
+    # `command` is the name the user types, which the refusal message quotes
     # back; every caller states it rather than reading Thor's command chain.
-    def boot_rails!(context:, allow_static: false, no_boot: false)
+    # A command that needs more than the tier gives it says so here rather
+    # than being recognised by name.
+    def boot_rails!(command:, allow_static: false, no_boot: false, allow_source_only: allow_static,
+                    boot_failure_hint: nil)
       app_path_opt = @app_path_override || options[:app_path]
       environment_opt = @environment_override || options[:environment]
       app_root = File.expand_path(app_path_opt || Dir.pwd)
@@ -476,11 +482,11 @@ class RailsAiContextCLI < Thor
       # A command that can serve the static tier reads a source-only tree
       # instead of refusing it.
       outcome = entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot],
-                                allow_source_only: allow_static || context == "doctor", context: context)
+                                allow_source_only: allow_source_only, command: command)
       outcome.messages.each { |line| $stderr.puts line }
       return unless outcome.tier == :absent
 
-      $stderr.puts "  doctor needs a bootable app; fix the boot error above first." if context == "doctor" && outcome.reason
+      $stderr.puts boot_failure_hint if boot_failure_hint && outcome.reason
       exit 1
     end
 

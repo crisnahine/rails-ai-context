@@ -19,6 +19,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Defects found by a second survey round over the whole surface, and the
 duplicated mechanisms behind them.
 
+- **`rails_get_api` stated a filesystem finding for a section nobody had
+  read.** In the static tier the whole section but the mode was declared
+  unavailable, and nothing read that declaration, so an app with
+  `app/controllers/api/v1/` was told "not detected (no app/controllers/api/v*
+  directories)". Every detection in that section is a file read, so the
+  static tier now answers all of them, and a key a section does name as
+  unanswered renders as `[UNAVAILABLE: ...]` rather than as a negative
+  finding.
+- **An existing `.ai-context.json` holding anything but a JSON object
+  aborted the whole generation run.** The skip check reads it as a file to
+  replace.
+- **`rails_get_schema`'s table heading named every model on the table**, so
+  an STI table with thirty subclasses filled the cheap summary with one
+  heading. It names five and counts the rest, the way the file's other lists
+  do.
+- **`rails_get_test_info` blamed the app root for a name it refused as
+  sensitive.** The refusal names what the check covers: the name leaves the
+  app root or names a sensitive file.
+- **`rails_onboard`'s Getting Started block told the reader to `cd` into the
+  app's class name underscored**, which is not the directory the clone lands
+  in. It names the app directory.
 - **`init` refused a tree with app source but no `config/environment.rb`
   after it had already written the config files**, leaving it half set up
   with no `CLAUDE.md`. Every command that can serve the static tier now
@@ -101,8 +122,8 @@ duplicated mechanisms behind them.
 - **`rails_get_view`'s ivar list counted an `@` inside an email address and a
   `@@class_variable`.** Neither is an instance variable.
 - **A controller ivar compared, not assigned, was reported as set.** `return
-  unless @post == current_user` no longer names `@post`; `||=` and `+=` still
-  count.
+  unless @post == current_user` no longer names `@post`; `||=`, `+=`, `<<=` and
+  `>>=` still count.
 - **`rails_get_context` resolved an action name case-sensitively** while
   `rails_get_controllers` did not, so `action: "Show"` skipped the ivar
   cross-check.

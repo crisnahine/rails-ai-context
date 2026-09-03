@@ -92,7 +92,7 @@ from the booted path:
 | `controllers` | `app/controllers/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
 | `jobs` | `app/jobs`, `app/mailers` and `app/channels` parsed for classes and their public methods |
 | `i18n` | every top-level key across `config/locales`, and the default locale read from `config/` |
-| `api` | serializers, API controllers and route constraints read from source |
+| `api` | every detection but the mode is a file read and runs unchanged; `config.api_only` comes from the assignment in `config/application.rb` |
 | `engines` | `config/routes.rb` mounts, plus the Gemfile |
 | `active_support` | concern and core-extension use read from source |
 | `middleware` | `app/middleware` and `config/initializers`; the booted stack and its count are declared unavailable |

@@ -31,6 +31,16 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # The name each section key goes by in the one-liner.
+      AREA_LABELS = {
+        serializers: "serializers",
+        graphql: "GraphQL",
+        api_versioning: "API versioning",
+        rate_limiting: "rate limiting",
+        cors_config: "CORS config",
+        pagination: "pagination gems"
+      }.freeze
+
       def self.call(detail: "standard", server_context: nil)
         fetch_section(:api, unusable_message:
           "No API layer data available. Ensure the :api introspector is enabled in your " \
@@ -63,34 +73,73 @@ module RailsAiContext
           summary = parts.join(". ")
           missing = missing_areas(data)
           summary += ". Not detected: #{missing.join(', ')}." if missing.any?
+          unanswered = unanswered_areas(data)
+          summary += " #{unavailable_text}: #{unanswered.join(', ')}." if unanswered.any?
           summary
         end
 
         def build_standard(data)
-          versions = data[:api_versioning]
           lines = [ "# API Layer", "" ]
           lines << "- **Mode:** #{mode_label(data)}"
-          lines << "- **Serialization:** #{serialization_line(data)}"
-          lines << "- **GraphQL:** #{data[:graphql].is_a?(Hash) ? graphql_label(data[:graphql]) : 'not detected (no app/graphql directory)'}"
-          lines << "- **Versioning:** #{versioning?(data) ? "#{versions.join(', ')} (app/controllers/api/)" : 'not detected (no app/controllers/api/v* directories)'}"
-          lines << "- **Rate limiting:** #{rate_limiting_label(data[:rate_limiting]) || 'not detected (no Rack::Attack initializer, no rate_limit macro)'}"
-          lines << "- **CORS:** #{cors_line(data[:cors_config])}"
-          lines << "- **Pagination:** #{pagination?(data) ? data[:pagination].join(', ') : 'no pagination gem detected (pagy/kaminari/will_paginate)'}"
+          lines << "- **Serialization:** #{answer(data, :serializers) { serialization_line(data) }}"
+          lines << "- **GraphQL:** #{answer(data, :graphql) { graphql_line(data) }}"
+          lines << "- **Versioning:** #{answer(data, :api_versioning) { versioning_line(data) }}"
+          lines << "- **Rate limiting:** #{answer(data, :rate_limiting) { rate_limiting_line(data) }}"
+          lines << "- **CORS:** #{answer(data, :cors_config) { cors_line(data[:cors_config]) }}"
+          lines << "- **Pagination:** #{answer(data, :pagination) { pagination_line(data) }}"
           lines.join("\n")
+        end
+
+        # A key the introspector named as unanswered has no filesystem
+        # finding behind it, so the negative wording would state a fact
+        # nobody checked.
+        def answer(data, key)
+          unanswered?(data, key) ? unavailable_text : yield
+        end
+
+        def unanswered?(data, key)
+          Array(data[:unavailable_sections]).map(&:to_s).include?(key.to_s)
+        end
+
+        def unavailable_text
+          Confidence.unavailable(Introspectors::StaticTier.unavailable_reason)
+        end
+
+        def graphql_line(data)
+          return graphql_label(data[:graphql]) if data[:graphql].is_a?(Hash)
+          "not detected (no app/graphql directory)"
+        end
+
+        def versioning_line(data)
+          return "#{data[:api_versioning].join(', ')} (app/controllers/api/)" if versioning?(data)
+          "not detected (no app/controllers/api/v* directories)"
+        end
+
+        def rate_limiting_line(data)
+          rate_limiting_label(data[:rate_limiting]) ||
+            "not detected (no Rack::Attack initializer, no rate_limit macro)"
+        end
+
+        def pagination_line(data)
+          return data[:pagination].join(", ") if pagination?(data)
+          "no pagination gem detected (pagy/kaminari/will_paginate)"
         end
 
         def build_full(data)
           lines = build_standard(data).lines.map(&:chomp)
-          append_openapi(lines, data[:openapi_spec])
+          append_openapi(lines, data)
           append_client_generation(lines, data[:api_client_generation])
           append_graphql_details(lines, data[:graphql_details])
           append_serializer_classes(lines, data.dig(:serializers, :serializer_classes))
           lines.join("\n")
         end
 
-        def append_openapi(lines, specs)
+        def append_openapi(lines, data)
+          specs = data[:openapi_spec]
           lines << "" << "## OpenAPI Specs" << ""
-          if specs.is_a?(Array) && specs.any?
+          if unanswered?(data, :openapi_spec)
+            lines << unavailable_text
+          elsif specs.is_a?(Array) && specs.any?
             specs.each { |path| lines << "- `#{path}`" }
           else
             lines << "No OpenAPI/Swagger spec files detected."
@@ -191,7 +240,11 @@ module RailsAiContext
           missing << "rate limiting" unless rate_limiting_label(data[:rate_limiting])
           missing << "CORS config" unless data[:cors_config].is_a?(Hash)
           missing << "pagination gems" unless pagination?(data)
-          missing
+          missing - unanswered_areas(data)
+        end
+
+        def unanswered_areas(data)
+          AREA_LABELS.filter_map { |key, label| label if unanswered?(data, key) }
         end
       end
     end
