@@ -68,7 +68,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config/application.rb"), "")
-        outcome = described_class.call(root: dir, allow_static: false, context: "doctor")
+        outcome = described_class.call(root: dir, allow_static: false, command: "doctor")
 
         expect(outcome.messages.first).to eq("Error: doctor needs a bootable app: no config/environment.rb in #{dir}")
       end
@@ -84,7 +84,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config/application.rb"), "")
 
-        outcome = described_class.call(root: dir, allow_static: true, allow_source_only: true, context: "init")
+        outcome = described_class.call(root: dir, allow_static: true, allow_source_only: true, command: "init")
 
         expect(outcome.tier).to eq(:static)
         expect(outcome.kind).to eq(:source_only)
@@ -102,7 +102,7 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         FileUtils.mkdir_p(File.join(dir, "config"))
         File.write(File.join(dir, "config/application.rb"), "")
 
-        outcome = described_class.call(root: dir, allow_static: false, allow_source_only: true, context: "doctor")
+        outcome = described_class.call(root: dir, allow_static: false, allow_source_only: true, command: "doctor")
 
         expect(outcome.tier).to eq(:absent)
         expect(outcome.messages.first).to eq("Error: doctor needs a bootable app: no config/environment.rb in #{dir}")
