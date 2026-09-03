@@ -39,7 +39,7 @@ preset: full
 ### Precedence
 
 > [!IMPORTANT]
-> `configure` block > YAML > Defaults, merged key by key. A block wins the keys it assigns and a key it never sets keeps the YAML value, wherever the block sits - an initializer, `config/application.rb` or an environment file, before or after the file loads. Corrupted YAML degrades gracefully with a warning.
+> `configure` block > YAML > Defaults, merged key by key. A block wins the keys it assigns and a key it never sets keeps the YAML value, wherever the block sits - an initializer, `config/application.rb` or an environment file, before or after the file loads. Assign a key to claim it for the block (`config.skip_tools = ["rails_query"]`); mutating the default in place (`config.skip_tools << "rails_query"`) is not an assignment, so the YAML still overwrites it. Corrupted YAML degrades gracefully with a warning.
 
 ---
 
