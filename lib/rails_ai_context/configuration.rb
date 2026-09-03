@@ -407,7 +407,7 @@ module RailsAiContext
     def preset=(name)
       name = name.to_sym
       raise ArgumentError, "Unknown preset: #{name}. Valid presets: #{PRESETS.keys.join(", ")}" unless PRESETS.key?(name)
-      @introspectors = PRESETS[name].dup
+      self.introspectors = PRESETS[name].dup
     end
 
     # A tool name is a String, and both the MCP server and the CLI compare

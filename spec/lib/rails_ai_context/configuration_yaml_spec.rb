@@ -450,6 +450,21 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         expect(config.server_name).to eq("from-yaml")
       end
     end
+
+    # A preset is how a block usually sets introspectors, so it has to claim
+    # that key too.
+    it "keeps the introspectors a block's preset chose" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, ".rails-ai-context.yml")
+        File.write(path, YAML.dump({ "introspectors" => [ "schema" ], "server_name" => "from-yaml" }))
+
+        RailsAiContext.configure { |c| c.preset = :standard }
+        RailsAiContext::Configuration.load_from_yaml(path)
+
+        expect(config.introspectors).to eq(RailsAiContext::Configuration::PRESETS[:standard])
+        expect(config.server_name).to eq("from-yaml")
+      end
+    end
   end
 
   describe "#ai_tools record fallback" do
