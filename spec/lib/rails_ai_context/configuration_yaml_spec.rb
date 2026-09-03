@@ -10,13 +10,11 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
   before do
     # Reset configuration state for each test
     RailsAiContext.configuration = RailsAiContext::Configuration.new
-    RailsAiContext.instance_variable_set(:@configured_via_block, false)
   end
 
   after do
     # Restore clean state so other specs don't see leaked config
     RailsAiContext.configuration = RailsAiContext::Configuration.new
-    RailsAiContext.instance_variable_set(:@configured_via_block, false)
   end
 
   describe ".load_from_yaml" do
@@ -451,17 +449,6 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         expect(config.skip_tools).to eq([ "rails_console" ])
         expect(config.server_name).to eq("from-yaml")
       end
-    end
-  end
-
-  describe "RailsAiContext.configured_via_block?" do
-    it "returns false before any configure call" do
-      expect(RailsAiContext.configured_via_block?).to eq(false)
-    end
-
-    it "returns true after configure block" do
-      RailsAiContext.configure { |_c| }
-      expect(RailsAiContext.configured_via_block?).to eq(true)
     end
   end
 

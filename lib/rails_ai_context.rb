@@ -46,12 +46,7 @@ module RailsAiContext
     end
 
     def configure
-      @configured_via_block = true
       configuration.recording_block_assignments { |config| yield(config) }
-    end
-
-    def configured_via_block?
-      @configured_via_block || false
     end
 
     # Warn through Rails.logger when available, stderr otherwise. Introspection
