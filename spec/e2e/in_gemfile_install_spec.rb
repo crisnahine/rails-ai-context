@@ -149,8 +149,20 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       yml = File.join(@builder.app_path, ".rails-ai-context.yml")
       init = File.join(@builder.app_path, "config", "initializers", "rails_ai_context.rb")
       moved = "#{init}.precedence-moved"
+      original_init = File.read(init)
       File.write(yml, "---\nskip_tools:\n  - rails_query\n  - rails_read_logs\n")
+      # The file is applied before this initializer, so an in-place edit here -
+      # the idiom the gem's own remedy strings taught - survives the load.
+      File.write(init, "#{original_init}\nRailsAiContext.configure do |config|\n" \
+                       "  config.skip_tools << \"rails_get_gems\"\nend\n")
 
+      with_edit = @cli.cli("tool", "--list")
+      expect(with_edit.success?).to be(true), with_edit.to_s
+      expect(with_edit.stdout).not_to match(/^\s+query\s/)
+      expect(with_edit.stdout).not_to match(/^\s+read_logs\s/)
+      expect(with_edit.stdout).not_to match(/^\s+gems\s/)
+
+      File.write(init, original_init)
       with_block = @cli.cli("tool", "--list")
       expect(with_block.success?).to be(true), with_block.to_s
       expect(with_block.stdout).not_to match(/^\s+query\s/)
@@ -165,6 +177,7 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
     ensure
       FileUtils.rm_f(File.join(@builder.app_path, ".rails-ai-context.yml"))
       File.rename(moved, init) if moved && File.exist?(moved)
+      File.write(init, original_init) if original_init && File.exist?(init)
     end
 
     it "an unknown command exits non-zero without a Thor deprecation warning" do

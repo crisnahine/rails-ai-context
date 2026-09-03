@@ -356,6 +356,46 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         expect(config.cache_ttl).to eq(120)
       end
     end
+
+    # `config.skip_tools << "..."` in an initializer is the idiom the gem's own
+    # remedy strings taught, and it survives only because the file is applied
+    # once, before those initializers run.
+    it "leaves an in-place edit alone on a second call" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"),
+                   YAML.dump({ "skip_tools" => [ "rails_console" ] }))
+
+        RailsAiContext::Configuration.auto_load!(dir)
+        config.skip_tools << "rails_query"
+        RailsAiContext::Configuration.auto_load!(dir)
+
+        expect(config.skip_tools).to contain_exactly("rails_console", "rails_query")
+      end
+    end
+
+    it "reads the file again for a fresh configuration" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "cache_ttl" => 120 }))
+
+        RailsAiContext::Configuration.auto_load!(dir)
+        RailsAiContext.configuration = RailsAiContext::Configuration.new
+        RailsAiContext::Configuration.auto_load!(dir)
+
+        expect(RailsAiContext.configuration.cache_ttl).to eq(120)
+      end
+    end
+
+    # The file is read once, at boot: a config file that appears mid-process is
+    # not picked up by a later call.
+    it "does not read a file written after the first call" do
+      Dir.mktmpdir do |dir|
+        RailsAiContext::Configuration.auto_load!(dir)
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "cache_ttl" => 120 }))
+        RailsAiContext::Configuration.auto_load!(dir)
+
+        expect(config.cache_ttl).to eq(60)
+      end
+    end
   end
 
   describe ".load_config_file!" do

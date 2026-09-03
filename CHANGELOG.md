@@ -30,11 +30,12 @@ duplicated mechanisms behind them.
   initializer holds a `configure` block, and the YAML was skipped whenever one
   had run, so a booted command took the defaults while `--no-boot` read the
   file and the two disagreed (45 tools against 43 with `skip_tools` set).
-  Precedence is a merge: the engine now loads the YAML before
-  `config/initializers`, and a block overrides it key by key. A block placed
-  in `config/application.rb` or an environment file runs before that load and
-  still wins the keys it assigns. The standalone binary and the CLI's boot
-  path read the file too, where a block used to make it inert wholesale.
+  Precedence is a merge: the file is applied once, before
+  `config/initializers`, so an initializer may assign a key or edit it in
+  place and both survive; a later call from the standalone binary or the
+  CLI's boot path is a no-op. A block wins the keys it assigns wherever it
+  lives, so one in `config/application.rb` or an environment file, which runs
+  before the load, keeps them too.
 - **The static tier named the app after its directory.** `onboard` and every
   generated context file were headed "mastodon" for an app that declares
   `module Mastodon`. The name now comes from the module enclosing

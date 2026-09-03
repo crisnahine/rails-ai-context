@@ -45,7 +45,7 @@ module RailsAiContext
         fetch_section(:api, unusable_message:
           "No API layer data available. Ensure the :api introspector is enabled in your " \
           "rails_ai_context configuration.\n\n" \
-          "Example:\n```ruby\nRailsAiContext.configure do |config|\n  config.introspectors << :api\nend\n```") do |data|
+          "Example:\n```ruby\nRailsAiContext.configure do |config|\n  config.introspectors += [ :api ]\nend\n```") do |data|
           case detail
           when "summary"
             text_response(build_summary(data))

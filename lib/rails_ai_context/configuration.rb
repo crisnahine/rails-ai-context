@@ -61,13 +61,19 @@ module RailsAiContext
       nil
     end
 
-    # Load .rails-ai-context.yml as the base over the defaults. Safe to call
-    # multiple times (idempotent). Precedence is a merge: a configure block
-    # wins the keys it assigned and a key it never mentions keeps what the
-    # file said, whichever of the two ran first.
+    # Load .rails-ai-context.yml as the base over the defaults, once per
+    # configuration. A second call is a no-op, so an initializer that edits a
+    # key in place keeps the edit; a block that runs before the load keeps the
+    # keys it assigns.
     def self.load_config_file!(dir = nil)
+      config = RailsAiContext.configuration
+      return if config.config_file_applied?
+
       dir ||= defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
       yaml_path = File.join(dir, CONFIG_FILENAME)
+      # An absent file is applied too: the file is read at boot, not whenever
+      # one appears mid-process.
+      config.config_file_applied!
       return unless File.exist?(yaml_path)
 
       $stderr.puts "[rails-ai-context] Loading configuration from #{CONFIG_FILENAME}" if ENV["DEBUG"]
@@ -75,8 +81,8 @@ module RailsAiContext
     end
 
     # The entry points that reach the config after the app's initializers have
-    # run - the standalone binary and the CLI's boot path. The load is the same
-    # merge in either direction, so a block's own keys survive it.
+    # run - the standalone binary and the CLI's boot path. On a booted
+    # in-Gemfile app the engine already applied the file, so this is a no-op.
     def self.auto_load!(dir = nil)
       load_config_file!(dir)
     end
@@ -97,6 +103,14 @@ module RailsAiContext
     # config/application.rb or an environment file.
     def block_assigned_keys
       @block_assigned_keys ||= []
+    end
+
+    def config_file_applied?
+      @config_file_applied || false
+    end
+
+    def config_file_applied!
+      @config_file_applied = true
     end
 
     def recording_block_assignments
