@@ -54,6 +54,11 @@ module RailsAiContext
     rescue Psych::SyntaxError, Psych::DisallowedClass => e
       $stderr.puts "[rails-ai-context] WARNING: #{path} has invalid YAML (#{e.message}). Using defaults."
       nil
+    rescue SystemCallError => e
+      # File.exist? is true for a directory and for a file the process cannot
+      # read, and this runs inside an engine initializer on every boot.
+      $stderr.puts "[rails-ai-context] WARNING: #{path} could not be read (#{e.message}). Using defaults."
+      nil
     end
 
     # Load .rails-ai-context.yml as the base over the defaults. Safe to call

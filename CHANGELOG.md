@@ -45,6 +45,9 @@ duplicated mechanisms behind them.
   against 117 booted). A static model is now a class whose superclass chain
   reaches `ApplicationRecord`, a namespaced `*ApplicationRecord` or
   `ActiveRecord::Base`, STI subclasses included.
+- **An unreadable `.rails-ai-context.yml` aborted the boot.** A directory or a
+  file the process cannot read at that path raised out of the engine
+  initializer; it now warns and keeps the defaults, the way broken YAML does.
 - **A model under a per-connection abstract base was missing from the static
   list.** The multi-database shape - `class AnimalsRecord < ApplicationRecord;
   self.abstract_class = true` in its own file, then `class Dog <

@@ -385,6 +385,17 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
       end
     end
 
+    # The engine loads the file on every in-Gemfile boot, and File.exist? is
+    # true for a directory or a file the process cannot read.
+    it "keeps the defaults when a directory sits at the config file's path" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".rails-ai-context.yml"))
+
+        expect { RailsAiContext::Configuration.load_config_file!(dir) }.not_to raise_error
+        expect(config.tool_mode).to eq(:mcp)
+      end
+    end
+
     # A block in config/application.rb or config/environments/*.rb runs before
     # the engine's file load, so precedence cannot depend on placement.
     it "keeps a key the block set even when the file loads afterwards" do
