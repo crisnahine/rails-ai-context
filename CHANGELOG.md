@@ -192,8 +192,9 @@ duplicated mechanisms behind them.
   strings.
 - **`rails-ai-context://routes/{controller}` prefers an exact route-key
   match**, so `routes/posts` no longer also returns `admin/posts`.
-- **`api[:unavailable_sections]` is a list of section keys**, not a reason
-  string.
+- **`unavailable_sections`, where a section carries it, is a list of
+  section keys**, not a reason string. The middleware section's static
+  answer is the one that still emits it.
 - **The models resource template advertises
   `rails-ai-context://models/{name}`**, and every scheme resolves through the
   VFS rather than an exact-match legacy reader. `rails://models/{name}` is
