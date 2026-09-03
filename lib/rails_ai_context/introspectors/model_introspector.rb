@@ -159,10 +159,10 @@ module RailsAiContext
         DeclaredConstant.resolve(source, path_name)
       end
 
-      # The booted tier rejects `abstract_class?`, and a namespaced base class -
-      # GitLab has Ci::ApplicationRecord, PackageMetadata::ApplicationRecord and
-      # SecApplicationRecord - is one. Excluding only the root
-      # application_record by path gave the same app two model counts.
+      # The booted tier rejects `abstract_class?`, so the static tier must too
+      # or the same app gets two model counts. A namespaced base is one of
+      # these - GitLab has Ci::ApplicationRecord and SecApplicationRecord - and
+      # the root application_record is not the only one to leave out.
       def abstract_class?(source)
         source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/)
       end
