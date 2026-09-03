@@ -33,7 +33,8 @@ duplicated mechanisms behind them.
   Precedence is a merge: the engine now loads the YAML before
   `config/initializers`, and a block overrides it key by key. A block placed
   in `config/application.rb` or an environment file runs before that load and
-  still wins the keys it assigns.
+  still wins the keys it assigns. The standalone binary and the CLI's boot
+  path read the file too, where a block used to make it inert wholesale.
 - **The static tier named the app after its directory.** `onboard` and every
   generated context file were headed "mastodon" for an app that declares
   `module Mastodon`. The name now comes from the module enclosing

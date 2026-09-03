@@ -74,12 +74,10 @@ module RailsAiContext
       load_from_yaml(yaml_path)
     end
 
-    # The entry points that reach the config after the app's initializers
-    # have run - the standalone binary and the CLI's boot path. A block that
-    # already set values is the later word, so the file must not undo it.
+    # The entry points that reach the config after the app's initializers have
+    # run - the standalone binary and the CLI's boot path. The load is the same
+    # merge in either direction, so a block's own keys survive it.
     def self.auto_load!(dir = nil)
-      return if RailsAiContext.configured_via_block?
-
       load_config_file!(dir)
     end
 
@@ -101,20 +99,24 @@ module RailsAiContext
       @block_assigned_keys ||= []
     end
 
-    # Comparing the instance variables around the block records the keys
-    # without a writer per attribute.
     def recording_block_assignments
-      recorded = block_assigned_keys
-      before = instance_variables.to_h { |name| [ name, instance_variable_get(name) ] }
-
+      @recording_block_assignments = true
       yield self
+    ensure
+      @recording_block_assignments = false
+    end
 
-      instance_variables.each do |name|
-        next if before.key?(name) && before[name] == instance_variable_get(name)
-
-        recorded << name.to_s.delete_prefix("@").to_sym
+    # The writer is what records, so assigning a key its default value still
+    # claims it for the block; comparing values around the block would not.
+    BLOCK_ASSIGNMENT_RECORDER = Module.new do
+      YAML_KEYS.each do |key|
+        define_method(:"#{key}=") do |value|
+          block_assigned_keys << key if @recording_block_assignments
+          super(value)
+        end
       end
     end
+    prepend BLOCK_ASSIGNMENT_RECORDER
 
     PRESETS = {
       standard: %i[schema models routes jobs gems conventions controllers tests migrations stimulus

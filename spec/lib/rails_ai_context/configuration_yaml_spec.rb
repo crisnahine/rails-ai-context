@@ -308,17 +308,19 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
   end
 
   describe ".auto_load!" do
-    it "skips when configured_via_block? is true" do
+    # Every entry point loads the file; the keys a block assigned are what it
+    # keeps, so the same merge holds after the app's initializers have run.
+    it "keeps a key the block assigned and takes the rest from the file" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")
-        File.write(yaml_path, YAML.dump({ "tool_mode" => "cli" }))
+        File.write(yaml_path, YAML.dump({ "tool_mode" => "cli", "server_name" => "from-yaml" }))
 
         RailsAiContext.configure { |c| c.tool_mode = :mcp }
 
         RailsAiContext::Configuration.auto_load!(dir)
 
-        # Should stay at :mcp because configure block ran
         expect(config.tool_mode).to eq(:mcp)
+        expect(config.server_name).to eq("from-yaml")
       end
     end
 
