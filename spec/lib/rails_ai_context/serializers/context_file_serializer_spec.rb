@@ -41,6 +41,21 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
       end
     end
 
+    # A hand-edited or half-written file need not hold a JSON object, and the
+    # skip check asked it for a key either way.
+    it "rewrites a JSON file that does not parse to an object" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        path = File.join(dir, ".ai-context.json")
+        File.write(path, "[1,2]")
+
+        result = described_class.new(context, format: :json).call
+
+        expect(result[:written].map { |f| File.basename(f) }).to include(".ai-context.json")
+        expect(JSON.parse(File.read(path))).to be_a(Hash)
+      end
+    end
+
     # Only the full-mode header carries the run's own clock; the compact one
     # never did, which is why it was already skipped.
     it "skips a markdown file when only its timestamp would change" do

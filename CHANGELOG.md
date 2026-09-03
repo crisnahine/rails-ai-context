@@ -27,6 +27,9 @@ duplicated mechanisms behind them.
   static tier now answers all of them, and a key a section does name as
   unanswered renders as `[UNAVAILABLE: ...]` rather than as a negative
   finding.
+- **An existing `.ai-context.json` holding anything but a JSON object
+  aborted the whole generation run.** The skip check reads it as a file to
+  replace.
 - **`rails_get_test_info` blamed the app root for a name it refused as
   sensitive.** The refusal names what the check covers: the name leaves the
   app root or names a sensitive file.

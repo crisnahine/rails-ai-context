@@ -124,7 +124,10 @@ module RailsAiContext
       def same_payload?(existing, content)
         return true if existing == content
 
-        JSON.parse(existing).except("generated_at") == JSON.parse(content).except("generated_at")
+        parsed = JSON.parse(existing)
+        return false unless parsed.is_a?(Hash)
+
+        parsed.except("generated_at") == JSON.parse(content).except("generated_at")
       rescue JSON::ParserError
         false
       end
