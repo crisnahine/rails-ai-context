@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.25.0] - 2026-09-03
 
 ### Added
 
@@ -253,6 +253,8 @@ duplicated mechanisms behind them.
 - **`SchemaHintBuilder.build_many`** - no callers.
 - **`Fingerprinter.changed?`** - no callers; `stale?` answers the question.
 - **The public constant `ChangeWatch::WATCH_DIRS`.**
+- **`RailsAiContext.configured_via_block?`** - no callers once the config file
+  applies once per configuration and a block wins its keys by name.
 
 ## [5.24.0] - 2026-08-17
 

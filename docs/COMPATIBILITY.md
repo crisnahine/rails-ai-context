@@ -159,7 +159,9 @@ Proof sources:
 1. `spec/e2e/in_gemfile_install_spec.rb`, `standalone_install_spec.rb`,
    `zero_config_install_spec.rb` (schema, routes, model_details, and controllers
    exercised across the install-path suite - in-Gemfile, standalone, zero-config);
-   real Rails 8.0 apps in the v5.14.0 release QA (`blog`, `sandbox`).
+   real Rails 8.0 apps in the v5.14.0 release QA (`blog`, `sandbox`); Mastodon
+   (Rails 8.1, Ruby 3.4) in the v5.25.0 release QA, booted and static tiers,
+   standalone and in-Gemfile installs.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
