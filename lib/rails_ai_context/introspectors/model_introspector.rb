@@ -67,6 +67,10 @@ module RailsAiContext
             next
           end
 
+          # An abstract base is dropped from the result but not from the walk:
+          # a per-connection base like Analytics::Record is how its models
+          # reach ApplicationRecord.
+          next if candidate[:abstract]
           next unless model_class?(class_name, candidates)
 
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file])
@@ -91,7 +95,7 @@ module RailsAiContext
             next if File.size(record.path) > RailsAiContext.configuration.max_file_size
 
             source = model_source(record.path)
-            next if source.nil? || mixin_path?(record.path_name.underscore, source) || abstract_class?(source)
+            next if source.nil? || mixin_path?(record.path_name.underscore, source)
 
             declarations = DeclaredConstant.declarations(source)
             class_name = declarations.map(&:name).find { |name| name.casecmp?(record.path_name) } || record.path_name
@@ -101,7 +105,8 @@ module RailsAiContext
             found[class_name] = {
               path: record.path,
               file: record.file,
-              superclass: declarations.find { |d| d.name == class_name }&.superclass
+              superclass: declarations.find { |d| d.name == class_name }&.superclass,
+              abstract: abstract_class?(source)
             }
           rescue => e
             found[record.path_name] = { error: e.message }

@@ -43,6 +43,12 @@ duplicated mechanisms behind them.
   against 117 booted). A static model is now a class whose superclass chain
   reaches `ApplicationRecord`, a namespaced `*ApplicationRecord` or
   `ActiveRecord::Base`, STI subclasses included.
+- **A model under a per-connection abstract base was missing from the static
+  list.** The multi-database shape - `class AnimalsRecord < ApplicationRecord;
+  self.abstract_class = true` in its own file, then `class Dog <
+  AnimalsRecord` - dropped every model on that connection from the static
+  list, the count and the schema listing. An abstract base is still walked so
+  chains resolve through it; it is left out of the result, as before.
 - **`rails_get_api` stated a filesystem finding for a section nobody had
   read.** In the static tier the whole section but the mode was declared
   unavailable, and nothing read that declaration, so an app with
