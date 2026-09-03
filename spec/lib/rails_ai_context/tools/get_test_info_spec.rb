@@ -159,6 +159,30 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       end
     end
 
+    # The set also holds :sensitive, which a configured pattern reaches for a
+    # name that never left the root.
+    it "does not blame the app root for a name refused as sensitive" do
+      Dir.mktmpdir do |parent|
+        root = File.join(parent, "app")
+        FileUtils.mkdir_p(File.join(root, "spec", "models"))
+        File.write(File.join(root, "spec", "models", "secret_spec.rb"), "# tests\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        original = RailsAiContext.configuration.sensitive_patterns
+        RailsAiContext.configuration.sensitive_patterns = original + [ "spec/models/*_spec.rb", "test/models/*_test.rb" ]
+
+        begin
+          text = described_class.call(model: "Secret", detail: "full").content.first[:text]
+        ensure
+          RailsAiContext.configuration.sensitive_patterns = original
+        end
+
+        expect(text).to include("refused")
+        expect(text).not_to include("Searched:")
+        expect(text).to include("or names a sensitive file")
+        expect(text).not_to end_with("it leaves the app root.")
+      end
+    end
+
     it "does not read a test file that resolves outside the app root or to a sensitive file" do
       Dir.mktmpdir do |parent|
         root = File.join(parent, "app")
