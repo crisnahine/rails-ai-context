@@ -71,6 +71,17 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
         expect(concern[:uses_active_support_concern]).to eq(true)
         expect(concern[:class_methods_block]).to eq(true)
       end
+
+      it "leaves an excluded concern out of the registry" do
+        original = RailsAiContext.configuration.excluded_concerns
+        RailsAiContext.configuration.excluded_concerns = [ /TestTrackable/ ]
+
+        entries = described_class.new(Rails.application).call[:concerns]["app/models/concerns"]
+
+        expect(Array(entries).map { |e| e[:name] }).not_to include("TestTrackable")
+      ensure
+        RailsAiContext.configuration.excluded_concerns = original
+      end
     end
   end
   # Deprecators, load hooks and the cache store live in a running process.

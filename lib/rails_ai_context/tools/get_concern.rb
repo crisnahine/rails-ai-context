@@ -251,6 +251,7 @@ module RailsAiContext
 
             relative = real.sub("#{real_root}/", "")
             concern_name = real.sub("#{real_dir}/", "").sub(/\.rb$/, "").camelize
+            next if ConcernMembership.excluded?(concern_name)
 
             method_count = 0
             if File.size(real) <= max_size

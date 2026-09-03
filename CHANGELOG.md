@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Defects found by a second survey round over the whole surface, and the
 duplicated mechanisms behind them.
 
+- **`excluded_concerns` hid a concern from a model's list but not from the
+  catalogue.** `rails_get_concern` and the `rails_get_active_support` concern
+  registry still listed and counted a concern the key names; all three now
+  apply the same predicate.
 - **An in-Gemfile app's `.rails-ai-context.yml` was inert.** The generated
   initializer holds a `configure` block, and the YAML was skipped whenever one
   had run, so a booted command took the defaults while `--no-boot` read the
