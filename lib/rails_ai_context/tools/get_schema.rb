@@ -164,7 +164,7 @@ module RailsAiContext
 
                 [ mname, md[:associations]&.size || 0, md[:validations]&.size || 0 ]
               end
-              usable = usable.each_with_index.sort_by { |(_, a, v), i| [ -(a + v), i ] }.map(&:first)
+              usable = usable.sort_by.with_index { |(_, a, v), i| [ -(a + v), i ] }
               model_info = if usable.any?
                 shown = usable.first(5).map { |mname, a, v| "**#{mname}** (#{a} assoc, #{v} val)" }.join(", ")
                 more = usable.size > 5 ? " (+#{usable.size - 5} more)" : ""
