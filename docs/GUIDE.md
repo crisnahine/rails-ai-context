@@ -1270,10 +1270,10 @@ if defined?(RailsAiContext)
     # schema.rb / structure.sql parse limit (default: 10MB)
     # config.max_schema_file_size = 10_000_000
 
-    # Total aggregated view content for UI patterns (default: 10MB)
+    # app/views size the doctor warns past - not a read cap (default: 10MB)
     # config.max_view_total_size = 10_000_000
 
-    # Per-view file during aggregation (default: 1MB)
+    # Named in that doctor warning's fix line (default: 1MB)
     # config.max_view_file_size = 1_000_000
 
     # Max search results per call (default: 200)
@@ -1345,8 +1345,8 @@ end
 | `max_file_size` | Integer | `5_000_000` | Per-file read limit for tools (5MB) |
 | `max_test_file_size` | Integer | `1_000_000` | Test file read limit (1MB) |
 | `max_schema_file_size` | Integer | `10_000_000` | schema.rb / structure.sql parse limit (10MB) |
-| `max_view_total_size` | Integer | `10_000_000` | Total aggregated view content for UI patterns (10MB) |
-| `max_view_file_size` | Integer | `1_000_000` | Per-view file during aggregation (1MB) |
+| `max_view_total_size` | Integer | `10_000_000` | Doctor threshold: app/views above this warns (10MB). Not a read cap |
+| `max_view_file_size` | Integer | `1_000_000` | Named in that doctor warning's fix line (1MB). Not a read cap |
 | `max_search_results` | Integer | `200` | Max search results per call |
 | `max_validate_files` | Integer | `50` | Max files per validate call |
 | `excluded_controllers` | Array | `DeviseController`, etc. | Controller classes hidden from listings |

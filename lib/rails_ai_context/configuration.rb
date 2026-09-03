@@ -183,8 +183,9 @@ module RailsAiContext
     attr_accessor :max_file_size          # Per-file read limit for tools (default: 2MB)
     attr_accessor :max_test_file_size     # Test file read limit (default: 500KB)
     attr_accessor :max_schema_file_size   # schema.rb / structure.sql parse limit (default: 10MB)
-    attr_accessor :max_view_total_size    # Total aggregated view content for template scanning (default: 5MB)
-    attr_accessor :max_view_file_size     # Per-view file during aggregation (default: 500KB)
+    # Doctor thresholds, not read caps: the view tools do not stop at them.
+    attr_accessor :max_view_total_size    # Size of app/views doctor warns past (default: 10MB)
+    attr_accessor :max_view_file_size     # Named in that warning's fix line (default: 1MB)
     attr_accessor :max_search_results     # Max search results per call (default: 100)
     attr_accessor :max_validate_files     # Max files per validate call (default: 20)
 

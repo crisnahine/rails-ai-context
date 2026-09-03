@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Defects found by a second survey round over the whole surface, and the
 duplicated mechanisms behind them.
 
+- **`max_view_total_size` and `max_view_file_size` said they capped view
+  reads.** Only `doctor` reads either one, as the threshold for its view-size
+  warning; the config comments and the docs rows now say that.
 - **`excluded_concerns` hid a concern from a model's list but not from the
   catalogue.** `rails_get_concern` and the `rails_get_active_support` concern
   registry still listed and counted a concern the key names; all three now
