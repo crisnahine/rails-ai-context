@@ -30,6 +30,10 @@ duplicated mechanisms behind them.
 - **An existing `.ai-context.json` holding anything but a JSON object
   aborted the whole generation run.** The skip check reads it as a file to
   replace.
+- **`rails_get_schema`'s table heading named every model on the table**, so
+  an STI table with thirty subclasses filled the cheap summary with one
+  heading. It names five and counts the rest, the way the file's other lists
+  do.
 - **`rails_get_test_info` blamed the app root for a name it refused as
   sensitive.** The refusal names what the check covers: the name leaves the
   app root or names a sensitive file.
