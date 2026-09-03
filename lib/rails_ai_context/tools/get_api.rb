@@ -74,7 +74,7 @@ module RailsAiContext
           missing = missing_areas(data)
           summary += ". Not detected: #{missing.join(', ')}." if missing.any?
           unanswered = unanswered_areas(data)
-          summary += " #{unavailable_text}: #{unanswered.join(', ')}." if unanswered.any?
+          summary += " Not answered without a booted app: #{unanswered.join(', ')} #{unavailable_text}." if unanswered.any?
           summary
         end
 

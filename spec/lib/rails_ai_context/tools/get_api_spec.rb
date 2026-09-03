@@ -60,6 +60,16 @@ RSpec.describe RailsAiContext::Tools::GetApi do
         expect(text).to include("API-only app (config.api_only = true)")
         expect(text).to include("Not detected: serializers, GraphQL, API versioning, rate limiting, CORS config, pagination gems.")
       end
+
+      it "renders an unanswered section without a doubled colon" do
+        allow(described_class).to receive(:cached_context).and_return(
+          { api: { api_only: false, unavailable_sections: %w[serializers graphql] } }
+        )
+        result = described_class.call(detail: "summary")
+        text = result.content.first[:text]
+
+        expect(text).to include("Not answered without a booted app: serializers, GraphQL [UNAVAILABLE")
+      end
     end
 
     context "with detail:standard" do
