@@ -55,19 +55,27 @@ module RailsAiContext
       nil
     end
 
-    # Auto-load config from .rails-ai-context.yml if no initializer configure block ran.
-    # Safe to call multiple times (idempotent). Called by the engine on boot
-    # and by the standalone binary, so the documented precedence (initializer,
-    # then YAML, then defaults) holds on every entry point.
-    def self.auto_load!(dir = nil)
-      return if RailsAiContext.configured_via_block?
-
+    # Load .rails-ai-context.yml as the base over the defaults. Safe to call
+    # multiple times (idempotent). The engine calls this before the app's
+    # config/initializers, so a configure block there overrides it key by key
+    # and a key the block never mentions keeps what the file said - the
+    # documented precedence is a merge, not a winner.
+    def self.load_config_file!(dir = nil)
       dir ||= defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
       yaml_path = File.join(dir, CONFIG_FILENAME)
       return unless File.exist?(yaml_path)
 
       $stderr.puts "[rails-ai-context] Loading configuration from #{CONFIG_FILENAME}" if ENV["DEBUG"]
       load_from_yaml(yaml_path)
+    end
+
+    # The entry points that reach the config after the app's initializers
+    # have run - the standalone binary and the CLI's boot path. A block that
+    # already set values is the later word, so the file must not undo it.
+    def self.auto_load!(dir = nil)
+      return if RailsAiContext.configured_via_block?
+
+      load_config_file!(dir)
     end
 
     def self.coerce_value(key, value)

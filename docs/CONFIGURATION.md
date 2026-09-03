@@ -39,7 +39,7 @@ preset: full
 ### Precedence
 
 > [!IMPORTANT]
-> Initializer > YAML > Defaults. If the initializer runs, YAML is skipped entirely. Corrupted YAML degrades gracefully with a warning.
+> Initializer > YAML > Defaults, merged key by key. The YAML loads first, then an initializer's `configure` block overrides the keys it sets; a key the block never sets keeps the YAML value. Corrupted YAML degrades gracefully with a warning.
 
 ---
 

@@ -2,13 +2,16 @@
 
 module RailsAiContext
   class Engine < ::Rails::Engine
+    # The YAML is the base a configure block overrides key by key, so it has
+    # to be in place before config/initializers runs. Loaded afterwards, the
+    # generated initializer's block made every YAML key inert on a booted run
+    # while `--no-boot` still read them, and the two tiers disagreed.
+    initializer "rails_ai_context.config_file", before: :load_config_initializers do |_app|
+      RailsAiContext::Configuration.load_config_file!
+    end
+
     # Register the MCP server after Rails finishes loading
     initializer "rails_ai_context.setup", after: :load_config_initializers do |_app|
-      # The documented precedence - initializer, then YAML, then defaults -
-      # used to run only in the standalone binary; every in-Gemfile surface
-      # left the YAML inert. auto_load! no-ops when a configure block ran.
-      RailsAiContext::Configuration.auto_load!
-
       # Make introspection available via Rails console
       Rails.application.config.rails_ai_context = RailsAiContext.configuration
     end

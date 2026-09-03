@@ -356,6 +356,36 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
     end
   end
 
+  describe ".load_config_file!" do
+    # Precedence is a merge: the YAML is the base over the defaults and a
+    # configure block overrides it key by key, so a key the block never
+    # mentions keeps what the file said.
+    it "leaves a key the block never set applied" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"),
+                   YAML.dump({ "skip_tools" => [ "rails_query" ], "server_name" => "from-yaml" }))
+
+        RailsAiContext::Configuration.load_config_file!(dir)
+        RailsAiContext.configure { |c| c.server_name = "from-block" }
+
+        expect(config.skip_tools).to eq([ "rails_query" ])
+        expect(config.server_name).to eq("from-block")
+      end
+    end
+
+    it "applies the YAML even when a configure block has already run" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"),
+                   YAML.dump({ "skip_tools" => [ "rails_query" ] }))
+
+        RailsAiContext.configure { |c| c.server_name = "from-block" }
+        RailsAiContext::Configuration.load_config_file!(dir)
+
+        expect(config.skip_tools).to eq([ "rails_query" ])
+      end
+    end
+  end
+
   describe "RailsAiContext.configured_via_block?" do
     it "returns false before any configure call" do
       expect(RailsAiContext.configured_via_block?).to eq(false)

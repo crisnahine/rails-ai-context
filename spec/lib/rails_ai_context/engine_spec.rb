@@ -24,6 +24,15 @@ RSpec.describe RailsAiContext::Engine do
       expect(initializer_names).to include("rails_ai_context.middleware")
     end
 
+    # The YAML is the base a configure block overrides, so it has to be in
+    # place before config/initializers runs. Loading it afterwards meant the
+    # generated initializer's block made every YAML key inert.
+    it "loads the config file before the app's own initializers run" do
+      initializer = described_class.initializers.find { |i| i.name == "rails_ai_context.config_file" }
+      expect(initializer).not_to be_nil
+      expect(initializer.before).to eq(:load_config_initializers)
+    end
+
     it "mounts the middleware after user initializers have run" do
       initializer = RailsAiContext::Engine.initializers.find { |i| i.name == "rails_ai_context.middleware" }
       expect(initializer).not_to be_nil
