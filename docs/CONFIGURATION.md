@@ -39,7 +39,7 @@ preset: full
 ### Precedence
 
 > [!IMPORTANT]
-> Initializer > YAML > Defaults. If the initializer runs, YAML is skipped entirely. Corrupted YAML degrades gracefully with a warning.
+> Initializer > YAML > Defaults, merged key by key. The YAML loads first, then an initializer's `configure` block overrides the keys it sets; a key the block never sets keeps the YAML value. Corrupted YAML degrades gracefully with a warning.
 
 ---
 
@@ -104,8 +104,8 @@ preset: full
 | `max_file_size` | Integer | `5_000_000` (5 MB) | General file read limit |
 | `max_test_file_size` | Integer | `1_000_000` (1 MB) | Test file read limit |
 | `max_schema_file_size` | Integer | `10_000_000` (10 MB) | Schema file read limit |
-| `max_view_total_size` | Integer | `10_000_000` (10 MB) | Total view file size limit |
-| `max_view_file_size` | Integer | `1_000_000` (1 MB) | Single view file limit |
+| `max_view_total_size` | Integer | `10_000_000` (10 MB) | Doctor threshold: `app/views` above this warns. Not a read cap |
+| `max_view_file_size` | Integer | `1_000_000` (1 MB) | Named in that doctor warning's fix line. Not a read cap |
 
 ### Search
 

@@ -19,6 +19,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Defects found by a second survey round over the whole surface, and the
 duplicated mechanisms behind them.
 
+- **`max_view_total_size` and `max_view_file_size` said they capped view
+  reads.** Only `doctor` reads either one, as the threshold for its view-size
+  warning; the config comments and the docs rows now say that.
+- **`excluded_concerns` hid a concern from a model's list but not from the
+  catalogue.** `rails_get_concern` and the `rails_get_active_support` concern
+  registry still listed and counted a concern the key names; all three now
+  apply the same predicate.
+- **An in-Gemfile app's `.rails-ai-context.yml` was inert.** The generated
+  initializer holds a `configure` block, and the YAML was skipped whenever one
+  had run, so a booted command took the defaults while `--no-boot` read the
+  file and the two disagreed (45 tools against 43 with `skip_tools` set).
+  Precedence is a merge: the engine now loads the YAML before
+  `config/initializers`, and a block overrides it key by key.
+- **The static tier named the app after its directory.** `onboard` and every
+  generated context file were headed "mastodon" for an app that declares
+  `module Mastodon`. The name now comes from the module enclosing
+  `class Application < Rails::Application` in `config/application.rb`, and
+  falls back to the directory only when that file names nothing.
+- **The static tier counted every class under `app/models` as a model.**
+  Namespace modules, form objects, filters and plain service classes were
+  listed and rendered as models of a table (Mastodon answered 195 models
+  against 117 booted). A static model is now a class whose superclass chain
+  reaches `ApplicationRecord`, a namespaced `*ApplicationRecord` or
+  `ActiveRecord::Base`, STI subclasses included.
 - **`rails_get_api` stated a filesystem finding for a section nobody had
   read.** In the static tier the whole section but the mode was declared
   unavailable, and nothing read that declaration, so an app with

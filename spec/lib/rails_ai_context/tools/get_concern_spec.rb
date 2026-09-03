@@ -85,6 +85,20 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
 
   describe ".call" do
     context "listing all concerns" do
+      # The key hid a concern from a model's own concern list and nowhere
+      # else, so the catalogue kept listing and counting it.
+      it "leaves an excluded concern out of the listing and the count" do
+        original = RailsAiContext.configuration.excluded_concerns
+        RailsAiContext.configuration.excluded_concerns = [ /Searchable/ ]
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).not_to include("Searchable")
+        expect(text).to include("# Concerns (1)")
+      ensure
+        RailsAiContext.configuration.excluded_concerns = original
+      end
+
       it "lists both model and controller concerns" do
         result = described_class.call
         text = result.content.first[:text]

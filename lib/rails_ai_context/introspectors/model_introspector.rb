@@ -60,11 +60,31 @@ module RailsAiContext
       def static_call
         return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
 
-        # The stat-only walk: SafeFile.read answers nil for both "too big" and
-        # "cannot read it", and those are different answers. A model the
-        # process cannot stat is an error entry rather than one that quietly
-        # is not there. The count is an answer too.
-        SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each_with_object({}) do |record, result|
+        candidates = static_candidates
+        candidates.each_with_object({}) do |(class_name, candidate), result|
+          if candidate[:error]
+            result[class_name] = { error: candidate[:error] }
+            next
+          end
+
+          next unless model_class?(class_name, candidates)
+
+          result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file])
+        end
+      end
+
+      private
+
+      # Every class file under the model directories, by declared name, with
+      # the superclass it names. Modelhood is decided over the whole walk
+      # afterwards, because STI reaches its base through another file.
+      #
+      # The stat-only walk: SafeFile.read answers nil for both "too big" and
+      # "cannot read it", and those are different answers. A model the
+      # process cannot stat is an error entry rather than one that quietly
+      # is not there. The count is an answer too.
+      def static_candidates
+        SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each_with_object({}) do |record, found|
           next if record.path_name == "ApplicationRecord"
 
           begin
@@ -73,18 +93,60 @@ module RailsAiContext
             source = model_source(record.path)
             next if source.nil? || mixin_path?(record.path_name.underscore, source) || abstract_class?(source)
 
-            class_name = declared_model_name(source, record.path_name)
-            next if result.key?(class_name)
+            declarations = DeclaredConstant.declarations(source)
+            class_name = declarations.map(&:name).find { |name| name.casecmp?(record.path_name) } || record.path_name
+            next if found.key?(class_name)
             next if config.excluded_models.include?(class_name)
 
-            result[class_name] = static_model_details(record.path, class_name, file: record.file)
+            found[class_name] = {
+              path: record.path,
+              file: record.file,
+              superclass: declarations.find { |d| d.name == class_name }&.superclass
+            }
           rescue => e
-            result[record.path_name] = { error: e.message }
+            found[record.path_name] = { error: e.message }
           end
         end
       end
 
-      private
+      # A model is a class whose superclass chain reaches a model base. A
+      # module declares no class and never gets here; a form object, a filter
+      # or a namespaced calculator has no superclass or a superclass that is
+      # not one, and the static tier used to report all of them as models.
+      def model_class?(class_name, candidates, seen = [])
+        return false if seen.include?(class_name)
+
+        parent = candidates.dig(class_name, :superclass)
+        return false unless parent
+        return true if model_base?(parent)
+
+        resolved = resolve_superclass(parent, class_name, candidates)
+        return false unless resolved
+
+        model_class?(resolved, candidates, seen + [ class_name ])
+      end
+
+      # ApplicationRecord, or the namespaced base a large app declares -
+      # GitLab has Ci::ApplicationRecord and SecApplicationRecord.
+      def model_base?(name)
+        name == "ActiveRecord::Base" || name.split("::").last.end_with?("ApplicationRecord")
+      end
+
+      # Ruby resolves a bare superclass from the enclosing namespace outward,
+      # so `Admin::Report < Post` means the top-level Post unless Admin
+      # declares one.
+      def resolve_superclass(name, from, candidates)
+        return name if candidates.key?(name)
+
+        scope = from.split("::")[0..-2]
+        while scope.any?
+          qualified = (scope + [ name ]).join("::")
+          return qualified if candidates.key?(qualified)
+
+          scope.pop
+        end
+        nil
+      end
 
       # Zeitwerk resolves a path through the app's own inflector, which the
       # static tier never loads, so camelizing invents `Activitypub::` for an

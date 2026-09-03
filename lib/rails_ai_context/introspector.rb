@@ -137,13 +137,30 @@ module RailsAiContext
     end
 
     def app_name
-      return File.basename(app.root.to_s) if app.is_a?(RailsAiContext::StaticApp)
+      return declared_app_name || File.basename(app.root.to_s) if app.is_a?(RailsAiContext::StaticApp)
 
       if app.class.respond_to?(:module_parent_name)
         app.class.module_parent_name
       else
         app.class.name.deconstantize
       end
+    end
+
+    # The module enclosing `class Application < Rails::Application` in
+    # config/application.rb - what the booted tier answers as
+    # module_parent_name. The directory is a different thing: it is
+    # "mastodon" for an app named Mastodon, and whatever the checkout was
+    # renamed to for any other.
+    def declared_app_name
+      source = RailsAiContext::SafeFile.read(File.join(app.root.to_s, "config", "application.rb"))
+      return nil unless source
+
+      declaration = Introspectors::DeclaredConstant.declarations(source)
+                      .find { |entry| entry.superclass == "Rails::Application" }
+      name = declaration&.name.to_s.deconstantize
+      name.empty? ? nil : name
+    rescue StandardError, ScriptError
+      nil
     end
 
     # Static tier: what an introspector answers is what it declared, so a

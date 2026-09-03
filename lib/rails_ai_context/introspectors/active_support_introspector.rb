@@ -63,6 +63,7 @@ module RailsAiContext
           modules = Dir.glob(File.join(dir, "**/*.rb")).sort.filter_map do |path|
             content = RailsAiContext::SafeFile.read(path) or next
             mod_name = File.basename(path, ".rb").camelize
+            next if RailsAiContext::ConcernMembership.excluded?(mod_name)
 
             ast = SourceIntrospector.walk(path, {
               concern_macros: -> { Listeners::GenericMacroListener.new(:included, :class_methods) }

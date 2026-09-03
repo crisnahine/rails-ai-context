@@ -141,6 +141,32 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       expect(result.success?).to be(true), result.to_s
     end
 
+    # The generated initializer holds a `configure` block, and the YAML used
+    # to be skipped whenever one had run - so an in-Gemfile app's
+    # .rails-ai-context.yml was inert on every booted command while
+    # `--no-boot` read it, and the two answers disagreed by two tools.
+    it "`tool --list` honours .rails-ai-context.yml beside the generated initializer" do
+      yml = File.join(@builder.app_path, ".rails-ai-context.yml")
+      init = File.join(@builder.app_path, "config", "initializers", "rails_ai_context.rb")
+      moved = "#{init}.precedence-moved"
+      File.write(yml, "---\nskip_tools:\n  - rails_query\n  - rails_read_logs\n")
+
+      with_block = @cli.cli("tool", "--list")
+      expect(with_block.success?).to be(true), with_block.to_s
+      expect(with_block.stdout).not_to match(/^\s+query\s/)
+      expect(with_block.stdout).not_to match(/^\s+read_logs\s/)
+
+      File.rename(init, moved)
+      without_block = @cli.cli("tool", "--list")
+      expect(without_block.success?).to be(true), without_block.to_s
+
+      names = ->(out) { out.scan(/^ {2}(\S+)\s{2,}/).flatten.sort }
+      expect(names.call(with_block.stdout)).to eq(names.call(without_block.stdout))
+    ensure
+      FileUtils.rm_f(File.join(@builder.app_path, ".rails-ai-context.yml"))
+      File.rename(moved, init) if moved && File.exist?(moved)
+    end
+
     it "an unknown command exits non-zero without a Thor deprecation warning" do
       result = @cli.cli("frobnicate")
       expect(result.success?).to be(false), result.to_s
