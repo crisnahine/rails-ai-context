@@ -193,7 +193,10 @@ class RailsAiContextCLI < Thor
     desc "doctor", "Run diagnostic checks and report AI readiness score"
     option :strict, type: :boolean, default: false, desc: "Exit 1 when any check fails (CI gate)"
     def doctor
-      boot_rails!(command: "doctor")
+      # Diagnosing a boot failure needs the app, so doctor never serves the
+      # static tier; it does read a source-only tree, to name what is missing.
+      boot_rails!(command: "doctor", allow_source_only: true,
+                  boot_failure_hint: "  doctor needs a bootable app; fix the boot error above first.")
       result = ::RailsAiContext::Doctor.new.run
       # The report is the command's product - it belongs on stdout so
       # `doctor > report.txt` captures it. stderr stays for errors only.
@@ -464,7 +467,10 @@ class RailsAiContextCLI < Thor
 
     # `command` is the name the user types, which the refusal message quotes
     # back; every caller states it rather than reading Thor's command chain.
-    def boot_rails!(command:, allow_static: false, no_boot: false)
+    # A command that needs more than the tier gives it says so here rather
+    # than being recognised by name.
+    def boot_rails!(command:, allow_static: false, no_boot: false, allow_source_only: allow_static,
+                    boot_failure_hint: nil)
       app_path_opt = @app_path_override || options[:app_path]
       environment_opt = @environment_override || options[:environment]
       app_root = File.expand_path(app_path_opt || Dir.pwd)
@@ -476,11 +482,11 @@ class RailsAiContextCLI < Thor
       # A command that can serve the static tier reads a source-only tree
       # instead of refusing it.
       outcome = entry_boot.call(root: Dir.pwd, allow_static: allow_static, no_boot: no_boot || options[:no_boot],
-                                allow_source_only: allow_static || command == "doctor", command: command)
+                                allow_source_only: allow_source_only, command: command)
       outcome.messages.each { |line| $stderr.puts line }
       return unless outcome.tier == :absent
 
-      $stderr.puts "  doctor needs a bootable app; fix the boot error above first." if command == "doctor" && outcome.reason
+      $stderr.puts boot_failure_hint if boot_failure_hint && outcome.reason
       exit 1
     end
 
