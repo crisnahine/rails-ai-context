@@ -10,13 +10,11 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
   before do
     # Reset configuration state for each test
     RailsAiContext.configuration = RailsAiContext::Configuration.new
-    RailsAiContext.instance_variable_set(:@configured_via_block, false)
   end
 
   after do
     # Restore clean state so other specs don't see leaked config
     RailsAiContext.configuration = RailsAiContext::Configuration.new
-    RailsAiContext.instance_variable_set(:@configured_via_block, false)
   end
 
   describe ".load_from_yaml" do
@@ -308,17 +306,19 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
   end
 
   describe ".auto_load!" do
-    it "skips when configured_via_block? is true" do
+    # Every entry point loads the file; the keys a block assigned are what it
+    # keeps, so the same merge holds after the app's initializers have run.
+    it "keeps a key the block assigned and takes the rest from the file" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")
-        File.write(yaml_path, YAML.dump({ "tool_mode" => "cli" }))
+        File.write(yaml_path, YAML.dump({ "tool_mode" => "cli", "server_name" => "from-yaml" }))
 
         RailsAiContext.configure { |c| c.tool_mode = :mcp }
 
         RailsAiContext::Configuration.auto_load!(dir)
 
-        # Should stay at :mcp because configure block ran
         expect(config.tool_mode).to eq(:mcp)
+        expect(config.server_name).to eq("from-yaml")
       end
     end
 
@@ -354,6 +354,46 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         expect(config.cache_ttl).to eq(120)
       end
     end
+
+    # `config.skip_tools << "..."` in an initializer is the idiom the gem's own
+    # remedy strings taught, and it survives only because the file is applied
+    # once, before those initializers run.
+    it "leaves an in-place edit alone on a second call" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"),
+                   YAML.dump({ "skip_tools" => [ "rails_console" ] }))
+
+        RailsAiContext::Configuration.auto_load!(dir)
+        config.skip_tools << "rails_query"
+        RailsAiContext::Configuration.auto_load!(dir)
+
+        expect(config.skip_tools).to contain_exactly("rails_console", "rails_query")
+      end
+    end
+
+    it "reads the file again for a fresh configuration" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "cache_ttl" => 120 }))
+
+        RailsAiContext::Configuration.auto_load!(dir)
+        RailsAiContext.configuration = RailsAiContext::Configuration.new
+        RailsAiContext::Configuration.auto_load!(dir)
+
+        expect(RailsAiContext.configuration.cache_ttl).to eq(120)
+      end
+    end
+
+    # The file is read once, at boot: a config file that appears mid-process is
+    # not picked up by a later call.
+    it "does not read a file written after the first call" do
+      Dir.mktmpdir do |dir|
+        RailsAiContext::Configuration.auto_load!(dir)
+        File.write(File.join(dir, ".rails-ai-context.yml"), YAML.dump({ "cache_ttl" => 120 }))
+        RailsAiContext::Configuration.auto_load!(dir)
+
+        expect(config.cache_ttl).to eq(60)
+      end
+    end
   end
 
   describe ".load_config_file!" do
@@ -384,16 +424,46 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         expect(config.skip_tools).to eq([ "rails_query" ])
       end
     end
-  end
 
-  describe "RailsAiContext.configured_via_block?" do
-    it "returns false before any configure call" do
-      expect(RailsAiContext.configured_via_block?).to eq(false)
+    # The engine loads the file on every in-Gemfile boot, and File.exist? is
+    # true for a directory or a file the process cannot read.
+    it "keeps the defaults when a directory sits at the config file's path" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".rails-ai-context.yml"))
+
+        expect { RailsAiContext::Configuration.load_config_file!(dir) }.not_to raise_error
+        expect(config.tool_mode).to eq(:mcp)
+      end
     end
 
-    it "returns true after configure block" do
-      RailsAiContext.configure { |_c| }
-      expect(RailsAiContext.configured_via_block?).to eq(true)
+    # A block in config/application.rb or config/environments/*.rb runs before
+    # the engine's file load, so precedence cannot depend on placement.
+    it "keeps a key the block set even when the file loads afterwards" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"),
+                   YAML.dump({ "skip_tools" => [ "rails_query" ], "server_name" => "from-yaml" }))
+
+        RailsAiContext.configure { |c| c.skip_tools = [ "rails_console" ] }
+        RailsAiContext::Configuration.load_config_file!(dir)
+
+        expect(config.skip_tools).to eq([ "rails_console" ])
+        expect(config.server_name).to eq("from-yaml")
+      end
+    end
+
+    # A preset is how a block usually sets introspectors, so it has to claim
+    # that key too.
+    it "keeps the introspectors a block's preset chose" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, ".rails-ai-context.yml")
+        File.write(path, YAML.dump({ "introspectors" => [ "schema" ], "server_name" => "from-yaml" }))
+
+        RailsAiContext.configure { |c| c.preset = :standard }
+        RailsAiContext::Configuration.load_from_yaml(path)
+
+        expect(config.introspectors).to eq(RailsAiContext::Configuration::PRESETS[:standard])
+        expect(config.server_name).to eq("from-yaml")
+      end
     end
   end
 

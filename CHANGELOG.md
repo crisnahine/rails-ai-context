@@ -30,8 +30,12 @@ duplicated mechanisms behind them.
   initializer holds a `configure` block, and the YAML was skipped whenever one
   had run, so a booted command took the defaults while `--no-boot` read the
   file and the two disagreed (45 tools against 43 with `skip_tools` set).
-  Precedence is a merge: the engine now loads the YAML before
-  `config/initializers`, and a block overrides it key by key.
+  Precedence is a merge: the file is applied once, before
+  `config/initializers`, so an initializer may assign a key or edit it in
+  place and both survive; a later call from the standalone binary or the
+  CLI's boot path is a no-op. A block wins the keys it assigns wherever it
+  lives, so one in `config/application.rb` or an environment file, which runs
+  before the load, keeps them too.
 - **The static tier named the app after its directory.** `onboard` and every
   generated context file were headed "mastodon" for an app that declares
   `module Mastodon`. The name now comes from the module enclosing
@@ -43,6 +47,15 @@ duplicated mechanisms behind them.
   against 117 booted). A static model is now a class whose superclass chain
   reaches `ApplicationRecord`, a namespaced `*ApplicationRecord` or
   `ActiveRecord::Base`, STI subclasses included.
+- **An unreadable `.rails-ai-context.yml` aborted the boot.** A directory or a
+  file the process cannot read at that path raised out of the engine
+  initializer; it now warns and keeps the defaults, the way broken YAML does.
+- **A model under a per-connection abstract base was missing from the static
+  list.** The multi-database shape - `class AnimalsRecord < ApplicationRecord;
+  self.abstract_class = true` in its own file, then `class Dog <
+  AnimalsRecord` - dropped every model on that connection from the static
+  list, the count and the schema listing. An abstract base is still walked so
+  chains resolve through it; it is left out of the result, as before.
 - **`rails_get_api` stated a filesystem finding for a section nobody had
   read.** In the static tier the whole section but the mode was declared
   unavailable, and nothing read that declaration, so an app with

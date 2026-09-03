@@ -67,6 +67,10 @@ module RailsAiContext
             next
           end
 
+          # An abstract base is dropped from the result but not from the walk:
+          # a per-connection base like Analytics::Record is how its models
+          # reach ApplicationRecord.
+          next if candidate[:abstract]
           next unless model_class?(class_name, candidates)
 
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file])
@@ -91,7 +95,7 @@ module RailsAiContext
             next if File.size(record.path) > RailsAiContext.configuration.max_file_size
 
             source = model_source(record.path)
-            next if source.nil? || mixin_path?(record.path_name.underscore, source) || abstract_class?(source)
+            next if source.nil? || mixin_path?(record.path_name.underscore, source)
 
             declarations = DeclaredConstant.declarations(source)
             class_name = declarations.map(&:name).find { |name| name.casecmp?(record.path_name) } || record.path_name
@@ -101,7 +105,8 @@ module RailsAiContext
             found[class_name] = {
               path: record.path,
               file: record.file,
-              superclass: declarations.find { |d| d.name == class_name }&.superclass
+              superclass: declarations.find { |d| d.name == class_name }&.superclass,
+              abstract: abstract_class?(source)
             }
           rescue => e
             found[record.path_name] = { error: e.message }
@@ -109,10 +114,9 @@ module RailsAiContext
         end
       end
 
-      # A model is a class whose superclass chain reaches a model base. A
-      # module declares no class and never gets here; a form object, a filter
-      # or a namespaced calculator has no superclass or a superclass that is
-      # not one, and the static tier used to report all of them as models.
+      # A model is a class whose superclass chain reaches a model base. A form
+      # object, a filter or a namespaced calculator under app/models has no
+      # superclass, or one the chain never resolves, so it is not a model.
       def model_class?(class_name, candidates, seen = [])
         return false if seen.include?(class_name)
 
@@ -155,10 +159,10 @@ module RailsAiContext
         DeclaredConstant.resolve(source, path_name)
       end
 
-      # The booted tier rejects `abstract_class?`, and a namespaced base class -
-      # GitLab has Ci::ApplicationRecord, PackageMetadata::ApplicationRecord and
-      # SecApplicationRecord - is one. Excluding only the root
-      # application_record by path gave the same app two model counts.
+      # The booted tier rejects `abstract_class?`, so the static tier must too
+      # or the same app gets two model counts. A namespaced base is one of
+      # these - GitLab has Ci::ApplicationRecord and SecApplicationRecord - and
+      # the root application_record is not the only one to leave out.
       def abstract_class?(source)
         source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/)
       end

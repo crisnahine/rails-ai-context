@@ -746,6 +746,37 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result.keys).to contain_exactly("Widget")
       end
     end
+
+    # The multi-database guide's own shape: a per-connection abstract base in
+    # its own file, with the connection's models under it. Dropping the base
+    # from the walk loses every model on that connection.
+    it "still reaches a model whose base is an abstract class in another file" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "analytics"))
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "analytics", "record.rb"), <<~RUBY)
+          module Analytics
+            class Record < ApplicationRecord
+              self.abstract_class = true
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "analytics", "event.rb"), <<~RUBY)
+          module Analytics
+            class Event < Record
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Analytics::Event")
+      end
+    end
   end
 
   # Rebuilding app/models/<underscored>.rb from the name is wrong for a model

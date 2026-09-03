@@ -31,7 +31,7 @@ module RailsAiContext
         fetch_section(:frontend_frameworks, unusable_message:
           "No frontend framework data available. Ensure the :frontend_frameworks introspector is enabled in your " \
           "rails_ai_context configuration.\n\n" \
-          "Example:\n```ruby\nRailsAiContext.configure do |config|\n  config.introspectors << :frontend_frameworks\nend\n```") do |data|
+          "Example:\n```ruby\nRailsAiContext.configure do |config|\n  config.introspectors += [ :frontend_frameworks ]\nend\n```") do |data|
           case detail
           when "summary"
             text_response(build_summary(data))

@@ -39,7 +39,7 @@ preset: full
 ### Precedence
 
 > [!IMPORTANT]
-> Initializer > YAML > Defaults, merged key by key. The YAML loads first, then an initializer's `configure` block overrides the keys it sets; a key the block never sets keeps the YAML value. Corrupted YAML degrades gracefully with a warning.
+> `configure` block > YAML > Defaults, merged key by key. The file is read once, at boot, before `config/initializers`, so an initializer may assign a key or edit it in place (`config.skip_tools << "rails_query"`) and both survive. A block that runs *before* the file - in `config/application.rb` or an environment file - must assign a key to keep it (`config.skip_tools = ["rails_query"]`), because an in-place edit there is replaced when the file loads. A key no block assigns keeps the YAML value. Corrupted YAML degrades gracefully with a warning.
 
 ---
 
