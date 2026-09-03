@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Defects found by a second survey round over the whole surface, and the
 duplicated mechanisms behind them.
 
+- **The static tier counted every class under `app/models` as a model.**
+  Namespace modules, form objects, filters and plain service classes were
+  listed and rendered as models of a table (Mastodon answered 195 models
+  against 117 booted). A static model is now a class whose superclass chain
+  reaches `ApplicationRecord`, a namespaced `*ApplicationRecord` or
+  `ActiveRecord::Base`, STI subclasses included.
 - **`rails_get_api` stated a filesystem finding for a section nobody had
   read.** In the static tier the whole section but the mode was declared
   unavailable, and nothing read that declaration, so an app with

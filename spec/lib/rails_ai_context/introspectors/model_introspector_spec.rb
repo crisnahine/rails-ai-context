@@ -511,6 +511,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(result["User"][:associations]).not_to be_empty
       end
     end
+
+    it "counts only classes descending from a model base, STI included" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "form"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "trends"))
+        File.write(File.join(dir, "app", "models", "post.rb"),
+                   "class Post < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "admin", "report.rb"),
+                   "class Admin::Report < Post\nend\n")
+        File.write(File.join(dir, "app", "models", "form", "batch.rb"),
+                   "class Form::Batch\n  include ActiveModel::Model\nend\n")
+        File.write(File.join(dir, "app", "models", "admin.rb"),
+                   "module Admin\nend\n")
+        File.write(File.join(dir, "app", "models", "trends", "statuses.rb"),
+                   "class Trends::Statuses\n  def call = nil\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Post", "Admin::Report")
+      end
+    end
   end
 
   describe "Mongoid apps" do
