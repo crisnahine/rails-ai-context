@@ -161,6 +161,7 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       expect(with_edit.stdout).not_to match(/^\s+query\s/)
       expect(with_edit.stdout).not_to match(/^\s+read_logs\s/)
       expect(with_edit.stdout).not_to match(/^\s+gems\s/)
+      expect(with_edit.stdout).to match(/^\s+schema\s/)
 
       File.write(init, original_init)
       with_block = @cli.cli("tool", "--list")
