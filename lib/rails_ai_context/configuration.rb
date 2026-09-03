@@ -39,6 +39,7 @@ module RailsAiContext
         key_sym = key.to_sym
         next unless YAML_KEYS.include?(key_sym)
         next if value.nil?
+        next if config.block_assigned_keys.include?(key_sym)
 
         begin
           config.public_send(:"#{key_sym}=", coerce_value(key_sym, value))
@@ -56,10 +57,9 @@ module RailsAiContext
     end
 
     # Load .rails-ai-context.yml as the base over the defaults. Safe to call
-    # multiple times (idempotent). The engine calls this before the app's
-    # config/initializers, so a configure block there overrides it key by key
-    # and a key the block never mentions keeps what the file said - the
-    # documented precedence is a merge, not a winner.
+    # multiple times (idempotent). Precedence is a merge: a configure block
+    # wins the keys it assigned and a key it never mentions keeps what the
+    # file said, whichever of the two ran first.
     def self.load_config_file!(dir = nil)
       dir ||= defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
       yaml_path = File.join(dir, CONFIG_FILENAME)
@@ -88,6 +88,28 @@ module RailsAiContext
       end
     end
     private_class_method :coerce_value
+
+    # Keys a `RailsAiContext.configure` block assigned. The YAML load skips
+    # them, so the block wins key by key whether it sits in an initializer,
+    # config/application.rb or an environment file.
+    def block_assigned_keys
+      @block_assigned_keys ||= []
+    end
+
+    # Comparing the instance variables around the block records the keys
+    # without a writer per attribute.
+    def recording_block_assignments
+      recorded = block_assigned_keys
+      before = instance_variables.to_h { |name| [ name, instance_variable_get(name) ] }
+
+      yield self
+
+      instance_variables.each do |name|
+        next if before.key?(name) && before[name] == instance_variable_get(name)
+
+        recorded << name.to_s.delete_prefix("@").to_sym
+      end
+    end
 
     PRESETS = {
       standard: %i[schema models routes jobs gems conventions controllers tests migrations stimulus

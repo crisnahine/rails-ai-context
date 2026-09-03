@@ -39,7 +39,7 @@ preset: full
 ### Precedence
 
 > [!IMPORTANT]
-> Initializer > YAML > Defaults, merged key by key. The YAML loads first, then an initializer's `configure` block overrides the keys it sets; a key the block never sets keeps the YAML value. Corrupted YAML degrades gracefully with a warning.
+> `configure` block > YAML > Defaults, merged key by key. A block wins the keys it assigns and a key it never sets keeps the YAML value, wherever the block sits - an initializer, `config/application.rb` or an environment file, before or after the file loads. Corrupted YAML degrades gracefully with a warning.
 
 ---
 

@@ -384,6 +384,21 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         expect(config.skip_tools).to eq([ "rails_query" ])
       end
     end
+
+    # A block in config/application.rb or config/environments/*.rb runs before
+    # the engine's file load, so precedence cannot depend on placement.
+    it "keeps a key the block set even when the file loads afterwards" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".rails-ai-context.yml"),
+                   YAML.dump({ "skip_tools" => [ "rails_query" ], "server_name" => "from-yaml" }))
+
+        RailsAiContext.configure { |c| c.skip_tools = [ "rails_console" ] }
+        RailsAiContext::Configuration.load_config_file!(dir)
+
+        expect(config.skip_tools).to eq([ "rails_console" ])
+        expect(config.server_name).to eq("from-yaml")
+      end
+    end
   end
 
   describe "RailsAiContext.configured_via_block?" do

@@ -47,7 +47,7 @@ module RailsAiContext
 
     def configure
       @configured_via_block = true
-      yield(configuration)
+      configuration.recording_block_assignments { |config| yield(config) }
     end
 
     def configured_via_block?

@@ -31,7 +31,9 @@ duplicated mechanisms behind them.
   had run, so a booted command took the defaults while `--no-boot` read the
   file and the two disagreed (45 tools against 43 with `skip_tools` set).
   Precedence is a merge: the engine now loads the YAML before
-  `config/initializers`, and a block overrides it key by key.
+  `config/initializers`, and a block overrides it key by key. A block placed
+  in `config/application.rb` or an environment file runs before that load and
+  still wins the keys it assigns.
 - **The static tier named the app after its directory.** `onboard` and every
   generated context file were headed "mastodon" for an app that declares
   `module Mastodon`. The name now comes from the module enclosing
