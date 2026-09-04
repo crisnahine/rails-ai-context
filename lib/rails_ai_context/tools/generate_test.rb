@@ -39,6 +39,8 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      MAX_ANCESTRY_WALK = 5
+
       def self.call(model: nil, controller: nil, file: nil, type: "unit", server_context: nil)
         unless model || controller || file
           return text_response("Provide at least one of: `model`, `controller`, or `file`.")
@@ -470,7 +472,7 @@ module RailsAiContext
           lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
           lines << "class #{ctrl_class}Test < ActionDispatch::IntegrationTest"
 
-          lines << "  include Devise::Test::IntegrationHelpers" if devise_app?(tests_data)
+          lines.concat(minitest_auth_lines(tests_data))
 
           setup = minitest_setup_lines(res, tests_data)
           if setup.any?
@@ -496,10 +498,21 @@ module RailsAiContext
           text_response(lines.join("\n"))
         end
 
+        # The Devise include is a fact about the app; the sign_in is only
+        # emitted when the app owns a users fixture to sign in.
+        def minitest_auth_lines(tests_data)
+          return [] unless devise_app?(tests_data)
+
+          lines = [ "  include Devise::Test::IntegrationHelpers" ]
+          unless fixture_key_for("users", tests_data)
+            lines << "  # TODO: these tests run unauthenticated; sign_in a user built from this app's own test data"
+          end
+          lines
+        end
+
         def minitest_setup_lines(res, tests_data)
           lines = []
-          if devise_app?(tests_data)
-            user_key = fixture_key_for("users", tests_data) || "one"
+          if devise_app?(tests_data) && (user_key = fixture_key_for("users", tests_data))
             lines << "@user = users(:#{user_key})"
             lines << "sign_in @user"
           end
@@ -656,13 +669,7 @@ module RailsAiContext
           lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
           lines << "RSpec.describe \"#{ctrl_class}\", type: :request do"
 
-          if devise_app?(tests_data)
-            lines << "  include Devise::Test::IntegrationHelpers"
-            lines << ""
-            lines << "  let(:user) { create(:user) }"
-            lines << "  before { sign_in user }"
-            lines << ""
-          end
+          lines.concat(rspec_auth_lines(ctrl_class, tests_data))
 
           subject_expr = rspec_subject_lines(lines, res, factory)
           attrs_available = rspec_attributes_lines(lines, res, factory)
@@ -682,6 +689,43 @@ module RailsAiContext
           lines << "end"
           lines << "```"
           text_response(lines.join("\n"))
+        end
+
+        # Auth setup for a request spec. sign_in cannot authenticate a
+        # Doorkeeper endpoint, and it needs a user the app can actually build,
+        # so each missing piece degrades to a TODO instead of a fabricated call.
+        def rspec_auth_lines(ctrl_class, tests_data)
+          if doorkeeper_controller?(ctrl_class)
+            [ "  # TODO: these examples run unauthenticated; #{ctrl_class} authorizes with Doorkeeper, so pass a bearer token", "" ]
+          elsif devise_app?(tests_data)
+            lines = [ "  include Devise::Test::IntegrationHelpers", "" ]
+            if (user_factory = find_factory_name("User", tests_data))
+              lines << "  let(:user) { create(:#{user_factory}) }"
+              lines << "  before { sign_in user }"
+            else
+              lines << "  # TODO: these examples run unauthenticated; build a user from this app's own test data and sign_in it"
+            end
+            lines << ""
+          else
+            []
+          end
+        end
+
+        # Doorkeeper is usually authorized from a lambda filter, which the
+        # controller payload drops, so the class bodies are read instead.
+        # The call commonly lives in an API base class, hence the walk up.
+        def doorkeeper_controller?(ctrl_class)
+          controllers = ((cached_context[:controllers] || {})[:controllers] || {})
+          name = ctrl_class
+          MAX_ANCESTRY_WALK.times do
+            info = controllers[name]
+            return false unless info.is_a?(Hash)
+            source = info[:file] && RailsAiContext::SafeFile.read(File.join(rails_app.root, info[:file]))
+            return true if source&.include?("doorkeeper_authorize!")
+
+            name = info[:parent_class]
+          end
+          false
         end
 
         # Emits the subject let and returns the expression tests use to

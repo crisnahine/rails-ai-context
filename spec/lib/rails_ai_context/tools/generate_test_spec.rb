@@ -268,4 +268,77 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).to include("RSpec.describe Post")
     end
   end
+
+  describe "authentication setup for a Devise app" do
+    def devise_context(framework:, tests: {}, controllers: {})
+      {
+        tests: {
+          framework: framework,
+          test_helper_setup: [ "Devise::Test::IntegrationHelpers" ]
+        }.merge(tests),
+        models: {},
+        controllers: { controllers: controllers },
+        routes: { by_controller: { "posts" => [ { verb: "GET", path: "/posts", action: "index" } ] } }
+      }
+    end
+
+    def generated(context)
+      allow(described_class).to receive(:cached_context).and_return(context)
+      described_class.call(controller: "PostsController").content.first[:text]
+    end
+
+    it "does not call a user factory the app does not have" do
+      text = generated(devise_context(framework: "rspec", tests: { factories: nil, factory_names: nil }))
+      expect(text).to include("include Devise::Test::IntegrationHelpers")
+      expect(text).not_to include("create(:user)")
+      expect(text).not_to include("before { sign_in user }")
+      expect(text).to include("# TODO: these examples run unauthenticated")
+    end
+
+    it "keeps the sign_in block when a user factory exists" do
+      text = generated(devise_context(
+        framework: "rspec",
+        tests: { factories: { location: "spec/factories", count: 1 }, factory_names: { "users.rb" => [ :user ] } }
+      ))
+      expect(text).to include("let(:user) { create(:user) }")
+      expect(text).to include("before { sign_in user }")
+    end
+
+    it "does not name a users fixture the app does not have" do
+      text = generated(devise_context(framework: "minitest", tests: { fixtures: nil, fixture_names: nil }))
+      expect(text).to include("include Devise::Test::IntegrationHelpers")
+      expect(text).not_to include("users(:one)")
+      expect(text).not_to include("setup do")
+      expect(text).to include("# TODO: these tests run unauthenticated")
+    end
+
+    it "keeps the fixture sign_in when a users fixture exists" do
+      text = generated(devise_context(framework: "minitest", tests: { fixture_names: { "users" => [ "alice" ] } }))
+      expect(text).to include("@user = users(:alice)")
+      expect(text).to include("sign_in @user")
+    end
+
+    it "skips sign_in for a controller whose ancestry authorizes with Doorkeeper" do
+      path = File.join(Rails.root, "app/controllers/doorkeeper_base_stub_controller.rb")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, <<~RUBY)
+        class DoorkeeperBaseStubController < ActionController::API
+          before_action -> { doorkeeper_authorize! :read }
+        end
+      RUBY
+
+      text = generated(devise_context(
+        framework: "rspec",
+        tests: { factories: { location: "spec/factories", count: 1 }, factory_names: { "users.rb" => [ :user ] } },
+        controllers: {
+          "PostsController" => { parent_class: "DoorkeeperBaseStubController", file: "app/controllers/posts_controller.rb" },
+          "DoorkeeperBaseStubController" => { file: "app/controllers/doorkeeper_base_stub_controller.rb" }
+        }
+      ))
+      expect(text).not_to include("sign_in")
+      expect(text).to include("Doorkeeper")
+    ensure
+      FileUtils.rm_f(path)
+    end
+  end
 end

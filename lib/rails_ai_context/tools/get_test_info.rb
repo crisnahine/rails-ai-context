@@ -301,7 +301,14 @@ module RailsAiContext
           lines << ""
           lines << "  describe \"#method_name\" do"
           lines << "    it \"does something\" do"
-          lines << "      record = create(:model_name)"
+          if data[:factories]
+            lines << "      record = create(:model_name)"
+          else
+            # A template headed "follow this pattern" must not hand factory_bot
+            # syntax to an app that has no factories.
+            lines << "      # TODO: build the record with this app's own test data"
+            lines << "      record = ModelName.new"
+          end
           lines << "      expect(record.method_name).to eq(expected)"
           lines << "    end"
           lines << "  end"

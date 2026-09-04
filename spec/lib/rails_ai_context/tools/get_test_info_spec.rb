@@ -60,6 +60,21 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
     end
   end
 
+  describe "the test template" do
+    it "shows a factory call when the app has factories" do
+      text = described_class.call.content.first[:text]
+      expect(text).to include("record = create(:model_name)")
+    end
+
+    it "does not show a factory call when the app has no factories" do
+      allow(described_class).to receive(:cached_context)
+        .and_return({ tests: test_data.merge(factories: nil, factory_names: nil) })
+      text = described_class.call.content.first[:text]
+      expect(text).not_to include("create(:model_name)")
+      expect(text).to include("record = ModelName.new")
+    end
+  end
+
   describe ".call with detail:summary" do
     it "returns compact summary with counts" do
       result = described_class.call(detail: "summary")
