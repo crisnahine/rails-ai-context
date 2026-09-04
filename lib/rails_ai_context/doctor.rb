@@ -45,7 +45,7 @@ module RailsAiContext
     def run
       results = CHECKS.filter_map do |check|
         send(check)
-      rescue StandardError => e
+      rescue StandardError, ScriptError => e
         $stderr.puts "[rails-ai-context] Doctor check #{check} failed: #{e.class}: #{e.message}"
         nil
       end
@@ -392,30 +392,47 @@ module RailsAiContext
 
     def check_introspector_health
       config = RailsAiContext.configuration
-      errors = []
+      introspector = RailsAiContext::Introspector.new(app)
+      failures = []
 
       config.introspectors.each do |name|
-        begin
-          result = RailsAiContext::Introspector.new(app).send(:resolve_introspector, name).call
-          errors << name.to_s if result.is_a?(Hash) && result[:error]
-        rescue => e
-          errors << "#{name} (#{e.message.truncate(50)})"
-        end
+        result = introspector.send(:resolve_introspector, name).call
+        failures << [ name.to_s, result[:error].to_s ] if result.is_a?(Hash) && result[:error]
+      rescue StandardError, ScriptError => e
+        # ScriptError included: a syntax-broken app file must cost one
+        # introspector, not the diagnosis the user ran doctor for.
+        failures << [ name.to_s, "#{e.class}: #{e.message}" ]
       end
 
-      if errors.empty?
+      if failures.empty?
         Check.new(name: "Introspector health", status: :pass,
           message: "All #{count_phrase(config.introspectors.size, "introspector")} return data " \
             "(these feed the #{count_phrase(Server.builtin_tools.size, "MCP tool")})",
           fix: nil)
       else
         Check.new(name: "Introspector health", status: :warn,
-          message: "#{count_phrase(errors.size, "introspector")} returned errors: #{errors.join(', ')}",
-          fix: "Check if the app has the required features (e.g., stimulus needs app/javascript/controllers/)")
+          message: "#{count_phrase(failures.size, "introspector")} returned errors: #{failures.map(&:first).join(', ')}",
+          fix: introspector_failure_hint(failures))
       end
-    rescue => e
+    rescue StandardError, ScriptError => e
       $stderr.puts "[rails-ai-context] check_introspector_health failed: #{e.message}" if ENV["DEBUG"]
       nil
+    end
+
+    MAX_SHOWN_FAILURES = 3
+
+    def introspector_failure_hint(failures)
+      shown = failures.first(MAX_SHOWN_FAILURES).map { |name, message| "#{name}: #{first_error_line(message)}" }
+      remaining = failures.size - MAX_SHOWN_FAILURES
+      shown << "and #{count_phrase(remaining, "more introspector")}" if remaining.positive?
+      shown.join("; ")
+    end
+
+    # Plain slicing, not truncate: this runs on the rescue path, where an
+    # app without ActiveSupport's core_ext loaded would lose the whole check.
+    def first_error_line(message)
+      line = message.to_s.lines.first.to_s.strip
+      line.length > 120 ? "#{line[0, 117]}..." : line
     end
 
     def check_preset_coverage
