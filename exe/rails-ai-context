@@ -272,12 +272,17 @@ class RailsAiContextCLI < Thor
       require_relative "../lib/rails_ai_context/presets"
 
       unless name && ::RailsAiContext::Presets.resolve(name)
-        $stderr.puts "Unknown preset: #{name}\n\n" if name
-        $stderr.print ::RailsAiContext::Presets.listing(invocation: ->(k) { "rails-ai-context preset #{k}" })
-        # Bare `preset` is a listing request (exit 0); a name that matches no
-        # preset is an input error, so scripts get a non-zero exit.
-        exit 1 if name
-        return
+        listing = ::RailsAiContext::Presets.listing(invocation: ->(k) { "rails-ai-context preset #{k}" })
+        # Bare `preset` is a listing request: stdout, exit 0. A name that
+        # matches no preset is an input error, so its framing and its copy of
+        # the listing go to stderr and scripts get a non-zero exit.
+        unless name
+          puts listing
+          return
+        end
+        $stderr.puts "Unknown preset: #{name}\n\n"
+        $stderr.print listing
+        exit 1
       end
 
       boot_rails!(command: "preset", allow_static: true)
