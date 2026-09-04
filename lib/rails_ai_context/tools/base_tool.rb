@@ -508,17 +508,24 @@ module RailsAiContext
             keys.find { |k| k.to_s.downcase == q.classify.downcase }
         end
 
+        # `\b` is a word/non-word transition, so it cannot fire beside a pattern
+        # edge that is already non-word: `reblog?\b` never matches `def reblog?`
+        # and `\b@user` never matches `@user = 1`. Escape the pattern, then add
+        # each boundary only on the side whose edge is a word character.
+        def leading_boundary(pattern)
+          pattern.match?(/\A\w/) ? "\\b" : ""
+        end
+
+        def trailing_boundary(pattern)
+          pattern.match?(/\w\z/) ? "\\b" : ""
+        end
+
         # Extract method source from a source string via indentation-based matching.
         # Returns { code:, start_line:, end_line: } or nil. Shared by get_callbacks, get_concern.
         def extract_method_source_from_string(source, method_name)
           source_lines = source.lines
-          escaped = Regexp.escape(method_name.to_s)
-          # ? and ! ARE word boundaries, so skip \b after them
-          pattern = if method_name.to_s.end_with?("?", "!")
-            /\A\s*def\s+#{escaped}/
-          else
-            /\A\s*def\s+#{escaped}\b/
-          end
+          name = method_name.to_s
+          pattern = /\A\s*def\s+#{Regexp.escape(name)}#{trailing_boundary(name)}/
           start_idx = source_lines.index { |l| l.match?(pattern) }
           return nil unless start_idx
 

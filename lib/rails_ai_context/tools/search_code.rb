@@ -40,7 +40,7 @@ module RailsAiContext
           },
           exact_match: {
             type: "boolean",
-            description: "Match whole words only (wraps pattern in \\b word boundaries). Default: false."
+            description: "Match the pattern literally, whole-word where its edges are word characters. `def reblog?` will not match `def reblog`. Default: false."
           },
           exclude_tests: {
             type: "boolean",
@@ -100,15 +100,17 @@ module RailsAiContext
         when "definition"
           cleaned = pattern.sub(/\A\s*def\s+/, "")
           escaped = Regexp.escape(cleaned)
-          exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}\\b" : "^\\s*def\\s+(self\\.)?#{escaped}"
+          # `def\s+` already anchors the left edge, so only a trailing boundary.
+          exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}#{trailing_boundary(cleaned)}" : "^\\s*def\\s+(self\\.)?#{escaped}"
         when "class"
           cleaned = pattern.sub(/\A\s*(class|module)\s+/, "")
           escaped = Regexp.escape(cleaned)
-          exact_match ? "^\\s*(class|module)\\s+\\w*#{escaped}\\b" : "^\\s*(class|module)\\s+\\w*#{escaped}"
+          # `\w*` stays unbounded so a CamelCase prefix still resolves.
+          exact_match ? "^\\s*(class|module)\\s+\\w*#{escaped}#{trailing_boundary(cleaned)}" : "^\\s*(class|module)\\s+\\w*#{escaped}"
         when "call"
-          exact_match ? "\\b#{pattern}\\b" : pattern
+          exact_match ? exact_pattern(pattern) : pattern
         else
-          exact_match ? "\\b#{pattern}\\b" : pattern
+          exact_match ? exact_pattern(pattern) : pattern
         end
 
         # Validate regex syntax early
@@ -189,6 +191,12 @@ module RailsAiContext
           }.join("\n")
           text_response("#{header}\n```\n#{output}\n```#{pagination}")
         end
+      end
+
+      # A literal, whole-word pattern: the user's text is regex source
+      # otherwise, so `def reblog?` would match `def reblog` too.
+      private_class_method def self.exact_pattern(pattern)
+        "#{leading_boundary(pattern)}#{Regexp.escape(pattern)}#{trailing_boundary(pattern)}"
       end
 
       # "> " for match lines, "  " for context lines; empty when the result
@@ -364,9 +372,8 @@ module RailsAiContext
         search_path = path ? File.join(root, path) : root
         lines = [ "# Trace: `#{cleaned}`", "" ]
 
-        # 1. Find the definition (no \b after ? or ! since they ARE word boundaries)
-        def_pattern = "^\\s*def\\s+(self\\.)?#{Regexp.escape(cleaned)}"
-        def_pattern += "\\b" unless cleaned.end_with?("?") || cleaned.end_with?("!")
+        # 1. Find the definition
+        def_pattern = "^\\s*def\\s+(self\\.)?#{Regexp.escape(cleaned)}#{trailing_boundary(cleaned)}"
         def_results = quick_search(def_pattern, search_path, root, 10, exclude_tests)
 
         if def_results.any?
@@ -410,11 +417,7 @@ module RailsAiContext
         end
 
         # 2. Find all callers (everywhere the method is referenced, excluding the def line)
-        call_pattern = if cleaned.end_with?("?") || cleaned.end_with?("!")
-          "#{Regexp.escape(cleaned)}"
-        else
-          "\\b#{Regexp.escape(cleaned)}\\b"
-        end
+        call_pattern = exact_pattern(cleaned)
         call_results = quick_search(call_pattern, search_path, root, max_results_cap, exclude_tests)
         callers = call_results.reject { |r| r[:content].match?(/\A\s*def\s/) }
 

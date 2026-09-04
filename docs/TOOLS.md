@@ -78,7 +78,7 @@ Search your codebase with regex, ripgrep acceleration, and sensitive file blocki
 | `path` | string | - | Subdirectory to search in (relative to Rails root) |
 | `match_type` | enum | `any` | `any`, `definition`, `class`, `call`, `trace` |
 | `file_type` | string | - | Filter by extension (`rb`, `erb`, `js`, etc.) |
-| `exact_match` | boolean | `false` | Word boundary matching |
+| `exact_match` | boolean | `false` | Literal, whole-word match. `def reblog?` does not match `def reblog` |
 | `exclude_tests` | boolean | `false` | Skip test/spec directories |
 | `group_by_file` | boolean | `false` | Group results by file with counts |
 

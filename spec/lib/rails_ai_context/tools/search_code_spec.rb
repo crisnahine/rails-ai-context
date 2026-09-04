@@ -3,6 +3,22 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Tools::SearchCode do
+  # Writes a throwaway app tree and points the memoized configuration at it.
+  # app_root must be put back or every later example searches a deleted dir.
+  def with_search_app(files)
+    previous_root = RailsAiContext.configuration.app_root
+    Dir.mktmpdir do |dir|
+      files.each do |rel, body|
+        FileUtils.mkdir_p(File.join(dir, File.dirname(rel)))
+        File.write(File.join(dir, rel), body)
+      end
+      RailsAiContext.configuration.app_root = dir
+      yield dir
+    end
+  ensure
+    RailsAiContext.configuration.app_root = previous_root
+  end
+
   describe ".call" do
     it "rejects invalid file_type with special characters" do
       result = described_class.call(pattern: "test", file_type: "rb;rm -rf /")
@@ -125,6 +141,132 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       traced = described_class.call(pattern: "display_url", match_type: "trace")
 
       expect(described_class.send(:definition_missing?, traced)).to be false
+    end
+  end
+
+  # `\b` is a word/non-word transition, so a pattern edge that is already
+  # non-word can carry neither an escape nor a boundary naively: the pattern
+  # has to be literal, and each `\b` added only where the edge is a word char.
+  describe "exact_match" do
+    let(:status_source) do
+      <<~RB
+        class Status
+          def reblog?
+            true
+          end
+
+          def reblog
+            nil
+          end
+
+          def check
+            reblog?
+          end
+
+          def other
+            reblog
+          end
+        end
+      RB
+    end
+
+    let(:foo_bar_source) do
+      <<~RB
+        class FooBar
+          def build
+            @user = 1
+          end
+        end
+      RB
+    end
+
+    [ true, false ].each do |with_ripgrep|
+      context(with_ripgrep ? "on the ripgrep backend" : "on the Ruby fallback backend") do
+        before do
+          allow(RailsAiContext).to receive(:tier).and_return(:static)
+          if with_ripgrep
+            skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+          else
+            allow(described_class).to receive(:ripgrep_available?).and_return(false)
+          end
+        end
+
+        def text_for(**kwargs)
+          described_class.call(context_lines: 0, **kwargs).content.first[:text]
+        end
+
+        it "matches the pattern literally instead of as a regex" do
+          with_search_app("app/models/status.rb" => status_source) do
+            text = text_for(pattern: "def reblog?", exact_match: true)
+
+            expect(text).to include("status.rb:2")
+            expect(text).not_to include("status.rb:6")
+          end
+        end
+
+        it "finds a predicate definition with match_type definition" do
+          with_search_app("app/models/status.rb" => status_source) do
+            expect(text_for(pattern: "reblog?", match_type: "definition", exact_match: true))
+              .to include("status.rb:2")
+          end
+        end
+
+        it "matches literally with match_type call" do
+          with_search_app("app/models/status.rb" => status_source) do
+            text = text_for(pattern: "reblog?", match_type: "call", exact_match: true)
+
+            expect(text).to include("status.rb:11")
+            expect(text).not_to include("status.rb:15")
+          end
+        end
+
+        it "finds a pattern whose first character is not a word character" do
+          with_search_app("app/models/foo_bar.rb" => foo_bar_source) do
+            expect(text_for(pattern: "@user", exact_match: true)).to include("foo_bar.rb:3")
+          end
+        end
+
+        # The class branch keeps its leading `\w*` unbounded so a CamelCase
+        # prefix still resolves; a leading `\b` would forbid that.
+        it "still finds a class whose name carries a word prefix" do
+          with_search_app("app/models/foo_bar.rb" => foo_bar_source) do
+            expect(text_for(pattern: "Bar", match_type: "class", exact_match: true))
+              .to include("foo_bar.rb:1")
+          end
+        end
+      end
+    end
+  end
+
+  describe "trace mode call sites" do
+    let(:saver_source) do
+      <<~RB
+        class Saver
+          def save!
+            true
+          end
+
+          def presave!
+            nil
+          end
+
+          def run
+            presave!
+            save!
+          end
+        end
+      RB
+    end
+
+    it "does not list a longer method name as a call site of a bang method" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      with_search_app("app/models/saver.rb" => saver_source) do
+        text = described_class.call(pattern: "save!", match_type: "trace").content.first[:text]
+
+        expect(text).to include("12: save!")
+        expect(text).not_to include("11: presave!")
+      end
     end
   end
 

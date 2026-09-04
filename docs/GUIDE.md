@@ -664,7 +664,7 @@ Ripgrep-powered regex search across the codebase.
 | `path` | string | Subdirectory to search in (e.g. `app/models`, `config`). Default: entire app. |
 | `file_type` | string | Filter by file extension (e.g. `rb`, `erb`, `js`). Alphanumeric only. |
 | `match_type` | string | `any` (default), `definition` (def lines), `class` (class/module lines), `call` (call sites only), `trace` (**full picture** - definition with class context + source code + internal calls + sibling methods + callers with route chain + test coverage separated). |
-| `exact_match` | boolean | Match whole words only (wraps pattern in `\b` boundaries). Default: false. |
+| `exact_match` | boolean | Match the pattern literally, whole-word where its edges are word characters. `def reblog?` does not match `def reblog`. Default: false. |
 | `exclude_tests` | boolean | Exclude test/spec/features directories. Default: false. |
 | `group_by_file` | boolean | Group results by file with match counts. Default: false. |
 | `offset` | integer | Skip this many results for pagination. Default: 0. |
