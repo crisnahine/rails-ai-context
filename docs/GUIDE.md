@@ -1352,7 +1352,7 @@ end
 | `excluded_controllers` | Array | `DeviseController`, etc. | Controller classes hidden from listings |
 | `excluded_route_prefixes` | Array | `action_mailbox/`, `active_storage/`, etc. | Route controller prefixes hidden with `app_only` |
 | `excluded_association_names` | Array | 7 framework associations | Framework association names hidden from model output |
-| `excluded_concerns` | Array | framework regex patterns | Regex patterns for concerns to hide from model output |
+| `excluded_concerns` | Array of Regex or String | framework regex patterns | Patterns for concerns to hide. A YAML list replaces the framework defaults; the initializer's `+=` adds to them |
 | `excluded_filters` | Array | `verify_authenticity_token`, etc. | Framework filter names hidden from controller output |
 | `excluded_middleware` | Array | standard Rails middleware | Default middleware hidden from config output |
 | `search_extensions` | Array | `rb js erb yml yaml json ts tsx vue svelte haml slim` | File extensions the Ruby fallback searches (ripgrep, when installed, searches every file) |

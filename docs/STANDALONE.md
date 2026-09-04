@@ -92,12 +92,15 @@ skip_tools:
 
 ### YAML limitations
 
-Two config options are Ruby-only and can't be set via YAML:
+One config option is Ruby-only and can't be set via YAML:
 
-- `custom_tools` - requires Ruby class references
-- `excluded_concerns` - requires Regex objects
+- `custom_tools` - a tool class is a Ruby class reference, which a YAML file cannot name
 
-For these, use the initializer approach (in-Gemfile mode).
+For that one, use the initializer approach (in-Gemfile mode).
+
+Every other option is a YAML key, `excluded_concerns` included: write the patterns as strings and each is compiled at load. A YAML list replaces the framework defaults rather than adding to them, and a string is an unanchored pattern - see [Configuration](CONFIGURATION.md#filtering).
+
+A key the gem does not know warns on stderr and is ignored; the rest of the file still applies.
 
 ### Precedence
 

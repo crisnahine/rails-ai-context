@@ -17,6 +17,18 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
     RailsAiContext.configuration = RailsAiContext::Configuration.new
   end
 
+  def capture_stderr
+    captured = StringIO.new
+    orig_err = $stderr
+    begin
+      $stderr = captured
+      yield
+    ensure
+      $stderr = orig_err
+    end
+    captured.string
+  end
+
   describe ".load_from_yaml" do
     it "loads ai_tools and tool_mode from YAML" do
       Dir.mktmpdir do |dir|
@@ -107,7 +119,43 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
       end
     end
 
-    it "ignores unknown keys" do
+    it "sets excluded_concerns from YAML strings and hides the concern" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({ "excluded_concerns" => %w[Publishable] }))
+
+        RailsAiContext::Configuration.load_from_yaml(yaml_path)
+
+        expect(config.excluded_concerns).to eq([ /Publishable/ ])
+        expect(RailsAiContext::ConcernMembership.payload?("Publishable")).to be false
+      end
+    end
+
+    it "replaces the framework defaults when excluded_concerns is set from YAML" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({ "excluded_concerns" => %w[Publishable] }))
+
+        RailsAiContext::Configuration.load_from_yaml(yaml_path)
+
+        expect(RailsAiContext::ConcernMembership.payload?("Turbo::Broadcastable")).to be true
+      end
+    end
+
+    it "warns on an invalid excluded_concerns pattern and keeps the default" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({ "excluded_concerns" => [ "Post[" ], "cache_ttl" => 120 }))
+
+        stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
+
+        expect(stderr).to include("excluded_concerns: invalid pattern")
+        expect(RailsAiContext::ConcernMembership.payload?("Turbo::Broadcastable")).to be false
+        expect(config.cache_ttl).to eq(120)
+      end
+    end
+
+    it "warns on an unknown key and applies the rest of the file" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")
         File.write(yaml_path, YAML.dump({
@@ -116,8 +164,34 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
           "custom_tools" => "also ignored"
         }))
 
-        expect { RailsAiContext::Configuration.load_from_yaml(yaml_path) }.not_to raise_error
+        stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
+
+        expect(stderr).to include("unknown key `not_a_real_key`")
+        expect(stderr).to include("unknown key `custom_tools`")
         expect(config.ai_tools).to eq(%i[claude])
+      end
+    end
+
+    it "names the nearest known key when the unknown one is a near miss" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({ "excluded_model" => %w[Post] }))
+
+        stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
+
+        expect(stderr).to include("did you mean `excluded_models`?")
+      end
+    end
+
+    it "keeps the rest of the file when it carries a hand-added date" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, "generated_at: 2026-09-04\ncache_ttl: 120\n")
+
+        stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
+
+        expect(stderr).to eq("")
+        expect(config.cache_ttl).to eq(120)
       end
     end
 
@@ -495,6 +569,33 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         config.ai_tools = %i[codex]
         expect(config.ai_tools).to eq(%i[codex])
       end
+    end
+  end
+
+  # excluded_concerns sat outside YAML_KEYS for six minor versions while the
+  # docs listed it as a config option, so a YAML user's setting vanished with
+  # no warning. Pin the list in both directions.
+  describe "the YAML allowlist against the writers" do
+    let(:writers) do
+      RailsAiContext::Configuration.public_instance_methods(false)
+        .grep(/=\z/)
+        .map { |m| m.to_s.chomp("=").to_sym }
+    end
+
+    it "allows every public writer except the Ruby-only ones" do
+      expect(writers - RailsAiContext::Configuration::YAML_KEYS).to match_array(%i[app_root custom_tools])
+    end
+
+    it "has a writer for every key it allows" do
+      expect(RailsAiContext::Configuration::YAML_KEYS - writers).to be_empty
+    end
+
+    it "is the list docs/STANDALONE.md calls Ruby-only" do
+      doc = File.read(File.expand_path("../../../docs/STANDALONE.md", __dir__))
+      section = doc[/### YAML limitations\n(.*?)\n#/m].to_s
+      documented = section.scan(/^- `(\w+)`/).flatten.map(&:to_sym)
+
+      expect(documented).to match_array(writers - RailsAiContext::Configuration::YAML_KEYS - %i[app_root])
     end
   end
 end
