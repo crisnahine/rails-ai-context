@@ -483,4 +483,31 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("npm_abc")
     end
   end
+
+  # The static model builder never mapped `encrypts`, so this section was
+  # silently absent from every --no-boot answer with no marker.
+  describe "encrypted model columns from a static payload" do
+    it "lists them for a model parsed without booting" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "keypair.rb"), <<~RUBY)
+          class Keypair < ApplicationRecord
+            encrypts :private_key
+          end
+        RUBY
+        File.write(File.join(dir, ".env.example"), "SECRET_KEY_BASE=\n")
+
+        app = RailsAiContext::StaticApp.new(dir)
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(app).static_call
+        allow(described_class).to receive(:detect_encrypted_columns).and_call_original
+        allow(described_class).to receive(:cached_context).and_return({ models: models })
+        allow(described_class).to receive(:rails_app).and_return(app)
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("## Encrypted Model Columns")
+        expect(text).to include("**Keypair:** private_key")
+      end
+    end
+  end
 end

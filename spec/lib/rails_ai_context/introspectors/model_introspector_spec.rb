@@ -398,6 +398,47 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "#static_call" do
+    # The static builder passed the listener's raw records through where the
+    # booted one merges the attribute-macro mappers, so every mapped key was
+    # nil and five consumers rendered nothing.
+    it "maps attribute macros, enums and custom validates the same way the booted tier does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "keypair.rb"), <<~RUBY)
+          class Keypair < ApplicationRecord
+            ROLES = %w[owner guest].freeze
+
+            enum :kind, { rsa: 0, ed25519: 1 }
+            encrypts :private_key, deterministic: true
+            normalizes :email, with: ->(e) { e.strip }
+            serialize :prefs
+            store :settings
+            has_one_attached :avatar
+            has_secure_password
+            generates_token_for :password_reset, expires_in: 2.hours
+            delegate :name, to: :account
+            validate :key_is_sane
+          end
+        RUBY
+
+        data = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Keypair"]
+
+        expect(data[:encrypts]).to eq([ "private_key" ])
+        expect(data[:normalizes]).to eq([ "email" ])
+        expect(data[:serialize]).to eq([ "prefs" ])
+        expect(data[:store]).to eq([ "settings" ])
+        expect(data[:has_one_attached]).to eq([ "avatar" ])
+        expect(data[:has_secure_password]).to be(true)
+        expect(data[:generates_token_for]).to eq([ "password_reset" ])
+        expect(data[:delegations]).to eq([ { methods: [ "name" ], to: "account" } ])
+        expect(data[:constants]).to include(a_hash_including(name: "ROLES"))
+        expect(data[:encryption_details]).to eq([ { field: "private_key", options: { deterministic: true } } ])
+        expect(data[:token_generation]).to include(a_hash_including(purpose: "password_reset"))
+        expect(data[:custom_validates]).to eq([ "key_is_sane" ])
+        expect(data[:enums]).to eq({ "kind" => { "rsa" => 0, "ed25519" => 1 } })
+      end
+    end
+
     # The skip was `relative.start_with?("concerns/")`, which only sees the
     # top-level directory Rails autoloads. A nested one - OpenProject has
     # app/models/queries/operators/concerns - walked straight past it, and four

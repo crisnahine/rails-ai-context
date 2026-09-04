@@ -299,7 +299,7 @@ module RailsAiContext
         if data[:encryption_details]&.any?
           lines << "" << "## Encryption Details"
           data[:encryption_details].each do |ed|
-            detail_str = ed.is_a?(Hash) ? "**#{ed[:attribute]}** (#{ed.reject { |k, _| k == :attribute }.map { |k, v| "#{k}: #{v}" }.join(', ')})" : ed.to_s
+            detail_str = ed.is_a?(Hash) ? "**#{ed[:field]}** (#{ed.reject { |k, _| k == :field }.map { |k, v| "#{k}: #{v}" }.join(', ')})" : ed.to_s
             lines << "- #{detail_str}"
           end
         end
@@ -308,8 +308,7 @@ module RailsAiContext
         if data[:normalizes_details]&.any?
           lines << "" << "## Normalizes Details"
           data[:normalizes_details].each do |nd|
-            detail_str = nd.is_a?(Hash) ? "**#{nd[:attribute]}** - #{nd[:with] || nd[:block]}" : nd.to_s
-            lines << "- #{detail_str}"
+            lines << "- #{normalization_line(nd)}"
           end
         end
 
@@ -409,6 +408,18 @@ module RailsAiContext
 
       private_class_method def self.model_source_path(model_name)
         rails_app.root.join(relative_model_path(model_name))
+      end
+
+      # A transformation the parser could not resolve is a marker, not the
+      # name of a transformation, so it never follows the dash.
+      private_class_method def self.normalization_line(nd)
+        return nd.to_s unless nd.is_a?(Hash)
+
+        transformation = nd[:transformation]
+        return "**#{nd[:field]}** #{RailsAiContext::Confidence::INFERRED}" if transformation.nil? ||
+          transformation == RailsAiContext::Confidence::INFERRED
+
+        "**#{nd[:field]}** - #{transformation}"
       end
 
       # Extract bodies of custom validate methods (single-line or first meaningful line)

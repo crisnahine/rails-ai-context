@@ -658,7 +658,7 @@ module RailsAiContext
 
       def static_model_details(path, class_name, file: relative_to_root(path))
         data = SourceIntrospector.call(path)
-        {
+        details = {
           confidence: Confidence::STATIC,
           # Rails derives the table through its own inflector, and the file's
           # name already carries that inflection - Zeitwerk resolved the
@@ -667,8 +667,12 @@ module RailsAiContext
           table_name: File.basename(path, ".rb").pluralize,
           associations: reject_excluded_associations(data[:associations]),
           validations: data[:validations],
+          custom_validates: extract_custom_validates_from_ast(data),
           scopes: data[:scopes],
-          enums: data[:enums],
+          # The booted tier answers a Hash of attribute => value map, and
+          # every renderer destructures one; the listener's records are a
+          # different shape under the same key.
+          enums: static_enums(data[:enums]),
           # Same shape as the booted tier: a Hash keyed by callback type. The
           # listener hands back a flat Array, and every consumer filters on
           # `callbacks.is_a?(Hash)` - so passing it through rendered "No models
@@ -680,6 +684,18 @@ module RailsAiContext
           methods: ActionResolver.own_methods(data[:methods], class_name),
           file: file
         }
+        details.merge!(extract_macros_from_ast(data, path))
+        details.merge!(extract_detailed_macros_from_ast(data))
+        details.compact
+      end
+
+      # `defined_enums` keys both levels with Strings; the listener uses
+      # Symbols, and a consumer that looks a value up by name misses.
+      def static_enums(enums)
+        Array(enums).each_with_object({}) do |enum, hash|
+          values = enum[:values]
+          hash[enum[:name].to_s] = values.is_a?(Hash) ? values.transform_keys(&:to_s) : values
+        end
       end
 
       # Consumers used to turn a model name back into

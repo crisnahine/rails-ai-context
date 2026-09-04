@@ -301,4 +301,47 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).not_to include("- `internal`")
     end
   end
+
+  # The builder emits `field:` and `transformation:`; the renderer read
+  # `attribute:` and `with:`, so both blocks printed "- **** ...".
+  describe "detailed macro blocks" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Keypair" => {
+            table_name: "keypairs",
+            encryption_details: [ { field: "private_key", options: { deterministic: true } } ],
+            normalizes_details: [
+              { field: "email", transformation: "strip" },
+              { field: "phone", transformation: RailsAiContext::Confidence::INFERRED }
+            ]
+          }
+        }
+      )
+    end
+
+    it "names the encrypted field and its options" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).to include("## Encryption Details")
+      expect(text).to include("- **private_key** (options: {deterministic: true})")
+    end
+
+    it "names the normalized field and its transformation" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).to include("## Normalizes Details")
+      expect(text).to include("- **email** - strip")
+    end
+
+    # A transformation the parser could not resolve is a marker, not the name
+    # of a transformation, so it never follows the dash.
+    it "marks an unresolved transformation instead of naming one" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).to include("- **phone** [INFERRED]")
+      expect(text).not_to include("- **phone** - [INFERRED]")
+    end
+  end
 end
