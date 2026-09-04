@@ -178,6 +178,56 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     end
   end
 
+  describe "categories derived from the app's own layout" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write_file(relative)
+      path = File.join(@root, relative)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, "# test")
+    end
+
+    def payload
+      described_class.new(double("app", root: @root)).call
+    end
+
+    it "counts a directory no naming convention would predict" do
+      write_file("spec/models/user_spec.rb")
+      write_file("spec/quacking_ducks/duck_spec.rb")
+      expect(payload[:test_count_by_category]).to eq("models" => 1, "quacking_ducks" => 1)
+    end
+
+    it "keeps files loose at the root of spec out of a spec/other row" do
+      write_file("spec/smoke_spec.rb")
+      write_file("spec/other/thing_spec.rb")
+      expect(payload[:test_files]).to eq(
+        "other" => { location: "spec/other", count: 1 },
+        "spec" => { location: "spec", count: 1 }
+      )
+    end
+
+    it "sums one category across spec and test and names both locations" do
+      write_file("spec/models/user_spec.rb")
+      write_file("spec/models/post_spec.rb")
+      write_file("test/models/comment_test.rb")
+      expect(payload[:test_files]["models"]).to eq(location: "spec/models, test/models", count: 3)
+    end
+
+    it "gives support files no row of their own" do
+      write_file("spec/models/user_spec.rb")
+      write_file("spec/support/auth_helpers.rb")
+      expect(payload[:test_files].keys).to eq(%w[models])
+    end
+
+    it "orders rows by count descending, then by name" do
+      write_file("spec/models/user_spec.rb")
+      write_file("spec/models/post_spec.rb")
+      write_file("spec/policies/user_policy_spec.rb")
+      write_file("spec/lib/importer_spec.rb")
+      expect(payload[:test_count_by_category].keys).to eq(%w[models lib policies])
+    end
+  end
+
   describe "#detect_database_cleaner" do
     around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
 
