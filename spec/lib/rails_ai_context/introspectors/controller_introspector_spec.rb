@@ -466,6 +466,87 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         expect(result[:controllers]["InvoicesController"][:actions]).to eq([ "show" ])
       end
     end
+
+    it "lists a parent's actions on a subclass that defines none of its own" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "admin", "disputes"))
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "disputes"))
+        File.write(File.join(dir, "app", "controllers", "disputes", "strikes_controller.rb"), <<~RUBY)
+          class Disputes::StrikesController < ApplicationController
+            def index; end
+
+            def show; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "admin", "disputes", "strikes_controller.rb"),
+                   "class Admin::Disputes::StrikesController < Disputes::StrikesController\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["Admin::Disputes::StrikesController"][:actions]).to eq(%w[index show])
+      end
+    end
+
+    it "walks past an empty middle class to the grandparent that defines the actions" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api", "v1"))
+        File.write(File.join(dir, "app", "controllers", "api", "accounts_controller.rb"), <<~RUBY)
+          class Api::AccountsController < ApplicationController
+            def index; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "api", "v1", "accounts_controller.rb"),
+                   "class Api::V1::AccountsController < Api::AccountsController\nend\n")
+        File.write(File.join(dir, "app", "controllers", "api", "v1", "public_accounts_controller.rb"),
+                   "class Api::V1::PublicAccountsController < Api::V1::AccountsController\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["Api::V1::PublicAccountsController"][:actions]).to eq([ "index" ])
+      end
+    end
+
+    it "does not carry a namespaced app base class's helpers in as actions" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api", "v1"))
+        File.write(File.join(dir, "app", "controllers", "api", "application_controller.rb"), <<~RUBY)
+          class Api::ApplicationController < ActionController::API
+            def doorkeeper_helper; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "api", "v1", "posts_controller.rb"),
+                   "class Api::V1::PostsController < Api::ApplicationController\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["Api::V1::PostsController"][:actions]).to eq([])
+      end
+    end
+
+    # The payload carries the superclass as written, so a name spelled
+    # relatively inside a module body matches no entry and ends the walk.
+    it "leaves a relatively spelled superclass unresolved" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "settings"))
+        File.write(File.join(dir, "app", "controllers", "settings", "base_controller.rb"), <<~RUBY)
+          module Settings
+            class BaseController < ApplicationController
+              def show; end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "settings", "profile_controller.rb"), <<~RUBY)
+          module Settings
+            class ProfileController < BaseController
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["Settings::ProfileController"][:actions]).to eq([])
+      end
+    end
   end
 
   describe "actions for a controller that defines none of its own" do

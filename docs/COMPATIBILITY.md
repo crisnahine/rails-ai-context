@@ -220,6 +220,15 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   assignment) has no static path and reports `[UNAVAILABLE]` in the static
   tier. Only the schema introspector's own secondary-database dump parsing
   (`db/*_schema.rb`, `db/*_structure.sql`) works without a boot.
+- **Inherited controller actions are resolved by parent name, so some walks
+  end early.** A controller that defines no action of its own takes the
+  actions of the nearest app ancestor the listing holds, walked through the
+  `parent_class` each entry carries. Two shapes end that walk with an empty
+  list: a superclass spelled relatively inside a `module` body (`module
+  Settings; class ProfileController < BaseController`), which no entry is
+  keyed under, and a gem-owned parent such as
+  `OAuth::AuthorizationsController < Doorkeeper::AuthorizationsController`,
+  which the payload cannot hold. A booted run answers both.
 - **Constraints and lambda routes surface as a dynamic tally, not resolved
   entries.** `RouteIntrospector#static_call` counts routes behind
   `constraints do...end` blocks, lambdas, `devise_for`, and `concern`-based

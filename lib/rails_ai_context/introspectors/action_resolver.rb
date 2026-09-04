@@ -20,8 +20,8 @@ module RailsAiContext
               (defined?(ActionController::Base) && k == ActionController::Base) ||
               (defined?(ActionController::API) && k == ActionController::API)
           },
-          app_base: ->(k) {
-            k.name == "ApplicationController" || k.name.to_s.end_with?("::ApplicationController")
+          app_base: ->(name) {
+            name == "ApplicationController" || name.end_with?("::ApplicationController")
           }
         },
         mailer: {
@@ -29,8 +29,8 @@ module RailsAiContext
             k.name.to_s.start_with?("ActionMailer::", "AbstractController::") ||
               (defined?(ActionMailer::Base) && k == ActionMailer::Base)
           },
-          app_base: ->(k) {
-            k.name == "ApplicationMailer" || k.name.to_s.end_with?("::ApplicationMailer")
+          app_base: ->(name) {
+            name == "ApplicationMailer" || name.end_with?("::ApplicationMailer")
           }
         }
       }.freeze
@@ -48,7 +48,11 @@ module RailsAiContext
       end
 
       def app_base?(klass, kind:)
-        KINDS.fetch(kind)[:app_base].call(klass)
+        app_base_name?(klass.name, kind: kind)
+      end
+
+      def app_base_name?(name, kind:)
+        KINDS.fetch(kind)[:app_base].call(name.to_s)
       end
 
       # Enclosing-class names as one constant path. Both nesting spellings
@@ -236,6 +240,26 @@ module RailsAiContext
           k = k.superclass
         end
         [ [], unreadable ]
+      end
+
+      # The same nearest-app-ancestor answer for a tier that has no classes:
+      # the listing's own entries, walked by the parent name each carries. A
+      # name the listing does not hold is the app base, a gem's controller or
+      # the framework, and ends the walk.
+      def inherited_actions_by_name(entries, parent_name, kind:)
+        seen = Set.new
+        name = parent_name&.to_s
+        while name && !seen.include?(name) && !app_base_name?(name, kind: kind)
+          seen << name
+          info = entries[name]
+          return [] unless info.is_a?(Hash)
+
+          actions = Array(info[:actions])
+          return actions if actions.any?
+
+          name = info[:parent_class]&.to_s
+        end
+        []
       end
 
       # `action_methods` subtracts inherited methods only as far as the

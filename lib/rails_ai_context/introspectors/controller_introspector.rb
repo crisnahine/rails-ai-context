@@ -44,7 +44,7 @@ module RailsAiContext
           result[name] = details
         end
 
-        { controllers: result }
+        { controllers: fill_inherited_actions(result) }
       rescue => e
         { error: e.message }
       end
@@ -61,7 +61,7 @@ module RailsAiContext
           hash[path_name] = { error: e.message }
         end
         {
-          controllers: result,
+          controllers: fill_inherited_actions(result),
           note: "Parsed statically from app/controllers (app not booted)"
         }
       rescue => e
@@ -69,6 +69,19 @@ module RailsAiContext
       end
 
       private
+
+      # One file cannot see its ancestor, so the inherited answer is filled in
+      # over the finished listing, walked by the parent name each entry
+      # carries. Only entries with no actions of their own are touched.
+      def fill_inherited_actions(result)
+        result.each_value do |info|
+          next unless info.is_a?(Hash) && Array(info[:actions]).empty?
+
+          inherited = ActionResolver.inherited_actions_by_name(result, info[:parent_class], kind: :controller)
+          info[:actions] = inherited if inherited.any?
+        end
+        result
+      end
 
       # What both tiers do with a file: read it, name it by what it declares,
       # and extract. A file it cannot read is an entry saying so, not a gap.

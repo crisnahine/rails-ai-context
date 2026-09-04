@@ -264,4 +264,52 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
         .to eq(code: "  def show\n    @a = 1\n  end", start_line: 2, end_line: 4)
     end
   end
+
+  describe ".app_base_name?" do
+    it "names the conventional base, plain and namespaced" do
+      expect(described_class.app_base_name?("ApplicationController", kind: :controller)).to be(true)
+      expect(described_class.app_base_name?("Api::ApplicationController", kind: :controller)).to be(true)
+      expect(described_class.app_base_name?("Admin::BaseController", kind: :controller)).to be(false)
+    end
+  end
+
+  describe ".inherited_actions_by_name" do
+    let(:entries) do
+      {
+        "Admin::BaseController" => { actions: [], parent_class: "ApplicationController" },
+        "Disputes::StrikesController" => { actions: %w[index show], parent_class: "ApplicationController" },
+        "Middle::StrikesController" => { actions: [], parent_class: "Disputes::StrikesController" }
+      }
+    end
+
+    it "answers the nearest named ancestor that defines actions" do
+      expect(described_class.inherited_actions_by_name(entries, "Middle::StrikesController", kind: :controller))
+        .to eq(%w[index show])
+    end
+
+    it "answers nothing when the walk reaches the app base" do
+      expect(described_class.inherited_actions_by_name(entries, "Admin::BaseController", kind: :controller))
+        .to eq([])
+    end
+
+    it "answers nothing for a name the listing does not hold" do
+      expect(described_class.inherited_actions_by_name(entries, "Doorkeeper::AuthorizationsController", kind: :controller))
+        .to eq([])
+    end
+
+    it "answers nothing for an entry the introspector could not read" do
+      failed = { "Broken::BaseController" => { error: "unreadable" } }
+
+      expect(described_class.inherited_actions_by_name(failed, "Broken::BaseController", kind: :controller)).to eq([])
+    end
+
+    it "ends a cycle rather than walking it" do
+      cyclic = {
+        "A" => { actions: [], parent_class: "B" },
+        "B" => { actions: [], parent_class: "A" }
+      }
+
+      expect(described_class.inherited_actions_by_name(cyclic, "A", kind: :controller)).to eq([])
+    end
+  end
 end
