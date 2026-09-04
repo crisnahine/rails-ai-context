@@ -51,6 +51,22 @@ module RailsAiContext
           .map { |a| "#{a[:type]} :#{a[:name]}" }
       end
 
+      # The introspector records each strong-params method as a hash of its
+      # permit detail; only the listing surfaces want the method names.
+      def strong_param_names(controller_data)
+        Array(controller_data[:strong_params]).map { |sp| (sp.is_a?(Hash) ? sp[:name] : sp).to_s }
+      end
+
+      # A block-form rescue_from carries no handler, so the exception name
+      # alone is the whole line.
+      def rescue_handler_lines(controller_data)
+        Array(controller_data[:rescue_from]).map do |entry|
+          next entry.to_s unless entry.is_a?(Hash)
+
+          entry[:handler] ? "#{entry[:exception]} -> #{entry[:handler]}" : entry[:exception].to_s
+        end
+      end
+
       # Introspector failures, so a half-failed run cannot read as a clean
       # one in any generated file.
       def warnings(ctx)

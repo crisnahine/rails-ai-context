@@ -21,6 +21,27 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
     end
   end
 
+  describe "the Controllers section" do
+    it "names the strong params methods rather than dumping their permit detail" do
+      context = {
+        controllers: {
+          controllers: {
+            "PostsController" => {
+              actions: %w[index],
+              filters: [],
+              strong_params: [ { name: "post_params", permits: %w[title body] } ],
+              parent_class: "ApplicationController"
+            }
+          }
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- Strong params: post_params")
+    end
+  end
+
   describe "the Hotwire section against the static fixture" do
     it "names each model's broadcast macros" do
       output = described_class.new(IntrospectedFixture.context).call

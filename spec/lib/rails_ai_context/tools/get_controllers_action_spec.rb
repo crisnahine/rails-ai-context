@@ -14,7 +14,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
             { kind: "before_action", name: "set_post", only: %w[show edit update destroy] },
             { kind: "before_action", name: "authenticate_user!" }
           ],
-          strong_params: %w[post_params],
+          strong_params: [ { name: "post_params", permits: %w[title body] } ],
           file: "app/controllers/posts_controller.rb"
         }
       }

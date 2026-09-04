@@ -49,4 +49,39 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
       expect(described_class.assets_line({ assets: {} })).to be_nil
     end
   end
+
+  describe ".strong_param_names" do
+    it "names the methods the introspector recorded as hashes" do
+      data = { strong_params: [ { name: "filter_params", permits: %w[origin status] },
+                                { name: "form_account_batch_params", requires: "form_account_batch" } ] }
+
+      expect(described_class.strong_param_names(data)).to eq(%w[filter_params form_account_batch_params])
+    end
+
+    it "keeps a plain string entry, which is already a method name" do
+      expect(described_class.strong_param_names({ strong_params: %w[post_params] })).to eq(%w[post_params])
+    end
+
+    it "answers an empty list for a controller with no strong params" do
+      expect(described_class.strong_param_names({})).to eq([])
+    end
+  end
+
+  describe ".rescue_handler_lines" do
+    it "pairs each exception with its handler" do
+      data = { rescue_from: [ { exception: "ActiveRecord::RecordInvalid", handler: "not_found" } ] }
+
+      expect(described_class.rescue_handler_lines(data)).to eq([ "ActiveRecord::RecordInvalid -> not_found" ])
+    end
+
+    it "names the exception alone for a block form, which records no handler" do
+      data = { rescue_from: [ { exception: "Mastodon::NotPermittedError" } ] }
+
+      expect(described_class.rescue_handler_lines(data)).to eq([ "Mastodon::NotPermittedError" ])
+    end
+
+    it "answers an empty list for a controller with no rescue_from" do
+      expect(described_class.rescue_handler_lines({})).to eq([])
+    end
+  end
 end
