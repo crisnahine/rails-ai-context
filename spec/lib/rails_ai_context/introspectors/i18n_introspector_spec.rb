@@ -161,6 +161,13 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:backend]).to be_nil
     end
 
+    # I18n.fallbacks belongs to whichever process asks, and no app booted in
+    # this one. Static Mastodon reported "en -> en" as the app's setting.
+    it "does not report the library's own fallbacks as the app's" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n")
+      expect(result).not_to have_key(:fallbacks)
+    end
+
     it "returns no locales when the directory is missing" do
       Dir.mktmpdir do |dir|
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
@@ -315,6 +322,104 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:default_locale]).to eq("en")
     ensure
       ENV["RAILS_ENV"] = original
+    end
+
+    # Rails builds available_locales from the load path only while the app
+    # leaves the setting alone. Once the app assigns it, that list IS
+    # available_locales, and reading the files instead invents locales the app
+    # disabled: Mastodon enables 97 and ships files for 106.
+    describe "an explicit available_locales assignment" do
+      def with_config(initializers, application: nil, &block)
+        static_result(
+          "en.yml"  => "en:\n  hello: Hello\n  bye: Bye\n",
+          "es.yml"  => "es:\n  hello: Hola\n",
+          "tlh.yml" => "tlh:\n  hello: nuqneH\n"
+        ) do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+          initializers.each { |name, body| File.write(File.join(dir, "config", "initializers", name), body) }
+          File.write(File.join(dir, "config", "application.rb"), application) if application
+          block&.call(dir)
+        end
+      end
+
+      it "reads a multi-line list of quoted symbols" do
+        result = with_config({ "i18n.rb" => <<~RUBY })
+          Rails.application.configure do
+            config.i18n.available_locales = [
+              :en,
+              :es,
+              :'zh-CN',
+            ]
+          end
+        RUBY
+
+        expect(result[:available_locales]).to eq(%w[en es zh-CN])
+      end
+
+      it "reads the bare I18n spelling" do
+        result = with_config({ "i18n.rb" => "I18n.available_locales = %i[en es]\n" })
+        expect(result[:available_locales]).to eq(%w[en es])
+      end
+
+      # The listener strips whichever root matched, so a bare
+      # `config.available_locales` inside a gem's own configure block reads the
+      # same as Rails' unless the config spelling has to name i18n. Accepting
+      # it replaced the app's whole list with the gem's one locale.
+      it "ignores a config.available_locales that does not name i18n" do
+        result = with_config({
+          "aaa_some_gem.rb" => "SomeGem.configure do |config|\n  config.available_locales = [:zz]\nend\n",
+          "i18n.rb"         => "Rails.application.configure do\n  config.i18n.available_locales = [:en, :es]\nend\n"
+        })
+
+        expect(result[:available_locales]).to eq(%w[en es])
+      end
+
+      # Rails hands app.config.i18n to I18n once, after every initializer has
+      # run, so the last assignment executed is the one that lands.
+      it "lets an initializer override application.rb" do
+        result = with_config(
+          { "i18n.rb" => "Rails.application.configure do\n  config.i18n.available_locales = [:en, :es]\nend\n" },
+          application: "module Dummy\n  class Application < Rails::Application\n    config.i18n.available_locales = [:en]\n  end\nend\n"
+        )
+
+        expect(result[:available_locales]).to eq(%w[en es])
+      end
+
+      it "says the list came from config" do
+        result = with_config({ "i18n.rb" => "I18n.available_locales = %i[en es]\n" })
+        expect(result[:available_locales_source]).to eq("config")
+      end
+
+      it "measures coverage against the configured list" do
+        result = with_config({ "i18n.rb" => "Rails.application.configure do\n  config.i18n.available_locales = [:en, :es]\nend\n" })
+        expect(result[:locale_coverage].keys).to eq(%w[es])
+      end
+
+      it "falls back to the files when the value is computed" do
+        result = with_config({ "i18n.rb" => "Rails.application.configure do\n  config.i18n.available_locales += [:zz]\nend\n" })
+
+        expect(result[:available_locales]).to eq(%w[en es tlh])
+        expect(result[:available_locales_source]).to eq("locale_files")
+      end
+
+      it "falls back to the files when nothing is configured" do
+        result = with_config({})
+
+        expect(result[:available_locales]).to eq(%w[en es tlh])
+        expect(result[:available_locales_source]).to eq("locale_files")
+      end
+
+      # One unreadable initializer used to raise out of the walk and through
+      # static_call's rescue, and the whole I18n answer became an error.
+      it "skips a file it cannot read" do
+        result = with_config({
+          "aaa_broken.rb" => "config.i18n.available_locales = [:zz]\n",
+          "i18n.rb"       => "Rails.application.configure do\n  config.i18n.available_locales = [:en, :es]\nend\n"
+        }) { |dir| File.chmod(0o000, File.join(dir, "config", "initializers", "aaa_broken.rb")) }
+
+        expect(result[:error]).to be_nil
+        expect(result[:available_locales]).to eq(%w[en es])
+      end
     end
   end
 end

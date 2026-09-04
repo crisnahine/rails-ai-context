@@ -17,6 +17,12 @@ module RailsAiContext
       # line then measured an English app against German.
       DEFAULT_LOCALE_ASSIGNMENT = /^[^\S\n]*(?:config\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
 
+      # `config.i18n.available_locales`, and only that: the listener strips the
+      # root it matched, so a bare `config.available_locales` is any gem's own
+      # setting inside its own configure block.
+      CONFIG_AVAILABLE_LOCALES = [ [ :i18n, :available_locales ] ].freeze
+      I18N_AVAILABLE_LOCALES = [ [ :available_locales ], [ :config, :available_locales ] ].freeze
+
       attr_reader :app
 
       def initialize(app)
@@ -42,29 +48,35 @@ module RailsAiContext
 
       # The locale files are the same files either way; only the list of
       # locales and the default came from a running I18n. Read both from disk
-      # rather than report the library's own defaults as the app's.
+      # rather than report the library's own defaults as the app's. The backend
+      # and the fallbacks belong to whichever process asks, so they are left
+      # out here entirely.
       def static_call
-        locales = locales_from_files
+        configured = configured_available_locales
+        locales = configured || locales_from_files
         default = default_locale_from_config
         coverage, untranslated = detect_locale_coverage(locales: locales.map(&:to_sym), default: default.to_sym)
 
         {
           default_locale: default,
           available_locales: locales,
+          available_locales_source: configured ? "config" : "locale_files",
           backend: nil,
           locale_files: extract_locale_files,
           total_locale_files: count_locale_files,
           locale_coverage: coverage,
           locales_without_translations: untranslated
-        }.merge(detect_fallback_config)
+        }
       rescue => e
         { error: e.message }
       end
 
       private
 
-      # Every top-level key across config/locales - the same population Rails
-      # builds available_locales from.
+      # Every top-level key across config/locales - the population Rails builds
+      # available_locales from while the app leaves the setting alone. The
+      # fallback, then: for an app that never assigns the list, and for one
+      # whose assignment is there but cannot be evaluated from source.
       def locales_from_files
         dir = File.join(root, "config/locales")
         return [] unless Dir.exist?(dir)
@@ -87,6 +99,17 @@ module RailsAiContext
       # Rails' own default is :en, so "en" is the right answer when the app
       # never says otherwise - not a guess.
       def default_locale_from_config
+        config_candidate_files.each do |path|
+          content = RailsAiContext::SafeFile.read(path)
+          match = content&.match(DEFAULT_LOCALE_ASSIGNMENT)
+          return match[1] if match
+        end
+        "en"
+      end
+
+      # The config files Rails runs, in the order it runs them: application.rb,
+      # then the environment file, then the initializers.
+      def config_candidate_files
         # config/environments/*.rb arrive in glob order, so whichever file
         # carried an assignment first won whatever environment it belonged to -
         # and development.rb sorts ahead of production.rb.
@@ -94,18 +117,54 @@ module RailsAiContext
         environments = Dir.glob(File.join(root, "config", "environments", "*.rb"))
           .partition { |path| File.basename(path, ".rb") == env }.flatten
 
-        candidates = [ File.join(root, "config", "application.rb") ] +
-                     environments +
-                     Dir.glob(File.join(root, "config", "initializers", "*.rb"))
+        ([ File.join(root, "config", "application.rb") ] +
+          environments +
+          Dir.glob(File.join(root, "config", "initializers", "*.rb")).sort).select { |path| File.exist?(path) }
+      end
 
-        candidates.each do |path|
-          next unless File.exist?(path)
+      # The list the app enables, or nil when it never says. Rails hands
+      # app.config.i18n to I18n once, after every initializer has run, so the
+      # last assignment executed is the one that lands.
+      def configured_available_locales
+        found = nil
 
-          content = RailsAiContext::SafeFile.read(path)
-          match = content&.match(DEFAULT_LOCALE_ASSIGNMENT)
-          return match[1] if match
+        config_candidate_files.each do |path|
+          # Reading first also keeps an unreadable file away from the parser.
+          source = RailsAiContext::SafeFile.read(path)
+          next unless source&.include?("available_locales")
+
+          available_locales_assignments(path).each do |entry|
+            names = literal_locale_list(entry[:value])
+            found = names if names
+          end
         end
-        "en"
+
+        found
+      end
+
+      def available_locales_assignments(path)
+        walked = SourceIntrospector.walk(path, {
+          config: -> { Listeners::ConfigAssignmentListener.new("config") },
+          i18n:   -> { Listeners::ConfigAssignmentListener.new("I18n") }
+        })
+
+        entries = walked[:config].select { |entry| CONFIG_AVAILABLE_LOCALES.include?(entry[:path]) } +
+                  walked[:i18n].select { |entry| I18N_AVAILABLE_LOCALES.include?(entry[:path]) }
+        entries.select { |entry| entry[:assignment] }.sort_by { |entry| entry[:location] }
+      # One initializer this introspector cannot parse must not take the whole
+      # I18n answer down through static_call's rescue.
+      rescue StandardError => e
+        $stderr.puts "[rails-ai-context] i18n available_locales walk of #{path} failed: #{e.message}" if ENV["DEBUG"]
+        []
+      end
+
+      # Only a literal list of names answers the question. `+= [...]`, a method
+      # call or a redacted value says the app sets it but not to what.
+      def literal_locale_list(value)
+        return nil unless value.is_a?(Array) && !value.empty?
+        return nil unless value.all? { |element| element.is_a?(Symbol) || element.is_a?(String) }
+
+        value.map(&:to_s).uniq.sort
       end
 
       def root
