@@ -52,6 +52,11 @@ module RailsAiContext
 
       VALID_ACTIONS = %w[add_column remove_column rename_column add_index add_association change_type create_table].freeze
 
+      # Stamped on generated migrations when neither the app's context nor a
+      # loaded Rails names a version. The bracket selects a compatibility
+      # mode, so the tool says so in its output when it falls back here.
+      SUPPORTED_RAILS_FLOOR = "7.1"
+
       def self.call(action: nil, table: nil, column: nil, type: nil, new_name: nil, options: nil, server_context: nil)
         action = action.to_s.strip
         table = table.to_s.strip
@@ -82,6 +87,12 @@ module RailsAiContext
         models = Payload.models(cached_context)
 
         lines = [ "# Migration Advisor", "" ]
+
+        if rails_version_unknown?
+          lines << "**Note:** Could not determine this app's Rails version (no `rails` entry in Gemfile.lock). " \
+            "The migration below is stamped with #{SUPPORTED_RAILS_FLOOR}; check that against your app."
+          lines << ""
+        end
 
         # Check if table exists
         table_exists = schema && schema[:tables]&.key?(table)
@@ -490,11 +501,36 @@ module RailsAiContext
           col[:type] if col
         end
 
+        # The superclass names the app's Rails, not the gem's. A standalone
+        # --no-boot run has no Rails constant at all, and inside a bundle the
+        # constant is whatever the gem loaded, so the context (which carries
+        # the lockfile's version under --no-boot) comes first.
         def rails_version
-          Rails.version.split(".").first(2).join(".")
+          resolved_rails_version || SUPPORTED_RAILS_FLOOR
+        end
+
+        def rails_version_unknown?
+          resolved_rails_version.nil?
+        end
+
+        def resolved_rails_version
+          from_context = major_minor(cached_context[:rails_version])
+          return from_context if from_context
+          return major_minor(Rails.version) if defined?(Rails) && Rails.respond_to?(:version)
+
+          nil
         rescue => e
           $stderr.puts "[rails-ai-context] rails_version failed: #{e.message}" if ENV["DEBUG"]
-          "7.1"
+          nil
+        end
+
+        # nil for anything that is not a real version, including the
+        # [UNAVAILABLE: ...] marker a static context can carry.
+        def major_minor(value)
+          parts = value.to_s.split(".").first(2)
+          return nil unless parts.size == 2 && parts.all? { |p| p.match?(/\A\d+\z/) }
+
+          parts.join(".")
         end
 
         # Locking/DDL advice differs by adapter (MySQL's online DDL vs
