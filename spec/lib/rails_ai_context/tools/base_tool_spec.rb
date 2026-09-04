@@ -86,6 +86,20 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
   end
 
+  describe ".paginate" do
+    it "keeps the plain hint when the caller names no unit" do
+      hint = described_class.paginate((1..10).to_a, offset: 0, limit: 3)[:hint]
+
+      expect(hint).to eq("_Showing 1-3 of 10. Use offset:3 for next page._")
+    end
+
+    it "names the unit and marks a total that was cut short" do
+      hint = described_class.paginate((1..10).to_a, offset: 0, limit: 3, noun: "line", truncated: true)[:hint]
+
+      expect(hint).to eq("_Showing 1-3 of 10+ lines. Use offset:3 for next page._")
+    end
+  end
+
   describe ".leading_boundary and .trailing_boundary" do
     it "adds a boundary only where the pattern edge is a word character" do
       expect(described_class.leading_boundary("user")).to eq("\\b")

@@ -293,16 +293,21 @@ module RailsAiContext
 
         # Standardized pagination: slice items with offset/limit and produce a consistent hint.
         # Returns { items:, hint:, total:, offset:, limit: }
-        def paginate(items, offset:, limit:, default_limit: 50)
+        # `noun` names what is being counted and `truncated` marks a total that
+        # is itself a cap, so the hint cannot restate a cut list as a whole one.
+        def paginate(items, offset:, limit:, default_limit: 50, noun: nil, truncated: false)
           offset = [ offset.to_i, 0 ].max
           limit  = limit.nil? ? default_limit : [ limit.to_i, 1 ].max
           total  = items.size
           sliced = items.drop(offset).first(limit)
 
+          counted = noun ? count_phrase(total, noun) : total.to_s
+          counted = counted.sub(/\A\d+/) { |n| "#{n}+" } if truncated
+
           hint = if sliced.empty? && total > 0
-            "_No items at offset #{offset}. Total: #{total}._"
+            "_No items at offset #{offset}. Total: #{counted}._"
           elsif offset + limit < total
-            "_Showing #{offset + 1}-#{offset + sliced.size} of #{total}. Use offset:#{offset + limit} for next page._"
+            "_Showing #{offset + 1}-#{offset + sliced.size} of #{counted}. Use offset:#{offset + limit} for next page._"
           else
             ""
           end

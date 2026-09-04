@@ -32,10 +32,10 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       expect(text).not_to include("Invalid file_type")
     end
 
-    it "uses smart result limiting and shows total count" do
+    it "uses smart result limiting and shows the match count" do
       result = described_class.call(pattern: "class")
       text = result.content.first[:text]
-      expect(text).to include("total results")
+      expect(text).to match(/\*\*\d+ matches?/)
       expect(result).to be_a(MCP::Tool::Response)
     end
 
@@ -267,6 +267,86 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
         expect(text).to include("12: save!")
         expect(text).not_to include("11: presave!")
       end
+    end
+  end
+
+  # The search returns rows - match rows and context rows - so a count taken
+  # off the row list moves with context_lines and stops at the line cap.
+  describe "result counts" do
+    # Three matching lines, each padded so -C 2 pulls four context rows.
+    let(:padded_source) { ([ "# pad", "# pad", "  def reblog?", "# pad", "# pad", "# pad" ] * 3).join("\n") + "\n" }
+
+    before do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      skip "requires ripgrep for context lines" unless described_class.send(:ripgrep_available?)
+    end
+
+    def header_count(text)
+      text[/\*\*(\d+)/, 1]
+    end
+
+    it "counts matches, not the rows emitted around them" do
+      with_search_app("app/models/status.rb" => padded_source) do
+        with_ctx = described_class.call(pattern: "def reblog?", exact_match: true, context_lines: 2).content.first[:text]
+        no_ctx = described_class.call(pattern: "def reblog?", exact_match: true, context_lines: 0).content.first[:text]
+
+        expect(header_count(with_ctx)).to eq("3")
+        expect(header_count(no_ctx)).to eq("3")
+      end
+    end
+
+    it "shows as many match lines as the header says it shows" do
+      with_search_app("app/models/status.rb" => padded_source) do
+        text = described_class.call(pattern: "def reblog?", exact_match: true, context_lines: 2).content.first[:text]
+
+        expect(text.lines.count { |l| l.start_with?("> ") }).to eq(text[/showing (\d+)/, 1].to_i)
+        expect(text).to include("lines with context")
+      end
+    end
+
+    it "names the line cap as a cap instead of printing it as the total" do
+      previous_cap = RailsAiContext.configuration.max_search_results
+      RailsAiContext.configuration.max_search_results = 10
+
+      with_search_app("app/services/thing.rb" => (([ "  def call" ] * 50).join("\n") + "\n")) do
+        text = described_class.call(pattern: "def call", context_lines: 0).content.first[:text]
+
+        expect(text).to include("first 10 lines scanned")
+      end
+    ensure
+      RailsAiContext.configuration.max_search_results = previous_cap
+    end
+
+    # A match line whose own content is tab-separated digits used to parse as
+    # a context row, which would take it out of the count entirely.
+    it "counts a match whose content looks like a context row" do
+      with_search_app("app/models/zed.rb" => "aaa\n\t12\tqqmarker\nbbb\n") do
+        text = described_class.call(pattern: "qqmarker", context_lines: 2).content.first[:text]
+
+        expect(header_count(text)).to eq("1")
+      end
+    end
+
+    it "reports a file's whole match count beside what the page shows" do
+      with_search_app("app/services/thing.rb" => (([ "  def call" ] * 20).join("\n") + "\n")) do
+        text = described_class.call(pattern: "def call", context_lines: 0, limit: 5, group_by_file: true).content.first[:text]
+
+        expect(text).to include("(20 matches, 5 shown)")
+      end
+    end
+
+    it "marks a trace caller count that stopped at the line cap" do
+      previous_cap = RailsAiContext.configuration.max_search_results
+      RailsAiContext.configuration.max_search_results = 10
+      source = "class Saver\n  def touch\n    true\n  end\nend\n" + (([ "touch" ] * 50).join("\n") + "\n")
+
+      with_search_app("app/models/saver.rb" => source) do
+        text = described_class.call(pattern: "touch", match_type: "trace").content.first[:text]
+
+        expect(text).to match(/## Called from \(\d+ sites - first 10 lines scanned\)/)
+      end
+    ensure
+      RailsAiContext.configuration.max_search_results = previous_cap
     end
   end
 

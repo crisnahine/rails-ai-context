@@ -667,10 +667,10 @@ Ripgrep-powered regex search across the codebase.
 | `exact_match` | boolean | Match the pattern literally, whole-word where its edges are word characters. `def reblog?` does not match `def reblog`. Default: false. |
 | `exclude_tests` | boolean | Exclude test/spec/features directories. Default: false. |
 | `group_by_file` | boolean | Group results by file with match counts. Default: false. |
-| `offset` | integer | Skip this many results for pagination. Default: 0. |
+| `offset` | integer | Skip this many lines for pagination. Default: 0. |
 | `context_lines` | integer | Lines of context before and after each match (like grep -C). Default: 2, max: 5. |
 
-Smart result limiting: <10 results shows all, 10-100 shows half, >100 caps at 100. Use `offset` for pagination.
+Smart result limiting, sized in matches: under 10 shows all, 10-100 shows half, over 100 caps at 100. `offset` and `limit` count emitted lines, so a search with context returns more lines than matches. The header says how many matches were found, how many the page shows, and whether the line cap was reached.
 
 **Examples:**
 
@@ -1347,7 +1347,7 @@ end
 | `max_schema_file_size` | Integer | `10_000_000` | schema.rb / structure.sql parse limit (10MB) |
 | `max_view_total_size` | Integer | `10_000_000` | Doctor threshold: app/views above this warns (10MB). Not a read cap |
 | `max_view_file_size` | Integer | `1_000_000` | Named in that doctor warning's fix line (1MB). Not a read cap |
-| `max_search_results` | Integer | `200` | Max search results per call |
+| `max_search_results` | Integer | `200` | Max lines a search may emit per call, matches and context together |
 | `max_validate_files` | Integer | `50` | Max files per validate call |
 | `excluded_controllers` | Array | `DeviseController`, etc. | Controller classes hidden from listings |
 | `excluded_route_prefixes` | Array | `action_mailbox/`, `active_storage/`, etc. | Route controller prefixes hidden with `app_only` |
