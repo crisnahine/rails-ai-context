@@ -41,6 +41,53 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       RailsAiContext.configuration = RailsAiContext::Configuration.new
     end
 
+    it "filters excluded_association_names on the static tier too" do
+      RailsAiContext.configuration.excluded_association_names += %w[comments]
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            belongs_to :author
+            has_many :comments
+          end
+        RUBY
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        names = static["Post"][:associations].map { |a| a[:name].to_s }
+        expect(names).to include("author")
+        expect(names).not_to include("comments")
+      end
+    ensure
+      RailsAiContext.configuration = RailsAiContext::Configuration.new
+    end
+
+    it "filters excluded_association_names on both tiers of a Mongoid app" do
+      RailsAiContext.configuration.excluded_association_names += %w[tickets]
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "customer.rb"), <<~RUBY)
+          class Customer
+            include Mongoid::Document
+            has_many :tickets
+            has_many :invoices
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        [ introspector.static_call, introspector.call ].each do |models|
+          names = models["Customer"][:associations].map { |a| a[:name].to_s }
+          expect(names).to include("invoices")
+          expect(names).not_to include("tickets")
+        end
+      end
+    ensure
+      RailsAiContext.configuration = RailsAiContext::Configuration.new
+    end
+
     it "extracts validations" do
       vals = result["User"][:validations]
       expect(vals).to include(a_hash_including(kind: "presence", attributes: [ "email" ]))

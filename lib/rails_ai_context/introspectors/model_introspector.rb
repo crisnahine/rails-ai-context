@@ -272,8 +272,10 @@ module RailsAiContext
       # ── Reflection-based extraction (unchanged) ─────────────────────
 
       def extract_associations(model)
-        excluded = config.excluded_association_names
-        model.reflect_on_all_associations.reject { |assoc| excluded.include?(assoc.name.to_s) }.map do |assoc|
+        # The reject stays ahead of the map: class_name/foreign_key on an
+        # excluded reflection with a broken :through raises, and `call`'s
+        # per-model rescue would replace the whole model with one error line.
+        model.reflect_on_all_associations.reject { |assoc| excluded_association?(assoc.name) }.map do |assoc|
           detail = {
             name: assoc.name.to_s,
             type: assoc.macro.to_s,
@@ -639,6 +641,16 @@ module RailsAiContext
         []
       end
 
+      # The listener names an association with a Symbol and reflection with a
+      # String, so the key is compared as text on both tiers.
+      def excluded_association?(name)
+        config.excluded_association_names.include?(name.to_s)
+      end
+
+      def reject_excluded_associations(associations)
+        Array(associations).reject { |assoc| excluded_association?(assoc[:name]) }
+      end
+
       def sanitize_options(options)
         options.reject { |_k, v| v.is_a?(Proc) || v.is_a?(Regexp) }
                .transform_values(&:to_s)
@@ -653,7 +665,7 @@ module RailsAiContext
           # constant from it. Underscoring the constant instead turns
           # OAuthClientConfig into o_auth_client_configs, a table no app has.
           table_name: File.basename(path, ".rb").pluralize,
-          associations: data[:associations],
+          associations: reject_excluded_associations(data[:associations]),
           validations: data[:validations],
           scopes: data[:scopes],
           enums: data[:enums],
@@ -741,7 +753,7 @@ module RailsAiContext
                         .map { |m| { name: m[:args].first, type: m[:options][:type] }.compact },
           embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
                         .map { |m| { type: m[:macro], name: m[:args].first } },
-          associations: data[:associations],
+          associations: reject_excluded_associations(data[:associations]),
           validations: data[:validations],
           scopes: data[:scopes],
           # Same shape as the booted tier: a Hash keyed by callback type. The
