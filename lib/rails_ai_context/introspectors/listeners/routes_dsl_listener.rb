@@ -18,11 +18,13 @@ module RailsAiContext
         PLURAL_ACTIONS = %i[index create new edit show update destroy].freeze
         SINGULAR_ACTIONS = %i[create new edit show update destroy].freeze
         RESTFUL_ACTIONS = %w[index show new create edit update destroy].freeze
-        DYNAMIC_MACROS = %i[devise_for draw direct resolve concerns match].freeze
+        DYNAMIC_MACROS = %i[devise_for draw direct resolve match].freeze
 
         def initialize
           super
           @stack = []
+          @concern_blocks = {}
+          @replaying = []
         end
 
         def on_call_node_enter(node)
@@ -35,7 +37,9 @@ module RailsAiContext
           when :resource then handle_resources(node, singular: true)
           when :member then enter_member_collection(node, :member)
           when :collection then enter_member_collection(node, :collection)
-          when :concern then push_frame(node, suppress: true) if node.block
+          when :concern then define_concern(node)
+          when :concerns then apply_concerns(node)
+          when :with_options then enter_with_options(node)
           when :root then emit_root(node)
           when *VERB_METHODS then emit_verb_route(node)
           when *DYNAMIC_MACROS then emit_dynamic(node)
@@ -62,6 +66,70 @@ module RailsAiContext
         def current_prefix
           frame = @stack.reverse.find { |f| f[:prefix] }
           frame ? frame[:prefix] : "/"
+        end
+
+        # Rails stores a concern's block and re-runs it with the mapper as it
+        # stands at each `concerns` site, so the definition itself routes
+        # nothing and the body has to be kept for replay.
+        def define_concern(node)
+          return unless node.block
+
+          name = literal_first_arg(node)
+          @concern_blocks[name.to_s] = node.block if name
+          push_frame(node, suppress: true)
+        end
+
+        def apply_concerns(node)
+          return if suppressed?
+
+          names = extract_symbol_args(node)
+          names.empty? ? emit_dynamic(node) : replay_concerns(names, node)
+        end
+
+        # Walks the stored body again with the current stack in place, which is
+        # what makes the same concern produce different paths at each site.
+        def replay_concerns(names, node)
+          names.each do |name|
+            key = name.to_s
+            block = @concern_blocks[key]
+            # A concern defined in another drawn file, or one that names
+            # itself, has no body this walk can replay; the marker keeps it
+            # counted instead of dropping its routes silently.
+            if block.nil? || @replaying.include?(key)
+              emit_dynamic(node, macro: :concerns)
+              next
+            end
+
+            @replaying.push(key)
+            replay_dispatcher.dispatch(block)
+            @replaying.pop
+          end
+        end
+
+        def replay_dispatcher
+          @replay_dispatcher ||= ListenerRegistration.dispatcher_for(self)
+        end
+
+        # `with_options` is ActiveSupport's OptionMerger, not a routing method:
+        # every call inside the block is re-sent with the outer options merged
+        # in, the inner call's own keys winning.
+        def enter_with_options(node)
+          return unless node.block
+
+          if node.block.respond_to?(:parameters) && node.block.parameters
+            # The routes inside are sent to the block parameter, so they reach
+            # this walker with a receiver it deliberately ignores. A marker
+            # keeps them counted rather than dropped.
+            emit_dynamic(node)
+            push_frame(node, suppress: true)
+            return
+          end
+
+          push_frame(node, defaults: route_options(node))
+        end
+
+        def current_defaults
+          @stack.filter_map { |f| f[:defaults] }.reduce({}, :merge)
         end
 
         def enter_namespace(node)
@@ -111,29 +179,46 @@ module RailsAiContext
             return
           end
 
-          opts = extract_keyword_options(node)
+          opts = route_options(node)
           names.each { |n| emit_resource_routes(node, n.to_s, opts, singular: singular) }
+          concerns = Array(opts[:concerns])
 
-          return unless node.block && names.size == 1
+          if node.block
+            return unless names.size == 1
 
-          name = names.first.to_s
-          opts = extract_keyword_options(node)
+            push_resource_frame(node, names.first.to_s, opts, singular: singular)
+            replay_concerns(concerns, node) if concerns.any?
+          elsif concerns.any?
+            # A concern applied without a block still runs inside the resource's
+            # scope, so the frame has to exist for the replay and go again
+            # straight after it - there is no block leave to pop it.
+            names.each do |n|
+              push_resource_frame(node, n.to_s, opts, singular: singular)
+              replay_concerns(concerns, node)
+              @stack.pop
+            end
+          end
+        end
+
+        # Routes nested under this resource inherit its singular route key as a
+        # name prefix (resources :posts { resources :comments } -> the comments
+        # index route is named "post_comments", not "comments").
+        def push_resource_frame(node, name, opts, singular:)
           base = join_path(current_prefix, (opts[:path] || name).to_s)
-          nested = singular ? base : "#{base}/:#{name.singularize}_id"
-          # Routes nested under this resource inherit its singular route key as
-          # a name prefix (resources :posts { resources :comments } -> the
-          # comments index route is named "post_comments", not "comments").
+          key = singular_route_key(name, opts, singular: singular)
+          param = resource_param(opts)
           push_frame(node,
-                     prefix: nested,
-                     name_prefix: singular ? name : name.singularize,
+                     prefix: singular ? base : "#{base}/:#{key}_#{param}",
+                     mod: opts[:module]&.to_s,
+                     name_prefix: key,
                      resource: {
                        name: name,
                        singular: singular,
                        controller: resource_controller(name, opts, singular: singular),
                        base: base,
-                       member_path: singular ? base : "#{base}/:id",
-                       singular_route_name: singular ? route_name_for(name) : route_name_for(name.singularize),
-                       plural_route_name: route_name_for(name)
+                       member_path: member_path(base, singular, param),
+                       singular_route_name: route_name_for(key),
+                       plural_route_name: route_name_for(route_key(name, opts))
                      })
         end
 
@@ -141,30 +226,46 @@ module RailsAiContext
           base = join_path(current_prefix, (opts[:path] || name).to_s)
           controller = resource_controller(name, opts, singular: singular)
           actions = requested_actions(singular ? SINGULAR_ACTIONS : PLURAL_ACTIONS, opts)
-          plural_name = route_name_for(name)
-          singular_name = route_name_for(singular ? name : name.singularize)
+          param = resource_param(opts)
+          plural_name = route_name_for(route_key(name, opts))
+          singular_name = route_name_for(singular_route_key(name, opts, singular: singular))
 
           actions.each do |action|
             case action
             when :index   then emit(node, "GET", base, controller, "index", plural_name)
             when :create  then emit(node, "POST", base, controller, "create", singular ? singular_name : plural_name)
             when :new     then emit(node, "GET", "#{base}/new", controller, "new", "new_#{singular_name}")
-            when :edit    then emit(node, "GET", edit_path(base, singular), controller, "edit", "edit_#{singular_name}")
-            when :show    then emit(node, "GET", member_path(base, singular), controller, "show", singular_name)
+            when :edit    then emit(node, "GET", edit_path(base, singular, param), controller, "edit", "edit_#{singular_name}")
+            when :show    then emit(node, "GET", member_path(base, singular, param), controller, "show", singular_name)
             when :update
-              emit(node, "PATCH", member_path(base, singular), controller, "update", nil)
-              emit(node, "PUT", member_path(base, singular), controller, "update", nil)
-            when :destroy then emit(node, "DELETE", member_path(base, singular), controller, "destroy", nil)
+              emit(node, "PATCH", member_path(base, singular, param), controller, "update", nil)
+              emit(node, "PUT", member_path(base, singular, param), controller, "update", nil)
+            when :destroy then emit(node, "DELETE", member_path(base, singular, param), controller, "destroy", nil)
             end
           end
         end
 
-        def member_path(base, singular)
-          singular ? base : "#{base}/:id"
+        # `as:` renames the route helpers and the nested param, and leaves the
+        # path and the controller on the resource's own name.
+        def route_key(name, opts)
+          (opts[:as] || name).to_s
         end
 
-        def edit_path(base, singular)
-          singular ? "#{base}/edit" : "#{base}/:id/edit"
+        def singular_route_key(name, opts, singular:)
+          key = route_key(name, opts)
+          singular ? key : key.singularize
+        end
+
+        def resource_param(opts)
+          (opts[:param] || "id").to_s
+        end
+
+        def member_path(base, singular, param)
+          singular ? base : "#{base}/:#{param}"
+        end
+
+        def edit_path(base, singular, param)
+          singular ? "#{base}/edit" : "#{base}/:#{param}/edit"
         end
 
         def emit_verb_route(node)
@@ -269,14 +370,14 @@ module RailsAiContext
           @results << record
         end
 
-        def emit_dynamic(node)
+        def emit_dynamic(node, macro: node.name)
           return if suppressed?
 
-          record = { type: :dynamic, macro: node.name, location: node.location.start_line }
+          record = { type: :dynamic, macro: macro, location: node.location.start_line }
           # `draw(:admin)` names a file, and Rails resolves it by literal path.
           # Recording the name is what lets the introspector follow it instead
           # of writing off everything the file defines.
-          record[:target] = draw_target(node) if node.name == :draw
+          record[:target] = draw_target(node) if macro == :draw
           @results << record
         end
 
@@ -287,8 +388,13 @@ module RailsAiContext
 
         # Keyword options including hash-rocket string keys, so
         # `get "up" => "rails/health#show", as: :x` yields
-        # {"up" => "rails/health#show", as: :x}.
+        # {"up" => "rails/health#show", as: :x}, with any enclosing
+        # with_options defaults underneath them.
         def route_options(node)
+          current_defaults.merge(own_options(node))
+        end
+
+        def own_options(node)
           args = node.arguments&.arguments || []
           hash = args.find { |a| a.is_a?(Prism::KeywordHashNode) || a.is_a?(Prism::HashNode) }
           return {} unless hash
@@ -320,9 +426,12 @@ module RailsAiContext
         end
 
         # Rails maps a singular resource to the plural controller
-        # (resource :profile -> ProfilesController).
+        # (resource :profile -> ProfilesController). `module:` is not a
+        # resource option there: Rails peels it into a surrounding scope, so it
+        # moves the controller and never the path.
         def resource_controller(name, opts, singular: false)
-          controller = (opts[:controller] || (singular ? name.pluralize : name)).to_s
+          controller = (opts[:controller] || (singular ? name.pluralize : name)).to_s.delete_prefix("/")
+          controller = "#{opts[:module]}/#{controller}" if opts[:module]
           prefixed_controller(controller)
         end
 

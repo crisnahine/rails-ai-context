@@ -220,11 +220,15 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   assignment) has no static path and reports `[UNAVAILABLE]` in the static
   tier. Only the schema introspector's own secondary-database dump parsing
   (`db/*_schema.rb`, `db/*_structure.sql`) works without a boot.
-- **Constraints and lambda routes surface as a dynamic tally, not resolved
-  entries.** `RouteIntrospector#static_call` counts routes behind
-  `constraints do...end` blocks, lambdas, `devise_for`, and `concern`-based
-  route declarations into a `dynamic_routes` count rather than fabricating
-  per-route controller/action pairs it can't actually determine from source.
+- **Some route macros surface as a dynamic tally, not resolved entries.**
+  `RouteIntrospector#static_call` counts routes behind `devise_for`, `match`,
+  `direct`, `resolve`, a `draw` it cannot read, and a route whose `to:` is a
+  lambda or a `redirect(...)` into a `dynamic_routes` count rather than
+  fabricating per-route controller/action pairs it can't actually determine
+  from source. Routing concerns and `with_options` blocks are expanded, so
+  they are not in that count; a `concerns:` naming a concern defined in
+  another drawn file still is. `constraints do...end` does not hide its
+  children: they are read and resolved, the constraint itself is ignored.
 
 <br>
 

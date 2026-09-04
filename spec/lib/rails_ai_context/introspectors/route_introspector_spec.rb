@@ -89,6 +89,53 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       end
     end
 
+    it "files a concern's routes under the controller that serves them" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            concern :account_resources do
+              scope module: :activitypub do
+                resources :collections, only: [:show]
+              end
+            end
+
+            resources :accounts, only: [], concerns: :account_resources
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:by_controller].keys).to eq([ "activitypub/collections" ])
+        expect(result[:total_routes]).to eq(1)
+        expect(result).not_to have_key(:dynamic_routes)
+      end
+    end
+
+    # Each routes file is walked by its own listener, so a concern defined in
+    # another file has no body to replay and has to stay a disclosed gap.
+    it "counts a concern defined in a file it did not walk as unexpanded" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "routes"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            concern :account_resources do
+              resources :collections, only: [:show]
+            end
+            draw(:admin)
+          end
+        RUBY
+        File.write(File.join(dir, "config", "routes", "admin.rb"), <<~RUBY)
+          resources :accounts, only: [], concerns: :account_resources
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:total_routes]).to eq(0)
+        expect(result[:dynamic_routes]).to eq(1)
+      end
+    end
+
     it "reports a missing routes.rb honestly" do
       Dir.mktmpdir do |dir|
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
