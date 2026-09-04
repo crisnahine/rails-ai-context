@@ -78,6 +78,41 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
       end
     end
 
+    # This check reads the table off the model itself, and underscoring the
+    # class name asks for o_auth_client_configs - a table no app has, so every
+    # model whose name carries an acronym was skipped in silence.
+    context "missing counter_cache" do
+      def counter_cache_for(model_path, model_source, schema_source)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, "app", "models", model_path)))
+          File.write(File.join(dir, "app", "models", model_path), model_source)
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), schema_source)
+          described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+        end
+      end
+
+      it "finds the table through the file name, not the underscored class name" do
+        missing = counter_cache_for(
+          "oauth_client_config.rb",
+          "class OAuthClientConfig < ApplicationRecord\n  has_many :tokens\nend\n",
+          "create_table \"oauth_client_configs\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(a_hash_including(model: "OAuthClientConfig", association: "tokens"))
+      end
+
+      it "reads the table a model assigns itself" do
+        missing = counter_cache_for(
+          "tagging.rb",
+          "class Tagging < ApplicationRecord\n  self.table_name = 'comments'\n  has_many :tokens\nend\n",
+          "create_table \"comments\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(a_hash_including(model: "Tagging", association: "tokens"))
+      end
+    end
+
     it "detects Model.all in controllers" do
       expect(result[:model_all_in_controllers]).to be_an(Array)
       models = result[:model_all_in_controllers].map { |f| f[:model] }

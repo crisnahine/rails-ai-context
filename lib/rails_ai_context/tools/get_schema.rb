@@ -64,7 +64,9 @@ module RailsAiContext
           # Accepts: "users", "Users", "User" (model name → pluralized+underscored table)
           if table
             table_down = table.downcase
-            table_as_table = table.underscore.pluralize # Post → posts, UserProfile → user_profiles
+            # "Post" and "Admin::ActionLog" are model names here, and the model
+            # tier knows the table each of them reads.
+            table_as_table = RailsAiContext::Introspectors::TableName.for_model_name(table, Payload.models(cached_context))
             table_key = tables.keys.find { |k|
               k.downcase == table_down || k == table_as_table || k == table.underscore
             } || table

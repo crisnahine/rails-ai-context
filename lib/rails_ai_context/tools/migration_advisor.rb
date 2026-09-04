@@ -57,8 +57,12 @@ module RailsAiContext
         table = table.to_s.strip
         column = column.to_s.strip.presence if column
 
-        # Normalize model names to table names: "Post" → "posts", "UserProfile" → "user_profiles"
-        table = table.underscore.pluralize if table.match?(/\A[A-Z]/)
+        # Normalize model names to table names: "Post" → "posts", and
+        # "Admin::ActionLog" → the table its model recorded, not the
+        # `admin/action_logs` an underscore would build.
+        if table.match?(/\A[A-Z]/)
+          table = RailsAiContext::Introspectors::TableName.for_model_name(table, Payload.models(cached_context))
+        end
 
         return text_response("**Error:** `action` is required. Valid actions: #{VALID_ACTIONS.join(', ')}") if action.empty?
         return text_response("**Error:** `table` is required (e.g., 'users', 'posts').") if table.empty?

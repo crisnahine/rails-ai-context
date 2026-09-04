@@ -52,11 +52,11 @@ module RailsAiContext
       # Static tier: models are discovered by globbing every model directory
       # PathResolver resolves (conventional app/models, packs, engines, and
       # configured extras) and parsed with the source listeners; nothing is
-      # constantized. The table name is inferred from the class name (Rails
-      # convention), which is why every entry is tagged STATIC rather than
-      # VERIFIED - custom table_name= calls surface in :macros but are not
-      # resolved. When the same class name is found in more than one
-      # directory, the first discovery wins.
+      # constantized. The table comes from TableName over those same sources,
+      # which is close to Rails but not the connection's own answer - a prefix
+      # declared outside the model directories stays invisible - so every entry
+      # is tagged STATIC rather than VERIFIED. When the same class name is
+      # found in more than one directory, the first discovery wins.
       def static_call
         return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
 
@@ -73,7 +73,8 @@ module RailsAiContext
           next if candidate[:abstract]
           next unless model_class?(class_name, candidates)
 
-          result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file])
+          result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
+                                                    table_name: resolve_table_name(class_name, candidates))
         end
       end
 
@@ -106,7 +107,12 @@ module RailsAiContext
               path: record.path,
               file: record.file,
               superclass: declarations.find { |d| d.name == class_name }&.superclass,
-              abstract: abstract_class?(source)
+              abstract: abstract_class?(source),
+              # A module file declares no class and is kept for these two
+              # alone: they belong to the namespace, not to any one model.
+              table_name: TableName.explicit(source, class_name),
+              table_name_prefix: TableName.prefix(source, class_name),
+              table_name_suffix: TableName.suffix(source, class_name)
             }
           rescue => e
             found[record.path_name] = { error: e.message }
@@ -150,6 +156,51 @@ module RailsAiContext
           scope.pop
         end
         nil
+      end
+
+      # Rails' own order: what the class assigns itself wins, an STI child
+      # reads its parent's table, and otherwise the namespace's prefix and
+      # suffix wrap the stem the file name already carries.
+      def resolve_table_name(class_name, candidates, seen = [])
+        candidate = candidates[class_name]
+        return nil unless candidate
+        return candidate[:table_name] if candidate[:table_name]
+
+        parent = sti_parent(class_name, candidates, seen)
+        inherited = parent && resolve_table_name(parent, candidates, seen + [ class_name ])
+        return inherited if inherited
+
+        [ namespace_affix(class_name, candidates, :table_name_prefix),
+          TableName.stem(candidate[:path]),
+          namespace_affix(class_name, candidates, :table_name_suffix) ].join
+      end
+
+      # The model this one inherits its table from. A model base ends the
+      # chain, and so does an abstract base: a child of one has a table of
+      # its own.
+      def sti_parent(class_name, candidates, seen)
+        return nil if seen.include?(class_name)
+
+        parent = candidates.dig(class_name, :superclass)
+        return nil if parent.nil? || model_base?(parent)
+
+        resolved = resolve_superclass(parent, class_name, candidates)
+        return nil if resolved.nil? || candidates.dig(resolved, :abstract)
+
+        resolved
+      end
+
+      # Rails takes the first of these its module parents answers, walking
+      # innermost outward, so an inner namespace overrides an outer one.
+      def namespace_affix(class_name, candidates, key)
+        scope = class_name.split("::")[0..-2]
+        while scope.any?
+          declared = candidates.dig(scope.join("::"), key)
+          return declared if declared
+
+          scope.pop
+        end
+        ""
       end
 
       # Zeitwerk resolves a path through the app's own inflector, which the
@@ -654,15 +705,11 @@ module RailsAiContext
                .transform_values(&:to_s)
       end
 
-      def static_model_details(path, class_name, file: relative_to_root(path))
+      def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil)
         data = SourceIntrospector.call(path)
         {
           confidence: Confidence::STATIC,
-          # Rails derives the table through its own inflector, and the file's
-          # name already carries that inflection - Zeitwerk resolved the
-          # constant from it. Underscoring the constant instead turns
-          # OAuthClientConfig into o_auth_client_configs, a table no app has.
-          table_name: File.basename(path, ".rb").pluralize,
+          table_name: table_name || TableName.stem(path),
           associations: data[:associations],
           validations: data[:validations],
           scopes: data[:scopes],
@@ -717,7 +764,10 @@ module RailsAiContext
               result[class_name] = if source.include?("Mongoid::Document")
                 mongoid_model_details(path).merge(file: relative_to_root(path))
               else
-                static_model_details(path, class_name)
+                # This walk keeps no candidate hash, so an AR model in a
+                # hybrid app gets the table it assigns itself and the derived
+                # stem otherwise - no namespace prefix, no STI parent.
+                static_model_details(path, class_name, table_name: TableName.explicit(source, class_name))
               end
             rescue => e
               result[relative.camelize] = { error: e.message }

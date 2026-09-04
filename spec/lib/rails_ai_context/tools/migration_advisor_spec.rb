@@ -29,6 +29,20 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       })
     end
 
+    # Underscoring a namespaced model asks for `admin/action_logs`, which the
+    # identifier guard then rejects as invalid - a dead end for a model the
+    # payload can name a table for.
+    it "takes a namespaced model's table from the model tier" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } },
+        models: { "Admin::Entry" => { table_name: "posts" } }
+      })
+
+      response = described_class.call(action: "add_column", table: "Admin::Entry", column: "phone", type: "string")
+
+      expect(response.content.first[:text]).to include("add_column :posts, :phone, :string")
+    end
+
     it "generates add_column migration" do
       response = described_class.call(action: "add_column", table: "users", column: "phone", type: "string")
       text = response.content.first[:text]
