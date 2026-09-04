@@ -270,7 +270,7 @@ rails-ai-context help                      # Show all commands
 
 Must be run from your Rails app root directory (requires `config/environment.rb`).
 
-**Config:** Standalone mode reads from `.rails-ai-context.yml` (created by `init`). If no config file exists, defaults are used. If the gem is also in the Gemfile, the initializer takes precedence over the YAML file.
+**Config:** Standalone mode reads from `.rails-ai-context.yml` (created by `init`), and that is its only config source - the gem is not loaded while `config/initializers` runs. If no config file exists, defaults are used. With the gem in the Gemfile the two merge key by key ([Precedence](CONFIGURATION.md#precedence)).
 
 ### Legacy command
 
