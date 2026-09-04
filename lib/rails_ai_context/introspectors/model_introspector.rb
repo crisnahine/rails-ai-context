@@ -345,24 +345,21 @@ module RailsAiContext
         nil
       end
 
+      # Rails registers one chain per event, holding before, after and around
+      # together - there is no `_before_save_callbacks` and no separate around
+      # chain, so the kind comes off the entry rather than the chain name.
+      CALLBACK_EVENTS = %i[validation save create update destroy touch commit rollback initialize find].freeze
+
       def extract_callbacks(model, source_data)
-        callback_types = %i[
-          before_validation after_validation
-          before_save after_save
-          before_create after_create
-          before_update after_update
-          before_destroy after_destroy
-          after_commit after_rollback
-        ]
+        result = CALLBACK_EVENTS.each_with_object({}) do |event, hash|
+          chain = :"_#{event}_callbacks"
+          next unless model.respond_to?(chain, true)
 
-        result = callback_types.each_with_object({}) do |type, hash|
-          callbacks = model.send(:"_#{type}_callbacks").reject do |cb|
-            cb.filter.nil? || cb.filter.to_s.start_with?(*EXCLUDED_CALLBACKS) || cb.filter.is_a?(Proc)
+          model.send(chain).each do |cb|
+            next if cb.filter.nil? || cb.filter.to_s.start_with?(*EXCLUDED_CALLBACKS) || cb.filter.is_a?(Proc)
+
+            (hash["#{cb.kind}_#{event}"] ||= []) << cb.filter.to_s
           end
-
-          next if callbacks.empty?
-
-          hash[type.to_s] = callbacks.map { |cb| cb.filter.to_s }
         end
 
         # If reflection returned nothing, fall back to AST-based extraction

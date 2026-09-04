@@ -296,4 +296,19 @@ RSpec.describe RailsAiContext::Introspectors::SourceIntrospector do
       end
     end
   end
+
+  # The listener kept only symbol and string arguments, so a callback whose
+  # target is a class object produced no entry at all in either tier.
+  it "reports an around callback whose target is a class object" do
+    result = described_class.from_source(<<~RUBY)
+      class Status < ApplicationRecord
+        around_create Mastodon::Snowflake::Callbacks
+        before_save :normalize
+      end
+    RUBY
+
+    expect(result[:callbacks]).to include(
+      a_hash_including(type: "around_create", method: "Mastodon::Snowflake::Callbacks")
+    )
+  end
 end

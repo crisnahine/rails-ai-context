@@ -918,4 +918,44 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
+
+  # Rails registers a chain per event - `_save_callbacks` holds before, after
+  # and around together - so asking for `_before_save_callbacks` raised on the
+  # first iteration and every booted model quietly fell back to the AST.
+  describe "#extract_callbacks from reflection" do
+    before do
+      stub_const("SnowflakeCallbacks", Class.new)
+    end
+
+    let(:model) do
+      Class.new(ApplicationRecord) do
+        self.table_name = "posts"
+
+        def self.name = "Snowflaked"
+
+        around_create SnowflakeCallbacks
+        before_save :normalize
+        after_touch :bust
+        after_initialize :prepare
+      end
+    end
+
+    let(:source_data) { { associations: [], validations: [], scopes: [], enums: [], callbacks: [], macros: [], methods: [] } }
+
+    subject(:callbacks) { introspector.send(:extract_callbacks, model, source_data) }
+
+    it "reports around callbacks from the event chain" do
+      expect(callbacks["around_create"]).to be_an(Array)
+      expect(callbacks["around_create"]).to include("SnowflakeCallbacks")
+    end
+
+    it "reports before and after callbacks from the same chain" do
+      expect(callbacks["before_save"]).to include("normalize")
+    end
+
+    it "reports the touch and initialize chains" do
+      expect(callbacks["after_touch"]).to include("bust")
+      expect(callbacks["after_initialize"]).to include("prepare")
+    end
+  end
 end

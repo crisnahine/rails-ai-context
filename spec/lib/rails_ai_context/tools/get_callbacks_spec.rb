@@ -213,4 +213,70 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(text).to include("# Post")
     end
   end
+
+  # `after_create do` was matched by a line regex whose colon was optional,
+  # so the block keyword was printed as the method name.
+  describe "concern callbacks the line regex mangled" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models", "concerns"))
+      File.write(File.join(tmpdir, "app", "models", "concerns", "rate_limitable.rb"), <<~RUBY)
+        module RateLimitable
+          extend ActiveSupport::Concern
+
+          included do
+            after_create do
+              rate_limiter.record!
+            end
+
+            around_create Some::CallbackObject
+            after_commit :announce, on: :create
+            after_rollback do
+              rate_limiter.rollback!
+            end
+          end
+
+          def rate_limiter(by = nil)
+            @rate_limiter ||= RateLimiter.new(by)
+          end
+        end
+      RUBY
+
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Status" => { callbacks: { "before_save" => %w[touch_thread] }, concerns: %w[RateLimitable] } }
+      )
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
+      allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "names the block and the class object instead of inventing a method" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("after_create do")
+      expect(text).to include("around_create Some::CallbackObject")
+      expect(text).to include("after_rollback do")
+      expect(text).not_to include(":do")
+      expect(text).not_to include(":Some")
+    end
+
+    # `after_commit_on_create` is the resolved type, not a Ruby method - the
+    # concern line prints what the file declares.
+    it "keeps the declared macro name for an after_commit with on:" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("after_commit :announce")
+      expect(text).not_to include("after_commit_on_create")
+    end
+
+    it "attaches no method source to a block callback at detail:full" do
+      text = described_class.call(model: "Status", detail: "full").content.first[:text]
+
+      expect(text).to include("after_create do")
+      expect(text).not_to include("def rate_limiter")
+    end
+  end
 end

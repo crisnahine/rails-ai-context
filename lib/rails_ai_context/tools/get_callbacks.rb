@@ -98,13 +98,13 @@ module RailsAiContext
             methods.each do |method_name|
               source = extract_callback_source(name, method_name)
               if source
-                lines << "### :#{method_name} (lines #{source[:start_line]}-#{source[:end_line]})"
+                lines << "### #{callback_target(method_name)} (lines #{source[:start_line]}-#{source[:end_line]})"
                 lines << "```ruby"
                 lines << source[:code]
                 lines << "```"
                 lines << ""
               else
-                lines << "- `:#{method_name}`"
+                lines << "- `#{callback_target(method_name)}`"
               end
             end
           end
@@ -114,8 +114,7 @@ module RailsAiContext
           lines << ""
 
           ordered.each do |type, methods|
-            method_list = methods.map { |m| "`:#{m}`" }.join(", ")
-            lines << "- **#{type}** → #{method_list}"
+            lines << "- **#{type}** → #{format_targets(methods)}"
           end
         end
 
@@ -127,7 +126,7 @@ module RailsAiContext
             concern_callbacks.each do |concern_name, info|
               lines << "### #{concern_name}"
               info[:callbacks].each do |cb|
-                source = extract_method_source_from_file(info[:path], cb[:method_name])
+                source = cb[:method_name] && extract_method_source_from_file(info[:path], cb[:method_name])
                 lines << "- #{cb[:declaration]}"
                 if source
                   lines << "```ruby"
@@ -179,8 +178,7 @@ module RailsAiContext
             ordered = order_callbacks(data[:callbacks])
             lines << "## #{name}"
             ordered.each do |type, methods|
-              method_list = methods.map { |m| "`:#{m}`" }.join(", ")
-              lines << "- **#{type}** → #{method_list}"
+              lines << "- **#{type}** → #{format_targets(methods)}"
             end
             lines << ""
           end
@@ -194,10 +192,10 @@ module RailsAiContext
               methods.each do |method_name|
                 source = extract_callback_source(name, method_name)
                 if source
-                  lines << "### #{type} :#{method_name} (lines #{source[:start_line]}-#{source[:end_line]})"
+                  lines << "### #{type} #{callback_target(method_name)} (lines #{source[:start_line]}-#{source[:end_line]})"
                   lines << "```ruby" << source[:code] << "```" << ""
                 else
-                  lines << "- **#{type}** → `:#{method_name}`"
+                  lines << "- **#{type}** → `#{callback_target(method_name)}`"
                 end
               end
             end
@@ -229,8 +227,14 @@ module RailsAiContext
       end
 
       private_class_method def self.extract_callback_source(model_name, method_name)
+        return nil unless method_name?(method_name)
+
         path = rails_app.root.join(RailsAiContext::Payload.model_file(cached_context, model_name))
         extract_method_source_from_file(path, method_name)
+      end
+
+      private_class_method def self.format_targets(methods)
+        methods.map { |m| "`#{callback_target(m.to_s)}`" }.join(", ")
       end
 
       private_class_method def self.find_concern_callbacks(model_name, data)
@@ -248,13 +252,7 @@ module RailsAiContext
           next if File.size(concern_path) > max_size
 
           source = RailsAiContext::SafeFile.read(concern_path) or next
-          callbacks = []
-
-          source.each_line do |line|
-            if (match = line.match(/\A\s*(before_\w+|after_\w+|around_\w+)\s+[: ]*(\w+)/))
-              callbacks << { declaration: "#{match[1]} :#{match[2]}", method_name: match[2] }
-            end
-          end
+          callbacks = concern_callback_entries(source)
 
           if callbacks.any?
             concern_callbacks[concern_name] = { callbacks: callbacks, path: concern_path }
@@ -265,6 +263,22 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] find_concern_callbacks failed: #{e.message}" if ENV["DEBUG"]
         {}
+      end
+
+      # The listener the rest of the gem uses, so a block and a class object
+      # are named the way the model file's own callbacks are.
+      private_class_method def self.concern_callback_entries(source)
+        walked = Introspectors::SourceIntrospector.walk_source(
+          source, { callbacks: Introspectors::Listeners::CallbacksListener }
+        )
+
+        Array(walked[:callbacks]).map do |cb|
+          method = cb[:method].to_s
+          # The declared macro, not the resolved type: `after_commit_on_create`
+          # is a key this gem synthesizes, not something the file says.
+          declaration = "#{cb[:name] || cb[:type]} #{callback_target(method)}"
+          { declaration: declaration, method_name: (method if method_name?(method)) }
+        end
       end
     end
   end

@@ -510,7 +510,7 @@ module RailsAiContext
             next unless data.is_a?(Hash)
             (data[:callbacks] || {}).each do |type, methods|
               next unless methods.is_a?(Array)
-              methods.each { |m| callbacks << "#{name}: #{type} :#{m}" }
+              methods.each { |m| callbacks << "#{name}: #{type} #{callback_target(m)}" }
             end
           end
           return if callbacks.empty?
