@@ -85,6 +85,41 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Rails names the anonymous join class it builds for a
+  # has_and_belongs_to_many through a singleton `name=`, so it answers a name
+  # no constant carries: "HABTM_Tags" while it lives at "Account::HABTM_Tags".
+  describe "a class that answers a name no constant carries" do
+    # Autoloading a model makes Rails walk ActiveRecord::Base.descendants to
+    # rebuild callbacks, so the app is loaded before the stub is in place or
+    # that walk reaches the doubles.
+    let(:loaded) do
+      introspector.call
+      ActiveRecord::Base.descendants
+    end
+
+    def add_descendant(model)
+      list = loaded + [ model ]
+      allow(ActiveRecord::Base).to receive(:descendants).and_return(list)
+    end
+
+    it "is not reported as a model" do
+      add_descendant(double("HABTM_Tags", name: "HABTM_Tags", to_s: "Account::HABTM_Tags",
+                                          abstract_class?: false))
+
+      keys = introspector.call.keys
+
+      expect(keys).to include("Post")
+      expect(keys).not_to include("HABTM_Tags")
+    end
+
+    it "is rejected by the name it answers, not by the HABTM spelling" do
+      add_descendant(double("Renamed", name: "Renamed", to_s: "Owner::Renamed",
+                                       abstract_class?: false))
+
+      expect(introspector.call.keys).not_to include("Renamed")
+    end
+  end
+
   describe "AST-based macro extraction via #call" do
     let(:fixture_model) { File.join(Rails.root, "app/models/employee.rb") }
 
