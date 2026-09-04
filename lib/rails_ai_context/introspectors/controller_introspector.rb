@@ -263,6 +263,8 @@ module RailsAiContext
         raw.filter_map do |entry|
           name_sym = entry[:args]&.first
           next unless name_sym
+          next if excluded_filters.include?(name_sym.to_s)
+
           kind = entry[:macro].to_s.sub(/_action\z/, "").sub(/\A(?:prepend|append|skip)_/, "")
           filter = { name: name_sym.to_s, kind: kind }
 

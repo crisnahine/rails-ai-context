@@ -97,6 +97,11 @@ preset: full
 | `excluded_association_names` | Array | 7 framework associations | Association names to hide from model output |
 | `excluded_concerns` | Array of Regex | Framework concerns | Concerns to skip (supports regex) |
 
+`excluded_filters` hides a name from a controller's filter list in both
+tiers. A filter the controller explicitly skips is still shown, as a
+struck-through `~~name~~ _(skipped)_` line, because a skip is a fact about
+the class rather than a filter that runs.
+
 ### File Size Limits
 
 | Option | Type | Default | Description |

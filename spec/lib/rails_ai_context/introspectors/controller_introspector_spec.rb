@@ -309,6 +309,25 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     end
   end
 
+  # Reflection that yields nothing but excluded names falls through to the
+  # source parser, which is the same producer the static tier uses.
+  describe "excluded_filters on the booted source fallback" do
+    it "does not hand back the names reflection already dropped" do
+      allow(RailsAiContext.configuration).to receive(:excluded_filters).and_return(%w[set_post])
+      callback = double("callback", filter: :set_post, kind: :before)
+      ctrl = double("controller", _process_action_callbacks: [ callback ])
+      source = <<~RUBY
+        class PostsController < ApplicationController
+          before_action :set_post
+
+          def show; end
+        end
+      RUBY
+
+      expect(introspector.send(:extract_filters, ctrl, source)).to eq([])
+    end
+  end
+
   describe "#static_call" do
     it "extracts controllers purely from source files" do
       Dir.mktmpdir do |dir|
@@ -520,6 +539,32 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result[:controllers]["Api::V1::PostsController"][:actions]).to eq([])
+      end
+    end
+
+    describe "excluded_filters" do
+      before { allow(RailsAiContext.configuration).to receive(:excluded_filters).and_return(%w[set_post]) }
+
+      def static_filters(dir)
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            before_action :set_post, only: %i[show]
+            before_action :authenticate_user!
+
+            def show; end
+          end
+        RUBY
+
+        described_class.new(RailsAiContext::StaticApp.new(dir))
+          .static_call[:controllers]["PostsController"][:filters].map { |f| f[:name] }
+      end
+
+      it "drops an excluded filter and keeps the rest" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+
+          expect(static_filters(dir)).to eq(%w[authenticate_user!])
+        end
       end
     end
 
