@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/RELEASING.md`.** Every release rediscovered the same list by reading
+  the release workflow: the changelog heading the notes are extracted from, the
+  two files carrying the version, and the end-to-end run the gate wants against
+  the exact commit before a tag will publish. `CONTRIBUTING.md` points at it.
+
 ### Fixed
 
 Defects found by a ninth QA round of v5.25.0 against Mastodon (issues #160
