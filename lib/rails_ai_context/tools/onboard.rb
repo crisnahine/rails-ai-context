@@ -295,6 +295,9 @@ module RailsAiContext
           end
           lines << "#{count_phrase(mailers.size, 'mailer')}." if mailers.any?
           lines << "#{count_phrase(channels.size, 'Action Cable channel')}." if channels.any?
+          # An app that runs its async work through Sidekiq workers has an
+          # empty app/jobs, and the section would read as no background work.
+          lines << GetJobPattern::NOT_COVERED if job_list.empty?
           lines << ""
           lines
         end

@@ -265,6 +265,35 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       end
     end
 
+    # An app whose async work runs through Sidekiq workers has nothing in
+    # app/jobs, and the section read as if it had no background work.
+    context "the async section on an app with no ActiveJob jobs" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "TestApp",
+          jobs: { jobs: [], mailers: [ { name: "UserMailer" } ], channels: [] }
+        })
+      end
+
+      it "states the limit the job listing states" do
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("## Background Jobs & Async")
+        expect(text).to include(RailsAiContext::Tools::GetJobPattern::NOT_COVERED)
+      end
+
+      it "leaves the caveat off when jobs were found" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "TestApp",
+          jobs: { jobs: [ { name: "ImportJob" } ], mailers: [], channels: [] }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).not_to include(RailsAiContext::Tools::GetJobPattern::NOT_COVERED)
+      end
+    end
+
     context "route count parity with rails_get_routes" do
       it "reports the same app route total as the routes tool (PUT/PATCH deduped)" do
         RailsAiContext::Tools::GetRoutes.reset_cache!
