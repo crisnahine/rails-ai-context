@@ -153,12 +153,12 @@ module RailsAiContext
 
         # One row past the cap, so a cut list is knowable rather than silent.
         fetch_limit = max_results_cap + 1
-        fetched = if ripgrep_available?
+        fetched, unreadable = if ripgrep_available?
           search_with_ripgrep(search_pattern, search_path, file_type, fetch_limit, root, context_lines, exclude_tests: exclude_tests)
         else
           search_with_ruby(search_pattern, search_path, file_type, fetch_limit, root, exclude_tests: exclude_tests)
         end
-        all_results, truncated, scanned = cap_results(fetched)
+        all_results, truncated = cap_results(fetched)
 
         # Filter out definitions for match_type:"call"
         all_results.reject! { |r| r[:content].match?(/\A\s*def\s/) } if match_type == "call"
@@ -189,6 +189,14 @@ module RailsAiContext
           return text_response(page[:hint])
         end
 
+        # Paging is row-based, so a page can land wholly inside one match's
+        # context. Rows under a "showing 0" header read as a contradiction,
+        # so that page answers as the empty page it is.
+        shown = unflagged ? paginated.size : match_count(paginated)
+        if shown.zero?
+          return empty_response("No matches at offset #{offset}. Total: #{capped_match_phrase(match_total, truncated)}.")
+        end
+
         pagination = page[:hint].empty? ? "" : "\n#{page[:hint]}"
 
         # When context lines are interleaved with matches, prefix matches with
@@ -197,9 +205,10 @@ module RailsAiContext
         mixed = paginated.any? { |r| !match_row?(r) }
         with_context = mixed ? " (#{count_phrase(paginated.size, 'line')} with context)" : ""
         header = "# Search: `#{original_pattern}`\n" \
-          "**#{count_phrase(match_total, 'match')}#{scanned}**#{" in #{path}" if path}, " \
-          "showing #{unflagged ? paginated.size : match_count(paginated)}#{with_context}\n"
+          "**#{capped_match_phrase(match_total, truncated)}#{scanned_note(truncated)}**#{" in #{path}" if path}, " \
+          "showing #{shown}#{with_context}\n"
         header += "`>` = match line\n" if mixed
+        header += "_Some files could not be read and were skipped._\n" if unreadable
 
         if group_by_file
           text_response(header + "\n" + format_grouped(paginated, mixed, all_results) + pagination)
@@ -302,26 +311,31 @@ module RailsAiContext
 
         output, status = Open3.capture2(*cmd, err: File::NULL)
 
-        # rg exits 1 for "no matches" and 2 for a run it could not make - an
-        # unsupported flag on an older rg, most of all. Answering an empty
-        # list there would report no matches for a search that never ran.
-        unless status.success? || status.exitstatus == 1
+        # rg exits 1 for "no matches" and 2 for any error, including one it
+        # recovered from - an unreadable file in the tree - and it still
+        # prints every match it found. An rg too old for a flag prints
+        # nothing, so an empty result from a failed run is the one worth
+        # rerunning; a full one is kept and the skipped files are named.
+        failed = !(status.success? || status.exitstatus == 1)
+        if failed && output.empty?
           return search_with_ruby(pattern, search_path, file_type, max_results, root, exclude_tests: exclude_tests)
         end
 
-        parse_rg_output(output, root)
+        rows = parse_rg_output(output, root)
           .reject { |r| sensitive_file?(r[:file]) }
           .first(max_results)
+        [ rows, failed ]
       rescue => e
-        [ { file: "error", line_number: 0, content: e.message } ]
+        [ [ { file: "error", line_number: 0, content: e.message } ], false ]
       end
 
       private_class_method def self.search_with_ruby(pattern, search_path, file_type, max_results, root, exclude_tests: false)
         results = []
+        unreadable = false
         begin
           regex = build_regexp(pattern, Regexp::IGNORECASE, timeout: 2)
         rescue RegexpError => e
-          return [ { file: "error", line_number: 0, content: "Invalid regex: #{e.message}" } ]
+          return [ [ { file: "error", line_number: 0, content: "Invalid regex: #{e.message}" } ], false ]
         end
         extensions = RailsAiContext.configuration.search_extensions.join(",")
         glob = file_type ? "**/*.#{file_type}" : "**/*.{#{extensions}}"
@@ -343,26 +357,36 @@ module RailsAiContext
           (RailsAiContext::SafeFile.read(file) || "").lines.each_with_index do |line, idx|
             if line.match?(regex)
               results << { file: relative, line_number: idx + 1, content: line, match: true }
-              return results if results.size >= max_results
+              return [ results, unreadable ] if results.size >= max_results
             end
           end
         rescue => _e
+          unreadable = true
           next # Skip binary/unreadable files
         end
 
-        results
+        [ results, unreadable ]
       end
 
 
       # Rows are matches plus context lines; only the flagged ones are matches.
-      # Rows are fetched one past the cap so a cut list is knowable. Returns
-      # the capped rows, whether they were cut, and the label the header
-      # prints when they were.
+      # Rows are fetched one past the cap so a cut list is knowable.
       private_class_method def self.cap_results(rows)
         truncated = rows.size > max_results_cap
-        rows = rows.first(max_results_cap) if truncated
-        scanned = truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
-        [ rows, truncated, scanned ]
+        [ truncated ? rows.first(max_results_cap) : rows, truncated ]
+      end
+
+      # The cap is on emitted lines, so a cut list means the count beside it
+      # covers only the lines the search got to read.
+      private_class_method def self.scanned_note(truncated)
+        truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
+      end
+
+      # A cut list makes the match count a floor. paginate marks its own
+      # total the same way, so the two lines of one answer agree.
+      private_class_method def self.capped_match_phrase(total, truncated)
+        phrase = count_phrase(total, "match")
+        truncated ? phrase.sub(/\A\d+/) { |n| "#{n}+" } : phrase
       end
 
       private_class_method def self.match_row?(row)
@@ -399,9 +423,9 @@ module RailsAiContext
         output.lines.filter_map do |line|
           next if line.strip == "--" # Skip group separators from -C context output
 
-          if (m = line.match(/^(.+?)#{MATCH_FIELD_SEPARATOR}(\d+)#{MATCH_FIELD_SEPARATOR}(.*)$/o))
+          if (m = line.match(/^(.+?)#{Regexp.escape(MATCH_FIELD_SEPARATOR)}(\d+)#{Regexp.escape(MATCH_FIELD_SEPARATOR)}(.*)$/o))
             { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: true }
-          elsif (m = line.match(/^([^\t]+)#{CONTEXT_FIELD_SEPARATOR}(\d+)#{CONTEXT_FIELD_SEPARATOR}(.*)$/o))
+          elsif (m = line.match(/^([^\t]+)#{Regexp.escape(CONTEXT_FIELD_SEPARATOR)}(\d+)#{Regexp.escape(CONTEXT_FIELD_SEPARATOR)}(.*)$/o))
             { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: false }
           elsif (m = line.match(/^(.+?):(\d+):(.*)$/))
             { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: true }
@@ -422,7 +446,7 @@ module RailsAiContext
 
         # 1. Find the definition
         def_pattern = "^\\s*def\\s+(self\\.)?#{Regexp.escape(cleaned)}#{trailing_boundary(cleaned)}"
-        def_results = quick_search(def_pattern, search_path, root, 10, exclude_tests)
+        def_results, = quick_search(def_pattern, search_path, root, 10, exclude_tests)
 
         if def_results.any?
           lines << "## Definition"
@@ -466,7 +490,8 @@ module RailsAiContext
 
         # 2. Find all callers (everywhere the method is referenced, excluding the def line)
         call_pattern = exact_pattern(cleaned)
-        call_results, _call_truncated, scanned = cap_results(quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests))
+        call_rows, = quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests)
+        call_results, call_truncated = cap_results(call_rows)
         callers = call_results.reject { |r| r[:content].match?(/\A\s*def\s/) }
 
         # Exclude the definition file+line to avoid self-reference
@@ -479,7 +504,7 @@ module RailsAiContext
           test_callers = callers.select { |r| r[:file].match?(/\A(test|spec)\//) }
 
           if app_callers.any?
-            lines << "## Called from (#{count_phrase(app_callers.size, "site")}#{scanned})"
+            lines << "## Called from (#{count_phrase(app_callers.size, "site")})"
             grouped = app_callers.group_by { |r| r[:file] }
             grouped.each do |file, matches|
               category = case file
@@ -510,10 +535,16 @@ module RailsAiContext
           end
 
           if test_callers.any?
-            lines << "" << "## Tested by (#{count_phrase(test_callers.size, "reference")}#{scanned})"
+            lines << "" << "## Tested by (#{count_phrase(test_callers.size, "reference")})"
             test_callers.group_by { |r| r[:file] }.each do |file, matches|
               lines << "- `#{file}` (#{count_phrase(matches.size, "reference")})"
             end
+          end
+
+          # One note for the whole search, worded against the lines it read
+          # rather than against a heading that counts sites.
+          if call_truncated
+            lines << "" << "_Only the first #{count_phrase(max_results_cap, 'matching line')} were scanned; there may be more call sites._"
           end
         else
           lines << "## Called from"

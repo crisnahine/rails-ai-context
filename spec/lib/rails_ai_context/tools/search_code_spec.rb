@@ -35,7 +35,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     it "uses smart result limiting and shows the match count" do
       result = described_class.call(pattern: "class")
       text = result.content.first[:text]
-      expect(text).to match(/\*\*\d+ matches?/)
+      expect(text).to match(/\*\*\d+\+? matches?/)
       expect(result).to be_a(MCP::Tool::Response)
     end
 
@@ -289,6 +289,34 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     end
   end
 
+  # rg exits 2 for an error it recovered from too, and still prints every
+  # match it found. Rerunning in Ruby there throws a good result set away and
+  # loses both the context rows and the files with no listed extension.
+  describe "when ripgrep recovered from an error" do
+    before do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
+    end
+
+    it "keeps the matches and says some files could not be read" do
+      with_search_app(
+        "Gemfile" => %(gem "devise"\n),
+        "app/models/status.rb" => "class Status\n  # devise lives here\nend\n",
+        "app/models/locked.rb" => "# devise\n"
+      ) do |dir|
+        File.chmod(0o000, File.join(dir, "app", "models", "locked.rb"))
+
+        text = described_class.call(pattern: "devise").content.first[:text]
+
+        expect(text).to include("Gemfile:1")
+        expect(text).to include("app/models/status.rb:2")
+        expect(text).to include("Some files could not be read")
+      ensure
+        File.chmod(0o644, File.join(dir, "app", "models", "locked.rb"))
+      end
+    end
+  end
+
   # The search returns rows - match rows and context rows - so a count taken
   # off the row list moves with context_lines and stops at the line cap.
   describe "result counts" do
@@ -324,6 +352,18 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     end
 
+    # Paging is row-based, so an offset can land wholly inside one match's
+    # trailing context. Rows under a "showing 0" header contradict it.
+    it "answers a page of pure context rows as an empty page" do
+      with_search_app("app/models/zed.rb" => "a\nb\nqqmarker\nd\ne\n") do
+        text = described_class.call(pattern: "qqmarker", context_lines: 2, offset: 3).content.first[:text]
+
+        expect(text).to include("No matches at offset 3")
+        expect(text).not_to include("showing 0")
+        expect(text).not_to include("zed.rb:4")
+      end
+    end
+
     # A match line whose own content is tab-separated digits used to parse as
     # a context row, which would take it out of the count entirely.
     it "counts a match whose content looks like a context row" do
@@ -353,6 +393,21 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       RailsAiContext.configuration.max_search_results = previous_cap
     end
 
+    # paginate prints its own cut total as "10+", so the header saying a bare
+    # "10 matches" made the two lines of one answer disagree.
+    it "marks the header count as a floor when the rows were cut" do
+      previous_cap = RailsAiContext.configuration.max_search_results
+      RailsAiContext.configuration.max_search_results = 10
+
+      with_search_app("app/services/thing.rb" => (([ "  def call" ] * 50).join("\n") + "\n")) do
+        text = described_class.call(pattern: "def call", context_lines: 0).content.first[:text]
+
+        expect(text).to include("**10+ matches - first 10 lines scanned**")
+      end
+    ensure
+      RailsAiContext.configuration.max_search_results = previous_cap
+    end
+
     it "reports a file's whole match count beside what the page shows" do
       with_search_app("app/services/thing.rb" => (([ "  def call" ] * 20).join("\n") + "\n")) do
         text = described_class.call(pattern: "def call", context_lines: 0, limit: 5, group_by_file: true).content.first[:text]
@@ -361,7 +416,9 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     end
 
-    it "marks a trace caller count that stopped at the line cap" do
+    # The heading counts sites and the cap counts lines, so the note goes
+    # once, under both sections, rather than into each heading.
+    it "notes once that a trace stopped at the line cap" do
       previous_cap = RailsAiContext.configuration.max_search_results
       RailsAiContext.configuration.max_search_results = 10
       source = "class Saver\n  def touch\n    true\n  end\nend\n" + (([ "touch" ] * 50).join("\n") + "\n")
@@ -369,7 +426,8 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       with_search_app("app/models/saver.rb" => source) do
         text = described_class.call(pattern: "touch", match_type: "trace").content.first[:text]
 
-        expect(text).to match(/## Called from \(\d+ sites - first 10 lines scanned\)/)
+        expect(text).to match(/## Called from \(\d+ sites\)/)
+        expect(text.scan("Only the first 10 matching lines were scanned").size).to eq(1)
       end
     ensure
       RailsAiContext.configuration.max_search_results = previous_cap
