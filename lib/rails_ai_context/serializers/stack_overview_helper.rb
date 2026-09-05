@@ -215,17 +215,18 @@ module RailsAiContext
       # "Global" is the claim the generated files make, so two shapes are not
       # it: `skip_before_action`, which says the opposite, and a filter carrying
       # only:/except:/if:/unless:, which runs on some requests.
+      # The filters every controller runs, through the reader the chain walk
+      # uses, so this line and `rails_get_controllers` cannot disagree about
+      # one file. Unconditional ones only: a constrained filter does not run
+      # everywhere, and this line says it does.
       def detect_before_actions(root = project_root)
-        app_ctrl_file = File.join(root, "app", "controllers", "application_controller.rb")
-        return [] unless File.exist?(app_ctrl_file)
+        source = ActionFilters.base_controller_source("ApplicationController", root)
+        return [] unless source
 
-        File.read(app_ctrl_file).lines.filter_map do |line|
-          match = line.match(/(?<!skip_)\bbefore_action\s+:(?<name>[\w!?]+)(?<rest>.*)/)
-          next unless match
-          next if match[:rest].match?(/\b(only|except|if|unless):/)
-
-          match[:name]
-        end
+        Introspectors::ControllerFilters.from_source(source)
+          .select { |filter| filter[:kind] == "before" && !filter[:skipped] }
+          .reject { |filter| filter[:only] || filter[:except] || filter[:if] || filter[:unless] }
+          .map { |filter| filter[:name] }
       rescue => e
         $stderr.puts "[rails-ai-context] Before actions scan skipped: #{e.message}" if ENV["DEBUG"]
         []

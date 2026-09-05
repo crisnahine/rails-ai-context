@@ -1507,6 +1507,92 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # The child's record already carries what its base's concerns declared, so a
+  # Concerns section that named none of them contradicted the Callbacks
+  # section under it, which credits them by name.
+  describe "a concern an STI base includes" do
+    def sti_app(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+      File.write(File.join(dir, "app", "models", "concerns", "trackable.rb"), <<~RUBY)
+        module Trackable
+          extend ActiveSupport::Concern
+
+          included do
+            before_save :touch_tracker
+          end
+        end
+      RUBY
+      File.write(File.join(dir, "app", "models", "vehicle.rb"),
+                 "class Vehicle < ApplicationRecord\n  include Trackable\nend\n")
+      File.write(File.join(dir, "app", "models", "car.rb"), "class Car < Vehicle\nend\n")
+    end
+
+    it "is named in the child's concerns, the way the child's callbacks credit it" do
+      Dir.mktmpdir do |dir|
+        sti_app(dir)
+
+        car = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Car"]
+
+        expect(car[:concerns]).to eq([ "Trackable" ])
+        expect(car[:concern_callbacks].map { |c| c[:from_concern] }).to eq([ "Trackable" ])
+      end
+    end
+
+    it "is counted as hidden for the child when the key hides it" do
+      Dir.mktmpdir do |dir|
+        sti_app(dir)
+        original = RailsAiContext.configuration.excluded_concerns
+        RailsAiContext.configuration.excluded_concerns = [ /\ATrackable\z/ ]
+
+        car = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Car"]
+
+        expect(car[:concerns_hidden]).to eq(1)
+        expect(car[:concerns]).to be_empty
+      ensure
+        RailsAiContext.configuration.excluded_concerns = original
+      end
+    end
+  end
+
+  # Rails runs the class's own declaration: the child's enum replaces the
+  # base's mapping and the model's replaces the concern's. The merge appended
+  # both and the Hash builder let the last one win, which is the inherited
+  # one, so the values the class actually runs with never appeared.
+  describe "an enum the model redeclares" do
+    it "keeps the child's mapping over its STI base's" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "vehicle.rb"),
+                   "class Vehicle < ApplicationRecord\n  enum :status, { parked: 0, moving: 1 }\nend\n")
+        File.write(File.join(dir, "app", "models", "car.rb"),
+                   "class Car < Vehicle\n  enum :status, { idle: 0, driving: 1, towed: 2 }\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Car"][:enums]).to eq("status" => { "idle" => 0, "driving" => 1, "towed" => 2 })
+        expect(result["Vehicle"][:enums]).to eq("status" => { "parked" => 0, "moving" => 1 })
+      end
+    end
+
+    it "keeps the model's own mapping over a concern's" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "van.rb"), <<~RUBY)
+          class Van < ApplicationRecord
+            include Statused
+            enum :status, { idle: 0 }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "concerns", "statused.rb"),
+                   "module Statused\n  enum :status, { parked: 9 }\n  enum :size, { small: 1 }\nend\n")
+
+        van = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Van"]
+
+        expect(van[:enums]).to eq("status" => { "idle" => 0 }, "size" => { "small" => 1 })
+      end
+    end
+  end
+
   # `excluded_concerns` hides the concern's name, and since both tiers merge
   # what a concern declared, it hides those declarations too. The record says
   # how many concerns went with it; naming them would undo the hiding.

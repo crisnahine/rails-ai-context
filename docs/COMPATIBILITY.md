@@ -276,14 +276,15 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   is a gem-owned parent such as `OAuth::AuthorizationsController <
   Doorkeeper::AuthorizationsController`, which the payload cannot hold. A
   booted run answers that one.
-- **`ApplicationController` is not in the listing, so its filters are not
-  attributed to it.** Every app has one and it would sit in every chain, so the
-  controller listing leaves it out. A filter it declares is therefore missing
-  from a static-tier chain entirely; a booted run still lists the filter,
-  because reflection carries it on the class itself, but the `from:` tag names
-  the nearest ancestor the listing holds. In a booted run every class below the
-  declaring one carries the filter, so the tag names the closest of them rather
-  than the class that declared it.
+- **`ApplicationController` is not in the listing, but its filters are in the
+  chain.** Every app has one and it would sit in every listing row, so the
+  controller listing leaves it out. The chain walk reads its file anyway, by
+  the one name Rails fixes, so a filter it declares is attributed to it in both
+  tiers with its `only:`/`except:`/`if:` intact. A parent the listing does not
+  hold and the app has no file for still ends the walk: reconstructing a path
+  from a class name breaks on an app inflection, and a gem-owned parent such as
+  `Doorkeeper::AuthorizationsController` has no file under the app root at all.
+  A booted run answers that one from reflection.
 - **Some route macros surface as a dynamic tally, not resolved entries.**
   `RouteIntrospector#static_call` counts routes behind `devise_for`, `match`,
   `direct`, `resolve`, a `draw` it cannot read, and a route whose `to:` is a

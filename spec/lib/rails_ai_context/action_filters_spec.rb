@@ -36,6 +36,102 @@ RSpec.describe RailsAiContext::ActionFilters do
     } } }
   end
 
+  # Every example below hands the walk a payload holding ApplicationController.
+  # The real one never does - the listing leaves it out because it would sit in
+  # every chain - so the walk ended on the first hop for most of an app's
+  # controllers, while the generated files read the same file directly and
+  # printed its filters. One run, two answers.
+  describe "the base controller the listing leaves out" do
+    def app_with_base(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "routes.rb"),
+                 "Rails.application.routes.draw do\n  resources :pages\nend\n")
+      File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+        class ApplicationController < ActionController::Base
+          before_action :authenticate_user!
+          before_action :set_locale
+          before_action :set_tenant, only: [ :show ]
+        end
+      RUBY
+      File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), <<~RUBY)
+        class PagesController < ApplicationController
+          def index; end
+          def show; end
+        end
+      RUBY
+    end
+
+    def static_context(dir)
+      previous = RailsAiContext.tier
+      RailsAiContext.tier = :static
+      RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+    ensure
+      RailsAiContext.tier = previous
+    end
+
+    it "carries its filters into a child's chain" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        ctx = static_context(dir)
+
+        expect(RailsAiContext::Payload.controllers(ctx)).not_to have_key("ApplicationController")
+
+        chain = described_class.for_controller(ctx, "PagesController", root: dir)
+        expect(chain[:inherited].map { |f| f[:name] }).to eq(%w[authenticate_user! set_locale set_tenant])
+        expect(chain[:inherited].map { |f| f[:from] }.uniq).to eq([ "ApplicationController" ])
+      end
+    end
+
+    it "applies its per-action constraints the way any other ancestor's are applied" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        ctx = static_context(dir)
+
+        index = described_class.for(ctx, "PagesController", "index", root: dir)
+        show = described_class.for(ctx, "PagesController", "show", root: dir)
+
+        expect(index[:inherited].map { |f| f[:name] }).to eq(%w[authenticate_user! set_locale])
+        expect(show[:inherited].map { |f| f[:name] }).to eq(%w[authenticate_user! set_locale set_tenant])
+      end
+    end
+
+    # The generated files print the same names off their own read of the same
+    # file; they have to be one answer.
+    it "names what the generated overview names" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        ctx = static_context(dir)
+
+        helper = Class.new do
+          include RailsAiContext::Serializers::StackOverviewHelper
+          def context = {}
+        end.new
+        chain = described_class.for_controller(ctx, "PagesController", root: dir)
+        unconditional = chain[:inherited].reject { |f| f[:only] || f[:except] || f[:if] || f[:unless] }
+
+        expect(helper.detect_before_actions(dir)).to eq(unconditional.map { |f| f[:name] })
+      end
+    end
+
+    # A parent the payload does not carry and the app has no file for still
+    # ends the walk: reconstructing a path from a name breaks on an inflection.
+    it "still ends the walk at a parent with no file of its own" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\nend\n")
+        File.write(File.join(dir, "app", "controllers", "oauth_controller.rb"),
+                   "class OauthController < Doorkeeper::ApplicationController\n  def index; end\nend\n")
+        ctx = static_context(dir)
+
+        chain = described_class.for_controller(ctx, "OauthController", root: dir)
+
+        expect(chain[:inherited]).to be_empty
+      end
+    end
+  end
+
   it "applies only and except to the action" do
     result = described_class.for(context, "PostsController", "show")
     expect(result[:own].map { |f| f[:name] }).to eq(%w[set_post track])

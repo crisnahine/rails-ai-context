@@ -187,12 +187,14 @@ module RailsAiContext
       while name && !seen.include?(name)
         seen << name
         info = controllers[name]
+        source = info.is_a?(Hash) ? nil : base_controller_source(name, root)
+        info ||= { filters: Introspectors::ControllerFilters.from_source(source) } if source
         break unless info.is_a?(Hash)
 
         # The class that skips a filter must not contribute it either: in the
         # booted tier its own list is the reflection list, which carries every
         # inherited name.
-        skips = own_skips(ctx, name, info, action, root: root)
+        skips = own_skips(ctx, name, info, action, root: root, source: source)
         dropped.merge(absolute_names(skips, action))
         # The walk runs closest ancestor first, so a nearer class's condition
         # is the one the child inherits.
@@ -306,6 +308,21 @@ module RailsAiContext
       []
     end
 
+    # ApplicationController is deliberately not in the listing: it would sit in
+    # every chain. The walk used to end there, so a filter every controller
+    # runs was missing from the static answer while the generated overview read
+    # the same file and printed it. Only a name the app has a file for is read,
+    # so a gem-owned parent, or one an inflection renames, still ends the walk.
+    def base_controller_source(name, root)
+      root ||= default_root
+      return nil unless root
+
+      relative = "#{name.to_s.underscore}.rb"
+      path = PathResolver.controller_dirs(root.to_s).map { |dir| File.join(dir, relative) }
+                         .find { |candidate| File.exist?(candidate) }
+      path && SafeFile.read(path)
+    end
+
     # A carried path came from the gem's own walk, and that walk keeps the
     # spelling the app uses, so realpath containment would refuse a
     # symlinked pack. The size cap still applies.
@@ -326,6 +343,7 @@ module RailsAiContext
     end
 
     private_class_method :default_root, :split, :applies?, :parent_filters, :skip_source_records, :carried_source,
+
                          :skip_calls, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,

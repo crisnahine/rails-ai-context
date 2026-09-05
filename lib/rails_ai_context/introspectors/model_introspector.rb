@@ -874,7 +874,7 @@ module RailsAiContext
           # with callbacks found" and then raised a TypeError on a Hash lookup
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
-          concerns: static_concerns(own[:mixins]),
+          concerns: static_concerns(data[:mixins]),
           concerns_hidden: (hidden.size if hidden.any?),
           concern_callbacks: concern_callbacks(data[:callbacks]),
           concerns_unread: (unread if unread.any?),
@@ -933,6 +933,9 @@ module RailsAiContext
 
           base, base_unread, base_hidden = merge_concern_macros(own, name)
           data = merge_inherited(data, base.slice(*MERGED_CONCERN_KEYS))
+          # A base's concerns are the child's too: the child's record already
+          # carries what they declared, and its callbacks credit them by name.
+          data[:mixins] = Array(data[:mixins]) | Array(own[:mixins])
           unread |= base_unread
           hidden |= base_hidden
         end
@@ -966,6 +969,7 @@ module RailsAiContext
         merged = mine.merge(inherited) { |_key, ours, theirs| Array(ours) + Array(theirs) }
         merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
         merged[:scopes] = dedup(merged[:scopes]) { |s| s[:name] }
+        merged[:enums] = dedup(merged[:enums]) { |e| e[:name].to_s }
         merged
       end
 

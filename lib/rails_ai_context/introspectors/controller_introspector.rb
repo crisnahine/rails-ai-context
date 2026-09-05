@@ -293,71 +293,7 @@ module RailsAiContext
       end
 
       def extract_filters_from_source(source)
-        filter_macros = %i[
-          before_action after_action around_action
-          prepend_before_action append_before_action
-          skip_before_action skip_after_action skip_around_action append_after_action
-        ]
-        ast_result = SourceIntrospector.walk_source(source, {
-          filters: -> { Listeners::GenericMacroListener.new(*filter_macros) }
-        })
-        raw = ast_result[:filters] || []
-        raw.filter_map do |entry|
-          name_sym = entry[:args]&.first
-          next unless name_sym
-
-          macro = entry[:macro].to_s
-          skipped = macro.start_with?("skip_")
-          # An excluded name is framework noise only while it runs. A skip of
-          # it is the app's own decision, which the per-action answer reports.
-          next if !skipped && excluded_filters.include?(name_sym.to_s)
-
-          kind = macro.sub(/_action\z/, "").sub(/\A(?:prepend|append|skip)_/, "")
-          filter = { name: name_sym.to_s, kind: kind }
-          # A skip states the opposite of what the plain kind says, so it has
-          # to survive the fold into `before`/`after`/`around`.
-          if skipped
-            filter[:skipped] = true
-          else
-            # This body declared it, so an ancestor's skip of the same name
-            # does not reach it and the chain names this class as its source.
-            filter[:declared] = true
-          end
-
-          opts = entry[:options] || {}
-          only = normalize_constraint(opts[:only])
-          except = normalize_constraint(opts[:except])
-          filter[:only] = only if only&.any?
-          filter[:except] = except if except&.any?
-
-          if opts[:unless]
-            filter[:unless] = opts[:unless].to_s
-          end
-          if opts[:if]
-            # A lambda has no literal value, so `opts[:if]` is "[INFERRED]".
-            # When the condition is an action_name comparison the AST can say
-            # exactly which action it names; report that instead of nothing.
-            actions = extract_action_condition(entry[:option_nodes][:if])
-            filter[:if] = actions ? %(action_name == "#{actions.first}") : opts[:if].to_s
-          end
-
-          filter
-        end
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_filters_from_source AST failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      # Normalize constraint values from AST extraction.
-      # Could be a single symbol, an array of symbols, or a string.
-      def normalize_constraint(value)
-        case value
-        when Array then value.map(&:to_s)
-        when Symbol then [ value.to_s ]
-        when String then [ value ]
-        when nil then nil
-        else [ value.to_s ]
-        end
+        ControllerFilters.from_source(source)
       end
 
       # Statically evaluate known runtime conditions to exclude inapplicable filters.
@@ -387,27 +323,6 @@ module RailsAiContext
       # `if: -> { action_name == "create" }` narrows a filter to one action the
       # same way `only:` does. Returns the action name, or nil for any other
       # condition.
-      def extract_action_condition(node)
-        node = lambda_body(node)
-        return nil unless node.is_a?(Prism::CallNode) && node.name == :==
-
-        receiver = node.receiver
-        return nil unless receiver.is_a?(Prism::CallNode) && receiver.name == :action_name && receiver.receiver.nil?
-
-        operand = node.arguments&.arguments&.first
-        case operand
-        when Prism::StringNode then [ operand.unescaped ]
-        when Prism::SymbolNode then [ operand.value.to_s ]
-        end
-      end
-
-      def lambda_body(node)
-        return node unless node.is_a?(Prism::LambdaNode) || node.is_a?(Prism::BlockNode)
-        statements = node.body
-        return nil unless statements.is_a?(Prism::StatementsNode) && statements.body.size == 1
-        statements.body.first
-      end
-
       def extract_concerns(ctrl)
         ConcernMembership.from_ancestors(ctrl)
       rescue => e

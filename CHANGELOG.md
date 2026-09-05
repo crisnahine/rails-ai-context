@@ -986,6 +986,29 @@ Changed.
   paragraph, so the notice read as part of the generator credit. It goes
   through the same helper the other renders use and keeps its own blank lines.
 
+- **`ApplicationController`'s filters reached the generated files and no tool.**
+  The listing leaves that class out - it would sit in every row - and the chain
+  walk looks each ancestor up in the listing, so the walk ended on the first
+  hop for most of an app's controllers. One run said "Global before_actions:
+  authenticate_user!, set_locale" in CLAUDE.md, off a regex read of the file,
+  and rendered no Filters section at all for a controller that runs both. The
+  walk reads that file too now, by the one name Rails fixes, and the overview
+  line reads it through the same reader, so the two cannot disagree about one
+  file. A parent the listing does not hold and the app has no file for still
+  ends the walk.
+- **A concern an STI base includes was credited but not named.** The child's
+  record carries what the base's concerns declared, tagged `from_concern`, but
+  its Concerns section was built from the child's own includes, so a child that
+  includes nothing itself listed no concerns while its Callbacks section named
+  one. The booted tier lists them, off the ancestor chain, so the two tiers
+  answered differently too.
+- **An inherited enum overwrote the model's own.** The merge appends the base's
+  or the concern's declarations after the model's, and the Hash the consumers
+  read is built by iterating that list, so the later entry won - always the
+  inherited one. A `Car < Vehicle` that redeclares `status` reported Vehicle's
+  mapping, and the values Car runs with appeared nowhere. Associations and
+  scopes were already deduped first-wins; enums are now too, which is the rule
+  Rails itself follows.
 - **One unreadable concern file cost the whole models section.** The concern
   walk guarded a file it could not find and a file too big, and nothing else,
   so a file that stats but does not read raised out of the walk and the only
