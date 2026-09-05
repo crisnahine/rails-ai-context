@@ -315,13 +315,13 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       )
     end
 
-    # The payload's own marker for a block callback; get_callbacks renders it
-    # as `do`, and this surface handed the reader a bracketed token.
-    it "renders a block callback the way get_callbacks does" do
+    # A list of targets is a list of names, so the block keyword read there
+    # as a callback named `do`.
+    it "names a block callback with the payload's marker" do
       text = described_class.call(model: "Status", detail: "full").content.first[:text]
 
-      expect(text).to include("- `after_create`: :set_poll_id, do")
-      expect(text).not_to include("[inline_block]")
+      expect(text).to include("- `after_create`: :set_poll_id, [inline_block]")
+      expect(text).not_to include(", do")
     end
   end
 

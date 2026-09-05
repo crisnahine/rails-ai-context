@@ -67,6 +67,37 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
     end
   end
 
+  # A list of targets is a list of names, so the block keyword the
+  # declaration line is composed from reads there as a callback named `do`.
+  describe "a block callback in a list of targets" do
+    let(:models) do
+      {
+        "Status" => {
+          callbacks: {
+            "after_create" => [ "set_poll_id", "[inline_block]" ],
+            "after_rollback" => [ "[inline_block]" ]
+          },
+          concerns: []
+        }
+      }
+    end
+
+    it "names the block with the payload's marker at detail:standard" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("- **after_create** → `:set_poll_id`, `[inline_block]`")
+      expect(text).to include("- **after_rollback** → `[inline_block]`")
+      expect(text).not_to include("`do`")
+    end
+
+    it "names the block with the payload's marker at detail:full" do
+      text = described_class.call(model: "Status", detail: "full").content.first[:text]
+
+      expect(text).to include("`[inline_block]`")
+      expect(text).not_to include("`do`")
+    end
+  end
+
   describe "concern callbacks with detail:full" do
     let(:tmpdir) { Dir.mktmpdir }
     let(:concern_dir) { File.join(tmpdir, "app", "models", "concerns") }

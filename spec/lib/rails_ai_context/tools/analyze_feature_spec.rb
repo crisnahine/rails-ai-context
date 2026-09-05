@@ -472,7 +472,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       text = described_class.call(feature: "status").content.first[:text]
 
       expect(text).to include("Status: around_create Mastodon::Snowflake::Callbacks")
-      expect(text).to include("Status: before_validation do")
+      expect(text).to include("Status: before_validation [inline_block]")
       expect(text).to include("Status: before_validation :set_slug")
       expect(text).not_to include(":Mastodon")
     end

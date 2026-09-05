@@ -610,11 +610,17 @@ module RailsAiContext
 
         # A callback target is a method name, an inline block, or a callback
         # object. Only the first is a symbol, so only the first takes a colon.
+        # A block has no name, so it keeps the payload's marker wherever a
+        # name is what the line lists.
         def callback_target(method)
           method = method.to_s
-          return "do" if method == RailsAiContext::Introspectors::Listeners::CallbacksListener::INLINE_BLOCK
+          return method if inline_block_callback?(method)
 
           method_name?(method) ? ":#{method}" : method
+        end
+
+        def inline_block_callback?(method)
+          method.to_s == RailsAiContext::Introspectors::Listeners::CallbacksListener::INLINE_BLOCK
         end
 
         def method_name?(method)
@@ -626,7 +632,9 @@ module RailsAiContext
         # a key this gem synthesizes, not something the source says.
         def callback_declaration(callback)
           name = callback[:name] || callback[:type]
-          "#{name} #{callback_target(callback[:method].to_s)}#{callback_options_tail(callback[:options])}"
+          method = callback[:method].to_s
+          target = inline_block_callback?(method) ? "do" : callback_target(method)
+          "#{name} #{target}#{callback_options_tail(callback[:options])}"
         end
 
         # Without the tail, four `after_commit` lines that differ only in
