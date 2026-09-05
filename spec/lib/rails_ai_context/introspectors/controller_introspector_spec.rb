@@ -123,7 +123,14 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         RUBY
       end
 
-      after { FileUtils.rm_f(fixture_ctrl) }
+      # A loaded controller stays in ActionController::Base.descendants,
+      # and so in every later booted payload, until its constant is gone
+      # and it is collected.
+      after do
+        FileUtils.rm_f(fixture_ctrl)
+        Object.send(:remove_const, :WidgetsController) if defined?(WidgetsController)
+        GC.start
+      end
 
       it "extracts rescue_from declarations" do
         load fixture_ctrl
@@ -179,7 +186,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         RUBY
       end
 
-      after { FileUtils.rm_f(fixture_ctrl) }
+      after do
+        FileUtils.rm_f(fixture_ctrl)
+        Object.send(:remove_const, :ItemsController) if defined?(ItemsController)
+        GC.start
+      end
 
       it "extracts all formats including those after nested end" do
         # Force controller discovery by loading the class

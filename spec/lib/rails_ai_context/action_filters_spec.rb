@@ -221,7 +221,11 @@ RSpec.describe RailsAiContext::ActionFilters do
         RUBY
         Dir[File.join(dir, "app/controllers/composed/*.rb")].sort.each { |f| load f }
         example.run
+        # The loaded classes stay in ActionController::Base.descendants, and so
+        # in every later booted payload, until the constant is gone and they are
+        # collected.
         Object.send(:remove_const, :Composed) if defined?(Composed)
+        GC.start
       end
     end
 
