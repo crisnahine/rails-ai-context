@@ -106,7 +106,11 @@ struck-through `~~name~~ _(skipped)_` line, because a skip is a fact about
 the class rather than a filter that runs. A skip carrying `if:` or `unless:`
 takes the filter out on some requests only, so the filter keeps its place in
 the chain and the line names the condition instead:
-`- \`before\` **require_functional!** (skipped unless: limited_federation_mode?)`.
+
+```
+- `before` **require_functional!** (skipped unless: limited_federation_mode?)
+```
+
 A condition written as a lambda has no name to print and reads `[INFERRED]`,
 the same way a filter's own `if:` does.
 
