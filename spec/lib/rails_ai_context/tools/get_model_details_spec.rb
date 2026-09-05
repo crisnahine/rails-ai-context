@@ -134,6 +134,18 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("could not load")
     end
 
+    # The count includes it either way, so a listing that skips it reads as
+    # a count that does not match its own rows.
+    it "names a model whose file it could not read in the listing" do
+      models_with_error = models.merge("Broken" => { error: "file is unreadable" })
+      allow(described_class).to receive(:cached_context).and_return({ models: models_with_error })
+
+      %w[standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        expect(text).to include("- **Broken** [UNAVAILABLE: file is unreadable]")
+      end
+    end
+
     it "strips whitespace from model name input" do
       result = described_class.call(model: "  User  ")
       text = result.content.first[:text]

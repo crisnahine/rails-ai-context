@@ -75,7 +75,10 @@ module RailsAiContext
             lines = [ "# Models (#{page[:total]})", "" ]
             paginated.each do |name|
               data = models[name]
-              next if data[:error]
+              if data[:error]
+                lines << unavailable_row(name, data)
+                next
+              end
               assoc_count = (data[:associations] || []).size
               val_count = (data[:validations] || []).size
               line = "- **#{name}**"
@@ -89,7 +92,10 @@ module RailsAiContext
             lines = [ "# Models (#{page[:total]})", "" ]
             paginated.each do |name|
               data = models[name]
-              next if data[:error]
+              if data[:error]
+                lines << unavailable_row(name, data)
+                next
+              end
               assocs = Serializers::SectionFacts.associations_list(data).join(", ")
               line = "- **#{name}**"
               line += " (table: #{data[:table_name]})" if data[:table_name]
@@ -104,6 +110,13 @@ module RailsAiContext
             text_response("# Available models (#{page[:total]})\n\n#{model_list}#{pagination_hint}")
           end
         end
+      end
+
+      # A model the walk could not read is still a model the app has, and the
+      # count already includes it, so the row says why it is thin rather than
+      # leaving the reader to subtract.
+      private_class_method def self.unavailable_row(name, data)
+        "- **#{name}** #{Confidence.unavailable(data[:error])}"
       end
 
       private_class_method def self.format_model(name, data)
