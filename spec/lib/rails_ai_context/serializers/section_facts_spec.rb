@@ -93,15 +93,26 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
     end
   end
 
+  describe ".unread_row" do
+    it "carries the reason after the label a listing chose" do
+      expect(described_class.unread_row("- **Vehicle**", { error: "file is unreadable" }))
+        .to eq("- **Vehicle** [UNAVAILABLE: file is unreadable]")
+    end
+
+    it "answers nil for an entry the walk read" do
+      expect(described_class.unread_row("- **Car**", { associations: [] })).to be_nil
+    end
+  end
+
   describe ".actions_phrase" do
     it "names the error of an entry the walk could not read" do
       expect(described_class.actions_phrase({ error: "unreadable" }))
-        .to eq("(could not be read: unreadable)")
+        .to eq("[UNAVAILABLE: unreadable]")
     end
 
     it "still says so when the entry carries an empty action list beside its error" do
       expect(described_class.actions_phrase({ error: "unreadable", actions: [] }))
-        .to eq("(could not be read: unreadable)")
+        .to eq("[UNAVAILABLE: unreadable]")
     end
 
     it "says a readable controller has no public actions" do
@@ -138,7 +149,7 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
     end
 
     it "states the error of an entry the walk could not read" do
-      expect(summary_lines({ error: "unreadable" })).to eq([ "- Could not be read: unreadable" ])
+      expect(summary_lines({ error: "unreadable" })).to eq([ "- [UNAVAILABLE: unreadable]" ])
     end
   end
 

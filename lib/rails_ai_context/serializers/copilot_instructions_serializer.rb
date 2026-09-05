@@ -106,6 +106,11 @@ module RailsAiContext
 
         models.keys.sort.first(30).each do |name|
           data = models[name]
+          if (unread = SectionFacts.unread_row("- #{name}", data))
+            lines << unread
+            next
+          end
+
           assocs = (data[:associations] || []).size
           lines << "- #{name} (#{count_phrase(assocs, "association")})"
           extras = model_extras_line(data)

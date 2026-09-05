@@ -61,6 +61,11 @@ module RailsAiContext
 
         models.keys.sort.first(30).each do |name|
           data = models[name]
+          if (unread = SectionFacts.unread_row("- **#{name}**", data))
+            lines << unread
+            next
+          end
+
           assocs = SectionFacts.associations_list(data).join(", ")
           vals = (data[:validations] || []).size
           line = "- **#{name}**"

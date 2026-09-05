@@ -99,6 +99,11 @@ module RailsAiContext
         lines = []
         controllers_hash.keys.sort.first(limit).each do |name|
           info = controllers_hash[name]
+          if (unread = SectionFacts.unread_row(with_actions ? "- **#{name}**" : "- #{name}", info))
+            lines << unread
+            next
+          end
+
           if with_actions
             actions = (info[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
             line = "- **#{name}**"

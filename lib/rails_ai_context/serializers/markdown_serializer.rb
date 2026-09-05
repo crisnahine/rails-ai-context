@@ -103,9 +103,13 @@ module RailsAiContext
 
         lines = [ "## Models (#{models.size})" ]
         models.each do |name, data|
-          next if data[:error]
-          assocs = SectionFacts.associations_list(data).join(", ")
           lines << "### #{escape_markdown(name)}"
+          if (unread = SectionFacts.unread_marker(data))
+            lines << "- #{unread}"
+            next
+          end
+
+          assocs = SectionFacts.associations_list(data).join(", ")
           lines << "- Table: `#{data[:table_name]}`" if data[:table_name]
           lines << "- Associations: #{assocs}" if assocs.present?
           if data[:validations]&.any?
@@ -182,7 +186,6 @@ module RailsAiContext
 
         lines = [ "## Controllers (#{controllers.size})" ]
         controllers.each do |name, info|
-          next if info[:error]
           lines << "### #{escape_markdown(name)}"
           lines << "- Parent: `#{info[:parent_class]}`" if info[:parent_class]
           lines << "- API controller: yes" if info[:api_controller]
