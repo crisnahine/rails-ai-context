@@ -102,10 +102,12 @@ module RailsAiContext
           return text_response(note) if note
         end
 
+        layouts = controller ? [] : layout_files
+
         case detail
         when "summary"
           all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
-          lines = [ "# Views (#{count_phrase(templates.size, "template")}, #{count_phrase(partials.size, "partial")})", "" ]
+          lines = views_header_lines(templates, partials, layouts)
           all_dirs.each do |ctrl|
             ctrl_templates = templates.select { |k, _| k.start_with?("#{ctrl}/") }
             ctrl_partials = partials.select { |k, _| k.start_with?("#{ctrl}/") }
@@ -128,7 +130,7 @@ module RailsAiContext
 
         when "standard"
           all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
-          lines = [ "# Views (#{count_phrase(templates.size, "template")}, #{count_phrase(partials.size, "partial")})", "" ]
+          lines = views_header_lines(templates, partials, layouts)
 
           # Form builders and component usage from views introspector
           form_builders = data[:form_builders_detected]
@@ -228,11 +230,31 @@ module RailsAiContext
         end
       end
 
+      # Layouts sit outside the template and partial maps, so a heading naming
+      # only those two numbers never added up to the files under app/views.
+      private_class_method def self.views_header_lines(templates, partials, layouts)
+        parts = [ count_phrase(templates.size, "template"), count_phrase(partials.size, "partial") ]
+        parts << count_phrase(layouts.size, "layout") if layouts.any?
+
+        lines = [ "# Views (#{parts.join(', ')})", "" ]
+        lines << "_Layouts are listed by `controller:\"layouts\"`._" << "" if layouts.any?
+        lines
+      end
+
+      # The template and partial maps exclude app/views/layouts, so the
+      # directory is the only statement of what is in it.
+      private_class_method def self.layout_files
+        layouts_dir = rails_app.root.join("app", "views", "layouts")
+        return [] unless Dir.exist?(layouts_dir)
+
+        Dir.glob(File.join(layouts_dir, "*")).reject { |f| File.directory?(f) }.sort
+      end
+
       private_class_method def self.list_layouts(detail)
         layouts_dir = rails_app.root.join("app", "views", "layouts")
         return text_response("No app/views/layouts/ directory found.") unless Dir.exist?(layouts_dir)
 
-        files = Dir.glob(File.join(layouts_dir, "*")).reject { |f| File.directory?(f) }.sort
+        files = layout_files
         return text_response("No layout files found.") if files.empty?
 
         views_dir = rails_app.root.join("app", "views")

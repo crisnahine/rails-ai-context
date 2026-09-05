@@ -190,7 +190,8 @@ module RailsAiContext
         data = Payload.section(context, :views)
 
         lines = [ "## Views" ]
-        lines << "- Layouts: #{data[:layouts].join(', ')}" if data[:layouts]&.any?
+        layouts = (data[:layouts] || []).map { |layout| layout.is_a?(Hash) ? layout[:name] : layout }
+        lines << "- Layouts: #{layouts.join(', ')}" if layouts.any?
         lines << "- Template engines: #{data[:template_engines].join(', ')}" if data[:template_engines]&.any?
 
         if data[:templates]&.any?

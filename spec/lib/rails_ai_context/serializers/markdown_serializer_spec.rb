@@ -42,6 +42,23 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
     end
   end
 
+  describe "the Views section" do
+    # The introspector answers layouts as records; joining them printed a
+    # Ruby hash into a file the app commits.
+    it "names each layout file" do
+      context = {
+        views: {
+          layouts: [ { name: "application.html.erb", yields: %w[content] }, { name: "mailer.html.erb" } ]
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- Layouts: application.html.erb, mailer.html.erb")
+      expect(output).not_to include("{name:")
+    end
+  end
+
   describe "the Internationalization section" do
     def i18n_output(source)
       described_class.new({ i18n: { default_locale: "en", available_locales: %w[en fr], available_locales_source: source } }).call
