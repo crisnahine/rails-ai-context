@@ -172,6 +172,30 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       end
     end
 
+    # ignored_columns belongs on the class that owns the table, and every STI
+    # class on it records the same table, so the first name in payload order
+    # could be a child.
+    context "with an STI family on one table" do
+      before do
+        described_class.reset_cache!
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { tables: { "users" => { columns: [ { name: "note", type: "string" } ] } } },
+          models: {
+            "AdminUser" => { table_name: "users", file: "app/models/admin_user.rb" },
+            "User" => { table_name: "users", file: "app/models/user.rb" }
+          }
+        })
+      end
+
+      it "points ignored_columns at the base's file, not a child's" do
+        allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+        response = described_class.call(action: "remove_column", table: "users", column: "note")
+
+        expect(response.content.first[:text]).to include("app/models/user.rb")
+        expect(response.content.first[:text]).not_to include("app/models/admin_user.rb")
+      end
+    end
+
     it "omits the Affected Models heading when no model uses the table" do
       allow(described_class).to receive(:cached_context).and_return({
         schema: { tables: { "flipper_gates" => { columns: [] } } }, models: {}

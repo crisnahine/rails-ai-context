@@ -189,11 +189,13 @@ module RailsAiContext
             .map { |a| a[:name] }
             .to_set
 
-          # Deduplicate validations with same kind and attributes
+          # The options are part of the key: a model can validate one
+          # attribute twice under different conditions, and the two rules are
+          # different declarations, not a repeat of one.
           seen_validations = Set.new
           seen_inclusions = {}
           data[:validations].each do |v|
-            dedup_key = "#{v[:kind]}:#{v[:attributes].sort.join(',')}"
+            dedup_key = [ v[:kind].to_s, v[:attributes].sort, v[:options] ]
             next if seen_validations.include?(dedup_key)
             seen_validations << dedup_key
             attrs = v[:attributes].join(", ")
@@ -271,7 +273,7 @@ module RailsAiContext
         if data[:callbacks]&.any?
           lines << "" << "## Callbacks"
           data[:callbacks].each do |type, methods|
-            lines << "- `#{type}`: #{methods.join(', ')}"
+            lines << "- `#{type}`: #{methods.map { |m| callback_target(m.to_s) }.join(', ')}"
           end
         end
 
@@ -299,8 +301,7 @@ module RailsAiContext
         if data[:encryption_details]&.any?
           lines << "" << "## Encryption Details"
           data[:encryption_details].each do |ed|
-            detail_str = ed.is_a?(Hash) ? "**#{ed[:field]}** (#{ed.reject { |k, _| k == :field }.map { |k, v| "#{k}: #{v}" }.join(', ')})" : ed.to_s
-            lines << "- #{detail_str}"
+            lines << "- #{encryption_detail_line(ed)}"
           end
         end
 
@@ -410,6 +411,19 @@ module RailsAiContext
 
       private_class_method def self.model_source_path(model_name)
         rails_app.root.join(relative_model_path(model_name))
+      end
+
+      # The macro's options are nested under an :options key. Printing that
+      # hash leans on Hash#to_s, whose format changed in Ruby 3.4, so the
+      # pairs are spelled here and an empty set drops the parenthesis.
+      private_class_method def self.encryption_detail_line(ed)
+        return ed.to_s unless ed.is_a?(Hash)
+
+        pairs = ed.reject { |key, _| key == :field }.flat_map do |key, value|
+          value.is_a?(Hash) ? value.map { |k, v| "#{k}: #{v}" } : "#{key}: #{value}"
+        end
+
+        pairs.any? ? "**#{ed[:field]}** (#{pairs.join(', ')})" : "**#{ed[:field]}**"
       end
 
       # A transformation the parser could not resolve is a marker, not the

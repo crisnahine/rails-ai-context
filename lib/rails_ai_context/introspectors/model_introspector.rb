@@ -75,7 +75,8 @@ module RailsAiContext
           next unless model_class?(class_name, candidates)
 
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
-                                                    table_name: resolve_table_name(class_name, candidates))
+                                                    table_name: resolve_table_name(class_name, candidates),
+                                                    inherited_from: sti_bases(class_name, candidates))
         end
       end
 
@@ -104,17 +105,15 @@ module RailsAiContext
             next if found.key?(class_name)
             next if config.excluded_models.include?(class_name)
 
+            # A module file declares no class and is kept for the prefix and
+            # the suffix alone: they belong to the namespace, not to any one
+            # model.
             found[class_name] = {
               path: record.path,
               file: record.file,
               superclass: declarations.find { |d| d.name == class_name }&.superclass,
-              abstract: abstract_class?(source),
-              # A module file declares no class and is kept for these two
-              # alone: they belong to the namespace, not to any one model.
-              table_name: TableName.explicit(source, class_name),
-              table_name_prefix: TableName.prefix(source, class_name),
-              table_name_suffix: TableName.suffix(source, class_name)
-            }
+              abstract: abstract_class?(source)
+            }.merge(TableName.declarations(source, class_name))
           rescue => e
             found[record.path_name] = { error: e.message }
           end
@@ -164,16 +163,29 @@ module RailsAiContext
       # suffix wrap the stem the file name already carries.
       def resolve_table_name(class_name, candidates, seen = [])
         candidate = candidates[class_name]
-        return nil unless candidate
+        # An entry the walk recorded as an error carries no path, and a table
+        # derived from no path is the empty string, which is truthy.
+        return nil unless candidate && candidate[:path]
         return candidate[:table_name] if candidate[:table_name]
 
         parent = sti_parent(class_name, candidates, seen)
         inherited = parent && resolve_table_name(parent, candidates, seen + [ class_name ])
-        return inherited if inherited
+        return inherited unless inherited.nil? || inherited.empty?
 
         [ namespace_affix(class_name, candidates, :table_name_prefix),
           TableName.stem(candidate[:path]),
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
+      end
+
+      # The STI bases above this class, nearest first. It inherits their
+      # macros the way it inherits their table, and a child that declares
+      # nothing answers for everything they declared.
+      def sti_bases(class_name, candidates, seen = [])
+        parent = sti_parent(class_name, candidates, seen)
+        return [] unless parent && candidates.dig(parent, :path)
+
+        [ [ parent, candidates[parent][:path] ] ] +
+          sti_bases(parent, candidates, seen + [ class_name ])
       end
 
       # The model this one inherits its table from. A model base ends the
@@ -626,17 +638,18 @@ module RailsAiContext
 
       # Ruby knows where the class was defined, and the name does not: a model
       # in a pack or engine does not live under app/models, and an inflected
-      # namespace does not underscore back to its own directory. The
-      # containment check keeps a gem-defined constant from being reported as
-      # the app's own file.
+      # namespace does not underscore back to its own directory. A gem's model
+      # keeps the gem's own path rather than an app/models file the app does
+      # not have; the conventional path is a fallback only when it is a file
+      # that is really there.
       def model_source_path(model)
-        root = app.root.to_s
         located = Object.const_source_location(model.name)&.first
-        return located if located && File.expand_path(located).start_with?("#{File.expand_path(root)}/")
+        return located if located
 
-        File.join(root, "app", "models", "#{model.name.underscore}.rb")
+        conventional = File.join(app.root.to_s, "app", "models", "#{model.name.underscore}.rb")
+        conventional if File.exist?(conventional)
       rescue NameError, TypeError
-        File.join(root, "app", "models", "#{model.name.underscore}.rb")
+        nil
       end
 
       DEVISE_CLASS_METHOD_PATTERNS = %w[
@@ -698,14 +711,18 @@ module RailsAiContext
                .transform_values(&:to_s)
       end
 
-      def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil)
+      def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [])
         own = SourceIntrospector.call(path)
         data, unread = merge_concern_macros(own, class_name)
+        data, unread = merge_sti_macros(data, unread, inherited_from)
         details = {
           confidence: Confidence::STATIC,
           table_name: table_name || TableName.stem(path),
           associations: reject_excluded_associations(data[:associations]),
-          validations: data[:validations],
+          # The booted tier's validations come from model.validators, which
+          # never holds a `validate :method`; those are reported once, under
+          # custom_validates.
+          validations: Array(data[:validations]).reject { |v| v[:kind] == :custom },
           custom_validates: extract_custom_validates_from_ast(data),
           scopes: data[:scopes],
           # The booted tier answers a Hash of attribute => value map, and
@@ -730,6 +747,10 @@ module RailsAiContext
         details.compact
       end
 
+      # Both tiers collect all six. The booted tier reads five of them off the
+      # source too - a concern's `validate :x` reaches custom_validates, its
+      # enum options reach enum_options - and reflection overwrites the sixth,
+      # associations, on that tier.
       MERGED_CONCERN_KEYS = %i[associations validations scopes enums callbacks macros].freeze
 
       # Reflection answers these whether or not the concern's file was read,
@@ -748,10 +769,27 @@ module RailsAiContext
         )
         return [ own, unread ] if collected.empty?
 
-        merged = own.merge(collected) { |_key, mine, inherited| Array(mine) + inherited }
+        [ merge_inherited(own, collected), unread ]
+      end
+
+      # An STI child inherits its base's macros along with its table, and the
+      # booted tier reads them off reflection, so the static tier walks the
+      # chain the same way it walks the concerns. Read nearest base first, so
+      # the closer declaration wins over the further one.
+      def merge_sti_macros(data, unread, bases)
+        Array(bases).each do |name, path|
+          base, base_unread = merge_concern_macros(SourceIntrospector.call(path), name)
+          data = merge_inherited(data, base.slice(*MERGED_CONCERN_KEYS))
+          unread |= base_unread
+        end
+        [ data, unread ]
+      end
+
+      def merge_inherited(mine, inherited)
+        merged = mine.merge(inherited) { |_key, ours, theirs| Array(ours) + Array(theirs) }
         merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
         merged[:scopes] = dedup(merged[:scopes]) { |s| s[:name] }
-        [ merged, unread ]
+        merged
       end
 
       # The model's own declaration wins: it is the one whose options the
@@ -780,9 +818,13 @@ module RailsAiContext
       # Consumers used to turn a model name back into
       # app/models/<underscored>.rb, which is wrong for a model in a pack or an
       # engine and wrong wherever the app registers an inflection. The path
-      # travels with the model instead.
+      # travels with the model instead. It goes into .ai-context.json, which
+      # the app commits, so a gem path keeps the gem and drops the install
+      # prefix.
       def relative_to_root(path)
-        path.to_s.sub(%r{\A#{Regexp.escape(app.root.to_s)}/}, "")
+        return nil if path.nil?
+
+        PortablePath.relativize(path, app.root.to_s)
       end
 
       # This sees the model file alone, where the booted tier also walks what

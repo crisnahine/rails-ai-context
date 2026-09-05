@@ -20,22 +20,38 @@ module RailsAiContext
     module TableName
       module_function
 
-      # @param source [String] the model file's source
-      # @param class_name [String] the qualified name of this file's class
+      NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil }.freeze
+
+      # All three declarations of one class body, read in one walk. A caller
+      # that wants only one asks through the readers below.
+      #
+      # @param source [String] the file's source
+      # @param name [String] the qualified name of the class or module
+      # @return [Hash] the three, each nil when this scope declares none
+      def declarations(source, name)
+        read(source, name) do |body|
+          {
+            table_name: assigned(body, :table_name=),
+            table_name_prefix: affix(body, :table_name_prefix),
+            table_name_suffix: affix(body, :table_name_suffix)
+          }
+        end || NONE
+      end
+
       # @return [String, nil] the table the class assigns itself, nil when it
       #   assigns none or computes one
       def explicit(source, class_name)
-        read(source, class_name) { |body| assigned(body, :table_name=) }
+        declarations(source, class_name)[:table_name]
       end
 
       # @return [String, nil] the prefix the module declares, either form
       def prefix(source, module_name)
-        affix(source, module_name, :table_name_prefix)
+        declarations(source, module_name)[:table_name_prefix]
       end
 
       # @return [String, nil] the suffix the module declares, either form
       def suffix(source, module_name)
-        affix(source, module_name, :table_name_suffix)
+        declarations(source, module_name)[:table_name_suffix]
       end
 
       # Rails derives the table through the app's own inflector, and the file's
@@ -67,10 +83,8 @@ module RailsAiContext
         recorded ? recorded.last[:table_name] : derive(name)
       end
 
-      def affix(source, module_name, name)
-        read(source, module_name) do |body|
-          assigned(body, :"#{name}=") || returned(body, name)
-        end
+      def affix(body, name)
+        assigned(body, :"#{name}=") || returned(body, name)
       end
 
       def read(source, name)

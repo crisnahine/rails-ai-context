@@ -302,6 +302,57 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "callbacks" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Status" => {
+            table_name: "statuses",
+            callbacks: { "after_create" => [ "set_poll_id", "[inline_block]" ] }
+          }
+        }
+      )
+    end
+
+    # The payload's own marker for a block callback; get_callbacks renders it
+    # as `do`, and this surface handed the reader a bracketed token.
+    it "renders a block callback the way get_callbacks does" do
+      text = described_class.call(model: "Status", detail: "full").content.first[:text]
+
+      expect(text).to include("- `after_create`: :set_poll_id, do")
+      expect(text).not_to include("[inline_block]")
+    end
+  end
+
+  describe "repeated validations" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Account" => {
+            table_name: "accounts",
+            validations: [
+              { kind: "length", attributes: [ "username" ], options: { maximum: "HARD_LIMIT" } },
+              { kind: "length", attributes: [ "username" ], options: { maximum: "LOCAL_LIMIT" } },
+              { kind: "length", attributes: [ "username" ], options: { maximum: "HARD_LIMIT" } }
+            ]
+          }
+        }
+      )
+    end
+
+    # A model can validate one attribute twice under different conditions;
+    # collapsing on kind and attribute alone dropped the second rule.
+    it "keeps a second declaration on the same attribute and kind" do
+      text = described_class.call(model: "Account", detail: "full").content.first[:text]
+
+      expect(text).to include("- `length` on username (maximum: HARD_LIMIT)")
+      expect(text).to include("- `length` on username (maximum: LOCAL_LIMIT)")
+      expect(text.scan("- `length` on username (maximum: HARD_LIMIT)").size).to eq(1)
+    end
+  end
+
   # The builder emits `field:` and `transformation:`; the renderer read
   # `attribute:` and `with:`, so both blocks printed "- **** ...".
   describe "detailed macro blocks" do
@@ -311,7 +362,8 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
         models: {
           "Keypair" => {
             table_name: "keypairs",
-            encryption_details: [ { field: "private_key", options: { deterministic: true } } ],
+            encryption_details: [ { field: "private_key", options: { deterministic: true } },
+                                  { field: "ssn", options: {} } ],
             normalizes_details: [
               { field: "email", transformation: "strip" },
               { field: "phone", transformation: RailsAiContext::Confidence::INFERRED }
@@ -325,7 +377,22 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
 
       expect(text).to include("## Encryption Details")
-      expect(text).to include("- **private_key** (options: {deterministic: true})")
+      expect(text).to include("- **private_key** (deterministic: true)")
+    end
+
+    # Interpolating the options hash printed Hash#to_s, whose format changed
+    # in Ruby 3.4, so the same app rendered two different lines.
+    it "renders the options as pairs rather than a Ruby hash" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).not_to include("options: {")
+    end
+
+    it "leaves out the parenthesis when the macro carried no options" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).to include("- **ssn**\n")
+      expect(text).not_to include("- **ssn** (")
     end
 
     it "names the normalized field and its transformation" do

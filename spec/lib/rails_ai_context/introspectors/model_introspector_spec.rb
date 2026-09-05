@@ -541,6 +541,88 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # An STI child inherits its base's macros the way it inherits its table,
+    # so a child that declares nothing answered "0 assoc, 0 val" in the schema
+    # heading while the booted tier read its parent's.
+    it "gives an STI child the macros its base declares" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            has_many :comments
+            validates :title, presence: true
+            scope :published, -> { where(published: true) }
+            before_save :normalize_title
+            encrypts :secret
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "article.rb"), "class Article < Post\nend\n")
+
+        article = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Article"]
+
+        expect(article[:table_name]).to eq("posts")
+        expect(article[:associations].map { |a| a[:name] }).to contain_exactly(:comments)
+        expect(article[:validations].map { |v| v[:kind] }).to contain_exactly(:presence)
+        expect(article[:scopes].map { |s| s[:name] }).to contain_exactly("published")
+        expect(article[:callbacks]).to include("before_save")
+        expect(article[:encrypts]).to contain_exactly("secret")
+      end
+    end
+
+    it "keeps a class's own declaration when its STI base declares the same one" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            has_many :comments, dependent: :destroy
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "article.rb"), <<~RUBY)
+          class Article < Post
+            has_many :comments, dependent: :nullify
+          end
+        RUBY
+
+        article = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Article"]
+
+        comments = article[:associations].select { |a| a[:name] == :comments }
+        expect(comments.size).to eq(1)
+        expect(comments.first[:options][:dependent]).to eq(:nullify)
+      end
+    end
+
+    # An error entry carries no path, and File.basename("", ".rb").pluralize
+    # is "", which is truthy and so was accepted as the child's table. No
+    # walk reaches this today, because model_class? already rejects a child
+    # whose chain hits an error entry, so the resolution is pinned directly.
+    it "does not resolve a table through a candidate that carries no path" do
+      Dir.mktmpdir do |dir|
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        candidates = {
+          "Post" => { error: "boom" },
+          "Draft" => { path: File.join(dir, "app", "models", "draft.rb"), superclass: "Post" }
+        }
+
+        expect(introspector.send(:resolve_table_name, "Draft", candidates)).to eq("drafts")
+      end
+    end
+
+    it "reports a custom validate once, under custom_validates" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            validate :body_is_sane
+          end
+        RUBY
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post[:custom_validates]).to contain_exactly("body_is_sane")
+        expect(post[:validations].map { |v| v[:kind] }).not_to include(:custom)
+      end
+    end
+
     it "reports the modules a model includes or prepends, and not what it extends" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
@@ -1082,8 +1164,16 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           end
         RUBY
 
-        expect(booted_callbacks(dir, "Committer")).to eq(static_callbacks(dir, "Committer"))
-        expect(booted_callbacks(dir, "Committer")).to include("after_create_commit" => [ "refresh" ])
+        # Both tiers read the same source through the same grouping now, so
+        # the parity line alone would stay green through a change of shape in
+        # that one producer. The literal is what pins the shape.
+        expect(booted_callbacks(dir, "Committer")).to eq(
+          "after_create_commit" => [ "refresh" ],
+          "after_commit_on_create" => [ "announce" ],
+          "around_create" => [ "Snowflake" ],
+          "after_touch" => [ "bust" ]
+        )
+        expect(static_callbacks(dir, "Committer")).to eq(booted_callbacks(dir, "Committer"))
       end
     end
   end
@@ -1178,6 +1268,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   # Reflection answers associations, validations and enums, but scopes,
   # macros and custom validates come off the model's own file - so without
   # the same merge the static tier would out-answer the booted one.
+  # A gem's model was reported at app/models/<name>.rb, a file the app does
+  # not have, and that path shipped into the app's own .ai-context.json.
+  describe "#extract_model_details for a model the app does not own" do
+    def details_for(dir, class_name, source_location)
+      model = Class.new(ApplicationRecord) { self.table_name = "oauth_access_grants" }
+      model.define_singleton_method(:name) { class_name }
+      allow(Object).to receive(:const_source_location).and_call_original
+      allow(Object).to receive(:const_source_location).with(class_name).and_return(source_location)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)
+    end
+
+    it "carries the gem's own path, not an invented app path" do
+      Dir.mktmpdir do |dir|
+        gem_file = File.join(Gem.path.first.to_s, "gems", "doorkeeper-5.8.2", "app", "models",
+                             "doorkeeper", "access_grant.rb")
+
+        details = details_for(dir, "Doorkeeper::AccessGrant", [ gem_file, 1 ])
+
+        expect(details[:file]).to eq("doorkeeper-5.8.2/app/models/doorkeeper/access_grant.rb")
+      end
+    end
+
+    it "records no file when Ruby knows of no source for the class" do
+      Dir.mktmpdir do |dir|
+        expect(details_for(dir, "Doorkeeper::AccessToken", nil)).not_to have_key(:file)
+      end
+    end
+  end
+
   describe "#extract_model_details concern-declared macros" do
     it "merges concern scopes and macros into the booted answer" do
       Dir.mktmpdir do |dir|
