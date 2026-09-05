@@ -185,6 +185,11 @@ module RailsAiContext
 
         models.keys.sort.each do |name|
           data = models[name]
+          if (unread = SectionFacts.unread_row("- #{name}", data))
+            lines << unread
+            next
+          end
+
           assocs = (data[:associations] || []).size
           vals = (data[:validations] || []).size
           table = data[:table_name]

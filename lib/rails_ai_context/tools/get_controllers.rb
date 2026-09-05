@@ -100,7 +100,7 @@ module RailsAiContext
             paginated_names.each do |name|
               info = app_controllers[name]
               action_count = info[:actions]&.size || 0
-              phrase = Serializers::SectionFacts.unread_phrase(info) || count_phrase(action_count, "action")
+              phrase = Serializers::SectionFacts.unread_marker(info) || count_phrase(action_count, "action")
               lines << "- **#{name}** - #{phrase}"
             end
             lines << "" << "_Use `controller:\"Name\"` for full detail._#{pagination_hint}"
@@ -193,7 +193,7 @@ module RailsAiContext
       # the line left it reading as a walk that did not look. An unread entry
       # already gets a line of its own, so it is not said twice.
       private_class_method def self.actions_lines(info)
-        return [] if Serializers::SectionFacts.unread_phrase(info)
+        return [] if Serializers::SectionFacts.unread_marker(info)
 
         [ "- Actions: #{Serializers::SectionFacts.actions_phrase(info)}" ]
       end

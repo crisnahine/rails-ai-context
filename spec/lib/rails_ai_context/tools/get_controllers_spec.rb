@@ -230,9 +230,9 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       standard = described_class.call(detail: "standard").content.first[:text]
       full = described_class.call(detail: "full").content.first[:text]
 
-      expect(summary).to include("- **HugeController** - (could not be read: unreadable)")
-      expect(standard).to include("- **HugeController** - (could not be read: unreadable)")
-      expect(full).to include("- Could not be read: unreadable")
+      expect(summary).to include("- **HugeController** - [UNAVAILABLE: unreadable]")
+      expect(standard).to include("- **HugeController** - [UNAVAILABLE: unreadable]")
+      expect(full).to include("- [UNAVAILABLE: unreadable]")
     end
 
     it "names both strong params methods of a controller under an app parent" do

@@ -131,7 +131,10 @@ Source: `lib/rails_ai_context/confidence.rb`.
 route, controller, and mailbox-routing introspectors as they walk the AST
 (`Confidence.for_node`). `[UNAVAILABLE]` is a whole-response tag, marking a
 section with no static path, or (in either tier) a data source that genuinely
-doesn't exist for this app.
+doesn't exist for this app. It also marks a single row: a model or controller
+whose file could not be read is named with the reason, in the generated files
+and the tool listings alike, rather than rendered as an entry that declares
+nothing. The count above the row still includes it, because the app has it.
 
 `[STATIC]` marks the whole response of any answer that came from the static
 tier, and it also caps the records inside it: no record can claim more than the

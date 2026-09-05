@@ -75,6 +75,11 @@ module RailsAiContext
         lines = [ "## Key models (#{models.size} total)" ]
         models.keys.sort.first(max_show).each do |name|
           data = models[name]
+          if (unread = SectionFacts.unread_row("- **#{name}**", data))
+            lines << unread
+            next
+          end
+
           assoc_count = (data[:associations] || []).size
           val_count = (data[:validations] || []).size
           top_assocs = SectionFacts.associations_list(data).join(", ")

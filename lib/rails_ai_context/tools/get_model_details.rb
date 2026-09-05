@@ -112,11 +112,8 @@ module RailsAiContext
         end
       end
 
-      # A model the walk could not read is still a model the app has, and the
-      # count already includes it, so the row says why it is thin rather than
-      # leaving the reader to subtract.
       private_class_method def self.unavailable_row(name, data)
-        "- **#{name}** #{Confidence.unavailable(data[:error])}"
+        Serializers::SectionFacts.unread_row("- **#{name}**", data)
       end
 
       private_class_method def self.format_model(name, data)
