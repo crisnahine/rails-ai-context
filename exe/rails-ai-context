@@ -411,6 +411,7 @@ class RailsAiContextCLI < Thor
     def print_context_result(result)
       (result[:written] || []).each { |f| $stderr.puts "  Written: #{f}" }
       (result[:skipped] || []).each { |f| $stderr.puts "  Skipped: #{f} (unchanged)" }
+      (result[:not_applicable] || {}).each { |f, why| $stderr.puts "  Not applicable: #{f} (#{why})" }
     end
 
     # The tool list only needs tool names/descriptions/schemas - none of that

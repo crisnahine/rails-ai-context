@@ -25,21 +25,21 @@ module RailsAiContext
         @context = context
       end
 
+      # Split rule files (.cursor/rules/*.mdc) are fully gem-owned, written
+      # as-is with no markers (the gem manages every file in that
+      # directory).
+      RULE_FILES = {
+        "rails-project.mdc" => [ :render_project_rule, "nothing to document" ],
+        "rails-models.mdc" => [ :render_models_rule, "no models" ],
+        "rails-controllers.mdc" => [ :render_controllers_rule, "no controllers" ],
+        "rails-mcp-tools.mdc" => [ :render_mcp_tools_rule, "nothing to document" ]
+      }.freeze
+
       # @param output_dir [String] Rails root path
-      # @return [Hash] { written: [paths], skipped: [paths] }
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
         rules_dir = File.join(output_dir, Install::AiTool.find(:cursor).rules_dir)
-
-        # Split rule files (.cursor/rules/*.mdc) are fully gem-owned.
-        # written as-is with no markers (the gem manages every file in
-        # that directory).
-        mdc_files = {
-          File.join(rules_dir, "rails-project.mdc")    => render_project_rule,
-          File.join(rules_dir, "rails-models.mdc")     => render_models_rule,
-          File.join(rules_dir, "rails-controllers.mdc") => render_controllers_rule,
-          File.join(rules_dir, "rails-mcp-tools.mdc")  => render_mcp_tools_rule
-        }
-        result = write_rule_files(mdc_files)
+        result = write_rule_table(rules_dir, RULE_FILES)
 
         # .cursorrules is at the project root and may pre-date the gem
         # install (users frequently hand-write .cursorrules before

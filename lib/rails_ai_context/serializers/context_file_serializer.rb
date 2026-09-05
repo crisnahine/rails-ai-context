@@ -41,7 +41,7 @@ module RailsAiContext
       end
 
       # Write context files, skipping unchanged ones.
-      # @return [Hash] { written: [paths], skipped: [paths] }
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call
         # `.ai-context.json` is the machine artifact, not an AI tool, so no
         # install menu can offer it. A recorded tool selection arrives here as
@@ -61,6 +61,7 @@ module RailsAiContext
         generate_root = RailsAiContext.configuration.generate_root_files
         written = []
         skipped = []
+        not_applicable = {}
 
         seen_root_files = Set.new
 
@@ -73,14 +74,19 @@ module RailsAiContext
             raise ArgumentError, "Unknown format: #{fmt}. Valid formats: #{valid}"
           end
 
-          # Skip root files when generate_root_files is false
-          next unless generate_root
-
           # Deduplicate: skip if this root file was already written (e.g. AGENTS.md for both :opencode and :codex)
           next if seen_root_files.include?(filename)
           seen_root_files << filename
 
           filepath = File.join(output_dir, filename)
+
+          # generate_root_files = false is a deliberate omission, so it is
+          # reported rather than dropped.
+          unless generate_root
+            not_applicable[filepath] = "root files disabled"
+            next
+          end
+
           FileUtils.mkdir_p(File.dirname(filepath))
           content = serialize(fmt)
 
@@ -92,9 +98,9 @@ module RailsAiContext
         end
 
         # Split rules are always generated regardless of generate_root_files
-        generate_split_rules(formats, output_dir, written, skipped)
+        generate_split_rules(formats, output_dir, written, skipped, not_applicable)
 
-        { written: written, skipped: skipped }
+        { written: written, skipped: skipped, not_applicable: not_applicable }
       end
 
       private
@@ -143,36 +149,20 @@ module RailsAiContext
         end
       end
 
-      def generate_split_rules(formats, output_dir, written, skipped)
-        if formats.include?(:claude)
-          result = ClaudeRulesSerializer.new(context).call(output_dir)
-          written.concat(result[:written])
-          skipped.concat(result[:skipped])
-        end
-
-        if formats.include?(:cursor)
-          result = CursorRulesSerializer.new(context).call(output_dir)
-          written.concat(result[:written])
-          skipped.concat(result[:skipped])
-        end
-
-        if formats.include?(:opencode)
-          result = OpencodeRulesSerializer.new(context).call(output_dir)
-          written.concat(result[:written])
-          skipped.concat(result[:skipped])
-        end
-
-        if formats.include?(:copilot)
-          result = CopilotInstructionsSerializer.new(context).call(output_dir)
-          written.concat(result[:written])
-          skipped.concat(result[:skipped])
-        end
-
+      def generate_split_rules(formats, output_dir, written, skipped, not_applicable)
+        serializers = []
+        serializers << ClaudeRulesSerializer if formats.include?(:claude)
+        serializers << CursorRulesSerializer if formats.include?(:cursor)
+        serializers << OpencodeRulesSerializer if formats.include?(:opencode)
+        serializers << CopilotInstructionsSerializer if formats.include?(:copilot)
         # Codex reuses OpenCode's directory-level AGENTS.md split rules
-        if formats.include?(:codex) && !formats.include?(:opencode)
-          result = OpencodeRulesSerializer.new(context).call(output_dir)
+        serializers << OpencodeRulesSerializer if formats.include?(:codex) && !formats.include?(:opencode)
+
+        serializers.each do |serializer|
+          result = serializer.new(context).call(output_dir)
           written.concat(result[:written])
           skipped.concat(result[:skipped])
+          not_applicable.merge!(result[:not_applicable] || {})
         end
       end
     end

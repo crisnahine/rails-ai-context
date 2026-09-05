@@ -14,17 +14,17 @@ module RailsAiContext
         @context = context
       end
 
+      RULE_FILES = {
+        "rails-context.instructions.md" => [ :render_context_instructions, "nothing to document" ],
+        "rails-models.instructions.md" => [ :render_models_instructions, "no models" ],
+        "rails-controllers.instructions.md" => [ :render_controllers_instructions, "no controllers" ],
+        "rails-mcp-tools.instructions.md" => [ :render_mcp_tools_instructions, "nothing to document" ]
+      }.freeze
+
+      # @param output_dir [String] Rails root path
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
-        dir = File.join(output_dir, Install::AiTool.find(:copilot).rules_dir)
-
-        files = {
-          File.join(dir, "rails-context.instructions.md") => render_context_instructions,
-          File.join(dir, "rails-models.instructions.md") => render_models_instructions,
-          File.join(dir, "rails-controllers.instructions.md") => render_controllers_instructions,
-          File.join(dir, "rails-mcp-tools.instructions.md") => render_mcp_tools_instructions
-        }
-
-        write_rule_files(files)
+        write_rule_table(File.join(output_dir, Install::AiTool.find(:copilot).rules_dir), RULE_FILES)
       end
 
       private

@@ -154,9 +154,11 @@ end
 
 ## Generated Files
 
-`rails ai:context` generates **29 files** across all AI assistants:
+`rails ai:context` generates **20 files** across all AI assistants:
 
-### Claude Code (5 files)
+A file whose section has nothing in it is not written. An app with no models gets no `.claude/rules/rails-models.md`, and every surface reports it as `Not applicable: <file> (no models)` so a deliberate omission is not mistaken for a failed run.
+
+### Claude Code (6 files)
 
 | File | Purpose | Notes |
 |------|---------|-------|
@@ -165,6 +167,7 @@ end
 | `.claude/rules/rails-models.md` | Model listing with associations | Auto-loaded by Claude Code alongside CLAUDE.md. |
 | `.claude/rules/rails-context.md` | Project context and conventions | Auto-loaded by Claude Code alongside CLAUDE.md. |
 | `.claude/rules/rails-mcp-tools.md` | Full MCP tool reference | Parameters, detail levels, pagination, workflow guide. |
+| `.claude/rules/rails-components.md` | View component listing | Written only when the app has view components. |
 
 ### OpenCode (3 files)
 
@@ -174,7 +177,7 @@ end
 | `app/models/AGENTS.md` | Model reference | Auto-loaded by OpenCode when reading files in `app/models/`. |
 | `app/controllers/AGENTS.md` | Controller reference | Auto-loaded by OpenCode when reading files in `app/controllers/`. |
 
-### Cursor (4 files)
+### Cursor (5 files)
 
 | File | Purpose | Notes |
 |------|---------|-------|
@@ -182,6 +185,7 @@ end
 | `.cursor/rules/rails-models.mdc` | Model reference | `globs: app/models/**/*.rb` - auto-attaches when editing models. |
 | `.cursor/rules/rails-controllers.mdc` | Controller reference | `globs: app/controllers/**/*.rb` - auto-attaches when editing controllers. |
 | `.cursor/rules/rails-mcp-tools.mdc` | MCP tool reference | `alwaysApply: false` - agent-requested when relevant. |
+| `.cursorrules` | Legacy fallback | Read by older Cursor clients. Wrapped in markers, so hand-written content around it survives. |
 
 ### GitHub Copilot (5 files)
 
@@ -211,7 +215,7 @@ Commit **all files except `.ai-context.json`** (which is gitignored). This gives
 
 | Command | Mode | Format | Description |
 |---------|------|--------|-------------|
-| `rails ai:context` | compact | all | Generate all 29 context files |
+| `rails ai:context` | compact | all | Generate all 20 context files |
 | `rails ai:context:full` | full | all | Generate all files in full mode |
 | `rails ai:context:claude` | compact | Claude | CLAUDE.md + .claude/rules/ |
 | `rails ai:context:opencode` | compact | OpenCode | AGENTS.md + per-directory AGENTS.md |

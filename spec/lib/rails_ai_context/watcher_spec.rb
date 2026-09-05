@@ -97,6 +97,22 @@ RSpec.describe RailsAiContext::Watcher do
       end
     end
 
+    context "when a file does not apply to the app" do
+      before do
+        allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(true)
+        allow(RailsAiContext::Fingerprinter).to receive(:mark).and_return(RailsAiContext::Fingerprinter::Mark.new(digest: "new_fp"))
+        allow(RailsAiContext).to receive(:generate_context).and_return(
+          { written: [], skipped: [], not_applicable: { "/tmp/.claude/rules/rails-models.md" => "no models" } }
+        )
+        allow($stderr).to receive(:puts)
+      end
+
+      it "logs it with its reason" do
+        expect($stderr).to receive(:puts).with("  Not applicable: /tmp/.claude/rules/rails-models.md (no models)")
+        watcher.send(:handle_change)
+      end
+    end
+
     context "when fingerprint has not changed" do
       before do
         allow(RailsAiContext::Fingerprinter).to receive(:stale?).and_return(false)
