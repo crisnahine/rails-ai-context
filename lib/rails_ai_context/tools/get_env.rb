@@ -356,18 +356,17 @@ module RailsAiContext
           source = safe_read(path)
           next unless source
 
-          source.each_line do |line|
-            stripped = line.strip
-
-            # ENV KEY=value or ENV KEY value
-            if (match = stripped.match(/\AENV\s+([A-Z_][A-Z0-9_]*)\s*=?\s*(.*)/))
-              default = RailsAiContext::Redaction.value(match[1], match[2])
-              default = nil if default.to_s.empty?
-              vars << { type: "ENV", name: match[1], default: default, file: name }
+          dockerfile_instructions(source).each do |instruction|
+            if (match = instruction.match(/\AENV\s+(.+)/m))
+              dockerfile_env_pairs(match[1]).each do |var_name, raw|
+                default = RailsAiContext::Redaction.value(var_name, raw)
+                default = nil if default.to_s.empty?
+                vars << { type: "ENV", name: var_name, default: default, file: name }
+              end
             end
 
-            # ARG KEY=default
-            if (match = stripped.match(/\AARG\s+([A-Z_][A-Z0-9_]*)(?:\s*=\s*(.*))?/))
+            # ARG takes one variable per instruction.
+            if (match = instruction.match(/\AARG\s+([A-Z_][A-Z0-9_]*)(?:\s*=\s*(.*))?/))
               default = RailsAiContext::Redaction.value(match[1], match[2])
               default = nil if default.to_s.empty?
               vars << { type: "ARG", name: match[1], default: default, file: name }
@@ -376,6 +375,46 @@ module RailsAiContext
         end
 
         vars
+      end
+
+      # One entry per Dockerfile instruction, with backslash continuations
+      # joined. Docker treats the continued lines as one instruction, so a
+      # reader that works line by line sees a bare `ENV \\` and nothing else.
+      private_class_method def self.dockerfile_instructions(source)
+        instructions = []
+        buffer = +""
+
+        source.each_line do |line|
+          stripped = line.strip
+          next if stripped.start_with?("#")
+          if buffer.empty? && stripped.empty?
+            next
+          end
+
+          if stripped.end_with?("\\")
+            buffer << stripped.delete_suffix("\\").strip << " "
+          else
+            buffer << stripped
+            instructions << buffer.strip unless buffer.strip.empty?
+            buffer = +""
+          end
+        end
+        instructions << buffer.strip unless buffer.strip.empty?
+
+        instructions
+      end
+
+      ENV_PAIR = /([A-Z_][A-Z0-9_]*)=("(?:[^"\\]|\\.)*"|'[^']*'|\S*)/
+      private_constant :ENV_PAIR
+
+      # `ENV A=1 B=2` declares two variables; the legacy `ENV KEY value`
+      # form declares one whose value is the rest of the instruction.
+      private_class_method def self.dockerfile_env_pairs(body)
+        pairs = body.scan(ENV_PAIR)
+        return pairs unless pairs.empty?
+
+        legacy = body.match(/\A([A-Z_][A-Z0-9_]*)\s+(.*)/m)
+        legacy ? [ [ legacy[1], legacy[2] ] ] : []
       end
 
       private_class_method def self.detect_external_services(root)
