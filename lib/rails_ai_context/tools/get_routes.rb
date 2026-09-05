@@ -38,6 +38,20 @@ module RailsAiContext
         RailsAiContext::RouteCoverage.framework_controller?(name)
       end
 
+      HINTED_FILTERS = 3
+
+      # The filters this controller actually runs, read the way every other
+      # surface reads them, so a skipped one is never named here. The cut is
+      # stated rather than silent.
+      def self.filter_hint(ctrl_class)
+        chain = RailsAiContext::ActionFilters.for_controller(cached_context, ctrl_class, root: rails_app&.root&.to_s)
+        names = (chain[:inherited] + chain[:own]).map { |f| f[:name] }
+        return nil if names.empty?
+
+        rest = names.size - HINTED_FILTERS
+        "#{names.first(HINTED_FILTERS).join(', ')}#{rest.positive? ? " (+#{rest} more)" : ''}"
+      end
+
       guide_row(
         order: 8,
         mcp: "rails_get_routes(controller:\"X\")",
@@ -163,10 +177,10 @@ module RailsAiContext
                 ctrl_data = cached_context.dig(:controllers, :controllers, ctrl_class)
                 ctrl_summary = ""
                 if ctrl_data
-                  filters = (ctrl_data[:filters] || []).map { |f| f[:name] }.first(3)
+                  filters = filter_hint(ctrl_class)
                   formats = ctrl_data[:respond_to_formats]
                   parts = []
-                  parts << "filters: #{filters.join(', ')}" if filters.any?
+                  parts << "filters: #{filters}" if filters
                   parts << "formats: #{formats.join(', ')}" if formats&.any?
                   ctrl_summary = " (#{parts.join(' | ')})" if parts.any?
                 end
