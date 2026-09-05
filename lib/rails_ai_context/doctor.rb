@@ -36,6 +36,20 @@ module RailsAiContext
       check_performance_view_count
     ].freeze
 
+    ICONS = { pass: "[PASS]", warn: "[WARN]", fail: "[FAIL]" }.freeze
+    EMOJI_ICONS = { pass: "✅", warn: "⚠️ ", fail: "❌" }.freeze
+
+    # The report the CLI and the rake task print, so the two say the same
+    # thing about the same result.
+    def self.report_lines(result, icons: ICONS)
+      result[:checks].flat_map do |check|
+        icon = icons[check.status]
+        lines = [ "  #{icon} #{check.name}: #{check.message}" ]
+        lines << "  #{' ' * icon.length} Fix: #{check.fix}" if check.fix
+        lines
+      end
+    end
+
     attr_reader :app
 
     def initialize(app = nil)
