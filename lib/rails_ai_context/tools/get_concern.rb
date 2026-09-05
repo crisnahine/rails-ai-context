@@ -227,6 +227,7 @@ module RailsAiContext
 
       private_class_method def self.list_concerns(concern_dirs, root, max_size)
         all_concerns = []
+        excluded_count = 0
         real_root = File.realpath(root).to_s
 
         concern_dirs.each do |dir|
@@ -251,7 +252,10 @@ module RailsAiContext
 
             relative = real.sub("#{real_root}/", "")
             concern_name = real.sub("#{real_dir}/", "").sub(/\.rb$/, "").camelize
-            next if ConcernMembership.excluded?(concern_name)
+            if ConcernMembership.excluded?(concern_name)
+              excluded_count += 1
+              next
+            end
 
             method_count = 0
             if File.size(real) <= max_size
@@ -273,7 +277,13 @@ module RailsAiContext
         end
 
         if all_concerns.empty?
-          return text_response("No concerns found in #{concern_dirs.map { |d| d.sub("#{root}/", "") }.join(', ')}.")
+          dirs = concern_dirs.map { |d| d.sub("#{root}/", "") }.join(", ")
+          if excluded_count > 0
+            return text_response("No concerns to list in #{dirs}: " \
+              "#{count_phrase(excluded_count, "concern")} excluded by `excluded_concerns`.")
+          end
+
+          return text_response("No concerns found in #{dirs}.")
         end
 
         lines = [ "# Concerns (#{all_concerns.size})", "" ]
