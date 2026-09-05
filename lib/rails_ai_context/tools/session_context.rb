@@ -34,7 +34,7 @@ module RailsAiContext
 
       def self.call(action: nil, mark: nil, server_context: nil)
         unless action || mark
-          return text_response("Provide `action` (status/summary/reset) or `mark` (tool:param to record).")
+          return error_response("Provide `action` (status/summary/reset) or `mark` (tool:param to record).")
         end
 
         if mark

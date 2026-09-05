@@ -43,7 +43,7 @@ module RailsAiContext
 
       def self.call(model: nil, controller: nil, file: nil, type: "unit", server_context: nil)
         unless model || controller || file
-          return text_response("Provide at least one of: `model`, `controller`, or `file`.")
+          return error_response("Provide at least one of: `model`, `controller`, or `file`.")
         end
 
         tests_data = cached_context[:tests] || {}

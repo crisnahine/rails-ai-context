@@ -69,7 +69,14 @@ Global options may be typed before or after the command name:
 
 `tool` exits 0 when the tool answered and 1 when it could not. A required
 parameter you did not pass, a flag with no value after it, a bare word where a
-flag belongs, and an unknown parameter all exit 1 and say which one.
+flag belongs, and an unknown parameter all exit 1 and say which one. So does a
+refusal on policy - a path outside the app root, a sensitive file, a SQL
+statement the read-only validator blocks - because the question went
+unanswered.
+
+A thing that is simply not there is an ordinary answer and exits 0: a file the
+tool looked for and did not find, a search with no matches, a directory the
+`--path` names that does not exist.
 
 A value the schema cannot hold - `--detail bogus` where the parameter takes
 `summary`, `standard` or `full`, or `--limit abc` where it takes an integer -

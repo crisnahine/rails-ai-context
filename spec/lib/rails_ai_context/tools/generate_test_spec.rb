@@ -15,6 +15,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Provide at least one")
+      expect(result.error?).to be(true)
     end
 
     it "returns not-found for unknown model" do

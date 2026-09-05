@@ -173,7 +173,7 @@ module RailsAiContext
 
         # ── Layer 1: SQL validation ─────────────────────────────────
         valid, error = validate_sql(sql)
-        return text_response(error) unless valid
+        return error_response(error) unless valid
 
         # ── EXPLAIN mode ────────────────────────────────────────────
         if explain
@@ -211,8 +211,9 @@ module RailsAiContext
         else
           # Genuine execution failure (unknown column, bad table, syntax
           # error) - flag as an error result so MCP clients and the CLI
-          # (exit 1) treat it as failed. Policy blocks ("Blocked: ...") and
-          # unavailable-database guidance stay informational above.
+          # (exit 1) treat it as failed. Guidance about a database that is
+          # not there stays informational above: the question is answerable,
+          # just not now.
           error_response("SQL error: #{clean_error_message(e.message)}")
         end
       rescue => e
