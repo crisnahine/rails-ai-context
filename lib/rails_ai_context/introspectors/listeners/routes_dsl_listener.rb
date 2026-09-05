@@ -254,17 +254,17 @@ module RailsAiContext
           (opts[:as] || name).to_s
         end
 
-        # Rails' Resource#collection_name: the route key pluralized, and
-        # `_index` appended when it pluralizes to itself, so `resources :sheep`
-        # names its index route sheep_index and not the member's sheep.
+        # Rails' Resource#collection_name: the route key as written, with
+        # `_index` appended when that key is already singular, so
+        # `resources :sheep` names its index route sheep_index and
+        # `resources :photos, as: :image` names it image_index.
         # SingletonResource aliases collection_name to the singular, so a
         # `collection` block inside `resource :confirmation` stays singular.
         def collection_route_key(name, opts, singular:)
           key = route_key(name, opts)
           return key if singular
 
-          plural = key.pluralize
-          plural == key.singularize ? "#{plural}_index" : plural
+          key.singularize == key ? "#{key}_index" : key
         end
 
         def singular_route_key(name, opts, singular:)

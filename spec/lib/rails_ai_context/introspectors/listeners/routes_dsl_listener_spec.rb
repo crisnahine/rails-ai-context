@@ -341,17 +341,34 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     )
   end
 
-  # Rails builds the collection helper from (as || name).pluralize, so a
-  # singular as: still names the index route in the plural.
-  it "pluralizes a singular as: for the collection helper" do
+  # Rails builds the collection helper from `as || name` as written, and
+  # appends _index when that name is already singular.
+  it "appends _index to a singular as: for the collection helper" do
     records = route_records('resources :photos, as: :image, only: [:index, :show]')
+    expect(records.map { |r| [ r[:action], r[:name] ] }).to contain_exactly(
+      [ "index", "image_index" ],
+      [ "show", "image" ]
+    )
+  end
+
+  it "keeps a plural as: as the collection helper" do
+    records = route_records('resources :albums, as: :images, only: [:index, :show]')
     expect(records.map { |r| [ r[:action], r[:name] ] }).to contain_exactly(
       [ "index", "images" ],
       [ "show", "image" ]
     )
   end
 
-  # collection_name appends _index when the name pluralizes to itself.
+  # Mastodon draws `resources :following, only: [:index]`, and Rails names its
+  # index following_index.
+  it "appends _index to a singular resource name" do
+    records = route_records('resources :following, only: [:index], controller: :following_accounts')
+    expect(records.map { |r| [ r[:action], r[:name] ] }).to contain_exactly(
+      [ "index", "following_index" ]
+    )
+  end
+
+  # collection_name appends _index when the name is already singular.
   it "names the collection helper of an uncountable resource with _index" do
     records = route_records('resources :sheep, only: [:index, :show]')
     expect(records.map { |r| [ r[:action], r[:name] ] }).to contain_exactly(

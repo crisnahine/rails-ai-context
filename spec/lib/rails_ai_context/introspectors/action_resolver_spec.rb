@@ -317,6 +317,34 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
         .to eq(%w[show])
     end
 
+    # openfoodnetwork ships both a top-level BaseController and an
+    # Api::V0::BaseController, and Api::V0::ShopsController inherits the
+    # namespaced one. Bare-name-first bound it to the top-level class.
+    it "prefers the namespaced parent over a top-level class of the same name" do
+      both = {
+        "BaseController" => { actions: %w[top_level_show], parent_class: "ApplicationController" },
+        "Settings::BaseController" => { actions: %w[settings_show], parent_class: "ApplicationController" },
+        "Settings::ProfileController" => { actions: [], parent_class: "BaseController" }
+      }
+
+      expect(described_class.inherited_actions_by_name(both, "BaseController", kind: :controller,
+                                                       within: "Settings::ProfileController"))
+        .to eq(%w[settings_show])
+    end
+
+    # A parent already spelled with a namespace is taken as written, or it
+    # would be re-prefixed onto the child's own namespace.
+    it "leaves a qualified parent name as written" do
+      qualified = {
+        "Disputes::StrikesController" => { actions: %w[index], parent_class: "ApplicationController" },
+        "Admin::Disputes::StrikesController" => { actions: [], parent_class: "Disputes::StrikesController" }
+      }
+
+      expect(described_class.inherited_actions_by_name(qualified, "Disputes::StrikesController", kind: :controller,
+                                                       within: "Admin::Disputes::StrikesController"))
+        .to eq(%w[index])
+    end
+
     it "ends a cycle rather than walking it" do
       cyclic = {
         "A" => { actions: [], parent_class: "B" },
