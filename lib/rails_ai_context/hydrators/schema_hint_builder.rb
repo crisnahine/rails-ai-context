@@ -48,8 +48,9 @@ module RailsAiContext
 
         primary_key = table_data&.dig(:primary_key) || "id"
 
-        # Confidence: verified if we have both model data and schema table
-        confidence = table_data ? "[VERIFIED]" : "[INFERRED]"
+        # A static record already carries [STATIC]; a booted one has no
+        # confidence key, and a resolved table there is reflection-confirmed.
+        confidence = model_info[:confidence] || (table_data ? Confidence::VERIFIED : Confidence::INFERRED)
 
         SchemaHint.new(
           model_name: model_key.to_s,
