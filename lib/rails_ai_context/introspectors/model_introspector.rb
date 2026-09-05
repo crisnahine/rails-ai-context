@@ -732,6 +732,10 @@ module RailsAiContext
 
       MERGED_CONCERN_KEYS = %i[associations validations scopes enums callbacks macros].freeze
 
+      # Reflection answers these whether or not the concern's file was read,
+      # so on the booted tier an unread concern costs the other keys only.
+      REFLECTED_CONCERN_KEYS = %i[associations validations enums].freeze
+
       # The mixin names are in the same walk and their files are on disk, so
       # the class's own declarations and its concerns' answer as one. Methods
       # and mixins stay the model's own: those are its interface, not the

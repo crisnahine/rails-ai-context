@@ -353,10 +353,7 @@ module RailsAiContext
               end
             end
             unread = data[:concerns_unread]
-            if unread&.any?
-              lines << "#{RailsAiContext::Confidence::UNAVAILABLE} " \
-                "#{count_phrase(unread.size, "concern")} not read: #{unread.join(', ')}"
-            end
+            lines << unread_concerns_line(unread) if unread&.any?
           end
         end
 
@@ -465,6 +462,22 @@ module RailsAiContext
       private_class_method def self.extract_method_signatures(model_name)
         source = model_source(model_name) or return nil
         Introspectors::ActionResolver.public_methods_from_source(source, owner: model_name)
+      end
+
+      # On the booted tier reflection has already answered associations,
+      # validations and enums for the concern, so the bare line overstates
+      # what an unread file costs.
+      private_class_method def self.unread_concerns_line(unread)
+        "#{RailsAiContext::Confidence::UNAVAILABLE} #{count_phrase(unread.size, "concern")} " \
+          "not read#{unread_gap_label}: #{unread.join(', ')}"
+      end
+
+      private_class_method def self.unread_gap_label
+        return "" if RailsAiContext.static_tier?
+
+        keys = Introspectors::ModelIntrospector::MERGED_CONCERN_KEYS -
+          Introspectors::ModelIntrospector::REFLECTED_CONCERN_KEYS
+        " for #{keys.to_sentence(last_word_connector: " and ")}"
       end
 
       # Public method names from a concern's source file

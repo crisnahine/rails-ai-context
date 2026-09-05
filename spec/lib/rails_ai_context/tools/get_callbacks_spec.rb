@@ -117,20 +117,25 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
       allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
       models["Post"][:concern_callbacks] = payload_concern_callbacks(tmpdir, "HtmlSanitizable")
+      # The introspector merges the concern's callbacks into the model's own
+      # list, so the execution-order list really holds this method.
+      models["Post"][:callbacks]["before_save"] = %w[generate_slug sanitize_body]
     end
 
     after { FileUtils.remove_entry(tmpdir) }
 
-    # The callback is already in the execution-order list, with its body at
-    # this detail level, so the section attributes it and stops there.
-    it "attributes the callback to its concern without repeating the body" do
+    # The section attributes the callback; the body belongs to the
+    # execution-order list, once, read from the concern that declared it.
+    it "shows a concern-declared callback body once, in the execution-order list" do
       result = described_class.call(model: "Post", detail: "full")
       text = result.content.first[:text]
 
       expect(text).to include("## From Concerns")
       expect(text).to include("- **HtmlSanitizable:** before_save :sanitize_body")
       expect(text).not_to include("### HtmlSanitizable")
-      expect(text).not_to include("ActionController::Base.helpers.sanitize")
+      expect(text.scan("ActionController::Base.helpers.sanitize").size).to eq(1)
+      expect(text).to include("### :sanitize_body (HtmlSanitizable lines 10-12)")
+      expect(text.index("def sanitize_body")).to be < text.index("## From Concerns")
     end
 
     it "shows model callback method source at detail:full" do
@@ -283,6 +288,14 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
 
       expect(text).to include("after_commit :announce")
       expect(text).not_to include("after_commit_on_create")
+    end
+
+    # Four after_commit lines that differ only in `on:` read as one
+    # declaration without the tail.
+    it "keeps the options tail the declaration was written with" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("after_commit :announce, on: :create")
     end
 
     it "attaches no method source to a block callback at detail:full" do

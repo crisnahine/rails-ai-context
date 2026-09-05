@@ -793,20 +793,20 @@ rails_get_concern(type: "model")
 
 ### rails_get_callbacks
 
-Get ActiveRecord model callbacks in execution order: before/after/around for validation, save, create, update, destroy. Specify a model for one model's callbacks, or omit to see all models with their callbacks.
+Get ActiveRecord model callbacks grouped by type, in Rails event order: before/after/around for validation, save, create, update, destroy. Specify a model for one model's callbacks, or omit to see all models with their callbacks.
 
 **Parameters:**
 
 | Param | Type | Description |
 |-------|------|-------------|
 | `model` | string | Model class name (e.g. `User`, `Post`). Omit to see all models with their callbacks. |
-| `detail` | string | `summary` / `standard` (default) / `full`. summary: model names + callback counts. standard: callbacks in execution order. full: callbacks with method source code. |
+| `detail` | string | `summary` / `standard` (default) / `full`. summary: model names + callback counts. standard: callbacks by type in Rails event order. full: callbacks with method source code. |
 
 **Examples:**
 
 ```
 rails_get_callbacks(model: "User")
-  → User's callbacks in execution order: before_validation, after_validation, before_save, etc.
+  → User's callbacks by type, in Rails event order: before_validation, after_validation, before_save, etc.
 
 rails_get_callbacks(detail: "summary")
   → All models with callback counts, sorted by most callbacks
@@ -815,7 +815,7 @@ rails_get_callbacks(model: "Order", detail: "full")
   → Order's callbacks with the actual method source code for each callback
 ```
 
-**Returns:** Callbacks organized in Rails execution order. Includes concern-provided callbacks. Full detail shows the Ruby source code of each callback method with line numbers.
+**Returns:** Callbacks grouped by type, in Rails event order. Includes concern-provided callbacks, with their bodies read from the concern file. Within one type the order is declaration order, not the order Rails registered them in.
 
 ### rails_get_helper_methods
 

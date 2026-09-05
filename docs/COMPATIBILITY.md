@@ -212,6 +212,12 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   attachment validations) - those are runtime-only and stay marked
   `[UNAVAILABLE]`. A concern whose file cannot be found, a gem's module for
   example, is named under `Concerns` as not read.
+- **Callbacks are what the file declares.** In both tiers the callback list is
+  what the model file and the app concerns it includes declare. A callback a
+  gem registers on include without an `include` line in the model file (Devise,
+  counter caches, attachment purges) is not listed. Within one type the order
+  is declaration order, the model file first and then its concerns, not the
+  order Rails registered them in; the order across types is Rails' event order.
 - **Concern-style Mongoid documents in runtime results.** Mongoid documents
   are invisible to ActiveRecord reflection, so `ModelIntrospector#call` falls
   back to the same source-parsing pass used in the static tier even when the

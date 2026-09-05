@@ -362,10 +362,24 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
 
     it "names them under the Concerns section" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
       text = described_class.call(model: "Widget", detail: "full").content.first[:text]
 
       expect(text).to include("## Concerns")
       expect(text).to include("[UNAVAILABLE] 1 concern not read: Discard::Model")
+    end
+
+    # Reflection already answered associations, validations and enums for the
+    # concern, so the bare line overstates the gap on this tier.
+    it "names the keys the gap covers on the booted tier" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(false)
+
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).to include(
+        "[UNAVAILABLE] 1 concern not read for scopes, callbacks and macros: Discard::Model"
+      )
     end
   end
 end
