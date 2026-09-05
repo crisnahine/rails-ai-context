@@ -262,7 +262,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
       text = described_class.call(detail: "full").content.first[:text]
 
-      expect(text).to include("- Filters: ~~authenticate_user!~~ (skipped), before require_actor_signature!")
+      expect(text).to include("- Filters: ~~authenticate_user!~~ _(skipped)_, before require_actor_signature!")
       expect(text).not_to include("before authenticate_user!")
     end
 

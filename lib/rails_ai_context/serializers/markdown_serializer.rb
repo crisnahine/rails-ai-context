@@ -181,10 +181,7 @@ module RailsAiContext
           lines << "- Parent: `#{info[:parent_class]}`" if info[:parent_class]
           lines << "- API controller: yes" if info[:api_controller]
           lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-          filters_line = SectionFacts.filters_line(info)
-          lines << filters_line if filters_line
-          param_names = SectionFacts.strong_param_names(info)
-          lines << "- Strong params: #{param_names.join(', ')}" if param_names.any?
+          lines.concat(SectionFacts.controller_summary_lines(info))
         end
         lines.join("\n")
       end

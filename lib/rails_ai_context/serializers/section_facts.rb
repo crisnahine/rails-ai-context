@@ -58,15 +58,31 @@ module RailsAiContext
       end
 
       # A skipped filter is not one the action runs, so the listings say so
-      # the way the per-action answer does.
+      # the way the per-action answer and docs/CONFIGURATION.md do.
       def filters_line(controller_data)
         filters = Array(controller_data[:filters]).grep(Hash)
         return nil if filters.empty?
 
         parts = filters.map do |f|
-          f[:skipped] ? "~~#{f[:name]}~~ (skipped)" : "#{f[:kind]} #{f[:name]}"
+          f[:skipped] ? "~~#{f[:name]}~~ _(skipped)_" : "#{f[:kind]} #{f[:name]}"
         end
         "- Filters: #{parts.join(', ')}"
+      end
+
+      # What every controller listing states under the name, in one order.
+      # `rescue_handlers:` because only the per-controller listing renders
+      # them; the compressed group and the generated files do not.
+      def controller_summary_lines(controller_data, rescue_handlers: false)
+        lines = []
+        filters = filters_line(controller_data)
+        lines << filters if filters
+        params = strong_param_names(controller_data)
+        lines << "- Strong params: #{params.join(', ')}" if params.any?
+        return lines unless rescue_handlers
+
+        rescues = rescue_handler_lines(controller_data)
+        lines << "- Rescue from: #{rescues.join(', ')}" if rescues.any?
+        lines
       end
 
       # A block-form rescue_from carries no handler, so the exception name
