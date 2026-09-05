@@ -219,6 +219,22 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("- **Admin::BaseController** - (no public actions)")
     end
 
+    # A file the walk could not read is not a controller with nothing in it,
+    # and the single-controller answer already says so.
+    it "says a controller could not be read in every listing detail" do
+      stub_controllers({
+        "HugeController" => { error: "unreadable" }
+      })
+
+      summary = described_class.call(detail: "summary").content.first[:text]
+      standard = described_class.call(detail: "standard").content.first[:text]
+      full = described_class.call(detail: "full").content.first[:text]
+
+      expect(summary).to include("- **HugeController** - (could not be read: unreadable)")
+      expect(standard).to include("- **HugeController** - (could not be read: unreadable)")
+      expect(full).to include("- Could not be read: unreadable")
+    end
+
     it "names both strong params methods of a controller under an app parent" do
       stub_controllers({
         "Admin::AccountsController" => {

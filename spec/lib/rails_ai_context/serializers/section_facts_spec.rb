@@ -87,6 +87,22 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
     end
   end
 
+  describe ".actions_phrase" do
+    it "names the error of an entry the walk could not read" do
+      expect(described_class.actions_phrase({ error: "unreadable" }))
+        .to eq("(could not be read: unreadable)")
+    end
+
+    it "still says so when the entry carries an empty action list beside its error" do
+      expect(described_class.actions_phrase({ error: "unreadable", actions: [] }))
+        .to eq("(could not be read: unreadable)")
+    end
+
+    it "says a readable controller has no public actions" do
+      expect(described_class.actions_phrase({ actions: [] })).to eq("(no public actions)")
+    end
+  end
+
   describe ".controller_summary_lines" do
     let(:controller_data) do
       {
@@ -108,6 +124,11 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
 
     it "answers an empty list for a controller with none of them" do
       expect(described_class.controller_summary_lines({}, rescue_handlers: true)).to eq([])
+    end
+
+    it "states the error of an entry the walk could not read" do
+      expect(described_class.controller_summary_lines({ error: "unreadable" }))
+        .to eq([ "- Could not be read: unreadable" ])
     end
   end
 

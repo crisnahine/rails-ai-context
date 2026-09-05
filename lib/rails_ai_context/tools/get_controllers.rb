@@ -97,7 +97,8 @@ module RailsAiContext
             paginated_names.each do |name|
               info = app_controllers[name]
               action_count = info[:actions]&.size || 0
-              lines << "- **#{name}** - #{count_phrase(action_count, "action")}"
+              phrase = Serializers::SectionFacts.unread_phrase(info) || count_phrase(action_count, "action")
+              lines << "- **#{name}** - #{phrase}"
             end
             lines << "" << "_Use `controller:\"Name\"` for full detail._#{pagination_hint}"
             text_response(lines.join("\n"))
