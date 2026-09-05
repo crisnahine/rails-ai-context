@@ -200,6 +200,16 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
         expect(text).not_to include("**fr** →")
       end
 
+      # The whole answer is here; two fields of it are not. Borrowing the
+      # tier's own refusal sentence made one unanswered field read as the
+      # tool declining, which is what an app that cannot boot really gets.
+      it "says why the two runtime-only fields are unanswered, not that the tool refused" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("- **Backend:** [UNAVAILABLE:")
+        expect(text).not_to include("requires a booted Rails app")
+        expect(text).to include("belongs to the process that answers")
+      end
+
       it "marks the per-locale fallback line unavailable" do
         text = described_class.call(locale: "fr").content.first[:text]
         expect(text).to include("**Fallbacks:** [UNAVAILABLE:")
