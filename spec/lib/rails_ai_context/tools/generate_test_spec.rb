@@ -461,5 +461,27 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         expect(text).not_to include(%(describe "associations" do\n  end))
       end
     end
+
+    it "renders a habtm row rather than an empty associations block" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "account.rb"), <<~RUBY)
+          class Account < ApplicationRecord
+            has_and_belongs_to_many :tags
+          end
+        RUBY
+
+        app = RailsAiContext::StaticApp.new(dir)
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(app).static_call
+        allow(described_class).to receive(:cached_context)
+          .and_return({ tests: { framework: "rspec" }, models: models })
+        allow(described_class).to receive(:rails_app).and_return(app)
+
+        text = described_class.call(model: "Account").content.first[:text]
+
+        expect(text).to include("it { is_expected.to have_and_belong_to_many(:tags) }")
+        expect(text).not_to include(%(describe "associations" do\n  end))
+      end
+    end
   end
 end

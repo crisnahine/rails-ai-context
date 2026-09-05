@@ -101,15 +101,9 @@ module RailsAiContext
         bases << ActionController::API if defined?(ActionController::API)
 
         bases.flat_map(&:descendants).reject do |ctrl|
-          ctrl.name.nil? || ctrl.name == "ApplicationController" || renamed_class?(ctrl) ||
+          ctrl.name.nil? || ctrl.name == "ApplicationController" || DeclaredConstant.renamed?(ctrl) ||
             ctrl.name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
         end.uniq.sort_by(&:name)
-      end
-
-      # A class that answers a name no constant carries belongs to no file,
-      # and keyed by that name it would overwrite the real controller's entry.
-      def renamed_class?(ctrl)
-        ctrl.name != ctrl.to_s
       end
 
       # Controller files not yet loaded as classes, keyed by the name the path
