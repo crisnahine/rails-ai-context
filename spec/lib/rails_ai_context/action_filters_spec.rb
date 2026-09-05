@@ -67,6 +67,70 @@ RSpec.describe RailsAiContext::ActionFilters do
     expect(result[:own]).to eq([])
   end
 
+  # A skip record carries the skip's own only:/except:, so it covers those
+  # actions only. Reading the flag without the constraint hid the filter
+  # from every action of the class.
+  describe "a skip record constrained to some actions" do
+    let(:constrained_context) do
+      { controllers: { controllers: {
+        "AdminController" => { filters: [ { kind: "before", name: "authenticate_admin!" } ] },
+        "ReportsController" => {
+          parent_class: "AdminController",
+          actions: %w[index show],
+          filters: [ { kind: "before", name: "authenticate_admin!", skipped: true, only: %w[index] } ]
+        }
+      } } }
+    end
+
+    it "reports the filter skipped for an action the skip names" do
+      result = described_class.for(constrained_context, "ReportsController", "index")
+
+      expect(result[:skipped]).to eq(%w[authenticate_admin!])
+      expect(result[:own]).to eq([])
+      expect(result[:inherited]).to eq([])
+    end
+
+    it "still inherits the filter for an action the skip does not cover" do
+      result = described_class.for(constrained_context, "ReportsController", "show")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].map { |f| [ f[:name], f[:from] ] })
+        .to eq([ %w[authenticate_admin! AdminController] ])
+    end
+  end
+
+  # The payload the CLI builds without booting, from real files, through the
+  # introspector that sets the skip flag.
+  describe "a constrained skip in a payload the static tier built" do
+    it "keeps the filter for the action the skip leaves alone" do
+      Dir.mktmpdir("action-filters-static") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        File.write(File.join(dir, "app/controllers/reports_controller.rb"), <<~RUBY)
+          class ReportsController < ApplicationController
+            before_action :authenticate_admin!
+            skip_before_action :authenticate_admin!, only: [ :index ]
+
+            def index; end
+
+            def show; end
+          end
+        RUBY
+
+        payload = RailsAiContext::Introspectors::ControllerIntrospector
+          .new(RailsAiContext::StaticApp.new(dir)).static_call
+        ctx = { controllers: payload }
+
+        show = described_class.for(ctx, "ReportsController", "show", root: dir)
+        index = described_class.for(ctx, "ReportsController", "index", root: dir)
+
+        expect(show[:skipped]).to eq([])
+        expect(show[:own].map { |f| f[:name] }).to eq(%w[authenticate_admin!])
+        expect(index[:skipped]).to eq(%w[authenticate_admin!])
+        expect(index[:own]).to eq([])
+      end
+    end
+  end
+
   it "answers empty lists for an unknown controller" do
     expect(described_class.for(context, "Nope", "show")).to eq({ own: [], inherited: [], skipped: [] })
   end
