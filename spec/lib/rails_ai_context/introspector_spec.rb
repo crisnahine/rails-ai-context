@@ -243,6 +243,26 @@ RSpec.describe RailsAiContext::Introspector do
         expect(result[:rails_version]).to eq("7.2.2")
       end
     end
+
+    # The interpreter running this gem is not the app's: statically it is
+    # whatever the binary was installed under, and .ai-context.json describes
+    # the app. The Rails version already reads the lockfile here.
+    it "answers the Ruby version from the app's lockfile, not the running interpreter" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n    rails (7.2.2)\n\nRUBY VERSION\n   ruby 4.0.6\n")
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:ruby_version]).to eq("4.0.6")
+      end
+    end
+
+    it "falls back to the running interpreter when the app declares no Ruby" do
+      Dir.mktmpdir do |dir|
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:ruby_version]).to eq(RUBY_VERSION)
+      end
+    end
   end
 
   describe "INTROSPECTOR_MAP / PRESETS drift guard" do

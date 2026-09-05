@@ -53,9 +53,6 @@ module RailsAiContext
         fetch_section(:schema, subject: "Schema introspection") do |schema|
           tables = schema[:tables] || {}
 
-          # Return full JSON if requested (existing behavior)
-          return text_response(schema.to_json) if format == "json" && RailsAiContext::DetailLevel.full?(detail)
-
           total = tables.size
           offset = [ offset.to_i, 0 ].max
           limit = [ limit.to_i, 0 ].max if limit && limit.to_i < 0
@@ -75,9 +72,7 @@ module RailsAiContext
               return not_found_response("Table", table, tables.keys.sort,
                 recovery_tool: "Call rails_get_schema(detail:\"summary\") to see all tables")
             end
-            if format == "json"
-              return text_response(table_data.to_json)
-            end
+            return json_response(table_data) if format == "json"
 
             output = format_table_markdown(table_key, table_data)
             # Cross-reference hint for AI: suggest next tool call
@@ -95,6 +90,8 @@ module RailsAiContext
             if paginated.empty? && total > 0
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
+            return json_page_response(schema, tables, paginated) if format == "json"
+
             lines = [ "# Schema Summary (#{count_phrase(total, "table")})", "" ]
             lines << "**Adapter:** #{adapter_label(schema)}" if schema[:adapter]
             lines.concat(static_source_lines(schema))
@@ -119,6 +116,8 @@ module RailsAiContext
             if paginated.empty?
               return text_response("No tables at offset #{page[:offset]}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
             end
+            return json_page_response(schema, tables, paginated) if format == "json"
+
             lines = [ "# Schema (#{count_phrase(total, "table")}, showing #{paginated.size})", "" ]
             lines.concat(static_source_lines(schema))
             paginated.each do |name|
@@ -196,6 +195,8 @@ module RailsAiContext
             if paginated.empty? && total > 0
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
+            return json_page_response(schema, tables, paginated) if format == "json"
+
             lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
             paginated.each do |name|
               lines << format_table_markdown(name, tables[name])
@@ -262,6 +263,14 @@ module RailsAiContext
           lines << "- **#{name}**: #{count_phrase(count, "table")} (#{db[:tables].keys.join(', ')}) - #{db[:note]}"
         end
         lines
+      end
+
+      # One JSON shape for every detail level: the schema as introspected,
+      # with :tables cut down to the page the same pagination produced for
+      # markdown. `detail` still decides how many tables a page holds.
+      private_class_method def self.json_page_response(schema, tables, names)
+        page = names.to_h { |name| [ name, tables[name] ] }
+        json_response(schema.merge(tables: page))
       end
 
       private_class_method def self.format_table_markdown(name, data)

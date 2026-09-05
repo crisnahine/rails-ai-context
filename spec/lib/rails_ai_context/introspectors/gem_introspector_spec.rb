@@ -155,8 +155,13 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
         expect(names).to include("devise")
       end
 
+      # Named for its source: the context's own ruby_version is the Ruby the
+      # app runs on, and a reader seeing both needs to know which is which.
       it "reads the ruby version from the RUBY VERSION section" do
-        expect(introspector.call[:ruby_version]).to eq("3.3.4p94")
+        result = introspector.call
+
+        expect(result[:declared_ruby_version]).to eq("3.3.4p94")
+        expect(result).not_to have_key(:ruby_version)
       end
     end
 
@@ -175,7 +180,7 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
       end
 
       it "still names the ruby version" do
-        expect(introspector.call[:ruby_version]).to eq("4.0.6")
+        expect(introspector.call[:declared_ruby_version]).to eq("4.0.6")
       end
     end
 

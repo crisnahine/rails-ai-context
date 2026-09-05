@@ -65,6 +65,7 @@ module RailsAiContext
         return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
 
         candidates = static_candidates
+        sti_parents = candidates.keys.to_h { |name| [ name, sti_parent(name, candidates, []) ] }
         candidates.each_with_object({}) do |(class_name, candidate), result|
           if candidate[:error]
             result[class_name] = { error: candidate[:error] }
@@ -79,11 +80,29 @@ module RailsAiContext
 
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
                                                     table_name: resolve_table_name(class_name, candidates),
-                                                    inherited_from: sti_bases(class_name, candidates))
+                                                    inherited_from: sti_bases(class_name, candidates),
+                                                    sti: static_sti_info(class_name, sti_parents))
         end
       end
 
       private
+
+      # The same shape the booted tier reports under :sti, off the chain the
+      # static tier already resolves to share the base's table. A model that
+      # inherits from another model IS the STI relation, so no type column has
+      # to be read to name it.
+      def static_sti_info(class_name, sti_parents)
+        parent = sti_parents[class_name]
+        children = sti_parents.select { |_name, other_parent| other_parent == class_name }.keys.sort
+
+        return nil if parent.nil? && children.empty?
+
+        {
+          sti_base: parent.nil? && children.any?,
+          sti_parent: parent,
+          sti_children: (children unless children.empty?)
+        }.compact
+      end
 
       # A model file the app cannot load leaves its class out of reflection,
       # and leaving it out here answers that the model does not exist and that
@@ -758,7 +777,8 @@ module RailsAiContext
                .transform_values(&:to_s)
       end
 
-      def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [])
+      def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
+                               sti: nil)
         own = SourceIntrospector.call(path)
         data, unread = merge_concern_macros(own, class_name)
         data, unread = merge_sti_macros(data, unread, inherited_from)
@@ -787,7 +807,8 @@ module RailsAiContext
           concerns_unread: (unread if unread.any?),
           macros: data[:macros],
           methods: ActionResolver.own_methods(own[:methods], class_name),
-          file: file
+          file: file,
+          sti: sti
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
@@ -871,7 +892,7 @@ module RailsAiContext
       def relative_to_root(path)
         return nil if path.nil?
 
-        PortablePath.relativize(path, app.root.to_s)
+        PortablePath.relativize_marked(path, app.root.to_s)
       end
 
       # This sees the model file alone, where the booted tier also walks what

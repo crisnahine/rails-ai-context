@@ -1307,6 +1307,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)
     end
 
+    # Marked, because every other model's file resolves against the app root
+    # and this one does not exist there.
     it "carries the gem's own path, not an invented app path" do
       Dir.mktmpdir do |dir|
         gem_file = File.join(Gem.path.first.to_s, "gems", "doorkeeper-5.8.2", "app", "models",
@@ -1314,7 +1316,15 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         details = details_for(dir, "Doorkeeper::AccessGrant", [ gem_file, 1 ])
 
-        expect(details[:file]).to eq("doorkeeper-5.8.2/app/models/doorkeeper/access_grant.rb")
+        expect(details[:file]).to eq("gem:doorkeeper-5.8.2/app/models/doorkeeper/access_grant.rb")
+      end
+    end
+
+    it "leaves an app-owned model's file unmarked" do
+      Dir.mktmpdir do |dir|
+        details = details_for(dir, "Widget", [ File.join(dir, "app", "models", "widget.rb"), 1 ])
+
+        expect(details[:file]).to eq("app/models/widget.rb")
       end
     end
 
@@ -1387,6 +1397,39 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         allow(introspector).to receive(:model_source_path).and_return(model_path)
 
         expect(introspector.send(:extract_model_details, model)[:concerns_unread]).to eq([ "Elsewhere" ])
+      end
+    end
+  end
+
+  describe "STI on the static tier" do
+    # The booted tier reports the hierarchy under :sti and the graph tool
+    # renders it from there. The static tier resolves the same chain to share
+    # the base's table and its macros, so it can answer the same question.
+    it "reports the base, the parent and the children" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            has_many :comments
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "article.rb"), "class Article < Post\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Post"][:sti]).to eq(sti_base: true, sti_children: [ "Article" ])
+        expect(models["Article"][:sti]).to eq(sti_base: false, sti_parent: "Post")
+      end
+    end
+
+    it "leaves a model with no STI chain without the key" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Post"]).not_to have_key(:sti)
       end
     end
   end

@@ -58,8 +58,9 @@ module RailsAiContext
     end
 
     # Attempts to boot the Rails app rooted at app_root. Returns a Result;
-    # never raises for boot problems. SystemExit passes through - an
-    # initializer calling exit() is an explicit process-level decision.
+    # never raises for boot problems. SystemExit passes through, announced on
+    # stderr - an initializer calling exit() is an explicit process-level
+    # decision.
     def self.boot!(app_root: Dir.pwd, timeout: DEFAULT_TIMEOUT)
       environment_rb = File.join(app_root, "config", "environment.rb")
       unless File.exist?(environment_rb)
@@ -80,6 +81,13 @@ module RailsAiContext
         Timeout.timeout(timeout) { yield }
       end
       Result.new(status: :booted)
+    rescue SystemExit => e
+      # The exit stands: an initializer calling exit() is an explicit
+      # process-level decision, and its own message is already on stderr.
+      # Without this line nothing says the call came from here, or that the
+      # static tier answers it without booting.
+      $stderr.puts "[rails-ai-context] App exited during boot (status #{e.status}); rerun with --no-boot for the static tier."
+      raise
     rescue Timeout::Error
       # Timeout::Error's own message ("execution expired") names neither the
       # app nor the configured limit - wrap it so a slow-booting app produces

@@ -167,7 +167,9 @@ module RailsAiContext
 
         {
           total_gems: lock.names.size,
-          ruby_version: lock.ruby_version,
+          # Named for its source: the context's own ruby_version is the Ruby
+          # the app runs on, and both are served from the same run.
+          declared_ruby_version: lock.ruby_version,
           notable_gems: notable,
           categories: categorize_gems(notable),
           local_gems: detect_local_gems,

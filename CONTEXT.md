@@ -26,7 +26,7 @@ Two senses, one per module, and neither is bare "path" in a name.
 
 **Where code lives** - `PathResolver` answers which directories a kind of app code can occupy for a given root: conventional layout, packwerk packs, in-repo engines, configured extras.
 
-**How a path is written down** - `PortablePath` rewrites one so it means the same thing on another machine, because what it touches ends up in `.ai-context.json` and the app commits that file. App paths go app-relative, gem paths keep the gem and version and drop the install prefix. "Relativize" always means this.
+**How a path is written down** - `PortablePath` rewrites one so it means the same thing on another machine, because what it touches ends up in `.ai-context.json` and the app commits that file. App paths go app-relative, gem paths keep the gem and version and drop the install prefix. Where a reader would otherwise resolve the result against the app root, `relativize_marked` prefixes a gem path with `gem:`. "Relativize" always means this.
 
 ## Safe path
 

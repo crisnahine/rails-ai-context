@@ -29,6 +29,25 @@ RSpec.describe RailsAiContext::PortablePath do
     end
   end
 
+  describe ".relativize_marked" do
+    it "marks a gem path, which no app root resolves" do
+      path = File.join(gem_root, "doorkeeper-5.9.5", "app", "models", "access_grant.rb")
+
+      expect(described_class.relativize_marked(path, "/srv/blog"))
+        .to eq("gem:doorkeeper-5.9.5/app/models/access_grant.rb")
+    end
+
+    it "leaves an app path unmarked" do
+      expect(described_class.relativize_marked("/srv/blog/app/models/user.rb", "/srv/blog"))
+        .to eq("app/models/user.rb")
+    end
+
+    it "leaves a path that belongs to neither unmarked" do
+      expect(described_class.relativize_marked("/opt/shared/lib/thing.rb", "/srv/blog"))
+        .to eq("/opt/shared/lib/thing.rb")
+    end
+  end
+
   describe ".gem_checkouts" do
     # The gem under test is loaded from this checkout rather than unpacked
     # under a gem root, which is the shape a Gemfile `path:` entry produces.
