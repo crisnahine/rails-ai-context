@@ -67,6 +67,32 @@ module RailsAiContext
       true
     end
 
+    # The whole typed-name rule, so the two surfaces cannot drift in wording
+    # or in exit code. A bare invocation is a listing request (out, :listed);
+    # a name no preset carries is an input error, so its framing and its copy
+    # of the listing go to err (:unknown). The block runs between the resolve
+    # and the run - the standalone CLI boots the app there, the rake task has
+    # already booted - and the caller turns the answer into an exit status.
+    #
+    # @return [Symbol] :listed, :unknown, :ran or :failed
+    def self.dispatch(typed, invocation:, out: $stdout, err: $stderr)
+      key = typed && resolve(typed)
+
+      unless key
+        listing = listing(invocation: invocation)
+        if typed.nil?
+          out.puts listing
+          return :listed
+        end
+        err.puts "Unknown preset: #{typed}\n\n"
+        err.print listing
+        return :unknown
+      end
+
+      yield key if block_given?
+      run(key, out: out, err: err) ? :ran : :failed
+    end
+
     def self.listing(invocation:)
       lines = [ "Available presets:", "" ]
       DEFINITIONS.each { |key, info| lines << "  #{invocation.call(key)}".ljust(45) + "# #{info[:desc]}" }

@@ -387,23 +387,10 @@ namespace :ai do
   task :preset, [ :name ] => :environment do |_t, args|
     require "rails_ai_context"
 
-    typed = args[:name]
-    name = typed&.strip&.downcase
-    listing = RailsAiContext::Presets.listing(invocation: ->(k) { "rails 'ai:preset[#{k}]'" })
-
-    unless name && RailsAiContext::Presets.resolve(name)
-      # Bare `ai:preset` is a listing request (exit 0); a name that matches no
-      # preset is an input error, so scripts get a non-zero exit.
-      unless typed
-        puts listing
-        next
-      end
-      $stderr.puts "Unknown preset: #{typed}\n\n"
-      $stderr.print listing
-      exit 1
-    end
-
-    exit 1 unless RailsAiContext::Presets.run(name)
+    outcome = RailsAiContext::Presets.dispatch(
+      args[:name], invocation: ->(k) { "rails 'ai:preset[#{k}]'" }
+    )
+    exit 1 unless %i[listed ran].include?(outcome)
   end
 
   desc "Print a concise schema facts summary (tables, columns, indexes, associations, dependencies)"
