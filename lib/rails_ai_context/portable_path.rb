@@ -40,6 +40,28 @@ module RailsAiContext
       gem_path?(path, root) ? "#{GEM_MARKER}#{relative}" : relative
     end
 
+    # The way back, for a reader that has to open the file a carried path
+    # names. A marked path belongs to a gem and joining it to the app root
+    # opens nothing, which is how a gem-owned model lost its structure and its
+    # callback bodies. Returns nil when there is no path to open.
+    def resolve(carried, root)
+      carried = carried.to_s
+      return nil if carried.empty?
+      return carried if carried.start_with?(File::SEPARATOR)
+
+      unless carried.start_with?(GEM_MARKER)
+        return root.to_s.empty? ? carried : File.join(root.to_s, carried)
+      end
+
+      within_gem = carried.delete_prefix(GEM_MARKER)
+      gem_roots.map { |gem_root| File.join(gem_root, within_gem) }
+               .find { |path| File.exist?(path) } ||
+        gem_checkouts.filter_map { |dir, name|
+          File.join(dir, within_gem.delete_prefix("#{name}/")) if within_gem.start_with?("#{name}/")
+        }.find { |path| File.exist?(path) } ||
+        File.join(gem_roots.first.to_s, within_gem)
+    end
+
     # True when relativize answers this path against a gem prefix rather than
     # against the app root.
     def gem_path?(path, root)

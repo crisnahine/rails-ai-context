@@ -417,4 +417,25 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(reads_for(40)).to eq(reads_for(3))
     end
   end
+
+  # A gem-owned model carries a path that names the gem, so joining it to the
+  # app root opened nothing and the callback body was silently absent.
+  describe "a model whose file belongs to a gem" do
+    it "reads the callback body out of the gem's own file" do
+      gem_file = File.join(Gem.loaded_specs["activesupport"].full_gem_path,
+                           "lib", "active_support", "notifications.rb")
+      marked = RailsAiContext::PortablePath.relativize_marked(gem_file, Rails.root.to_s)
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Doorkeeper::AccessGrant" => {
+          name: "Doorkeeper::AccessGrant", file: marked,
+          callbacks: { "before_validation" => [ "instrument" ] }
+        } }
+      })
+
+      text = described_class.call(model: "Doorkeeper::AccessGrant", detail: "full").content.first[:text]
+
+      expect(marked).to start_with("gem:")
+      expect(text).to include("def instrument")
+    end
+  end
 end

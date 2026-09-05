@@ -153,7 +153,8 @@ A model's `file` in `.ai-context.json` is app-relative, except for a model a
 gem owns: that value begins `gem:` and the rest of it starts with the gem's own
 directory name, as in `gem:doorkeeper-5.9.5/app/models/access_grant.rb`. It is
 relative to the directory the gems are unpacked under, not to the app root, so
-a consumer must not join it to the app root.
+a consumer must not join it to the app root. The gem's own readers ask
+`PortablePath.resolve`, which answers both shapes.
 
 ## Shape matrix
 

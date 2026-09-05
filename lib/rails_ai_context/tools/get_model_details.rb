@@ -426,8 +426,10 @@ module RailsAiContext
         RailsAiContext::Payload.model_file(cached_context, model_name)
       end
 
+      # A carried path can name a gem rather than the app, and joining that to
+      # the app root opens nothing. One reader answers both shapes.
       private_class_method def self.model_source_path(model_name)
-        rails_app.root.join(relative_model_path(model_name))
+        RailsAiContext::PortablePath.resolve(relative_model_path(model_name), rails_app.root.to_s)
       end
 
       # The macro's options are nested under an :options key. Printing that
@@ -458,7 +460,7 @@ module RailsAiContext
       # Extract bodies of custom validate methods (single-line or first meaningful line)
       private_class_method def self.extract_custom_validate_bodies(model_name, method_names)
         path = model_source_path(model_name)
-        return {} unless File.exist?(path) && File.size(path) <= max_file_size
+        return {} unless path && File.exist?(path) && File.size(path) <= max_file_size
 
         source = RailsAiContext::SafeFile.read(path)
         return {} unless source
@@ -479,7 +481,7 @@ module RailsAiContext
       # The model's own source, nil when the file is missing or too large.
       private_class_method def self.model_source(model_name)
         path = model_source_path(model_name)
-        return nil unless File.exist?(path) && File.size(path) <= max_file_size
+        return nil unless path && File.exist?(path) && File.size(path) <= max_file_size
 
         RailsAiContext::SafeFile.read(path)
       end
@@ -534,8 +536,8 @@ module RailsAiContext
 
       private_class_method def self.extract_model_structure(model_name)
         path = relative_model_path(model_name)
-        full_path = rails_app.root.join(path)
-        return nil unless File.exist?(full_path)
+        full_path = model_source_path(model_name)
+        return nil unless full_path && File.exist?(full_path)
         return nil if File.size(full_path) > max_file_size
 
         source_lines = (RailsAiContext::SafeFile.read(full_path) || "").lines

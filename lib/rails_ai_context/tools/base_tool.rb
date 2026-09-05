@@ -579,7 +579,7 @@ module RailsAiContext
 
         # Extract method source from a file path. Reads file safely. Returns hash or nil.
         def extract_method_source_from_file(path, method_name)
-          return nil unless File.exist?(path)
+          return nil unless path && File.exist?(path)
           return nil if File.size(path) > RailsAiContext.configuration.max_file_size
           source = RailsAiContext::SafeFile.read(path) || ""
           extract_method_source_from_string(source, method_name)

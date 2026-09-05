@@ -492,4 +492,29 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       )
     end
   end
+
+  # The path a gem-owned model carries names the gem, not the app, so joining
+  # it to the app root opened nothing and the model lost its structure.
+  describe "a model whose file belongs to a gem" do
+    let(:gem_file) do
+      File.join(Gem.loaded_specs["activesupport"].full_gem_path,
+                "lib", "active_support", "notifications.rb")
+    end
+
+    it "reads the file the gem marker names" do
+      marked = RailsAiContext::PortablePath.relativize_marked(gem_file, Rails.root.to_s)
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Doorkeeper::AccessGrant" => {
+          name: "Doorkeeper::AccessGrant", table_name: "oauth_access_grants",
+          file: marked, associations: [], validations: []
+        } }
+      })
+
+      text = described_class.call(model: "Doorkeeper::AccessGrant").content.first[:text]
+
+      expect(marked).to start_with("gem:")
+      expect(text).to include("**File:** `#{marked}`")
+      expect(text).to match(/\*\*Structure:\*\* .+/)
+    end
+  end
 end
