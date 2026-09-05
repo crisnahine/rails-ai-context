@@ -106,6 +106,20 @@ to #181), and the sibling defects behind them.
   losing its table name, associations, validations, enums, callbacks, scopes
   and methods. A base the walk cannot read now costs that base's own
   declarations, and its name goes into the unread list.
+- **An STI base whose file could not be read was reported as an unread
+  concern.** Both tiers put it in the list the concern walk fills, and that
+  list is only printed inside the Concerns section, so a child with no
+  concerns said nothing about the base at all and a child with one called the
+  base a concern. An unreadable base comes back under its own key now and is
+  named under the table line.
+- **An association written `dependent: nil` was lifted onto the record as an
+  empty string.** The static tier kept the key on presence alone, so
+  `generate_test` wrote `it { is_expected.to have_many(:replies).dependent(:)
+  }` into the file the tool tells you to paste, and that line does not parse;
+  the model details printed a blank `dependent:` for the same row. Mastodon
+  declares it nineteen times. A nil value is dropped now, the way the booted
+  tier already dropped it, and `optional: false` and `polymorphic: false` keep
+  their keys.
 - **A model whose own file could not be read lost its whole entry.** The
   constants walk parsed the model file a second time with no size check, so an
   unreadable or oversize file raised past the source walk and the entry became
@@ -715,6 +729,12 @@ to #181), and the sibling defects behind them.
   binary fills in `development` when nothing else set it, and an initializer's
   `exit` degrades to the static tier like every other boot failure. The rake
   tasks, which boot inside the app's own process, still stop with it.
+- **The environment default lost an ambient `RACK_ENV`.** Filling in
+  `development` whenever `RAILS_ENV` was unset skipped the second term of the
+  chain Rails itself reads, so an app invoked with only `RACK_ENV` set booted
+  in the wrong environment, and an empty `RAILS_ENV` was kept where Rails
+  treats it as unset. The chain is `RAILS_ENV`, then `RACK_ENV`, then
+  `development`, with an empty value read as no value.
 - **A refusal on policy exited 0 in the SQL tool and 1 everywhere else.** A
   blocked SQL statement came back as ordinary text, so a script could not tell
   "no, that writes" from a result. It is an error result now. A file or a path
@@ -740,6 +760,13 @@ to #181), and the sibling defects behind them.
   app root to relativize the frame swallowed every error, so a bug in the
   resolver read as a missing app. Only a missing app or a missing root is
   absorbed now.
+- **A fault resolving the app root escaped the tool safety net.** Turning a
+  tool failure into an error result needs the app's root to shorten the
+  backtrace frame, and that resolution ran inside the rescue that answers the
+  failure, so anything it raised other than a missing constant left the net
+  and reached the client as a bare internal error, which the module's own
+  contract says must never happen. The frame comes back unshortened now and
+  the client still gets the error result.
 - **The release gate ran a smaller suite than CI.** The `search_code` count
   examples skip without ripgrep, and only the CI workflow installed it, so the
   workflow that publishes ran fewer examples than the one that guards a pull
@@ -823,6 +850,14 @@ to #181), and the sibling defects behind them.
   no `RUBY VERSION` in the lockfile and no `ruby` line in the Gemfile, the
   version reported is the interpreter running the CLI. The static tier's stack
   sentence names no Ruby at all in that case.
+- **The static tier stated the interpreter running the tool as the app's Ruby
+  version.** An app that declares none, in its lockfile or its Gemfile, got a
+  header reading `Rails [UNAVAILABLE: app not booted] | Ruby 3.4.9`: one
+  sentence refusing one version and stating the other with confidence. Nine
+  serializers, `.ai-context.json` and the `ai:inspect` summary all carried it.
+  It answers `[UNAVAILABLE: app declares none]` now, the way the Rails version
+  beside it already refuses, and `onboard`'s quick depth says the same as its
+  standard depth rather than interpolating the value raw.
 - **The onboarding brief dropped an app's whole Sidekiq layer without saying
   so.** On an app that runs its background work through workers in
   `app/workers`, the async section counted the mailers and said nothing else,
