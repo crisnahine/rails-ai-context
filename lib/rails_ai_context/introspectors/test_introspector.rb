@@ -105,17 +105,19 @@ module RailsAiContext
         nil
       end
 
+      # Both bases are summed: an app that keeps system tests under spec/ and
+      # test/ has both, and reporting one hid the other.
       def detect_system_tests
-        dirs = [
-          File.join(root, "spec/system"),
-          File.join(root, "test/system")
-        ]
-
-        dirs.filter_map do |dir|
+        rows = %w[spec/system test/system].filter_map do |rel|
+          dir = File.join(root, rel)
           next unless Dir.exist?(dir)
-          count = Dir.glob(File.join(dir, "**/*.rb")).size
-          { location: dir.sub("#{root}/", ""), count: count } if count > 0
-        end.first
+
+          count = Dir.glob(File.join(dir, "**/#{TEST_FILE_GLOB}")).size
+          [ rel, count ] if count > 0
+        end
+        return nil if rows.empty?
+
+        { location: rows.map(&:first).join(", "), count: rows.sum(&:last) }
       end
 
       def detect_test_helpers

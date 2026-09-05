@@ -219,6 +219,18 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(payload[:test_files].keys).to eq(%w[models])
     end
 
+    it "counts only test files under a system directory" do
+      write_file("spec/system/login_spec.rb")
+      write_file("spec/system/page_objects/dashboard.rb")
+      expect(payload[:system_tests]).to eq(location: "spec/system", count: 1)
+    end
+
+    it "sums system tests across spec and test and names both locations" do
+      write_file("spec/system/login_spec.rb")
+      write_file("test/system/signup_test.rb")
+      expect(payload[:system_tests]).to eq(location: "spec/system, test/system", count: 2)
+    end
+
     it "orders rows by count descending, then by name" do
       write_file("spec/models/user_spec.rb")
       write_file("spec/models/post_spec.rb")
