@@ -47,7 +47,10 @@ module RailsAiContext
         fetch_section(:controllers, subject: "Controller introspection") do |data|
           controllers = data[:controllers] || {}
 
-          app_controller_names = Payload.app_controllers(cached_context).keys.sort
+          # Every read of the shared cache deep-copies the whole payload, so
+          # the listing reads it once and hands the copy down.
+          ctx = cached_context
+          app_controller_names = Payload.app_controllers(ctx).keys.sort
 
           # Specific controller - always full detail (searches ALL controllers including framework)
           # Flexible matching: "posts", "PostsController", "postscontroller" all work
@@ -77,7 +80,7 @@ module RailsAiContext
             return text_response(format_controller(key, info))
           end
 
-          app_controllers = Payload.app_controllers(cached_context)
+          app_controllers = Payload.app_controllers(ctx)
 
           # Pagination
           all_names = app_controllers.keys.sort
@@ -119,7 +122,7 @@ module RailsAiContext
             paginated_ctrl = app_controllers.select { |k, _| paginated_names.include?(k) }
             grouped = paginated_ctrl.keys.sort.group_by do |name|
               info = app_controllers[name]
-              parent = resolved_parent(name, info)
+              parent = resolved_parent(name, info, ctx)
               # Group by parent + actions + filters + params fingerprint
               if parent && parent != "ApplicationController"
                 actions_sig = info[:actions]&.sort&.join(",")
@@ -138,16 +141,16 @@ module RailsAiContext
 
             grouped.each do |_key, names|
               if names.size > 2 &&
-                  resolved_parent(names.first, app_controllers[names.first]) != "ApplicationController"
+                  resolved_parent(names.first, app_controllers[names.first], ctx) != "ApplicationController"
                 # Compress group: show once with all names
                 info = app_controllers[names.first]
-                parent = resolved_parent(names.first, info) || "ApplicationController"
+                parent = resolved_parent(names.first, info, ctx) || "ApplicationController"
                 lines << "## #{group_heading(names)}"
                 lines << "- Members: #{names.join(', ')}"
                 lines << "- Inherits: #{parent}"
                 lines.concat(actions_lines(info))
                 lines.concat(Serializers::SectionFacts.controller_summary_lines(
-                  info, ctx: cached_context, name: names.first, root: rails_app&.root&.to_s
+                  info, ctx: ctx, name: names.first, root: rails_app&.root&.to_s
                 ))
                 lines << ""
               else
@@ -157,7 +160,7 @@ module RailsAiContext
                   lines.concat(actions_lines(info))
                   lines.concat(Serializers::SectionFacts.controller_summary_lines(
                     info, rescue_handlers: true,
-                    ctx: cached_context, name: name, root: rails_app&.root&.to_s
+                    ctx: ctx, name: name, root: rails_app&.root&.to_s
                   ))
                   lines << "- Rate limit: #{info[:rate_limit]}" if info[:rate_limit]
                   lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
@@ -180,9 +183,9 @@ module RailsAiContext
       # The rendered chain resolves it, so the key has to resolve it too, and
       # against the full set the chain walk uses: an excluded base class is
       # still an ancestor.
-      private_class_method def self.resolved_parent(name, info)
+      private_class_method def self.resolved_parent(name, info, ctx)
         Introspectors::ActionResolver.resolve_entry_name(
-          Payload.controllers(cached_context), info[:parent_class], name
+          Payload.controllers(ctx), info[:parent_class], name
         )
       end
 
@@ -417,7 +420,7 @@ module RailsAiContext
 
       private_class_method def self.format_controller(name, info)
         lines = [ "# #{name}", "" ]
-        lines << "**Parent:** `#{resolved_parent(name, info)}`" if info[:parent_class]
+        lines << "**Parent:** `#{resolved_parent(name, info, cached_context)}`" if info[:parent_class]
         lines << "**API controller:** yes" if info[:api_controller]
         lines << "**Formats:** #{info[:respond_to_formats].join(', ')}" if info[:respond_to_formats]&.any?
 
