@@ -210,9 +210,6 @@ module RailsAiContext
           config.excluded_models.include?(record.path_name)
       end
 
-      # A model is a class whose superclass chain reaches a model base. A form
-      # object, a filter or a namespaced calculator under app/models has no
-      # superclass, or one the chain never resolves, so it is not a model.
       # Every candidate another candidate inherits from, by the name the walk
       # resolves the superclass to.
       def declared_bases(candidates)

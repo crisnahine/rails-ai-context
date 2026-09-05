@@ -210,15 +210,11 @@ module RailsAiContext
         []
       end
 
-      # The filters ApplicationController runs on every request.
-      #
-      # "Global" is the claim the generated files make, so two shapes are not
-      # it: `skip_before_action`, which says the opposite, and a filter carrying
-      # only:/except:/if:/unless:, which runs on some requests.
-      # The filters every controller runs, through the reader the chain walk
-      # uses, so this line and `rails_get_controllers` cannot disagree about
-      # one file. Unconditional ones only: a constrained filter does not run
-      # everywhere, and this line says it does.
+      # The filters ApplicationController runs on every request, through the
+      # reader the chain walk uses, so this line and `rails_get_controllers`
+      # cannot disagree about one file. "Global" is the claim the generated
+      # files make, so a `skip_before_action` and a filter carrying
+      # only:/except:/if:/unless: are both out.
       def detect_before_actions(root = project_root)
         source = ActionFilters.base_controller_source("ApplicationController", root)
         return [] unless source

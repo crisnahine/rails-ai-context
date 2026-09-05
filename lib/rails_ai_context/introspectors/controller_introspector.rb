@@ -320,9 +320,6 @@ module RailsAiContext
         false
       end
 
-      # `if: -> { action_name == "create" }` narrows a filter to one action the
-      # same way `only:` does. Returns the action name, or nil for any other
-      # condition.
       def extract_concerns(ctrl)
         ConcernMembership.from_ancestors(ctrl)
       rescue => e
