@@ -9,10 +9,6 @@ require "rake"
 # every surface. Dropping it silently made a deliberate omission look like
 # a failed run.
 RSpec.describe "not-applicable context files on every surface" do
-  def repo_root
-    File.expand_path("../../..", __dir__)
-  end
-
   def capture_stderr
     previous = $stderr
     $stderr = StringIO.new
@@ -20,23 +16,6 @@ RSpec.describe "not-applicable context files on every surface" do
     $stderr.string
   ensure
     $stderr = previous
-  end
-
-  # Drives the shipped rakefile the way `bin/rails ai:context` does.
-  def invoke_rake_context
-    previous_application = Rake.application
-    previous_stdout = $stdout
-    Rake.application = Rake::Application.new
-    Rake.application.rake_require(
-      "rails_ai_context", [ File.join(repo_root, "lib", "rails_ai_context", "tasks") ], []
-    )
-    Rake::Task.define_task(:environment)
-    $stdout = StringIO.new
-    Rake.application["ai:context"].invoke
-    $stdout.string
-  ensure
-    $stdout = previous_stdout
-    Rake.application = previous_application
   end
 
   it "names them in the install generator output" do
@@ -93,7 +72,7 @@ RSpec.describe "not-applicable context files on every surface" do
       )
       allow(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
 
-      out = invoke_rake_context
+      out = invoke_rake_task("ai:context")
 
       expect(out).to include("  \u2796  /app/.claude/rules/rails-models.md (no models)")
     end
@@ -126,7 +105,7 @@ RSpec.describe "not-applicable context files on every surface" do
       File.write(root.join(".rails-ai-context.yml"), "ai_tools:\n  - claude\ntool_mode: mcp\n")
       allow(Rails).to receive(:root).and_return(root)
 
-      expect(invoke_rake_context).to include("  MARKER /app/CLAUDE.md")
+      expect(invoke_rake_task("ai:context")).to include("  MARKER /app/CLAUDE.md")
     end
 
     expect(said).to include("  MARKER /app/CLAUDE.md")
