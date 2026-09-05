@@ -61,7 +61,7 @@ module RailsAiContext
           # The backend class is a runtime fact. Printing the I18n gem's own
           # default when no app booted states it as the app's choice.
           lines << "- **Backend:** #{i18n[:backend]}" if i18n[:backend]
-          lines << "- **Available locales:** #{available_list(i18n)}"
+          lines << "- **#{available_label(i18n)}:** #{available_list(i18n)}"
           lines << "- **Locale files:** #{i18n[:total_locale_files] || files.size}"
 
           # A language-name table under config/locales makes Rails list a
@@ -178,6 +178,15 @@ module RailsAiContext
           name = File.basename(file, ".*")
           name == locale || name.end_with?(".#{locale}") ||
             file.start_with?("#{locale}/") || file.include?("/#{locale}/")
+        end
+
+        # "What config/locales holds" and "what the app enables" are different
+        # questions with the same name, and only the second one is
+        # available_locales. Say which one this answer is.
+        def available_label(i18n)
+          return "Available locales" unless i18n[:available_locales_source] == "locale_files"
+
+          "Available locales (from locale files)"
         end
 
         def available_list(i18n)

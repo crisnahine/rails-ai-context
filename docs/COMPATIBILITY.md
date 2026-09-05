@@ -91,7 +91,7 @@ from the booted path:
 | `routes` | `config/routes.rb` parsed with a dedicated Prism listener |
 | `controllers` | `app/controllers/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
 | `jobs` | `app/jobs`, `app/mailers` and `app/channels` parsed for classes and their public methods |
-| `i18n` | every top-level key across `config/locales`, and the default locale read from `config/` |
+| `i18n` | `config.i18n.available_locales` read from `config/`, or every top-level key across `config/locales` when the app never assigns it; the default locale read from `config/`. The backend and the fallbacks are left out, being facts about the running process |
 | `api` | every detection but the mode is a file read and runs unchanged; `config.api_only` comes from the assignment in `config/application.rb` |
 | `engines` | `config/routes.rb` mounts, plus the Gemfile |
 | `active_support` | concern and core-extension use read from source |

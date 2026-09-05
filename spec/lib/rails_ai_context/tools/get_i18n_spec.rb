@@ -36,6 +36,27 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       expect(text).to include("**Locale files:** 4")
     end
 
+    # Without a booted app the list is read from config/locales unless the app
+    # assigns one, and those two answers are not the same question. Mastodon
+    # ships files for 106 locales and enables 97.
+    context "when the list was read from the locale files" do
+      let(:i18n_data) { super().merge(available_locales_source: "locale_files") }
+
+      it "says where the list came from" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("**Available locales (from locale files):** en, fr (2)")
+      end
+    end
+
+    context "when the app configures the list" do
+      let(:i18n_data) { super().merge(available_locales_source: "config") }
+
+      it "names the field plainly" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("**Available locales:** en, fr (2)")
+      end
+    end
+
     it "renders coverage vs the default locale" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Coverage (vs en)")
