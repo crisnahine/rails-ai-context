@@ -599,9 +599,34 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       end
     end
 
-    # The payload carries the superclass as written, so a name spelled
-    # relatively inside a module body matches no entry and ends the walk.
-    it "leaves a relatively spelled superclass unresolved" do
+    # An excluded name is framework noise while it runs; a skip of it is the
+    # app's own decision, and the per-action answer states it either way.
+    describe "a skip of an excluded filter, under the default config" do
+      it "keeps the skip in the listing and still drops the plain filter" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+          File.write(File.join(dir, "app", "controllers", "webhooks_controller.rb"), <<~RUBY)
+            class WebhooksController < ApplicationController
+              skip_before_action :verify_authenticity_token
+              before_action :verify_same_origin_request
+              before_action :require_sig
+
+              def create; end
+            end
+          RUBY
+
+          info = described_class.new(RailsAiContext::StaticApp.new(dir))
+            .static_call[:controllers]["WebhooksController"]
+
+          expect(RailsAiContext::Serializers::SectionFacts.filters_line(info))
+            .to eq("- Filters: ~~verify_authenticity_token~~ _(skipped)_, before require_sig")
+        end
+      end
+    end
+
+    # Ruby resolves a bare superclass from the enclosing namespace outward,
+    # so the listing key is the qualified name, not the spelling in the file.
+    it "resolves a relatively spelled superclass against the enclosing namespace" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "controllers", "settings"))
         File.write(File.join(dir, "app", "controllers", "settings", "base_controller.rb"), <<~RUBY)
@@ -620,7 +645,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result[:controllers]["Settings::ProfileController"][:actions]).to eq([])
+        expect(result[:controllers]["Settings::ProfileController"][:actions]).to eq(%w[show])
       end
     end
   end

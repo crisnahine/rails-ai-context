@@ -246,9 +246,9 @@ module RailsAiContext
       # the listing's own entries, walked by the parent name each carries. A
       # name the listing does not hold is the app base, a gem's controller or
       # the framework, and ends the walk.
-      def inherited_actions_by_name(entries, parent_name, kind:)
+      def inherited_actions_by_name(entries, parent_name, kind:, within: nil)
         seen = Set.new
-        name = parent_name&.to_s
+        name = resolve_entry_name(entries, parent_name, within)
         while name && !seen.include?(name) && !app_base_name?(name, kind: kind)
           seen << name
           info = entries[name]
@@ -257,9 +257,27 @@ module RailsAiContext
           actions = Array(info[:actions])
           return actions if actions.any?
 
-          name = info[:parent_class]&.to_s
+          name = resolve_entry_name(entries, info[:parent_class], name)
         end
         []
+      end
+
+      # Ruby resolves a bare superclass from the enclosing namespace outward,
+      # so `class Settings::ProfileController < BaseController` keys the
+      # listing under Settings::BaseController. A name nothing resolves is
+      # handed back as written, so the app-base check still sees it.
+      def resolve_entry_name(entries, name, within)
+        name = name&.to_s
+        return name if name.nil? || within.nil? || entries.key?(name)
+
+        scope = within.to_s.split("::")[0..-2]
+        while scope.any?
+          qualified = (scope + [ name ]).join("::")
+          return qualified if entries.key?(qualified)
+
+          scope.pop
+        end
+        name
       end
 
       # `action_methods` subtracts inherited methods only as far as the

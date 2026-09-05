@@ -276,6 +276,7 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
   describe ".inherited_actions_by_name" do
     let(:entries) do
       {
+        "ApplicationController" => { actions: %w[helper_from_base], parent_class: nil },
         "Admin::BaseController" => { actions: [], parent_class: "ApplicationController" },
         "Disputes::StrikesController" => { actions: %w[index show], parent_class: "ApplicationController" },
         "Middle::StrikesController" => { actions: [], parent_class: "Disputes::StrikesController" }
@@ -301,6 +302,19 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       failed = { "Broken::BaseController" => { error: "unreadable" } }
 
       expect(described_class.inherited_actions_by_name(failed, "Broken::BaseController", kind: :controller)).to eq([])
+    end
+
+    # A parent spelled relatively inside a module body keys the listing under
+    # the enclosing namespace, which is where Ruby resolves it.
+    it "resolves a relative parent name against the enclosing namespace" do
+      relative = {
+        "Settings::BaseController" => { actions: %w[show], parent_class: "ApplicationController" },
+        "Settings::ProfileController" => { actions: [], parent_class: "BaseController" }
+      }
+
+      expect(described_class.inherited_actions_by_name(relative, "BaseController", kind: :controller,
+                                                       within: "Settings::ProfileController"))
+        .to eq(%w[show])
     end
 
     it "ends a cycle rather than walking it" do

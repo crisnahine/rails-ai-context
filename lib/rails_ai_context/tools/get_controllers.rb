@@ -106,8 +106,7 @@ module RailsAiContext
             lines = [ "# Controllers (#{page[:total]})", "" ]
             paginated_names.each do |name|
               info = app_controllers[name]
-              actions = info[:actions]&.join(", ") || "none"
-              lines << "- **#{name}** - #{actions}"
+              lines << "- **#{name}** - #{Serializers::SectionFacts.actions_phrase(info)}"
             end
             lines << "" << "_Use `controller:\"Name\"` for filters and strong params, or `detail:\"full\"` for everything._#{pagination_hint}"
             text_response(lines.join("\n"))
@@ -123,7 +122,11 @@ module RailsAiContext
               # Group by parent + actions + filters + params fingerprint
               if parent && parent != "ApplicationController"
                 actions_sig = info[:actions]&.sort&.join(",")
-                filters_sig = info[:filters]&.map { |f| "#{f[:kind]}:#{f[:name]}" }&.sort&.join(",")
+                # The group renders one member's filter line for all of them,
+                # so a skip has to tell the fingerprints apart.
+                filters_sig = info[:filters]&.map { |f|
+                  "#{f[:kind]}:#{f[:name]}#{':skipped' if f[:skipped]}"
+                }&.sort&.join(",")
                 params_sig = Serializers::SectionFacts.strong_param_names(info).sort.join(",")
                 "#{parent}|#{actions_sig}|#{filters_sig}|#{params_sig}"
               else

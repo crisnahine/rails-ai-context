@@ -207,6 +207,18 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       })
     end
 
+    # A base controller with no public actions rendered as a name, a dash and
+    # nothing, which reads as a truncated line rather than an answer.
+    it "says so when a controller has no public actions" do
+      stub_controllers({
+        "Admin::BaseController" => { actions: [], filters: [], strong_params: [], parent_class: "ApplicationController" }
+      })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("- **Admin::BaseController** - (no public actions)")
+    end
+
     it "names both strong params methods of a controller under an app parent" do
       stub_controllers({
         "Admin::AccountsController" => {
@@ -264,6 +276,30 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
       expect(text).to include("- Filters: ~~authenticate_user!~~ _(skipped)_, before require_actor_signature!")
       expect(text).not_to include("before authenticate_user!")
+    end
+
+    # The compressed group renders one member's filters for all of them, so a
+    # skip has to keep the skipper out of a group of declarers.
+    it "does not group a controller that skips a filter with the ones that declare it" do
+      declarer = {
+        actions: %w[index show],
+        filters: [ { kind: "before", name: "authenticate" } ],
+        strong_params: [],
+        parent_class: "Admin::BaseController"
+      }
+      stub_controllers({
+        "Admin::PostsController" => declarer.merge(
+          filters: [ { kind: "before", name: "authenticate", skipped: true } ]
+        ),
+        "Admin::TagsController" => declarer.dup,
+        "Admin::UsersController" => declarer.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Admin::PostsController")
+      expect(text).to include("- Filters: ~~authenticate~~ _(skipped)_")
+      expect(text).not_to include("## Admin::* (Posts, Tags, Users)")
     end
 
     it "pairs each rescued exception with its handler" do

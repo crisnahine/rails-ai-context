@@ -57,6 +57,13 @@ module RailsAiContext
         Array(controller_data[:strong_params]).map { |sp| (sp.is_a?(Hash) ? sp[:name] : sp).to_s }
       end
 
+      # A base controller declares no action of its own. Joining an empty list
+      # leaves the listing line ending in a dash, so it says what it found.
+      def actions_phrase(controller_data)
+        actions = Array(controller_data[:actions])
+        actions.any? ? actions.join(", ") : "(no public actions)"
+      end
+
       # A skipped filter is not one the action runs, so the listings say so
       # the way the per-action answer and docs/CONFIGURATION.md do.
       def filters_line(controller_data)

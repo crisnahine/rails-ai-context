@@ -39,8 +39,8 @@ module RailsAiContext
       info = Payload.controllers(ctx)[controller_name.to_s]
       return { own: [], inherited: [], skipped: [] } unless info.is_a?(Hash)
 
-      skipped = (skipped_names(ctx, controller_name, action, root: root, source: source) +
-        skip_flag_names(info, action)).uniq
+      skipped = ((skipped_names(ctx, controller_name, action, root: root, source: source) +
+        skip_flag_names(info, action)).uniq - redeclared_names(info, action))
       # A record the walk marked as a skip states what does not run, so it is
       # never a filter, on the class that declared it or on a child.
       declared = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
@@ -113,9 +113,27 @@ module RailsAiContext
     # carries the skip's own only:/except:, and a skip covers those actions
     # only.
     def skip_flag_names(info, action)
+      last_records(info, action).select { |_, f| f[:skipped] }.keys
+    end
+
+    # A class body can skip a filter and then declare it again. Rails runs
+    # whichever came last, so the later record decides, and the name is no
+    # longer skipped for this class or for its children.
+    def redeclared_names(info, action)
+      last = last_records(info, action)
       Array(info[:filters]).grep(Hash)
-        .select { |f| f[:skipped] && applies?(f, action) }
+        .select { |f| f[:skipped] }
         .map { |f| f[:name].to_s }
+        .select { |name| last[name] && !last[name][:skipped] }
+        .uniq
+    end
+
+    # The last record for each name that covers this action, in declaration
+    # order.
+    def last_records(info, action)
+      Array(info[:filters]).grep(Hash).each_with_object({}) do |f, acc|
+        acc[f[:name].to_s] = f if applies?(f, action)
+      end
     end
 
     # Skips live only in the class body, so they are read from the file the
@@ -155,6 +173,6 @@ module RailsAiContext
     end
 
     private_class_method :default_root, :split, :applies?, :parent_filters, :skipped_names, :carried_source,
-                         :skip_calls, :skip_flag_names
+                         :skip_calls, :skip_flag_names, :redeclared_names, :last_records
   end
 end

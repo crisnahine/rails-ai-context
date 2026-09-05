@@ -74,10 +74,11 @@ module RailsAiContext
       # over the finished listing, walked by the parent name each entry
       # carries. Only entries with no actions of their own are touched.
       def fill_inherited_actions(result)
-        result.each_value do |info|
+        result.each do |name, info|
           next unless info.is_a?(Hash) && Array(info[:actions]).empty?
 
-          inherited = ActionResolver.inherited_actions_by_name(result, info[:parent_class], kind: :controller)
+          inherited = ActionResolver.inherited_actions_by_name(result, info[:parent_class],
+                                                               kind: :controller, within: name)
           info[:actions] = inherited if inherited.any?
         end
         result
@@ -269,14 +270,18 @@ module RailsAiContext
         raw.filter_map do |entry|
           name_sym = entry[:args]&.first
           next unless name_sym
-          next if excluded_filters.include?(name_sym.to_s)
 
           macro = entry[:macro].to_s
+          skipped = macro.start_with?("skip_")
+          # An excluded name is framework noise only while it runs. A skip of
+          # it is the app's own decision, which the per-action answer reports.
+          next if !skipped && excluded_filters.include?(name_sym.to_s)
+
           kind = macro.sub(/_action\z/, "").sub(/\A(?:prepend|append|skip)_/, "")
           filter = { name: name_sym.to_s, kind: kind }
           # A skip states the opposite of what the plain kind says, so it has
           # to survive the fold into `before`/`after`/`around`.
-          filter[:skipped] = true if macro.start_with?("skip_")
+          filter[:skipped] = true if skipped
 
           opts = entry[:options] || {}
           only = normalize_constraint(opts[:only])
