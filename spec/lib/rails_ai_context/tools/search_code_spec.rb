@@ -482,4 +482,28 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       expect(reads_for(30)).to eq(reads_for(3))
     end
   end
+
+  # The route hint is read out of a capture group, and `String#match?` never
+  # sets one, so the name it looked the routes up by was always nil and the
+  # hint never rendered for any app.
+  describe "a trace whose caller is a controller with routes" do
+    it "names the routes that reach the call site" do
+      described_class.reset_cache!
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      files = {
+        "app/models/post.rb" => "class Post\n  def publish_all\n    1\n  end\nend\n",
+        "app/controllers/posts_controller.rb" => "class PostsController\n  def index\n    publish_all\n  end\nend\n"
+      }
+
+      with_search_app(files) do
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: { "posts" => [ { verb: "GET", path: "/posts" } ] } }
+        })
+
+        text = described_class.call(pattern: "publish_all", match_type: "trace").content.first[:text]
+
+        expect(text).to include("`GET /posts`")
+      end
+    end
+  end
 end

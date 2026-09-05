@@ -525,10 +525,12 @@ module RailsAiContext
 
               # Route chain for controller callers
               route_hint = ""
-              if category == "Controller" && file.match?(/app\/controllers\/(.+)_controller\.rb/)
-                ctrl_path = $1
+              # `match?` answers the question without setting the capture, so
+              # the name this looked routes up by was always nil.
+              controller_match = file.match(%r{app/controllers/(.+)_controller\.rb})
+              if category == "Controller" && controller_match
                 route_actions = extract_controller_actions_from_matches(matches)
-                routes = find_routes_for_controller(ctrl_path, route_actions, root, ctx)
+                routes = find_routes_for_controller(controller_match[1], route_actions, root, ctx)
                 route_hint = " → #{routes}" if routes
               end
 

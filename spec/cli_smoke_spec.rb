@@ -277,7 +277,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
           raise "boot needs a database"
         RUBY
 
-        out = `cd #{dir} && env -u RAILS_ENV ruby -I #{lib} #{exe} tool model_details 2>&1`
+        out = `cd #{dir} && env -u RAILS_ENV -u RACK_ENV ruby -I #{lib} #{exe} tool model_details 2>&1`
 
         expect($?.exitstatus).to eq(0), out
         expect(File.read(File.join(dir, "seen_env.txt"))).to eq("development")
@@ -292,7 +292,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
           raise "boot needs a database"
         RUBY
 
-        `cd #{dir} && env -u RAILS_ENV ruby -I #{lib} #{exe} tool model_details --environment test 2>&1`
+        `cd #{dir} && env -u RAILS_ENV -u RACK_ENV ruby -I #{lib} #{exe} tool model_details --environment test 2>&1`
 
         expect(File.read(File.join(dir, "seen_env.txt"))).to eq("test")
       end
@@ -321,7 +321,7 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
           raise "boot needs a database"
         RUBY
 
-        `cd #{dir} && RAILS_ENV= ruby -I #{lib} #{exe} tool model_details 2>&1`
+        `cd #{dir} && env -u RACK_ENV RAILS_ENV= ruby -I #{lib} #{exe} tool model_details 2>&1`
 
         expect(File.read(File.join(dir, "seen_env.txt"))).to eq("development")
       end
