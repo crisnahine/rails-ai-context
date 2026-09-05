@@ -22,6 +22,18 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:controllers]).to have_key("PostsController")
     end
 
+    # A class that answers a name no constant carries stays in
+    # ActionController::Base.descendants for the life of the process, and
+    # keyed by that name it would overwrite the real controller's entry.
+    it "ignores a descendant whose name is not the constant it lives at" do
+      Class.new(ActionController::Base) do
+        def self.name = "GhostsController"
+      end
+
+      expect(result[:controllers]).not_to have_key("GhostsController")
+      expect(result[:controllers]["PostsController"][:parent_class]).to eq("ApplicationController")
+    end
+
     # The consumers read :file through Payload in both tiers, so a booted app
     # that answered without it would send them all back to guessing the path.
     it "carries the file each controller was read from" do
@@ -315,8 +327,6 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     it "does not hand back the names reflection already dropped" do
       allow(RailsAiContext.configuration).to receive(:excluded_filters).and_return(%w[set_post])
       ctrl = Class.new(ActionController::Base) do
-        def self.name = "PostsController"
-
         before_action :set_post
       end
       source = <<~RUBY
