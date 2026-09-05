@@ -382,11 +382,9 @@ module RailsAiContext
         truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
       end
 
-      # A cut list makes the match count a floor. paginate marks its own
-      # total the same way, so the two lines of one answer agree.
       private_class_method def self.capped_match_phrase(total, truncated)
         phrase = count_phrase(total, "match")
-        truncated ? phrase.sub(/\A\d+/) { |n| "#{n}+" } : phrase
+        truncated ? floor_phrase(phrase) : phrase
       end
 
       private_class_method def self.match_row?(row)
