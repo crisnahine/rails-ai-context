@@ -93,6 +93,23 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).not_to include("Ruby #{RUBY_VERSION}")
     end
 
+    # Both depths describe the same app, so the depth that says less must not
+    # be the one that claims more.
+    it "keeps quick silent about a ruby version the app declares nowhere" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: RailsAiContext::Confidence.unavailable("app declares none"),
+        gems: { declared_ruby_version: nil },
+        tier: "static"
+      })
+
+      text = described_class.call(detail: "quick").content.first[:text]
+
+      expect(text).to include("TestApp** is a Rails 8.0 app")
+      expect(text).not_to include("UNAVAILABLE")
+    end
+
     it "says a booted run is running that ruby" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",
@@ -239,7 +256,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         text = result.content.first[:text]
 
         expect(text).to include("GenericApp")
-        expect(text).to include("Rails 8.0 / Ruby 3.4")
+        expect(text).to include("Rails 8.0 app running Ruby 3.4")
         expect(text).not_to include("app with")
       end
 
