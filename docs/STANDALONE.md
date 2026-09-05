@@ -104,7 +104,7 @@ A key the gem does not know warns on stderr and is ignored; the rest of the file
 
 ### Precedence
 
-In standalone mode `.rails-ai-context.yml` is the only config source. The gem is not loaded while `config/initializers` runs, so a `config/initializers/rails_ai_context.rb` contributes nothing: the generated file, which guards on `defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`, is a silent no-op, and one without that guard raises `NameError` for an undefined constant and drops the command into the static tier.
+In standalone mode `.rails-ai-context.yml` is the only config source. The gem is not loaded while `config/initializers` runs, so a `config/initializers/rails_ai_context.rb` contributes nothing: the generated file, which guards on `defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`, is a silent no-op, and one without that guard raises `NoMethodError` (the binary opens the `RailsAiContext` namespace before the boot, so the constant exists but `configure` is not defined on it) and drops the command into the static tier.
 
 For in-Gemfile installs both sources apply and merge key by key - see [Precedence](CONFIGURATION.md#precedence).
 
