@@ -285,4 +285,38 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(described_class.call.content.first[:text]).to include("+1 more")
     end
   end
+
+  # Every read of the shared cache is a deep copy of the whole payload, so a
+  # listing that reads it once per controller heading pays for the app twice
+  # over.
+  describe "shared context reads in the route listing" do
+    def context_with(count)
+      routes = (1..count).to_h do |i|
+        [ "group#{i}", [ { verb: "GET", path: "/group#{i}", action: "index", name: "group#{i}" } ] ]
+      end
+      controllers = (1..count).to_h do |i|
+        [ "Group#{i}Controller", { actions: %w[index], filters: [ { kind: "before", name: "authenticate!" } ] } ]
+      end
+      {
+        routes: { total_routes: count, by_controller: routes, api_namespaces: [] },
+        controllers: { controllers: controllers }
+      }
+    end
+
+    def reads_for(count)
+      described_class.reset_cache!
+      reads = 0
+      ctx = context_with(count)
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(detail: "standard", limit: 400)
+      reads
+    end
+
+    it "reads the shared context the same number of times for 3 controllers as for 40" do
+      expect(reads_for(40)).to eq(reads_for(3))
+    end
+  end
 end

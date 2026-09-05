@@ -508,6 +508,9 @@ module RailsAiContext
 
           if app_callers.any?
             lines << "## Called from (#{count_phrase(app_callers.size, "site")})"
+            # Every read of the shared cache deep-copies the whole payload, so
+            # the route hints read it once for the whole group.
+            ctx = cached_context
             grouped = app_callers.group_by { |r| r[:file] }
             grouped.each do |file, matches|
               category = case file
@@ -525,7 +528,7 @@ module RailsAiContext
               if category == "Controller" && file.match?(/app\/controllers\/(.+)_controller\.rb/)
                 ctrl_path = $1
                 route_actions = extract_controller_actions_from_matches(matches)
-                routes = find_routes_for_controller(ctrl_path, route_actions, root)
+                routes = find_routes_for_controller(ctrl_path, route_actions, root, ctx)
                 route_hint = " → #{routes}" if routes
               end
 
@@ -621,8 +624,8 @@ module RailsAiContext
       end
 
       # Find routes for a controller
-      private_class_method def self.find_routes_for_controller(ctrl_path, _actions, _root)
-        routes = cached_context[:routes]
+      private_class_method def self.find_routes_for_controller(ctrl_path, _actions, _root, ctx)
+        routes = ctx[:routes]
         return nil unless routes
         by_controller = routes[:by_controller] || {}
         ctrl_routes = by_controller[ctrl_path]

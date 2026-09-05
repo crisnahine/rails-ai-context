@@ -661,4 +661,35 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(reads_for(40)).to eq(reads_for(3))
     end
   end
+
+  # One controller is one invocation, not a loop, but the reads were still one
+  # per fact rendered, so a controller with a parent and a source file paid
+  # more than a bare one.
+  describe "shared context reads for a single controller" do
+    def reads_for(entries, name)
+      described_class.reset_cache!
+      reads = 0
+      ctx = { controllers: { controllers: entries } }
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(controller: name)
+      reads
+    end
+
+    it "reads the shared context as many times for a bare controller as for one with a parent" do
+      bare = { "BareController" => { actions: %w[index], filters: [] } }
+      rich = {
+        "RichController" => {
+          actions: %w[index], parent_class: "Admin::BaseController",
+          filters: [ { kind: "before", name: "authenticate!" } ],
+          file: "app/controllers/rich_controller.rb"
+        },
+        "Admin::BaseController" => { actions: [], filters: [] }
+      }
+
+      expect(reads_for(rich, "RichController")).to eq(reads_for(bare, "BareController"))
+    end
+  end
 end

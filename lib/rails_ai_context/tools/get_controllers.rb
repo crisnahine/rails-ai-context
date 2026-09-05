@@ -77,7 +77,7 @@ module RailsAiContext
               return format_action_source(key, info, action)
             end
 
-            return text_response(format_controller(key, info))
+            return text_response(format_controller(key, info, ctx))
           end
 
           app_controllers = Payload.app_controllers(ctx)
@@ -418,9 +418,9 @@ module RailsAiContext
         nil
       end
 
-      private_class_method def self.format_controller(name, info)
+      private_class_method def self.format_controller(name, info, ctx)
         lines = [ "# #{name}", "" ]
-        lines << "**Parent:** `#{resolved_parent(name, info, cached_context)}`" if info[:parent_class]
+        lines << "**Parent:** `#{resolved_parent(name, info, ctx)}`" if info[:parent_class]
         lines << "**API controller:** yes" if info[:api_controller]
         lines << "**Formats:** #{info[:respond_to_formats].join(', ')}" if info[:respond_to_formats]&.any?
 
@@ -431,7 +431,7 @@ module RailsAiContext
           Serializers::SectionFacts.actions_phrase(info)
         end
 
-        chain = RailsAiContext::ActionFilters.for_controller(cached_context, name, root: rails_app.root.to_s)
+        chain = RailsAiContext::ActionFilters.for_controller(ctx, name, root: rails_app.root.to_s)
         if chain.values.any?(&:any?)
           lines << "" << "## Filters"
           chain[:inherited].each { |f| lines << filter_line(f) }
@@ -467,16 +467,16 @@ module RailsAiContext
         end
 
         # Hydrate with schema hints for models referenced in this controller
-        carried = RailsAiContext::Payload.controller_file(cached_context, name)
+        carried = RailsAiContext::Payload.controller_file(ctx, name)
         if RailsAiContext.configuration.hydration_enabled && carried
-          hydration = Hydrators::ControllerHydrator.call(rails_app.root.join(carried).to_s, context: cached_context)
+          hydration = Hydrators::ControllerHydrator.call(rails_app.root.join(carried).to_s, context: ctx)
           hydration_text = Hydrators::HydrationFormatter.format(hydration)
           lines << "" << hydration_text unless hydration_text.empty?
         end
 
         # Cross-reference hints. The route key is the controller's path, which
         # the class name does not reproduce wherever an inflection is in play.
-        ctrl_path = RailsAiContext::Payload.controller_route_key(cached_context, name)
+        ctrl_path = RailsAiContext::Payload.controller_route_key(ctx, name)
         model_name = ctrl_path.split("/").last.singularize.camelize
         lines << ""
         lines << "_Next: `rails_get_routes(controller:\"#{ctrl_path}\")` for routes"
