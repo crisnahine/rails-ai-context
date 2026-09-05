@@ -436,6 +436,10 @@ module RailsAiContext
           return read_view_file(path)
         end
 
+        # This listing prints the same `controller:"layouts"` pointer the
+        # payload listing does, so it has to answer it the same way.
+        return list_layouts(detail) if controller&.downcase == "layouts"
+
         # List views from disk
         files = Dir.glob(File.join(views_dir, "**", "*"))
           .reject { |f| File.directory?(f) || f.include?("/layouts/") }

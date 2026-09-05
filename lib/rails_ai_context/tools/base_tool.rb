@@ -592,18 +592,20 @@ module RailsAiContext
         def fixture_key_for(table, tests_data)
           fixture_names = tests_data[:fixture_names] || {}
           keys = fixture_names[table] || fixture_names[table.to_sym]
-          return keys.first.to_s if keys.is_a?(Array) && keys.any?
+          if keys.is_a?(Array)
+            named = keys.map(&:to_s).find { |key| RailsAiContext::FixtureKeys.name?(key) }
+            return named if named
+          end
 
           fixture_file = File.join(rails_app.root, "test", "fixtures", "#{table}.yml")
           return nil unless File.exist?(fixture_file)
 
+          # The disk read keeps its own filter: it reads raw YAML that no
+          # introspector has been through.
           content = RailsAiContext::SafeFile.read(fixture_file)
-          # A fixture file's top-level keys are fixture names, except the
-          # shared-attribute anchor the fixtures guide writes as DEFAULTS and
-          # Rails' own _fixture key.
           content&.scan(/^([a-z_]\w*):/i)
                  &.flatten
-                 &.find { |key| key != "DEFAULTS" && !key.start_with?("_") }
+                 &.find { |key| RailsAiContext::FixtureKeys.name?(key) }
         end
 
         # A callback target is a method name, an inline block, or a callback

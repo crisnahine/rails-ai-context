@@ -158,8 +158,7 @@ module RailsAiContext
           Dir.glob(File.join(dir, "**/*.yml")).each do |path|
             file = File.basename(path, ".yml")
             content = RailsAiContext::SafeFile.read(path) or next
-            # Top-level YAML keys are fixture names
-            keys = content.scan(/^(\w+):/).flatten
+            keys = content.scan(/^(\w+):/).flatten.select { |key| RailsAiContext::FixtureKeys.name?(key) }
             names[file] = keys if keys.any?
           end
           return names if names.any?

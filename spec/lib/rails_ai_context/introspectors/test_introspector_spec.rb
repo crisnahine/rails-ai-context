@@ -107,6 +107,22 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
         expect(result[:fixture_names]).to be_a(Hash)
         expect(result[:fixture_names]["users"]).to include("one", "two")
       end
+
+      it "skips the shared-attribute anchor and Rails' own _fixture key" do
+        File.write(File.join(fixtures_dir, "accounts.yml"), <<~YAML)
+          DEFAULTS: &DEFAULTS
+            active: true
+
+          _fixture:
+            model_class: Account
+
+          alice:
+            <<: *DEFAULTS
+            name: Alice
+        YAML
+
+        expect(result[:fixture_names]["accounts"]).to eq([ "alice" ])
+      end
     end
 
     context "with factory files containing factory definitions" do

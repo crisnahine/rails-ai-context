@@ -11,7 +11,7 @@ module RailsAiContext
     :associations,  # [{name: "comments", type: "has_many", class_name: "Comment"}, ...]
     :validations,   # [{kind: "presence", attributes: ["title"]}, ...]
     :primary_key,   # "id"
-    :confidence     # "[VERIFIED]" or "[INFERRED]"
+    :confidence     # "[VERIFIED]", "[STATIC]" or "[INFERRED]"
   ) do
     def verified?
       confidence == "[VERIFIED]"

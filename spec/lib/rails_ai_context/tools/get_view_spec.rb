@@ -162,6 +162,15 @@ RSpec.describe RailsAiContext::Tools::GetView do
         expect(text).to match(/# Views \(\d+ templates?, \d+ partials?, \d+ layouts?\)/)
       end
 
+      it "answers the pointer its own heading prints" do
+        heading = described_class.call(detail: "summary").content.first[:text]
+        expect(heading).to include('`controller:"layouts"`')
+
+        text = described_class.call(controller: "layouts", detail: "summary").content.first[:text]
+
+        expect(text).to include("layouts/application.html.erb")
+      end
+
       it "leaves layouts out of the heading when the listing is one controller" do
         text = described_class.call(controller: "posts", detail: "summary").content.first[:text]
 

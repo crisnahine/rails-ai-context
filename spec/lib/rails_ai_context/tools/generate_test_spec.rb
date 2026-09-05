@@ -396,6 +396,26 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
 
+    it "does not name an anchor a cached context carries as a fixture name" do
+      text = generated(devise_context(
+        framework: "minitest",
+        tests: { fixture_names: { "users" => [ "DEFAULTS", "alice" ] } }
+      ))
+
+      expect(text).not_to include("users(:DEFAULTS)")
+      expect(text).to include("users(:alice)")
+    end
+
+    it "does not name a cached _fixture key as a fixture name" do
+      text = generated(devise_context(
+        framework: "minitest",
+        tests: { fixture_names: { "users" => [ "_fixture", "alice" ] } }
+      ))
+
+      expect(text).not_to include("users(:_fixture)")
+      expect(text).to include("users(:alice)")
+    end
+
     it "keeps the fixture sign_in when a users fixture exists" do
       text = generated(devise_context(framework: "minitest", tests: { fixture_names: { "users" => [ "alice" ] } }))
       expect(text).to include("@user = users(:alice)")
