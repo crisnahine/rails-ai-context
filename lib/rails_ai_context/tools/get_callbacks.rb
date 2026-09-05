@@ -118,29 +118,14 @@ module RailsAiContext
           end
         end
 
-        # Concern-provided callbacks
+        # Which concern declared what. The callbacks themselves are already in
+        # the execution-order list above, with their bodies at detail:full, so
+        # repeating either here prints the same declaration twice.
         concern_callbacks = find_concern_callbacks(data)
         if concern_callbacks.any?
           lines << "" << "## From Concerns"
-          if RailsAiContext::DetailLevel.full?(detail)
-            concern_callbacks.each do |concern_name, entries|
-              lines << "### #{concern_name}"
-              path = concern_file(concern_name)
-              entries.each do |cb|
-                source = path && cb[:method_name] && extract_method_source_from_file(path, cb[:method_name])
-                lines << "- #{cb[:declaration]}"
-                if source
-                  lines << "```ruby"
-                  lines << source[:code]
-                  lines << "```"
-                  lines << ""
-                end
-              end
-            end
-          else
-            concern_callbacks.each do |concern_name, entries|
-              lines << "- **#{concern_name}:** #{entries.map { |cb| cb[:declaration] }.join(', ')}"
-            end
+          concern_callbacks.each do |concern_name, entries|
+            lines << "- **#{concern_name}:** #{entries.map { |cb| cb[:declaration] }.join(', ')}"
           end
         end
 
@@ -248,18 +233,10 @@ module RailsAiContext
       end
 
       private_class_method def self.concern_callback_entry(callback)
-        method = callback[:method].to_s
         # The declared macro, not the resolved type: `after_commit_on_create`
         # is a key this gem synthesizes, not something the file says.
-        declaration = "#{callback[:name] || callback[:type]} #{callback_target(method)}"
-        { declaration: declaration, method_name: (method if method_name?(method)) }
-      end
-
-      private_class_method def self.concern_file(concern_name)
-        ConcernPaths.find_file(rails_app.root.to_s, concern_name, prefer: "model")
-      rescue => e
-        $stderr.puts "[rails-ai-context] concern_file failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        declaration = "#{callback[:name] || callback[:type]} #{callback_target(callback[:method].to_s)}"
+        { declaration: declaration }
       end
     end
   end

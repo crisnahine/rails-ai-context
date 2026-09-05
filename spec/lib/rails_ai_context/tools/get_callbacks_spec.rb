@@ -121,18 +121,16 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
 
     after { FileUtils.remove_entry(tmpdir) }
 
-    it "shows concern callback method source at detail:full" do
+    # The callback is already in the execution-order list, with its body at
+    # this detail level, so the section attributes it and stops there.
+    it "attributes the callback to its concern without repeating the body" do
       result = described_class.call(model: "Post", detail: "full")
       text = result.content.first[:text]
 
-      # Should have the From Concerns section with the concern name as heading
       expect(text).to include("## From Concerns")
-      expect(text).to include("### HtmlSanitizable")
-      expect(text).to include("before_save :sanitize_body")
-
-      # Should include the method source code from the concern
-      expect(text).to include("def sanitize_body")
-      expect(text).to include("ActionController::Base.helpers.sanitize")
+      expect(text).to include("- **HtmlSanitizable:** before_save :sanitize_body")
+      expect(text).not_to include("### HtmlSanitizable")
+      expect(text).not_to include("ActionController::Base.helpers.sanitize")
     end
 
     it "shows model callback method source at detail:full" do
@@ -190,13 +188,11 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
 
     after { FileUtils.remove_entry(tmpdir) }
 
-    it "shows the callback declaration without source when method is not found" do
+    it "shows the callback declaration when the method has no def" do
       result = described_class.call(model: "Post", detail: "full")
       text = result.content.first[:text]
 
-      expect(text).to include("### HtmlSanitizable")
-      expect(text).to include("before_save :sanitize_body")
-      # No source block since method def is missing
+      expect(text).to include("- **HtmlSanitizable:** before_save :sanitize_body")
       expect(text).not_to include("```ruby")
     end
   end
