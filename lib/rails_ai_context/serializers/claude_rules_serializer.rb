@@ -15,11 +15,11 @@ module RailsAiContext
       end
 
       RULE_FILES = {
-        "rails-context.md" => [ :render_context_overview, "nothing to document" ],
-        "rails-schema.md" => [ :render_schema_reference, "no schema dump" ],
-        "rails-models.md" => [ :render_models_reference, "no models" ],
-        "rails-mcp-tools.md" => [ :render_mcp_tools_reference, "nothing to document" ],
-        "rails-components.md" => [ :render_components_reference, "no view components" ]
+        "rails-context.md" => { renderer: :render_context_overview, reason: "nothing to document" },
+        "rails-schema.md" => { renderer: :render_schema_reference, reason: "no schema dump" },
+        "rails-models.md" => { renderer: :render_models_reference, reason: "no models" },
+        "rails-mcp-tools.md" => { renderer: :render_mcp_tools_reference, reason: "nothing to document" },
+        "rails-components.md" => { renderer: :render_components_reference, reason: "no view components" }
       }.freeze
 
       # @param output_dir [String] Rails root path

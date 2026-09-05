@@ -15,10 +15,10 @@ module RailsAiContext
       end
 
       RULE_FILES = {
-        "rails-context.instructions.md" => [ :render_context_instructions, "nothing to document" ],
-        "rails-models.instructions.md" => [ :render_models_instructions, "no models" ],
-        "rails-controllers.instructions.md" => [ :render_controllers_instructions, "no controllers" ],
-        "rails-mcp-tools.instructions.md" => [ :render_mcp_tools_instructions, "nothing to document" ]
+        "rails-context.instructions.md" => { renderer: :render_context_instructions, reason: "nothing to document" },
+        "rails-models.instructions.md" => { renderer: :render_models_instructions, reason: "no models" },
+        "rails-controllers.instructions.md" => { renderer: :render_controllers_instructions, reason: "no controllers" },
+        "rails-mcp-tools.instructions.md" => { renderer: :render_mcp_tools_instructions, reason: "nothing to document" }
       }.freeze
 
       # @param output_dir [String] Rails root path

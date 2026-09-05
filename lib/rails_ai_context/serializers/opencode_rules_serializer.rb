@@ -19,28 +19,27 @@ module RailsAiContext
       end
 
       RULE_FILES = {
-        "app/models/AGENTS.md" => [ :render_models_reference, "no models" ],
-        "app/controllers/AGENTS.md" => [ :render_controllers_reference, "no controllers" ]
+        "app/models/AGENTS.md" => { renderer: :render_models_reference, reason: "no models" },
+        "app/controllers/AGENTS.md" => { renderer: :render_controllers_reference, reason: "no controllers" }
       }.freeze
 
       # @param output_dir [String] Rails root path
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
-        files = {}
-        reasons = {}
-
         # The split targets after the root file, per the table's convention.
-        Install::AiTool.find(:opencode).context_paths.drop(1).each do |relative|
-          renderer, reason = RULE_FILES.fetch(relative)
+        entries = Install::AiTool.find(:opencode).context_paths.drop(1).map do |relative|
+          rule = RULE_FILES.fetch(relative)
           filepath = File.join(output_dir, relative)
           # A directory the app does not have is reported, not dropped, and
           # nothing renders for it so the directory is never created.
-          present = Dir.exist?(File.dirname(filepath))
-          files[filepath] = present ? send(renderer) : nil
-          reasons[filepath] = present ? reason : "#{File.dirname(relative)} not present"
+          if Dir.exist?(File.dirname(filepath))
+            RuleFile.new(filepath, send(rule[:renderer]), rule[:reason])
+          else
+            RuleFile.new(filepath, nil, "#{File.dirname(relative)} not present")
+          end
         end
 
-        write_rule_files(files, reasons: reasons)
+        write_rule_files(entries)
       end
 
       private
