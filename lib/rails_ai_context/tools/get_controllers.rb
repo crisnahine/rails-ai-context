@@ -119,14 +119,15 @@ module RailsAiContext
             paginated_ctrl = app_controllers.select { |k, _| paginated_names.include?(k) }
             grouped = paginated_ctrl.keys.sort.group_by do |name|
               info = app_controllers[name]
-              parent = info[:parent_class]
+              parent = resolved_parent(name, info)
               # Group by parent + actions + filters + params fingerprint
               if parent && parent != "ApplicationController"
                 actions_sig = info[:actions]&.sort&.join(",")
                 # The group renders one member's filter line for all of them,
-                # so a skip has to tell the fingerprints apart.
+                # so a skip and its constraints have to tell the fingerprints
+                # apart: the constraint is what decides the rendered tail.
                 filters_sig = info[:filters]&.map { |f|
-                  "#{f[:kind]}:#{f[:name]}#{':skipped' if f[:skipped]}"
+                  "#{f[:kind]}:#{f[:name]}#{skip_sig(f)}"
                 }&.sort&.join(",")
                 params_sig = Serializers::SectionFacts.strong_param_names(info).sort.join(",")
                 "#{parent}|#{actions_sig}|#{filters_sig}|#{params_sig}"
@@ -136,10 +137,11 @@ module RailsAiContext
             end
 
             grouped.each do |_key, names|
-              if names.size > 2 && app_controllers[names.first][:parent_class] != "ApplicationController"
+              if names.size > 2 &&
+                  resolved_parent(names.first, app_controllers[names.first]) != "ApplicationController"
                 # Compress group: show once with all names
                 info = app_controllers[names.first]
-                parent = info[:parent_class] || "ApplicationController"
+                parent = resolved_parent(names.first, info) || "ApplicationController"
                 lines << "## #{group_heading(names)}"
                 lines << "- Members: #{names.join(', ')}"
                 lines << "- Inherits: #{parent}"
@@ -171,6 +173,25 @@ module RailsAiContext
             text_response("# Controllers (#{page[:total]})\n\n#{list}#{pagination_hint}")
           end
         end
+      end
+
+      # The static walk stores the superclass as the source spells it, so two
+      # namespaces that each define a BaseController arrive spelled the same.
+      # The rendered chain resolves it, so the key has to resolve it too, and
+      # against the full set the chain walk uses: an excluded base class is
+      # still an ancestor.
+      private_class_method def self.resolved_parent(name, info)
+        Introspectors::ActionResolver.resolve_entry_name(
+          Payload.controllers(cached_context), info[:parent_class], name
+        )
+      end
+
+      # Only a skip's constraints reach the group's filter line: `only:` and
+      # `except:` on an active filter are never rendered there.
+      private_class_method def self.skip_sig(filter)
+        return "" unless filter[:skipped]
+
+        ":skipped:#{filter[:if]}:#{filter[:unless]}:#{filter[:only]}:#{filter[:except]}"
       end
 
       # A compressed group is headed by the namespace every member is really

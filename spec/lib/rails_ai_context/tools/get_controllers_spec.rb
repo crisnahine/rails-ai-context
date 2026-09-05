@@ -368,6 +368,64 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).not_to include("## Admin::* (Posts, Tags, Users)")
     end
 
+    # The static walk records the superclass as written, so two namespaces
+    # that each define their own BaseController arrive spelled the same. The
+    # group key read that raw spelling while the rendered filter chain
+    # resolved it, so unrelated controllers shared one group and were given a
+    # chain that is not theirs.
+    it "groups by the parent the chain walk resolves, not the source spelling" do
+      member = { actions: %w[index], filters: [], strong_params: [], parent_class: "BaseController" }
+      stub_controllers({
+        "Admin::BaseController" => {
+          actions: [], strong_params: [], parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "set_referrer_policy_header" } ]
+        },
+        "Settings::BaseController" => {
+          actions: [], strong_params: [], parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "authenticate_user!" } ]
+        },
+        "Admin::DashboardController" => member.dup,
+        "Settings::Exports::BookmarksController" => member.dup,
+        "Settings::Exports::ListsController" => member.dup,
+        "Settings::Exports::MutedAccountsController" => member.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- Inherits: Settings::BaseController")
+      expect(text).not_to include("- Inherits: BaseController")
+      expect(text).to include("## Admin::DashboardController")
+      expect(text).not_to include("- Members: Admin::DashboardController")
+      expect(text).to include("- Filters: before authenticate_user!")
+    end
+
+    # A skip's constraint decides whether the filter is struck through, so
+    # two controllers whose skips differ only in the constraint must not
+    # share a group and one rendered chain.
+    it "tells a conditional skip apart from an outright one in the group key" do
+      sibling = {
+        actions: %w[index], strong_params: [], parent_class: "Api::BaseController",
+        filters: [ { kind: "before", name: "require_user!", skipped: true } ]
+      }
+      stub_controllers({
+        "Api::BaseController" => {
+          actions: [], strong_params: [], parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "require_user!" } ]
+        },
+        "Api::AController" => sibling.dup,
+        "Api::BController" => sibling.dup,
+        "Api::CController" => sibling.merge(
+          filters: [ { kind: "before", name: "require_user!", skipped: true, unless: "public_fetch_mode?" } ]
+        )
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Api::CController")
+      expect(text).to include("- Filters: before require_user! (skipped unless: public_fetch_mode?)")
+      expect(text).not_to include("- Members: Api::AController, Api::BController, Api::CController")
+    end
+
     it "pairs each rescued exception with its handler" do
       stub_controllers({
         "MediaProxyController" => {

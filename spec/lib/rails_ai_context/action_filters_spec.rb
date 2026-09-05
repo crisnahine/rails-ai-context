@@ -181,6 +181,75 @@ RSpec.describe RailsAiContext::ActionFilters do
     end
   end
 
+  # Every other example that reaches this module hands it a payload written
+  # by hand, so a rename of a key the booted walk writes would pass. Real
+  # constants, because `#call` rejects a class whose `name` is not the
+  # constant it lives at, and an anonymous class would leave the payload
+  # empty and the assertions vacuous.
+  describe "a booted payload read back per action" do
+    around do |example|
+      Dir.mktmpdir("action-filters-composed") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/composed"))
+        File.write(File.join(dir, "app/controllers/composed/app_controller.rb"), <<~RUBY)
+          module Composed
+            class AppController < ActionController::Base
+              before_action :authenticate!
+              before_action :set_locale
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/composed/base_controller.rb"), <<~RUBY)
+          module Composed
+            class BaseController < Composed::AppController
+              skip_before_action :authenticate!, only: [ :index ]
+              skip_before_action :set_locale, unless: :html_request?
+              before_action :require_admin
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app/controllers/composed/reports_controller.rb"), <<~RUBY)
+          module Composed
+            class ReportsController < Composed::BaseController
+              before_action :load_report, except: :index
+
+              def index; end
+
+              def show; end
+            end
+          end
+        RUBY
+        Dir[File.join(dir, "app/controllers/composed/*.rb")].sort.each { |f| load f }
+        example.run
+        Object.send(:remove_const, :Composed) if defined?(Composed)
+      end
+    end
+
+    let(:composed_context) do
+      app = Struct.new(:root).new(Pathname.new(@root))
+      { controllers: RailsAiContext::Introspectors::ControllerIntrospector.new(app).call }
+    end
+
+    it "runs a constrained skip's filter on every action the skip leaves alone" do
+      show = described_class.for(composed_context, "Composed::ReportsController", "show", root: @root)
+      index = described_class.for(composed_context, "Composed::ReportsController", "index", root: @root)
+
+      expect(show[:inherited].map { |f| f[:name] }).to include("authenticate!")
+      expect(index[:inherited].map { |f| f[:name] }).not_to include("authenticate!")
+      expect(index[:own].map { |f| f[:name] }).not_to include("authenticate!")
+    end
+
+    # `unless:` on a skip record is the one key of that seam no producer
+    # example pins, so a rename of it drifts silently past both sides.
+    it "keeps a conditionally skipped filter and names its condition" do
+      show = described_class.for(composed_context, "Composed::ReportsController", "show", root: @root)
+
+      set_locale = show[:inherited].find { |f| f[:name] == "set_locale" }
+      expect(set_locale).not_to be_nil
+      expect(set_locale[:skipped_unless]).to eq("html_request?")
+    end
+  end
+
   it "answers empty lists for an unknown controller" do
     expect(described_class.for(context, "Nope", "show")).to eq({ own: [], inherited: [], skipped: [] })
   end
@@ -665,6 +734,61 @@ RSpec.describe RailsAiContext::ActionFilters do
 
       expect(described_class.for_controller(ctx, "PostsController"))
         .to eq({ own: [], inherited: [], skipped: [] })
+    end
+  end
+
+  # ApplicationController is out of the payload by design, so a skip on the
+  # base class is the only evidence the filter is there at all. The
+  # whole-controller answer said "(skipped on: index)" and the per-action one
+  # dropped the filter, so one tool contradicted itself on one tier.
+  describe "a skip whose constraint leaves the queried action alone" do
+    let(:evidence_context) do
+      { controllers: { controllers: {
+        "Admin::BaseController" => {
+          parent_class: "ApplicationController",
+          filters: [
+            { kind: "before", name: "authenticate!", skipped: true, only: %w[index] },
+            { kind: "before", name: "require_admin" }
+          ]
+        },
+        "Admin::ReportsController" => { parent_class: "Admin::BaseController", filters: [] }
+      } } }
+    end
+
+    it "keeps the filter in the per-action chain with no skipped tail" do
+      result = described_class.for(evidence_context, "Admin::ReportsController", "show")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].map { |f| f[:name] }).to contain_exactly("require_admin", "authenticate!")
+      authenticate = result[:inherited].find { |f| f[:name] == "authenticate!" }
+      expect(authenticate.keys).not_to include(:skipped_on, :skipped_if, :skipped_unless, :skipped_except)
+    end
+
+    it "still names the actions the skip covers in the whole-controller answer" do
+      result = described_class.for_controller(evidence_context, "Admin::ReportsController")
+
+      expect(result[:inherited].map { |f| [ f[:name], f[:skipped_on] ] })
+        .to contain_exactly([ "require_admin", nil ], [ "authenticate!", "index" ])
+    end
+
+    # The child's own skip says nothing about `show`, so the ancestor's
+    # condition is still the answer for it.
+    it "does not let it displace an ancestor's own condition" do
+      ctx = { controllers: { controllers: {
+        "Api::BaseController" => {
+          filters: [ { kind: "before", name: "require_functional!", skipped: true, unless: "limited?" } ]
+        },
+        "Api::V1::AccountsController" => {
+          parent_class: "Api::BaseController",
+          filters: [ { kind: "before", name: "require_functional!", skipped: true, only: %w[index] } ]
+        }
+      } } }
+
+      result = described_class.for(ctx, "Api::V1::AccountsController", "show")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].map { |f| [ f[:name], f[:skipped_unless] ] })
+        .to eq([ [ "require_functional!", "limited?" ] ])
     end
   end
 
