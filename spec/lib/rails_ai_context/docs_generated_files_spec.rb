@@ -7,14 +7,18 @@ require "spec_helper"
 # file added to any RULE_FILES table would break the same claim again. Derive
 # the counts from the tables that write the files.
 RSpec.describe "the generated-file counts in GUIDE.md" do
-  RULE_TABLES = {
-    claude: RailsAiContext::Serializers::ClaudeRulesSerializer::RULE_FILES,
-    cursor: RailsAiContext::Serializers::CursorRulesSerializer::RULE_FILES,
-    copilot: RailsAiContext::Serializers::CopilotInstructionsSerializer::RULE_FILES
-  }.freeze
+  # A constant assigned in a describe block lands on Object, where a name this
+  # generic can collide with an app's own.
+  let(:rule_tables) do
+    {
+      claude: RailsAiContext::Serializers::ClaudeRulesSerializer::RULE_FILES,
+      cursor: RailsAiContext::Serializers::CursorRulesSerializer::RULE_FILES,
+      copilot: RailsAiContext::Serializers::CopilotInstructionsSerializer::RULE_FILES
+    }
+  end
 
   # The generic file no AI tool owns.
-  JSON_CONTEXT_FILE = ".ai-context.json"
+  let(:json_context_file) { ".ai-context.json" }
 
   def guide
     @guide ||= File.read(File.expand_path("../../../docs/GUIDE.md", __dir__))
@@ -26,7 +30,7 @@ RSpec.describe "the generated-file counts in GUIDE.md" do
     tool.context_paths.flat_map do |path|
       next [ path ] unless path == tool.rules_dir
 
-      RULE_TABLES.fetch(tool.key).keys.map { |name| File.join(path, name) }
+      rule_tables.fetch(tool.key).keys.map { |name| File.join(path, name) }
     end
   end
 
@@ -51,7 +55,12 @@ RSpec.describe "the generated-file counts in GUIDE.md" do
 
   it "gives the generic JSON file a section of its own" do
     expect(guide).to include("### Generic (1 file)")
-    expect(guide).to include("`#{JSON_CONTEXT_FILE}`")
+    expect(guide).to include("`#{json_context_file}`")
+  end
+
+  it "leaves no name of its own on Object" do
+    expect(Object.const_defined?(:RULE_TABLES)).to be(false)
+    expect(Object.const_defined?(:JSON_CONTEXT_FILE)).to be(false)
   end
 
   # The paragraph under the total shows what a surface prints for a file the
