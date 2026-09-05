@@ -180,10 +180,11 @@ module RailsAiContext
               lines << ""
             end
 
-            # Detect orphaned tables (no ActiveRecord model maps to them)
-            orphaned = paginated.select { |name| models_for_table(name).empty? }
-            if orphaned.any?
-              lines << "\u26A0 **Orphaned tables** (no ActiveRecord model): #{orphaned.join(', ')}"
+            unclaimed = paginated.select { |name| models_for_table(name).empty? } - habtm_join_tables.to_a
+            if unclaimed.any?
+              lines << "\u26A0 **Tables with no model file in this app**: #{unclaimed.join(', ')}"
+              lines << "A gem that owns a table declares its model in the gem, so check the Gemfile before " \
+                       "treating one of these as dead."
               lines << ""
             end
 
@@ -223,6 +224,32 @@ module RailsAiContext
       # CLAUDE.md and on "unknown" by this tool, in the same session.
       private_class_method def self.adapter_label(_schema = nil)
         RailsAiContext::SchemaAdapter.label(cached_context)
+      end
+
+      # Rails builds no model for a has_and_belongs_to_many join table, so one
+      # is not a table whose model is missing. The name is the two tables
+      # sorted, unless the association writes :join_table itself.
+      private_class_method def self.habtm_join_tables
+        Payload.models(cached_context).each_with_object(Set.new) do |(_name, data), found|
+          next unless data.is_a?(Hash)
+
+          Array(data[:associations]).each do |assoc|
+            next unless assoc[:type].to_s == "has_and_belongs_to_many"
+
+            options = assoc[:options].is_a?(Hash) ? assoc[:options] : {}
+            if options[:join_table]
+              found << options[:join_table].to_s
+              next
+            end
+            next unless data[:table_name]
+
+            other = (assoc[:class_name] || options[:class_name] || assoc[:name]).to_s.tableize
+            found << [ data[:table_name].to_s, other ].sort.join("_")
+          end
+        end
+      rescue => e
+        $stderr.puts "[rails-ai-context] habtm_join_tables failed: #{e.message}" if ENV["DEBUG"]
+        Set.new
       end
 
       private_class_method def self.models_for_table(table_name)
