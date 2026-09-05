@@ -182,11 +182,12 @@ module RailsAiContext
 
     # Booted, the interpreter running this is the app's own. Statically it is
     # whatever the binary was installed under, which says nothing about the
-    # app, so the app's declared Ruby answers instead.
+    # app, so the app's declared Ruby answers instead, and an app declaring
+    # none gets the refusal the Rails version below already gives.
     def ruby_version
       return RUBY_VERSION unless RailsAiContext.static_tier?
 
-      GemLock.for(app.root).ruby_version || RUBY_VERSION
+      GemLock.for(app.root).ruby_version || Confidence.unavailable("app declares none")
     end
 
     def rails_version

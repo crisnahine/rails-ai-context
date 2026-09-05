@@ -256,11 +256,14 @@ RSpec.describe RailsAiContext::Introspector do
       end
     end
 
-    it "falls back to the running interpreter when the app declares no Ruby" do
+    # The interpreter the binary was installed under is not an answer about
+    # the app, and the same sentence already refuses the Rails version.
+    it "refuses the Ruby version when the app declares none" do
       Dir.mktmpdir do |dir|
         result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
 
-        expect(result[:ruby_version]).to eq(RUBY_VERSION)
+        expect(result[:ruby_version]).to eq("[UNAVAILABLE: app declares none]")
+        expect(result[:ruby_version]).not_to include(RUBY_VERSION)
       end
     end
   end

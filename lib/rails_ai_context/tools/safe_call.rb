@@ -89,15 +89,19 @@ module RailsAiContext
         return frame if path.to_s.empty?
 
         # No app, or one with no root: relativize still strips the gem prefix,
-        # so an empty root is an answer. Anything else raised here is a fault,
-        # not a missing root, and hiding it behind a path that merely looks
-        # right is worse than the raise.
+        # so an empty root is an answer.
         root = begin
           rails_app.root.to_s
         rescue NameError
           ""
         end
         [ RailsAiContext::PortablePath.relativize(path, root), rest ].compact.join(":")
+      rescue StandardError
+        # This runs inside the rescue that answers a tool failure, so a raise
+        # here leaves the net entirely and the client gets a protocol error.
+        # The frame as it stands is honest: nothing unrelativized is presented
+        # as if it were.
+        frame
       end
 
       # The value the caller sent, when this tool takes a DetailLevel detail

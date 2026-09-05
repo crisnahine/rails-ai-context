@@ -53,7 +53,7 @@ module RailsAiContext
           app = ctx[:app_name] || "This Rails app"
           purpose = infer_app_purpose(ctx)
 
-          parts = [ "**#{app}** is a Rails #{ctx[:rails_version]} / Ruby #{ctx[:ruby_version]}" ]
+          parts = [ "**#{app}** is a Rails #{ctx[:rails_version]} app#{ruby_clause(ctx)}" ]
           parts << purpose if purpose
 
           # Stats: tables, models, jobs

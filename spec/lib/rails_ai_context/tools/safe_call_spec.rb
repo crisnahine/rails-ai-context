@@ -371,9 +371,11 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(tool.call.content.first[:text]).to match(%r{At: \S*base_tool\.rb:\d+})
     end
 
-    # Swallowing every StandardError there hid a real fault behind a path that
-    # merely looked right.
-    it "does not swallow a fault that is not a missing root" do
+    # A fault resolving the root ran inside the rescue that answers a tool
+    # failure, so it left this net and reached the client as the -32603 the
+    # net exists to prevent. It degrades to the frame as it stands instead:
+    # nothing that was not relativized is presented as if it were.
+    it "answers with the unrelativized frame when resolving the root faults" do
       tool = build_tool do
         input_schema(properties: {})
         def self.rails_app
@@ -385,7 +387,11 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
         end
       end
 
-      expect { tool.call }.to raise_error(ArgumentError, "resolver bug")
+      response = tool.call
+      text = response.content.first[:text]
+
+      expect(response.error?).to be(true)
+      expect(text).to include("At: #{File.expand_path("../../../../lib/rails_ai_context/tools/base_tool.rb", __dir__)}:")
     end
   end
 
