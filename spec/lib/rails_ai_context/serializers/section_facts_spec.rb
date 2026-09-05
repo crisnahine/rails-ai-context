@@ -144,4 +144,20 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
       expect(described_class.available_locales_label({})).to eq("Available locales")
     end
   end
+
+  describe ".i18n_line" do
+    it "qualifies a list read off the locale files" do
+      ctx = { i18n: { available_locales: %w[en fr], available_locales_source: "locale_files" } }
+      expect(described_class.i18n_line(ctx)).to eq("- I18n: 2 locales from locale files (en, fr)")
+    end
+
+    it "leaves a configured list unqualified" do
+      ctx = { i18n: { available_locales: %w[en fr], available_locales_source: "config" } }
+      expect(described_class.i18n_line(ctx)).to eq("- I18n: 2 locales (en, fr)")
+    end
+
+    it "says nothing when the app has one locale" do
+      expect(described_class.i18n_line(i18n: { available_locales: %w[en] })).to be_nil
+    end
+  end
 end

@@ -135,9 +135,11 @@ module RailsAiContext
           source = RailsAiContext::SafeFile.read(path)
           next unless source&.include?("available_locales")
 
+          # Every assignment, not only the readable ones: a literal a later
+          # computed assignment overwrites is not the list Rails hands I18n,
+          # so it falls through to the locale files and says so.
           available_locales_assignments(path).each do |entry|
-            names = literal_locale_list(entry[:value])
-            found = names if names
+            found = literal_locale_list(entry[:value])
           end
         end
 
