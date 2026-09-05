@@ -252,4 +252,37 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(text).not_to include("not expanded")
     end
   end
+
+  # The header read the payload straight, so it named a filter the controller
+  # skips, and it cut at three with nothing said about the rest.
+  describe "the per-controller filter hint" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 6, by_controller: { "posts" => by_controller["posts"] }, api_namespaces: [] },
+        controllers: { controllers: {
+          "PostsController" => {
+            parent_class: "ApplicationController",
+            filters: [
+              { kind: "before", name: "authenticate!" },
+              { kind: "before", name: "set_locale", skipped: true },
+              { kind: "after", name: "audit" },
+              { kind: "before", name: "set_post", only: %w[show edit update destroy] },
+              { kind: "before", name: "track" }
+            ]
+          }
+        } }
+      })
+    end
+
+    it "leaves out a filter the controller skips" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("filters: authenticate!, audit, set_post")
+      expect(text).not_to include("set_locale")
+    end
+
+    it "says how many it did not show" do
+      expect(described_class.call.content.first[:text]).to include("+1 more")
+    end
+  end
 end

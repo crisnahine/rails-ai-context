@@ -243,15 +243,24 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   assignment) has no static path and reports `[UNAVAILABLE]` in the static
   tier. Only the schema introspector's own secondary-database dump parsing
   (`db/*_schema.rb`, `db/*_structure.sql`) works without a boot.
-- **Inherited controller actions are resolved by parent name, so some walks
-  end early.** A controller that defines no action of its own takes the
-  actions of the nearest app ancestor the listing holds, walked through the
-  `parent_class` each entry carries. Two shapes end that walk with an empty
-  list: a superclass spelled relatively inside a `module` body (`module
-  Settings; class ProfileController < BaseController`), which no entry is
-  keyed under, and a gem-owned parent such as
-  `OAuth::AuthorizationsController < Doorkeeper::AuthorizationsController`,
-  which the payload cannot hold. A booted run answers both.
+- **Inherited controller actions and filters are resolved by parent name, so
+  some walks end early.** A controller that defines no action of its own takes
+  the actions of the nearest app ancestor the listing holds, walked through the
+  `parent_class` each entry carries, and the filter chain is walked the same
+  way. A superclass spelled relatively inside a `module` body (`module
+  Settings; class ProfileController < BaseController`) is resolved against the
+  enclosing namespace first, the way Ruby resolves it. What still ends the walk
+  is a gem-owned parent such as `OAuth::AuthorizationsController <
+  Doorkeeper::AuthorizationsController`, which the payload cannot hold. A
+  booted run answers that one.
+- **`ApplicationController` is not in the listing, so its filters are not
+  attributed to it.** Every app has one and it would sit in every chain, so the
+  controller listing leaves it out. A filter it declares is therefore missing
+  from a static-tier chain entirely; a booted run still lists the filter,
+  because reflection carries it on the class itself, but the `from:` tag names
+  the nearest ancestor the listing holds. That tag names the nearest ancestor
+  whose entry carries the filter, which in a booted run is every class below
+  the one that declared it, not only the declaring class.
 - **Some route macros surface as a dynamic tally, not resolved entries.**
   `RouteIntrospector#static_call` counts routes behind `devise_for`, `match`,
   `direct`, `resolve`, a `draw` it cannot read, and a route whose `to:` is a

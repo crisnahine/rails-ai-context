@@ -359,6 +359,123 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
     end
   end
 
+  # A skip states what does not run, so its only:/except: is the opposite of
+  # the filter's own. Copying it onto the reflection record inverted the
+  # per-action answer: an authentication filter was named on the one action
+  # where the skip applies and dropped from every action where it runs.
+  describe "a class whose body skips an inherited filter for some actions" do
+    let(:base_source) do
+      <<~RUBY
+        module Admin
+          class BaseController < ApplicationController
+            skip_before_action :authenticate!, only: [ :index ]
+            before_action :require_admin
+            after_action :audit
+          end
+        end
+      RUBY
+    end
+
+    let(:reports_source) do
+      <<~RUBY
+        module Admin
+          class ReportsController < BaseController
+            before_action :load_report, except: :index
+            skip_before_action :set_locale
+
+            def index; end
+            def show; end
+          end
+        end
+      RUBY
+    end
+
+    # Named after construction: the inherited hook resolves a helper module
+    # from the class name, and these names carry no constant.
+    def build_chain
+      app_ctrl = Class.new(ActionController::Base) do
+        before_action :authenticate!
+        before_action :set_locale
+      end
+      base = Class.new(app_ctrl) do
+        skip_before_action :authenticate!, only: [ :index ]
+        before_action :require_admin
+        after_action :audit
+      end
+      reports = Class.new(base) do
+        before_action :load_report, except: :index
+        skip_before_action :set_locale
+      end
+      app_ctrl.define_singleton_method(:name) { "ApplicationController" }
+      base.define_singleton_method(:name) { "Admin::BaseController" }
+      reports.define_singleton_method(:name) { "Admin::ReportsController" }
+      [ app_ctrl, base, reports ]
+    end
+
+    before do
+      sources = {
+        "ApplicationController" => "class ApplicationController < ActionController::Base\n" \
+                                   "  before_action :authenticate!\n  before_action :set_locale\nend\n",
+        "Admin::BaseController" => base_source,
+        "Admin::ReportsController" => reports_source
+      }
+      allow(introspector).to receive(:read_source) { |k| sources[k.name] }
+    end
+
+    it "does not give the filter the skip's own constraint" do
+      _app, base, = build_chain
+
+      authenticate = introspector.send(:extract_filters, base, base_source).find { |f| f[:name] == "authenticate!" }
+
+      expect(authenticate).not_to have_key(:only)
+      expect(authenticate).not_to have_key(:except)
+    end
+
+    it "marks the records the class declares in its own body" do
+      _app, base, = build_chain
+
+      filters = introspector.send(:extract_filters, base, base_source)
+
+      expect(filters.find { |f| f[:name] == "require_admin" }[:declared]).to be(true)
+      expect(filters.find { |f| f[:name] == "set_locale" }).not_to have_key(:declared)
+    end
+
+    it "carries the class's own skip records the way the static tier does" do
+      _app, base, reports = build_chain
+
+      expect(introspector.send(:extract_filters, base, base_source))
+        .to include(a_hash_including(name: "authenticate!", skipped: true, only: %w[index]))
+      expect(introspector.send(:extract_filters, reports, reports_source))
+        .to include(a_hash_including(name: "set_locale", skipped: true))
+    end
+
+    # A skip and a later re-declaration of the same name are decided by the
+    # order the body wrote them, which the callback chain does not preserve.
+    it "keeps a re-declared filter after the skip it undoes" do
+      ctrl = Class.new(ActionController::Base) do
+        before_action :authenticate!
+      end
+      child = Class.new(ctrl) do
+        skip_before_action :authenticate!
+        before_action :authenticate!, only: [ :admin ]
+      end
+      ctrl.define_singleton_method(:name) { "ApplicationController" }
+      child.define_singleton_method(:name) { "PublicController" }
+      source = <<~RUBY
+        class PublicController < ApplicationController
+          skip_before_action :authenticate!
+          before_action :authenticate!, only: [ :admin ]
+        end
+      RUBY
+      allow(introspector).to receive(:read_source) { |k| k == child ? source : nil }
+
+      records = introspector.send(:extract_filters, child, source).select { |f| f[:name] == "authenticate!" }
+
+      expect(records.map { |f| f[:skipped] }).to eq([ true, nil ])
+      expect(records.last[:only]).to eq(%w[admin])
+    end
+  end
+
   describe "#static_call" do
     it "extracts controllers purely from source files" do
       Dir.mktmpdir do |dir|

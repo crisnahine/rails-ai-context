@@ -221,7 +221,7 @@ module RailsAiContext
             # Evaluate known runtime conditions to remove inapplicable filters
             reflection_filters.reject! { |f| filter_excluded_by_condition?(ctrl, f) }
 
-            return reflection_filters
+            return merge_own_source(reflection_filters, source || read_source(ctrl))
           end
         end
 
@@ -237,7 +237,10 @@ module RailsAiContext
         []
       end
 
-      # Walk up the controller inheritance chain and collect filter constraints from source files
+      # A compiled callback keeps only:/except: in private ivars, so the
+      # constraint has to come from the chain's source. A skip record states
+      # the actions on which the filter does NOT run, which is the opposite
+      # of what the filter is being asked for, so it never supplies one.
       def collect_source_constraints(ctrl, current_source = nil)
         constraints = {}
         klass = ctrl
@@ -245,6 +248,8 @@ module RailsAiContext
           src = (klass == ctrl) ? (current_source || read_source(klass)) : read_source(klass)
           if src
             extract_filters_from_source(src).each do |sf|
+              next if sf[:skipped]
+
               # First definition wins (most specific controller in chain)
               constraints[sf[:name]] ||= sf
             end
@@ -255,6 +260,27 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] collect_source_constraints failed: #{e.message}" if ENV["DEBUG"]
         {}
+      end
+
+      # Reflection hands every class the whole chain and no skips at all, so
+      # the class's own body is the only thing that says which of those names
+      # it declares itself and what it took out. Both go on the record: the
+      # skips the way the static tier carries them, and `declared` on the rest.
+      # A skip and a later re-declaration of the same name are decided by the
+      # order the body wrote them, which the callback chain does not keep, so
+      # the names the body declares take the body's order and the ones it only
+      # inherits stay ahead of them.
+      def merge_own_source(filters, source)
+        return filters unless source
+
+        own = extract_filters_from_source(source)
+        declared = own.reject { |f| f[:skipped] }.map { |f| f[:name] }.to_set
+        by_name = filters.group_by { |f| f[:name] }
+        declared.each { |name| Array(by_name[name]).each { |f| f[:declared] = true } }
+        return filters unless own.any? { |f| f[:skipped] }
+
+        (filters.reject { |f| declared.include?(f[:name]) } +
+          own.flat_map { |f| f[:skipped] ? [ f ] : Array(by_name[f[:name]]) }).uniq
       end
 
       def extract_filters_from_source(source)
@@ -281,7 +307,13 @@ module RailsAiContext
           filter = { name: name_sym.to_s, kind: kind }
           # A skip states the opposite of what the plain kind says, so it has
           # to survive the fold into `before`/`after`/`around`.
-          filter[:skipped] = true if skipped
+          if skipped
+            filter[:skipped] = true
+          else
+            # This body declared it, so an ancestor's skip of the same name
+            # does not reach it and the chain names this class as its source.
+            filter[:declared] = true
+          end
 
           opts = entry[:options] || {}
           only = normalize_constraint(opts[:only])
