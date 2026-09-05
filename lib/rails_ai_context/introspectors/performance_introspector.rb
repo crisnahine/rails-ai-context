@@ -66,12 +66,12 @@ module RailsAiContext
           class_name = active_record_class_name(ast[:classes])
           next unless class_name
 
-          has_many = ast[:associations].select { |a| a[:type] == :has_many }.map do |a|
+          has_many = ast[:associations].select { |a| a[:type] == "has_many" }.map do |a|
             opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
             { name: a[:name].to_s, options: opts.empty? ? nil : opts }
           end
 
-          belongs_to = ast[:associations].select { |a| a[:type] == :belongs_to }.map do |a|
+          belongs_to = ast[:associations].select { |a| a[:type] == "belongs_to" }.map do |a|
             opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
             { name: a[:name].to_s, options: opts.empty? ? nil : opts }
           end
@@ -379,7 +379,7 @@ module RailsAiContext
 
           class_name = active_record_class_name(ast[:classes]) or next
           has_many_assocs = ast[:associations]
-            .select { |a| a[:type] == :has_many }
+            .select { |a| a[:type] == "has_many" }
             .map { |a| a[:name].to_s }
 
           next unless has_many_assocs.size >= 2

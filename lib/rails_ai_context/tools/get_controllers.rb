@@ -144,14 +144,19 @@ module RailsAiContext
                 lines << "## #{names.first.split('::').first}::* (#{short_names.join(', ')})"
                 lines << "- Inherits: #{parent}"
                 lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-                lines.concat(Serializers::SectionFacts.controller_summary_lines(info))
+                lines.concat(Serializers::SectionFacts.controller_summary_lines(
+                  info, ctx: cached_context, name: names.first, root: rails_app&.root&.to_s
+                ))
                 lines << ""
               else
                 names.each do |name|
                   info = app_controllers[name]
                   lines << "## #{name}"
                   lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-                  lines.concat(Serializers::SectionFacts.controller_summary_lines(info, rescue_handlers: true))
+                  lines.concat(Serializers::SectionFacts.controller_summary_lines(
+                    info, rescue_handlers: true,
+                    ctx: cached_context, name: name, root: rails_app&.root&.to_s
+                  ))
                   lines << "- Rate limit: #{info[:rate_limit]}" if info[:rate_limit]
                   lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
                   lines << ""
@@ -293,7 +298,7 @@ module RailsAiContext
         line += " _(from #{filter[:from]})_" if filter[:from]
         line += " (only: #{filter[:only].join(', ')})" if filter[:only]&.any?
         line += " (except: #{filter[:except].join(', ')})" if filter[:except]&.any?
-        line
+        line + Serializers::SectionFacts.skip_condition_tail(filter)
       end
 
       # Extract render map from action source: redirects, renders, and side effects

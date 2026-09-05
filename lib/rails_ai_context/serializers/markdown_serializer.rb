@@ -187,7 +187,7 @@ module RailsAiContext
           lines << "- Parent: `#{info[:parent_class]}`" if info[:parent_class]
           lines << "- API controller: yes" if info[:api_controller]
           lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-          lines.concat(SectionFacts.controller_summary_lines(info))
+          lines.concat(SectionFacts.controller_summary_lines(info, ctx: context, name: name))
         end
         lines.join("\n")
       end

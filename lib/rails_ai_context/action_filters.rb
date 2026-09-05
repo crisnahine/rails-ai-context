@@ -39,12 +39,14 @@ module RailsAiContext
       info = Payload.controllers(ctx)[controller_name.to_s]
       return { own: [], inherited: [], skipped: [] } unless info.is_a?(Hash)
 
-      skipped = own_skips(ctx, controller_name, info, action, root: root, source: source)
+      skips = own_skips(ctx, controller_name, info, action, root: root, source: source)
+      skipped = absolute_names(skips)
       # A record the walk marked as a skip states what does not run, so it is
       # never a filter, on the class that declared it or on a child.
       declared = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
-      parent, dropped = parent_filters(ctx, info[:parent_class], action, skipped,
-                                       root: root, within: controller_name.to_s)
+      parent, dropped, inherited_conditions = parent_filters(ctx, info[:parent_class], action, skipped,
+                                                             root: root, within: controller_name.to_s)
+      conditions = inherited_conditions.merge(conditions_by_name(skips))
       # The runtime tier's list is the whole chain, so an ancestor's skip has
       # to be taken out of this class's list too. What this body declares
       # itself survives an ancestor's skip: Rails re-adds a callback the class
@@ -56,13 +58,62 @@ module RailsAiContext
       declared_on = parent.to_h { |f| [ f[:name].to_s, f[:from] ] }
       declared_names = declared.map { |f| f[:name].to_s }.to_set
 
-      {
-        own: applicable.reject { |f| declared_on.key?(f[:name].to_s) },
-        inherited: parent.reject { |f| declared_names.include?(f[:name].to_s) } +
+      own = mark_conditional_skips(applicable.reject { |f| declared_on.key?(f[:name].to_s) }, conditions)
+      inherited = mark_conditional_skips(
+        parent.reject { |f| declared_names.include?(f[:name].to_s) } +
           applicable.select { |f| declared_on.key?(f[:name].to_s) }
-            .map { |f| f.merge(from: declared_on[f[:name].to_s]) },
-        skipped: skipped
-      }
+            .map { |f| f.merge(from: declared_on[f[:name].to_s]) }, conditions
+      )
+
+      { own: own, inherited: inherited + unplaced_conditional_skips(own + inherited, conditions), skipped: skipped }
+    end
+
+    # Nothing can be skipped that the chain does not run, so a conditional
+    # skip of a name no ancestor the payload carries declares is still
+    # evidence the filter is there. Concerns are the usual reason the walk
+    # cannot see the declaration.
+    def unplaced_conditional_skips(placed, conditions)
+      names = placed.map { |f| f[:name].to_s }.to_set
+      conditions.reject { |name, _| names.include?(name) }.map do |name, skip|
+        mark_conditional_skips([ { kind: skip[:kind] || "before", name: name } ], conditions).first
+      end
+    end
+
+    # A skip carrying if:/unless: takes the filter out on some requests and
+    # not on others, so it never removes the filter from the chain. The
+    # filter keeps its place and carries the condition, which is the only
+    # honest answer to "does this run".
+    def conditional?(skip)
+      !skip[:if].nil? || !skip[:unless].nil?
+    end
+
+    def absolute_names(skips)
+      skips.reject { |skip| conditional?(skip) }.map { |skip| skip[:name] }
+    end
+
+    def conditions_by_name(skips)
+      skips.select { |skip| conditional?(skip) }.to_h { |skip| [ skip[:name], skip ] }
+    end
+
+    def mark_conditional_skips(filters, conditions)
+      return filters if conditions.empty?
+
+      filters.map do |filter|
+        skip = conditions[filter[:name].to_s]
+        next filter unless skip
+
+        tail = {}
+        tail[:skipped_if] = condition_text(skip[:if]) if skip[:if]
+        tail[:skipped_unless] = condition_text(skip[:unless]) if skip[:unless]
+        filter.merge(tail)
+      end
+    end
+
+    # A lambda has no name to print, and the filter records already spell
+    # that "[INFERRED]".
+    def condition_text(value)
+      text = Array(value).map(&:to_s).join(", ")
+      text.match?(/\A[A-Za-z_][A-Za-z0-9_]*[?!]?\z/) ? text : "[INFERRED]"
     end
 
     # `only` wins over `except`; declaring neither means every action. A nil
@@ -94,6 +145,7 @@ module RailsAiContext
       seen = Set.new
       found = {}
       attributed = Set.new
+      conditions = {}
       dropped = skipped.map(&:to_s).to_set
       name = Introspectors::ActionResolver.resolve_entry_name(controllers, parent_class, within)
 
@@ -105,7 +157,11 @@ module RailsAiContext
         # The class that skips a filter must not contribute it either: in the
         # booted tier its own list is the reflection list, which carries every
         # inherited name.
-        dropped.merge(own_skips(ctx, name, info, action, root: root))
+        skips = own_skips(ctx, name, info, action, root: root)
+        dropped.merge(absolute_names(skips))
+        # The walk runs closest ancestor first, so a nearer class's condition
+        # is the one the child inherits.
+        conditions = conditions_by_name(skips).merge(conditions)
         Array(info[:filters]).grep(Hash)
           .reject { |f| f[:skipped] }
           .select { |f| applies?(f, action) }
@@ -115,7 +171,7 @@ module RailsAiContext
         name = Introspectors::ActionResolver.resolve_entry_name(controllers, info[:parent_class], name)
       end
 
-      [ found.values, dropped ]
+      [ found.values, dropped, conditions ]
     end
 
     # The closest ancestor carrying a filter keeps its constraints, but a
@@ -132,19 +188,25 @@ module RailsAiContext
     end
 
     # What one class's own body takes out of the chain for this action: the
-    # skips its file states plus the skip records its payload carries, minus
-    # whatever the same body declares again after the skip.
+    # skip records its payload carries plus the skips its file states, minus
+    # whatever the same body declares again after the skip. Each entry is
+    # { name:, if:, unless: }; the payload's record comes first because the
+    # walk that built it already normalized the condition.
     def own_skips(ctx, controller_name, info, action, root:, source: nil)
-      (skipped_names(ctx, controller_name, action, root: root, source: source) +
-        skip_flag_names(info, action)).uniq - redeclared_names(info, action)
+      redeclared = redeclared_names(info, action)
+      (skip_flag_records(info, action) +
+        skip_source_records(ctx, controller_name, action, root: root, source: source))
+        .reject { |skip| redeclared.include?(skip[:name]) }
+        .uniq { |skip| skip[:name] }
     end
 
     # The static walk marks a skip macro on the record, so a payload that
     # carries no readable file still knows what the class skipped. The record
     # carries the skip's own only:/except:, and a skip covers those actions
     # only.
-    def skip_flag_names(info, action)
-      last_records(info, action).select { |_, f| f[:skipped] }.keys
+    def skip_flag_records(info, action)
+      last_records(info, action).select { |_, f| f[:skipped] }
+        .map { |name, f| { name: name, kind: f[:kind], if: f[:if], unless: f[:unless] } }
     end
 
     # A class body can skip a filter and then declare it again. Rails runs
@@ -170,17 +232,20 @@ module RailsAiContext
     # Skips live only in the class body, so they are read from the file the
     # introspector carried - never a path derived from the class name. A file
     # SafePath refuses (too large, unreadable, gone) skips nothing.
-    def skipped_names(ctx, controller_name, action, root: nil, source: nil)
+    def skip_source_records(ctx, controller_name, action, root: nil, source: nil)
       source ||= carried_source(ctx, controller_name, root)
       return [] unless source
 
       skip_calls(source).flat_map do |call|
-        next [] unless applies?({ only: call.dig(:options, :only), except: call.dig(:options, :except) }, action)
+        options = call[:options] || {}
+        next [] unless applies?({ only: options[:only], except: options[:except] }, action)
 
-        Array(call[:arguments]).select { |a| a.is_a?(Symbol) || a.is_a?(String) }.map(&:to_s)
-      end.uniq
+        kind = call[:name].to_s.sub(/\Askip_/, "").sub(/_action\z/, "")
+        Array(call[:arguments]).select { |a| a.is_a?(Symbol) || a.is_a?(String) }
+          .map { |a| { name: a.to_s, kind: kind, if: options[:if], unless: options[:unless] } }
+      end.uniq { |skip| skip[:name] }
     rescue => e
-      $stderr.puts "[rails-ai-context] ActionFilters skipped_names failed: #{e.message}" if ENV["DEBUG"]
+      $stderr.puts "[rails-ai-context] ActionFilters skip_source_records failed: #{e.message}" if ENV["DEBUG"]
       []
     end
 
@@ -203,8 +268,9 @@ module RailsAiContext
       })[:skips] || []
     end
 
-    private_class_method :default_root, :split, :applies?, :parent_filters, :skipped_names, :carried_source,
-                         :skip_calls, :skip_flag_names, :redeclared_names, :last_records, :own_skips,
-                         :attribute
+    private_class_method :default_root, :split, :applies?, :parent_filters, :skip_source_records, :carried_source,
+                         :skip_calls, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
+                         :attribute, :conditional?, :absolute_names, :conditions_by_name,
+                         :mark_conditional_skips, :condition_text
   end
 end

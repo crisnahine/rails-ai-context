@@ -86,26 +86,48 @@ module RailsAiContext
       end
 
       # A skipped filter is not one the action runs, so the listings say so
-      # the way the per-action answer and docs/CONFIGURATION.md do.
-      def filters_line(controller_data)
-        filters = Array(controller_data[:filters]).grep(Hash)
-        return nil if filters.empty?
+      # the way the per-action answer and docs/CONFIGURATION.md do. With a
+      # context the line is resolved through ActionFilters, the same source
+      # the single-controller answer reads, so the two cannot disagree about
+      # what a class inherits or skips.
+      def filters_line(controller_data, ctx: nil, name: nil, root: nil)
+        parts = ctx && name ? chain_filter_parts(ctx, name, root) : own_filter_parts(controller_data)
+        return nil if parts.empty?
 
-        parts = filters.map do |f|
-          f[:skipped] ? "~~#{f[:name]}~~ _(skipped)_" : "#{f[:kind]} #{f[:name]}"
-        end
         "- Filters: #{parts.join(', ')}"
+      end
+
+      def own_filter_parts(controller_data)
+        Array(controller_data[:filters]).grep(Hash).map do |f|
+          f[:skipped] ? "~~#{f[:name]}~~ _(skipped)_" : "#{f[:kind]} #{f[:name]}#{skip_condition_tail(f)}"
+        end
+      end
+
+      def chain_filter_parts(ctx, name, root)
+        chain = ActionFilters.for_controller(ctx, name, root: root)
+        (chain[:inherited] + chain[:own]).map { |f| "#{f[:kind]} #{f[:name]}#{skip_condition_tail(f)}" } +
+          chain[:skipped].map { |skipped| "~~#{skipped}~~ _(skipped)_" }
+      end
+
+      # A skip carrying if:/unless: leaves the filter in the chain, so the
+      # line says on what the class takes it out instead of striking it
+      # through.
+      def skip_condition_tail(filter)
+        tail = +""
+        tail << " (skipped if: #{filter[:skipped_if]})" if filter[:skipped_if]
+        tail << " (skipped unless: #{filter[:skipped_unless]})" if filter[:skipped_unless]
+        tail
       end
 
       # What every controller listing states under the name, in one order.
       # `rescue_handlers:` because only the per-controller listing renders
       # them; the compressed group and the generated files do not.
-      def controller_summary_lines(controller_data, rescue_handlers: false)
+      def controller_summary_lines(controller_data, rescue_handlers: false, ctx: nil, name: nil, root: nil)
         unread = unread_phrase(controller_data)
         return [ "- Could not be read: #{controller_data[:error]}" ] if unread
 
         lines = []
-        filters = filters_line(controller_data)
+        filters = filters_line(controller_data, ctx: ctx, name: name, root: root)
         lines << filters if filters
         params = strong_param_names(controller_data)
         lines << "- Strong params: #{params.join(', ')}" if params.any?

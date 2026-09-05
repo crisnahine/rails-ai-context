@@ -119,7 +119,7 @@ Three modules answer questions every introspector used to answer for itself:
 Two more answer a question a tool asks:
 
 - **PendingMigrations** - which migration files are not in the applied set, from one derivation both the schema and migrations sections read
-- **ActionFilters** - which filters apply to a controller or to one of its actions: own, inherited, skipped
+- **ActionFilters** - which filters apply to a controller or to one of its actions: own, inherited, skipped. `skipped` holds unconditional skips only; a skip carrying `if:`/`unless:` leaves the filter in `own` or `inherited` with the condition on the record. Every controller surface reads its filter line from here, so no two answers can disagree
 
 ### AST Engine
 

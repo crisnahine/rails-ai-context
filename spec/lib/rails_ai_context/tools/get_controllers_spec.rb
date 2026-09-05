@@ -290,7 +290,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
       text = described_class.call(detail: "full").content.first[:text]
 
-      expect(text).to include("- Filters: ~~authenticate_user!~~ _(skipped)_, before require_actor_signature!")
+      expect(text).to include("- Filters: before require_actor_signature!, ~~authenticate_user!~~ _(skipped)_")
       expect(text).not_to include("before authenticate_user!")
     end
 
@@ -351,6 +351,37 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       text = described_class.call(controller: "MediaProxyController").content.first[:text]
 
       expect(text).to include("- `rescue_from` ActiveRecord::RecordInvalid -> not_found")
+    end
+
+    # The listing rendered the class's own filter records while the
+    # single-controller answer resolved the chain, so one tool gave two
+    # answers to one question about the same controller. A skip carrying
+    # `unless:` does not take the filter out on every request, so neither
+    # answer strikes it through.
+    it "says the same thing about a conditional skip in both answers" do
+      stub_controllers({
+        "ApplicationController" => {
+          actions: [],
+          filters: [ { kind: "before", name: "require_functional!" } ],
+          strong_params: []
+        },
+        "AccountsController" => {
+          actions: %w[show],
+          parent_class: "ApplicationController",
+          filters: [
+            { kind: "before", name: "require_functional!", skipped: true, unless: "limited_federation_mode?" }
+          ],
+          strong_params: []
+        }
+      })
+
+      listing = described_class.call(detail: "full").content.first[:text]
+      single = described_class.call(controller: "AccountsController").content.first[:text]
+
+      expect(listing).to include("- Filters: before require_functional! (skipped unless: limited_federation_mode?)")
+      expect(listing).not_to include("~~require_functional!~~")
+      expect(single).to include("**require_functional!** _(from ApplicationController)_ (skipped unless: limited_federation_mode?)")
+      expect(single).not_to include("~~require_functional!~~")
     end
   end
 

@@ -471,4 +471,79 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(result[:inherited]).to eq([])
     end
   end
+
+  # `skip_before_action :x, unless: :y` takes the filter out on some requests
+  # and leaves it on others, so striking it through claims more than the
+  # source says.
+  describe "a skip that carries a condition" do
+    let(:conditional_context) do
+      { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "require_functional!" } ] },
+        "AccountsController" => {
+          parent_class: "ApplicationController",
+          actions: %w[show],
+          filters: [
+            { kind: "before", name: "require_functional!", skipped: true, unless: "limited_federation_mode?" }
+          ]
+        }
+      } } }
+    end
+
+    it "keeps the filter in the chain and says on what it is skipped" do
+      result = described_class.for_controller(conditional_context, "AccountsController")
+
+      expect(result[:skipped]).to eq([])
+      inherited = result[:inherited].find { |f| f[:name] == "require_functional!" }
+      expect(inherited).not_to be_nil
+      expect(inherited[:skipped_unless]).to eq("limited_federation_mode?")
+    end
+
+    it "spells a lambda condition the way an inferred filter option is spelled" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "around", name: "set_locale" } ] },
+        "AccountsController" => {
+          parent_class: "ApplicationController",
+          filters: [ { kind: "around", name: "set_locale", skipped: true, if: "-> { request.format == :json }" } ]
+        }
+      } } }
+
+      result = described_class.for_controller(ctx, "AccountsController")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].first[:skipped_if]).to eq("[INFERRED]")
+    end
+
+    it "leaves an unconditional skip absolute" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "require_functional!" } ] },
+        "AccountsController" => {
+          parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "require_functional!", skipped: true } ]
+        }
+      } } }
+
+      result = described_class.for_controller(ctx, "AccountsController")
+
+      expect(result[:skipped]).to eq([ "require_functional!" ])
+      expect(result[:inherited]).to eq([])
+    end
+
+    # A conditional skip on a shared base is inherited by every child, and
+    # the child's answer has to carry the condition too.
+    it "carries an ancestor's condition down to the child" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "require_functional!" } ] },
+        "Api::BaseController" => {
+          parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "require_functional!", skipped: true, unless: "limited_federation_mode?" } ]
+        },
+        "Api::V1::AccountsController" => { parent_class: "Api::BaseController", filters: [] }
+      } } }
+
+      result = described_class.for_controller(ctx, "Api::V1::AccountsController")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].map { |f| f[:skipped_unless] }).to eq([ "limited_federation_mode?" ])
+    end
+  end
 end
