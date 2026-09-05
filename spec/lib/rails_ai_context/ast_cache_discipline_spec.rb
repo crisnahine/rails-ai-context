@@ -2,11 +2,12 @@
 
 require "spec_helper"
 
-# These two walks glob a live directory and then read what they found, and
-# `spec/` is a live directory: an example writes a model into the dummy app
-# and removes it again, so a second suite running beside this one can delete a
-# path between the glob and the read. A file that is gone is not a file that
-# breaks the rule.
+# Both walks glob a directory and then read what they found. `spec/` is a live
+# directory - an example writes a model into the dummy app and removes it again
+# - so a second suite running beside this one can delete a path between the
+# glob and the read, and a file that is gone is not a file that breaks the
+# rule. `lib/` is not live, so a file that cannot be read there is a fault this
+# walk must not swallow: its whole job is to be loud.
 module DisciplineWalk
   module_function
 
@@ -16,17 +17,25 @@ module DisciplineWalk
 
   def uncommented_lines(file)
     File.readlines(file).reject { |l| l.strip.start_with?("#") }
+  end
+
+  def uncommented_lines_if_present(file)
+    uncommented_lines(file)
   rescue Errno::ENOENT
     []
   end
 end
 
 RSpec.describe DisciplineWalk do
-  it "reads no lines from a file that is gone by the time it is opened" do
-    missing = File.join(Dir.tmpdir, "discipline-walk-#{Process.pid}-gone.rb")
+  let(:missing) { File.join(Dir.tmpdir, "discipline-walk-#{Process.pid}-gone.rb") }
 
-    expect { described_class.uncommented_lines(missing) }.not_to raise_error
-    expect(described_class.uncommented_lines(missing)).to eq([])
+  it "reads no lines from a file that is gone by the time it is opened" do
+    expect { described_class.uncommented_lines_if_present(missing) }.not_to raise_error
+    expect(described_class.uncommented_lines_if_present(missing)).to eq([])
+  end
+
+  it "still raises for a walk that has no reason to tolerate a missing file" do
+    expect { described_class.uncommented_lines(missing) }.to raise_error(Errno::ENOENT)
   end
 end
 
@@ -49,7 +58,16 @@ end
 
 RSpec.describe "Prism listener registration discipline" do
   def ruby_files(root) = DisciplineWalk.ruby_files(root)
-  def uncommented_lines(file) = DisciplineWalk.uncommented_lines(file)
+
+  # Only the spec half is live, so only the spec half tolerates a file that
+  # went away between the glob and the read.
+  def uncommented_lines(file)
+    if file.start_with?("#{spec_root}/")
+      DisciplineWalk.uncommented_lines_if_present(file)
+    else
+      DisciplineWalk.uncommented_lines(file)
+    end
+  end
 
   let(:lib_root) { File.expand_path("../../../../lib", __FILE__) }
   let(:spec_root) { File.expand_path("../../..", __FILE__) }

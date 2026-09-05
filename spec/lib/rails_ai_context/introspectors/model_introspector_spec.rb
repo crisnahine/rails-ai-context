@@ -1359,7 +1359,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         File.write(base_path, "class Post < ApplicationRecord\n  scope :published, -> { all }\nend\n")
         File.write(File.join(dir, "app", "models", "article.rb"),
                    "class Article < Post\n  scope :recent, -> { all }\nend\n")
-        File.chmod(0o000, base_path)
+        make_unreadable(base_path)
 
         article = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Article"]
 
@@ -1572,7 +1572,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         child_path = File.join(dir, "app", "models", "article.rb")
         File.write(base_path, "class Post < ApplicationRecord\n  scope :published, -> { all }\nend\n")
         File.write(child_path, "class Article < Post\n  scope :recent, -> { all }\nend\n")
-        File.chmod(0o000, base_path)
+        make_unreadable(base_path)
 
         base = Class.new(ApplicationRecord) do
           self.table_name = "posts"
@@ -1632,7 +1632,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         path = File.join(dir, "app", "models", "post.rb")
         File.write(path, model_source)
-        File.chmod(0o000, path) if unreadable
+        make_unreadable(path) if unreadable
 
         model = Class.new(ApplicationRecord) do
           self.table_name = "posts"

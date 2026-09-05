@@ -304,8 +304,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
         "app/models/status.rb" => "class Status\n  # devise lives here\nend\n",
         "app/models/locked.rb" => "# devise\n"
       ) do |dir|
-        File.chmod(0o000, File.join(dir, "app", "models", "locked.rb"))
-        skip "cannot make a file unreadable as this user" if File.readable?(File.join(dir, "app", "models", "locked.rb"))
+        make_unreadable(File.join(dir, "app", "models", "locked.rb"))
 
         text = described_class.call(pattern: "devise").content.first[:text]
 

@@ -547,8 +547,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
           "zzz_broken.rb" => "Rails.application.configure do\n  config.i18n.available_locales = [:zz]\nend\n"
         }) do |dir|
           broken = File.join(dir, "config", "initializers", "zzz_broken.rb")
-          File.chmod(0o000, broken)
-          skip "cannot make a file unreadable as this user" if File.readable?(broken)
+          make_unreadable(broken)
         end
 
         expect(result[:error]).to be_nil

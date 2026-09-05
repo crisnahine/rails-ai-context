@@ -9,14 +9,17 @@ RSpec.describe "The static-tier notice in generated files" do
   let(:static_context) { IntrospectedFixture.context.merge(tier: "static") }
   let(:booted_context) { IntrospectedFixture.context.merge(tier: "booted") }
 
-  ROOT_SERIALIZERS = [
+  # Assigned inside a describe block, a bare constant lands on Object and is
+  # visible to every later example in the run. A local carries the same list
+  # and goes away with the file.
+  root_serializers = [
     RailsAiContext::Serializers::ClaudeSerializer,
     RailsAiContext::Serializers::CopilotSerializer,
     RailsAiContext::Serializers::OpencodeSerializer,
     RailsAiContext::Serializers::MarkdownSerializer
   ].freeze
 
-  ROOT_SERIALIZERS.each do |klass|
+  root_serializers.each do |klass|
     it "#{klass.name.split('::').last} says the answer is static, near the top" do
       output = klass.new(static_context).call
 
@@ -111,5 +114,9 @@ RSpec.describe "The static-tier notice in generated files" do
     output = RailsAiContext::Serializers::JsonSerializer.new(static_context).call
 
     expect(JSON.parse(output)["tier"]).to eq("static")
+  end
+
+  it "leaves no name of its own on Object" do
+    expect(Object.const_defined?(:ROOT_SERIALIZERS)).to be(false)
   end
 end
