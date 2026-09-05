@@ -1214,5 +1214,29 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(details[:concern_callbacks].map { |c| c[:method] }).to eq([ "stamp" ])
       end
     end
+
+    it "marks a concern whose file it could not read" do
+      Dir.mktmpdir do |dir|
+        model_path = File.join(dir, "app", "models", "gadget.rb")
+        FileUtils.mkdir_p(File.dirname(model_path))
+        File.write(model_path, <<~RUBY)
+          class Gadget < ApplicationRecord
+            include Elsewhere
+          end
+        RUBY
+
+        stub_const("Elsewhere", Module.new)
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          include Elsewhere
+          def self.name = "Gadget"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:model_source_path).and_return(model_path)
+
+        expect(introspector.send(:extract_model_details, model)[:concerns_unread]).to eq([ "Elsewhere" ])
+      end
+    end
   end
 end

@@ -279,7 +279,7 @@ module RailsAiContext
         # Reflection covers associations, validations and enums, but scopes,
         # macros and custom validates are read off the file - so the concerns
         # are merged here too, or the static tier out-answers this one.
-        source_data, = merge_concern_macros(own_source, model.name)
+        source_data, unread = merge_concern_macros(own_source, model.name)
 
         details = {
           table_name:       model.table_name,
@@ -293,6 +293,7 @@ module RailsAiContext
           callbacks:        extract_callbacks_from_ast(source_data),
           concerns:         extract_concerns(model),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
+          concerns_unread:  (unread if unread.any?),
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           scopes:           extract_scopes_from_ast(source_data),
