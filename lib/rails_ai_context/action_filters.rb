@@ -39,15 +39,20 @@ module RailsAiContext
       info = Payload.controllers(ctx)[controller_name.to_s]
       return { own: [], inherited: [], skipped: [] } unless info.is_a?(Hash)
 
-      skipped = ((skipped_names(ctx, controller_name, action, root: root, source: source) +
-        skip_flag_names(info, action)).uniq - redeclared_names(info, action))
+      skipped = own_skips(ctx, controller_name, info, action, root: root, source: source)
       # A record the walk marked as a skip states what does not run, so it is
       # never a filter, on the class that declared it or on a child.
       declared = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
+      parent, dropped = parent_filters(ctx, info[:parent_class], action, skipped,
+                                       root: root, within: controller_name.to_s)
+      # The runtime tier's list is the whole chain, so an ancestor's skip has
+      # to be taken out of this class's list too. What this body declares
+      # itself survives an ancestor's skip: Rails re-adds a callback the class
+      # declares again. Its own skip binds it either way.
+      inherited_skips = dropped - skipped.map(&:to_s)
       applicable = declared.select { |f| applies?(f, action) }
         .reject { |f| skipped.include?(f[:name].to_s) }
-
-      parent = parent_filters(ctx, info[:parent_class], action, skipped, root: root)
+        .reject { |f| inherited_skips.include?(f[:name].to_s) && !f[:declared] }
       declared_on = parent.to_h { |f| [ f[:name].to_s, f[:from] ] }
       declared_names = declared.map { |f| f[:name].to_s }.to_set
 
@@ -75,37 +80,63 @@ module RailsAiContext
     end
 
     # Every ancestor's filters, closest first, deduped by name and tagged
-    # with the ancestor they were found on. The runtime tier's list already
-    # carries the whole chain, so the dedupe is what keeps it correct; the
-    # static tier's holds one class's declarations only, so the walk is what
-    # completes it. Each class's skips join the set as the walk passes it, so
-    # a filter an intermediate ancestor skipped never reaches the child. An
-    # ancestor the payload does not carry ends it: reconstructing a path from
-    # a class name breaks on every app inflection.
-    def parent_filters(ctx, parent_class, action, skipped, root:)
+    # with the ancestor they were found on, plus the set of names the walk
+    # dropped. The runtime tier's list already carries the whole chain, so the
+    # dedupe is what keeps it correct; the static tier's holds one class's
+    # declarations only, so the walk is what completes it. Each class's skips
+    # join the set as the walk reaches it, so a filter an intermediate ancestor
+    # skipped never reaches the child. An ancestor the payload does not carry
+    # ends it: reconstructing a path from a class name breaks on every app
+    # inflection. A bare superclass is resolved against the enclosing namespace
+    # first, the way Ruby does.
+    def parent_filters(ctx, parent_class, action, skipped, root:, within: nil)
       controllers = Payload.controllers(ctx)
       seen = Set.new
       found = {}
+      attributed = Set.new
       dropped = skipped.map(&:to_s).to_set
-      name = parent_class&.to_s
+      name = Introspectors::ActionResolver.resolve_entry_name(controllers, parent_class, within)
 
       while name && !seen.include?(name)
         seen << name
         info = controllers[name]
         break unless info.is_a?(Hash)
 
-        dropped.merge(skip_flag_names(info, action))
+        # The class that skips a filter must not contribute it either: in the
+        # booted tier its own list is the reflection list, which carries every
+        # inherited name.
+        dropped.merge(own_skips(ctx, name, info, action, root: root))
         Array(info[:filters]).grep(Hash)
           .reject { |f| f[:skipped] }
           .select { |f| applies?(f, action) }
           .reject { |f| dropped.include?(f[:name].to_s) }
-          .each { |f| found[f[:name].to_s] ||= f.merge(from: name) }
+          .each { |f| attribute(found, attributed, f, name) }
 
-        dropped.merge(skipped_names(ctx, name, action, root: root))
-        name = info[:parent_class]&.to_s
+        name = Introspectors::ActionResolver.resolve_entry_name(controllers, info[:parent_class], name)
       end
 
-      found.values
+      [ found.values, dropped ]
+    end
+
+    # The closest ancestor carrying a filter keeps its constraints, but a
+    # booted ancestor carries names it only inherits, so `from:` moves on to
+    # the first ancestor whose own body declared it.
+    def attribute(found, attributed, filter, name)
+      key = filter[:name].to_s
+      if found.key?(key)
+        found[key] = found[key].merge(from: name) if filter[:declared] && !attributed.include?(key)
+      else
+        found[key] = filter.merge(from: name)
+      end
+      attributed << key if filter[:declared]
+    end
+
+    # What one class's own body takes out of the chain for this action: the
+    # skips its file states plus the skip records its payload carries, minus
+    # whatever the same body declares again after the skip.
+    def own_skips(ctx, controller_name, info, action, root:, source: nil)
+      (skipped_names(ctx, controller_name, action, root: root, source: source) +
+        skip_flag_names(info, action)).uniq - redeclared_names(info, action)
     end
 
     # The static walk marks a skip macro on the record, so a payload that
@@ -173,6 +204,7 @@ module RailsAiContext
     end
 
     private_class_method :default_root, :split, :applies?, :parent_filters, :skipped_names, :carried_source,
-                         :skip_calls, :skip_flag_names, :redeclared_names, :last_records
+                         :skip_calls, :skip_flag_names, :redeclared_names, :last_records, :own_skips,
+                         :attribute
   end
 end

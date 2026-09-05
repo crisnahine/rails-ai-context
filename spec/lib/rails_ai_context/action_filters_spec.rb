@@ -135,6 +135,104 @@ RSpec.describe RailsAiContext::ActionFilters do
     expect(described_class.for(context, "Nope", "show")).to eq({ own: [], inherited: [], skipped: [] })
   end
 
+  # An ancestor's skip joined the dropped set only after that ancestor's own
+  # list had been collected, so the class that skips a filter still handed it
+  # down. In the booted tier that list is the reflection list, which carries
+  # every inherited name, so the skipping class itself contributed it.
+  describe "an ancestor that skips a filter it also carries" do
+    around do |example|
+      Dir.mktmpdir("action-filters-own-skip") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/admin"))
+        File.write(File.join(dir, "app/controllers/admin/base_controller.rb"), <<~RUBY)
+          module Admin
+            class BaseController < ApplicationController
+              skip_before_action :authenticate!, only: [ :index ]
+              before_action :require_admin
+            end
+          end
+        RUBY
+        example.run
+      end
+    end
+
+    let(:skipping_context) do
+      { controllers: { controllers: {
+        "Admin::BaseController" => {
+          parent_class: "ApplicationController",
+          filters: [
+            { kind: "before", name: "authenticate!" },
+            { kind: "before", name: "require_admin" }
+          ],
+          file: "app/controllers/admin/base_controller.rb"
+        },
+        "Admin::ReportsController" => { parent_class: "Admin::BaseController", filters: [] }
+      } } }
+    end
+
+    it "does not hand the filter to a child on an action the skip covers" do
+      result = described_class.for(skipping_context, "Admin::ReportsController", "index", root: @root)
+
+      expect(result[:inherited].map { |f| f[:name] }).to eq(%w[require_admin])
+    end
+
+    it "still hands it down on an action the skip leaves alone" do
+      result = described_class.for(skipping_context, "Admin::ReportsController", "show", root: @root)
+
+      expect(result[:inherited].map { |f| f[:name] }).to eq(%w[authenticate! require_admin])
+    end
+
+    # The booted tier gives every class the whole chain by reflection, so the
+    # child's own list carries the name its parent skipped. Subtracting the
+    # skip from the walk alone left it in the child's own filters.
+    it "does not report it as the child's own filter either" do
+      skipping_context[:controllers][:controllers]["Admin::ReportsController"][:filters] =
+        [ { kind: "before", name: "authenticate!" }, { kind: "before", name: "require_admin" } ]
+
+      result = described_class.for(skipping_context, "Admin::ReportsController", "index", root: @root)
+
+      expect(result[:own].map { |f| f[:name] }).to eq([])
+      expect(result[:inherited].map { |f| f[:name] }).to eq(%w[require_admin])
+    end
+
+    # A class that declares the filter again in its own body runs it, whatever
+    # an ancestor skipped.
+    it "keeps a filter the child declares itself" do
+      skipping_context[:controllers][:controllers]["Admin::ReportsController"][:filters] =
+        [ { kind: "before", name: "authenticate!", declared: true } ]
+
+      result = described_class.for(skipping_context, "Admin::ReportsController", "index", root: @root)
+
+      expect(result[:own].map { |f| f[:name] }).to eq(%w[authenticate!])
+    end
+  end
+
+  # Ruby resolves a bare superclass from the enclosing namespace outward, so
+  # `class ReportsController < BaseController` inside `module Admin` carries
+  # the parent as written. Looking that up verbatim found nothing and the
+  # whole inherited chain vanished from the answer.
+  describe "a parent spelled relatively to its namespace" do
+    let(:relative_context) do
+      { controllers: { controllers: {
+        "Admin::BaseController" => {
+          parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "require_admin" }, { kind: "after", name: "audit" } ]
+        },
+        "Admin::ReportsController" => {
+          parent_class: "BaseController",
+          filters: [ { kind: "before", name: "load_report", except: %w[index] } ]
+        }
+      } } }
+    end
+
+    it "resolves it against the enclosing namespace" do
+      result = described_class.for_controller(relative_context, "Admin::ReportsController")
+
+      expect(result[:inherited].map { |f| [ f[:name], f[:from] ] })
+        .to eq([ %w[require_admin Admin::BaseController], %w[audit Admin::BaseController] ])
+    end
+  end
+
   describe ".for_controller" do
     it "keeps every declared filter, whatever action it constrains itself to" do
       result = described_class.for_controller(context, "PostsController")
@@ -261,6 +359,22 @@ RSpec.describe RailsAiContext::ActionFilters do
 
       expect(result[:inherited].map { |f| [ f[:name], f[:from] ] })
         .to eq([ %w[require_admin Admin::BaseController], %w[authenticate ApplicationController] ])
+    end
+
+    # A booted ancestor's list carries every inherited name, so the nearest
+    # entry holding a filter is not the one that declared it. The record the
+    # class declared in its own body says which.
+    it "names the ancestor that declared it over one that only carries it" do
+      deep_context[:controllers][:controllers]["ApplicationController"][:filters] =
+        [ { kind: "before_action", name: "authenticate", declared: true } ]
+      deep_context[:controllers][:controllers]["Admin::BaseController"][:filters] =
+        [ { kind: "before_action", name: "authenticate" },
+          { kind: "before_action", name: "require_admin", declared: true } ]
+
+      result = described_class.for_controller(deep_context, "Admin::PostsController")
+
+      expect(result[:inherited].map { |f| [ f[:name], f[:from] ] })
+        .to eq([ %w[authenticate ApplicationController], %w[require_admin Admin::BaseController] ])
     end
 
     # A skip in a class between the child and the declaring ancestor stops
