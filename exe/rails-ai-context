@@ -58,6 +58,38 @@ class RailsAiContextCLI < Thor
       true
     end
 
+    # Thor reads a leading switch as "no command given" and falls back to
+    # `help`, so `rails-ai-context --app-path /x doctor` printed usage and
+    # exited 0 having checked nothing. Move every switch this binary declares
+    # (global or per-command) behind the command name; anything else is left
+    # where it is, so `--help`, `--version` and an unknown switch keep their
+    # own answers.
+    def self.normalize_argv(argv)
+      declared = class_options.values + commands.each_value.flat_map { |c| c.options.values }
+      switches = declared.each_with_object({}) do |option, table|
+        ([ option.switch_name ] + Array(option.aliases)).each { |name| table[name] = option.type }
+      end
+
+      globals = []
+      rest = argv.dup
+      while (token = rest.first) && token.start_with?("-")
+        name, inline = token.split("=", 2)
+        type = switches[name]
+        break unless type
+
+        globals << rest.shift
+        globals << rest.shift if inline.nil? && type != :boolean && rest.first && !rest.first.start_with?("-")
+      end
+
+      return argv if globals.empty?
+      # A switch this binary does not know still belongs to Thor, which
+      # refuses it; the globals it follows have nothing to attach to.
+      return rest if rest.first.to_s.start_with?("-")
+      return argv if rest.empty?
+
+      [ rest.first, *globals, *rest[1..] ]
+    end
+
     # Let Thor pass unknown options through to ToolRunner for the tool command
     stop_on_unknown_option! :tool
 
@@ -175,6 +207,11 @@ class RailsAiContextCLI < Thor
 
       context = ::RailsAiContext.introspect
       puts JSON.pretty_generate(context)
+    rescue SystemExit
+      raise
+    rescue StandardError, ScriptError => e
+      $stderr.puts "Error: #{e.message}"
+      exit 1
     end
 
     # Thor registers commands under their Ruby method names, and this method
@@ -188,6 +225,11 @@ class RailsAiContextCLI < Thor
     def watch
       boot_rails!(command: "watch", allow_static: true)
       ::RailsAiContext::Watcher.new.start
+    rescue SystemExit
+      raise
+    rescue StandardError, ScriptError => e
+      $stderr.puts "Error: #{e.message}"
+      exit 1
     end
 
     desc "doctor", "Run diagnostic checks and report AI readiness score"
@@ -209,6 +251,11 @@ class RailsAiContextCLI < Thor
         $stderr.puts "#{RailsAiContext::CountPhrase.call(failed, "check")} failed (--strict)"
         exit 1
       end
+    rescue SystemExit
+      raise
+    rescue StandardError, ScriptError => e
+      $stderr.puts "Error: #{e.message}"
+      exit 1
     end
 
     desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml and .mcp.json)"
@@ -461,6 +508,10 @@ class RailsAiContextCLI < Thor
       app_path_opt = @app_path_override || options[:app_path]
       environment_opt = @environment_override || options[:environment]
       app_root = File.expand_path(app_path_opt || Dir.pwd)
+      if app_path_opt && !Dir.exist?(app_root)
+        $stderr.puts "Error: No such directory: #{app_root}"
+        exit 1
+      end
       # Relative paths inside the app (log/, tmp/, sqlite files) assume the
       # process cwd is the app root, so honor --app-path by moving there.
       Dir.chdir(app_root) if app_path_opt
@@ -510,4 +561,4 @@ class RailsAiContextCLI < Thor
     end
 end
 
-RailsAiContextCLI.start(ARGV)
+RailsAiContextCLI.start(RailsAiContextCLI.normalize_argv(ARGV))

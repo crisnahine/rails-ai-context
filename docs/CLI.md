@@ -61,6 +61,20 @@ rails-ai-context tool model_details --model User
 | `--json` | Output as JSON |
 | `--no-boot` | Skip booting the app; answer from source alone |
 
+Global options may be typed before or after the command name:
+`rails-ai-context --app-path /srv/app doctor` and
+`rails-ai-context doctor --app-path /srv/app` run the same check.
+
+#### Exit status
+
+`tool` exits 0 when the tool answered and 1 when it could not. A required
+parameter you did not pass, a flag with no value after it, a bare word where a
+flag belongs, and an unknown parameter all exit 1 and say which one.
+
+A value the schema cannot hold - `--detail bogus` where the parameter takes
+`summary`, `standard` or `full`, or `--limit abc` where it takes an integer -
+is warned about on stderr and the tool's own default is used.
+
 ### The static tier and `--no-boot`
 
 Every command that reads the app takes `--no-boot`: `tool`, `serve`, `context`,
