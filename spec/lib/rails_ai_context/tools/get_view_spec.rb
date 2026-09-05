@@ -13,6 +13,20 @@ RSpec.describe RailsAiContext::Tools::GetView do
       expect(text).to include("posts")
     end
 
+    # The template and partial counts left the layouts out, so the numbers in
+    # the heading never added up to the files under app/views.
+    it "counts layouts in the heading so the file count reconciles" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to match(/# Views \(\d+ templates?, \d+ partials?, 1 layout\)/)
+    end
+
+    it "leaves layouts out of the heading when the listing is one controller" do
+      text = described_class.call(controller: "posts", detail: "summary").content.first[:text]
+
+      expect(text).not_to include("layout)")
+    end
+
     it "lists views for a specific controller" do
       result = described_class.call(controller: "posts", detail: "summary")
       text = result.content.first[:text]

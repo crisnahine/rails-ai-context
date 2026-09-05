@@ -13,7 +13,9 @@ module RailsAiContext
   module GemLock
     MAX_SIZE = 5 * 1024 * 1024
     SPEC_LINE = /\A {4}(\S+) \(([^)]+)\)\s*\z/
-    RUBY_LINE = /\A {3}ruby (\S+)/
+    RUBY_LINE = /\A\s+ruby (\S+)/
+    GEMFILE_RUBY_LINE = /^\s*ruby\s+(["'])([^"']+)\1/
+    PLAIN_VERSION = /\A\d+(?:\.\d+)*\S*\z/
 
     class Spec
       attr_reader :ruby_version
@@ -53,23 +55,27 @@ module RailsAiContext
 
     def for(root)
       path = File.join(root.to_s, "Gemfile.lock")
-      stamp = begin
-        File.mtime(path)
-      rescue SystemCallError
-        nil
-      end
+      gemfile = File.join(root.to_s, "Gemfile")
+      stamp = [ mtime(path), mtime(gemfile) ]
 
       MUTEX.synchronize do
         cached = CACHE[path]
         return cached[:spec] if cached && cached[:stamp] == stamp
 
-        spec = stamp ? parse(path) : Spec.new({}, missing: true)
+        spec = stamp.first ? parse(path, gemfile) : Spec.new({}, missing: true)
         CACHE[path] = { stamp: stamp, spec: spec }
         spec
       end
     end
 
-    def parse(path)
+    def mtime(path)
+      File.mtime(path)
+    rescue SystemCallError
+      nil
+    end
+    private_class_method :mtime
+
+    def parse(path, gemfile)
       content = SafeFile.read(path, max_size: MAX_SIZE)
       return Spec.new({}, missing: true) unless content
 
@@ -90,8 +96,20 @@ module RailsAiContext
           ruby_version = match[1]
         end
       end
-      Spec.new(versions, ruby_version: ruby_version, missing: false)
+      Spec.new(versions, ruby_version: ruby_version || gemfile_ruby_version(gemfile), missing: false)
     end
     private_class_method :parse
+
+    # A lockfile without a RUBY VERSION section leaves the Gemfile as the only
+    # statement of the version. A requirement such as `ruby ">= 3.3.0"` names a
+    # range, not a version, so it is left unanswered rather than reported as one.
+    def gemfile_ruby_version(path)
+      content = SafeFile.read(path, max_size: MAX_SIZE)
+      return nil unless content
+
+      declared = content[GEMFILE_RUBY_LINE, 2]
+      declared if declared&.match?(PLAIN_VERSION)
+    end
+    private_class_method :gemfile_ruby_version
   end
 end

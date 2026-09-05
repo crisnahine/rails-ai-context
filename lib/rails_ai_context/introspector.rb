@@ -22,6 +22,7 @@ module RailsAiContext
         ruby_version: RUBY_VERSION,
         rails_version: rails_version,
         environment: environment_name,
+        tier: RailsAiContext.static_tier? ? "static" : "booted",
         generated_at: Time.now.utc.iso8601,
         generator: "rails-ai-context v#{RailsAiContext::VERSION}"
       }

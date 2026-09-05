@@ -110,6 +110,42 @@ RSpec.describe RailsAiContext::GemLock do
     expect(described_class.for(@root).version("rails")).to eq("8.0.1")
   end
 
+  it "reads the ruby version whatever the section is indented by" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            rails (8.0.0)
+
+        RUBY VERSION
+          ruby 4.0.6
+
+        BUNDLED WITH
+          2.7.2
+      LOCK
+      expect(described_class.for(dir).ruby_version).to eq("4.0.6")
+    end
+  end
+
+  it "falls back to the Gemfile's ruby line when the lockfile names no version" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.0.0)\n")
+      File.write(File.join(dir, "Gemfile"), "source \"https://rubygems.org\"\n\nruby \"3.3.4\"\n")
+
+      expect(described_class.for(dir).ruby_version).to eq("3.3.4")
+    end
+  end
+
+  it "does not read a Gemfile ruby requirement as a version" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.0.0)\n")
+      File.write(File.join(dir, "Gemfile"), "ruby '>= 3.3.0', '< 4.1.0'\n")
+
+      expect(described_class.for(dir).ruby_version).to be_nil
+    end
+  end
+
   it "answers no gems for a file with no specs section" do
     File.write(File.join(@root, "Gemfile.lock"), "not a lockfile\n  GEM\n specs")
     File.utime(Time.now + 2, Time.now + 2, File.join(@root, "Gemfile.lock"))

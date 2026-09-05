@@ -154,6 +154,25 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
       end
     end
 
+    context "with a lockfile Bundler indented by two spaces" do
+      before do
+        content = <<~LOCK
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rails (8.0.0)
+
+          RUBY VERSION
+            ruby 4.0.6
+        LOCK
+        File.write(File.join(tmpdir, "Gemfile.lock"), content)
+      end
+
+      it "still names the ruby version" do
+        expect(introspector.call[:ruby_version]).to eq("4.0.6")
+      end
+    end
+
     context "with empty GEM section" do
       before do
         content = <<~LOCK

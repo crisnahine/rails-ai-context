@@ -16,6 +16,17 @@ RSpec.describe RailsAiContext::Introspector do
       expect(result[:generated_at]).to be_a(String)
     end
 
+    # Every count in a generated file is a different number depending on this,
+    # and the files carried nothing that said which one they held.
+    it "records the tier the run was answered in" do
+      expect(introspector.call[:tier]).to eq("booted")
+
+      RailsAiContext.tier = :static
+      expect(described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).call[:tier]).to eq("static")
+    ensure
+      RailsAiContext.tier = :runtime
+    end
+
     it "includes all configured introspectors" do
       result = introspector.call
 

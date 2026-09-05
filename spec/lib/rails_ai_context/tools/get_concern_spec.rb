@@ -99,6 +99,20 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         RailsAiContext.configuration.excluded_concerns = original
       end
 
+      # An empty listing and a fully excluded one read the same, so the
+      # answer blamed the app for a setting the user chose.
+      it "says the exclusions emptied the listing rather than that the app has none" do
+        original = RailsAiContext.configuration.excluded_concerns
+        RailsAiContext.configuration.excluded_concerns = [ /Searchable/, /Authenticatable/ ]
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("2 concerns excluded by `excluded_concerns`")
+        expect(text).not_to include("No concerns found in")
+      ensure
+        RailsAiContext.configuration.excluded_concerns = original
+      end
+
       it "lists both model and controller concerns" do
         result = described_class.call
         text = result.content.first[:text]
