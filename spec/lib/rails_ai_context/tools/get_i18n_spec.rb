@@ -186,6 +186,26 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       end
     end
 
+    context "when the static tier declares the fallbacks unanswered" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          { i18n: i18n_data.merge(backend: nil, fallbacks: nil, unavailable_sections: %w[backend fallbacks]) }
+        )
+      end
+
+      it "marks the fallbacks section unavailable instead of dropping it" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("## Fallbacks")
+        expect(text).to include("[UNAVAILABLE:")
+        expect(text).not_to include("**fr** →")
+      end
+
+      it "marks the per-locale fallback line unavailable" do
+        text = described_class.call(locale: "fr").content.first[:text]
+        expect(text).to include("**Fallbacks:** [UNAVAILABLE:")
+      end
+    end
+
     context "when running in the static tier without file data" do
       before do
         allow(described_class).to receive(:cached_context)

@@ -399,6 +399,16 @@ module RailsAiContext
           "[UNAVAILABLE: #{section_data[:unavailable]}]"
         end
 
+        # A key the introspector named as unanswered has no finding behind it,
+        # so a negative or empty rendering would state a fact nobody checked.
+        def unanswered?(data, key)
+          Array(data[:unavailable_sections]).map(&:to_s).include?(key.to_s)
+        end
+
+        def unavailable_text
+          Confidence.unavailable(Introspectors::StaticTier.unavailable_reason)
+        end
+
         # API-only apps legitimately have no views, partials, Stimulus, or
         # Turbo surface; a bare empty listing is indistinguishable from a
         # full-stack app that has none yet, so name the reason.

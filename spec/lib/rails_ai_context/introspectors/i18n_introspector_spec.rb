@@ -165,7 +165,9 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
     # this one. Static Mastodon reported "en -> en" as the app's setting.
     it "does not report the library's own fallbacks as the app's" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n")
-      expect(result).not_to have_key(:fallbacks)
+      expect(result).to have_key(:fallbacks)
+      expect(result[:fallbacks]).to be_nil
+      expect(result[:unavailable_sections]).to include("backend", "fallbacks")
     end
 
     it "returns no locales when the directory is missing" do

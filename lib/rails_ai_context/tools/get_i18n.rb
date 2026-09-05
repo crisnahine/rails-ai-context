@@ -88,7 +88,9 @@ module RailsAiContext
           end
 
           fallbacks = i18n[:fallbacks] || {}
-          if fallbacks.any?
+          if unanswered?(i18n, :fallbacks)
+            lines << "" << "## Fallbacks" << unavailable_text
+          elsif fallbacks.any?
             lines << "" << "## Fallbacks"
             fallbacks.sort.each do |from, to|
               lines << "- **#{from}** → #{Array(to).join(', ')}"
@@ -117,7 +119,11 @@ module RailsAiContext
           end
 
           fallbacks = i18n[:fallbacks] || {}
-          lines << "- **Fallbacks:** #{Array(fallbacks[locale.to_sym] || fallbacks[locale]).join(', ')}" if fallbacks[locale.to_sym] || fallbacks[locale]
+          if unanswered?(i18n, :fallbacks)
+            lines << "- **Fallbacks:** #{unavailable_text}"
+          elsif fallbacks[locale.to_sym] || fallbacks[locale]
+            lines << "- **Fallbacks:** #{Array(fallbacks[locale.to_sym] || fallbacks[locale]).join(', ')}"
+          end
 
           render_file_list(lines, page, "Files for #{locale}", "_No locale files found for '#{locale}'._")
           text_response(lines.join("\n"))

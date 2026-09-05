@@ -49,8 +49,8 @@ module RailsAiContext
       # The locale files are the same files either way; only the list of
       # locales and the default came from a running I18n. Read both from disk
       # rather than report the library's own defaults as the app's. The backend
-      # and the fallbacks belong to whichever process asks, so they are left
-      # out here entirely.
+      # and the fallbacks belong to whichever process asks, so both keys stay
+      # in the answer and are declared unanswered.
       def static_call
         configured = configured_available_locales
         locales = configured || locales_from_files
@@ -65,7 +65,9 @@ module RailsAiContext
           locale_files: extract_locale_files,
           total_locale_files: count_locale_files,
           locale_coverage: coverage,
-          locales_without_translations: untranslated
+          locales_without_translations: untranslated,
+          fallbacks: nil,
+          unavailable_sections: %w[backend fallbacks]
         }
       rescue => e
         { error: e.message }
