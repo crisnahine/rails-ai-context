@@ -668,6 +668,61 @@ RSpec.describe RailsAiContext::ActionFilters do
     end
   end
 
+  # ApplicationController is out of the payload by design, so a skip on the
+  # base class is the only evidence the filter is there at all. The
+  # whole-controller answer said "(skipped on: index)" and the per-action one
+  # dropped the filter, so one tool contradicted itself on one tier.
+  describe "a skip whose constraint leaves the queried action alone" do
+    let(:evidence_context) do
+      { controllers: { controllers: {
+        "Admin::BaseController" => {
+          parent_class: "ApplicationController",
+          filters: [
+            { kind: "before", name: "authenticate!", skipped: true, only: %w[index] },
+            { kind: "before", name: "require_admin" }
+          ]
+        },
+        "Admin::ReportsController" => { parent_class: "Admin::BaseController", filters: [] }
+      } } }
+    end
+
+    it "keeps the filter in the per-action chain with no skipped tail" do
+      result = described_class.for(evidence_context, "Admin::ReportsController", "show")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].map { |f| f[:name] }).to contain_exactly("require_admin", "authenticate!")
+      authenticate = result[:inherited].find { |f| f[:name] == "authenticate!" }
+      expect(authenticate.keys).not_to include(:skipped_on, :skipped_if, :skipped_unless, :skipped_except)
+    end
+
+    it "still names the actions the skip covers in the whole-controller answer" do
+      result = described_class.for_controller(evidence_context, "Admin::ReportsController")
+
+      expect(result[:inherited].map { |f| [ f[:name], f[:skipped_on] ] })
+        .to contain_exactly([ "require_admin", nil ], [ "authenticate!", "index" ])
+    end
+
+    # The child's own skip says nothing about `show`, so the ancestor's
+    # condition is still the answer for it.
+    it "does not let it displace an ancestor's own condition" do
+      ctx = { controllers: { controllers: {
+        "Api::BaseController" => {
+          filters: [ { kind: "before", name: "require_functional!", skipped: true, unless: "limited?" } ]
+        },
+        "Api::V1::AccountsController" => {
+          parent_class: "Api::BaseController",
+          filters: [ { kind: "before", name: "require_functional!", skipped: true, only: %w[index] } ]
+        }
+      } } }
+
+      result = described_class.for(ctx, "Api::V1::AccountsController", "show")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].map { |f| [ f[:name], f[:skipped_unless] ] })
+        .to eq([ [ "require_functional!", "limited?" ] ])
+    end
+  end
+
   it "keeps unplaced_conditional_skips off the public surface" do
     expect(described_class).not_to respond_to(:unplaced_conditional_skips)
   end

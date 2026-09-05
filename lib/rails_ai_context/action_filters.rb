@@ -46,7 +46,7 @@ module RailsAiContext
       declared = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
       parent, dropped, inherited_conditions, declares = parent_filters(ctx, info[:parent_class], action, skipped,
                                                                        root: root, within: controller_name.to_s)
-      conditions = inherited_conditions.merge(conditions_by_name(skips, action))
+      conditions = merge_conditions(inherited_conditions, conditions_by_name(skips, action))
       # The runtime tier's list is the whole chain, so an ancestor's skip has
       # to be taken out of this class's list too. What this body declares
       # itself survives an ancestor's skip: Rails re-adds a callback the class
@@ -100,11 +100,19 @@ module RailsAiContext
     end
 
     def absolute_names(skips, action)
-      skips.reject { |skip| conditional?(skip, action) }.map { |skip| skip[:name] }
+      skips.reject { |skip| skip[:evidence] || conditional?(skip, action) }.map { |skip| skip[:name] }
     end
 
     def conditions_by_name(skips, action)
-      skips.select { |skip| conditional?(skip, action) }.to_h { |skip| [ skip[:name], skip ] }
+      skips.select { |skip| skip[:evidence] || conditional?(skip, action) }
+        .to_h { |skip| [ skip[:name], skip ] }
+    end
+
+    # An evidence record says only that the filter is in the chain, so a real
+    # condition on the same name always outranks it, however close the class
+    # carrying the evidence is.
+    def merge_conditions(weaker, stronger)
+      weaker.merge(stronger) { |_name, weak, strong| strong[:evidence] ? weak : strong }
     end
 
     def mark_conditional_skips(filters, conditions, action)
@@ -120,6 +128,8 @@ module RailsAiContext
 
     def skip_tail(skip, action)
       tail = {}
+      return tail if skip[:evidence]
+
       tail[:skipped_if] = condition_text(skip[:if]) if skip[:if]
       tail[:skipped_unless] = condition_text(skip[:unless]) if skip[:unless]
       return tail unless partial?(skip, action)
@@ -186,7 +196,7 @@ module RailsAiContext
         dropped.merge(absolute_names(skips, action))
         # The walk runs closest ancestor first, so a nearer class's condition
         # is the one the child inherits.
-        conditions = conditions_by_name(skips, action).merge(conditions)
+        conditions = merge_conditions(conditions_by_name(skips, action), conditions)
         carried = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
         # Counted before the rejects below, so a conditional skip of a name
         # the walk did see is never mistaken for a skip of a declaration it
@@ -223,9 +233,23 @@ module RailsAiContext
     def own_skips(ctx, controller_name, info, action, root:, source: nil)
       redeclared = redeclared_names(info, action)
       (skip_flag_records(info, action) +
-        skip_source_records(ctx, controller_name, action, root: root, source: source))
+        skip_source_records(ctx, controller_name, action, root: root, source: source) +
+        evidence_skips(ctx, controller_name, info, action, root: root, source: source))
         .reject { |skip| redeclared.include?(skip[:name]) }
         .uniq { |skip| skip[:name] }
+    end
+
+    # A skip whose only:/except: leaves this action alone takes nothing out
+    # here, but nothing can be skipped that the chain does not run, so it is
+    # still the only evidence the filter is there. Marked so it never reads
+    # as a skip of this action.
+    def evidence_skips(ctx, controller_name, info, action, root:, source: nil)
+      return [] unless action
+
+      (skip_flag_records(info, nil) +
+        skip_source_records(ctx, controller_name, nil, root: root, source: source))
+        .reject { |skip| applies?(skip, action) }
+        .map { |skip| skip.merge(evidence: true) }
     end
 
     # The static walk marks a skip macro on the record, so a payload that
@@ -304,7 +328,7 @@ module RailsAiContext
     private_class_method :default_root, :split, :applies?, :parent_filters, :skip_source_records, :carried_source,
                          :skip_calls, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
-                         :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
-                         :unplaced_conditional_skips
+                         :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
+                         :unplaced_conditional_skips, :evidence_skips
   end
 end
