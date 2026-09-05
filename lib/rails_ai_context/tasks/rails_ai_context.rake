@@ -359,7 +359,11 @@ namespace :ai do
     end
 
     if (routes = RailsAiContext::Payload.section(context, :routes))
-      puts "🛤️  Routes: #{routes[:total_routes]}#{RailsAiContext::RouteCoverage.suffix(routes)}"
+      app_ctrls = RailsAiContext::RouteCoverage.app_controllers(routes)
+      puts "🛤️  Routes: " \
+           "#{RailsAiContext::CountPhrase.call(RailsAiContext::RouteCoverage.app_route_count(routes), "app route")} " \
+           "across #{RailsAiContext::CountPhrase.call(app_ctrls.size, "controller")} " \
+           "(#{routes[:total_routes]} total incl. framework#{RailsAiContext::RouteCoverage.suffix(routes)})"
     end
 
     if context[:jobs]
