@@ -304,6 +304,22 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     end
 
+    # A match line whose own content is tab-separated digits used to parse as
+    # a context row, which would take it out of the count entirely.
+    it "counts a match whose content looks like a context row" do
+      with_search_app("app/models/zed.rb" => "aaa\n\t12\tqqmarker\nbbb\n") do
+        text = described_class.call(pattern: "qqmarker", context_lines: 2).content.first[:text]
+
+        expect(header_count(text)).to eq("1")
+      end
+    end
+  end
+
+  # The line cap and its label are printed off the row list either backend
+  # produced, so these run without ripgrep.
+  describe "the line cap in the header" do
+    before { allow(RailsAiContext).to receive(:tier).and_return(:static) }
+
     it "names the line cap as a cap instead of printing it as the total" do
       previous_cap = RailsAiContext.configuration.max_search_results
       RailsAiContext.configuration.max_search_results = 10
@@ -315,16 +331,6 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     ensure
       RailsAiContext.configuration.max_search_results = previous_cap
-    end
-
-    # A match line whose own content is tab-separated digits used to parse as
-    # a context row, which would take it out of the count entirely.
-    it "counts a match whose content looks like a context row" do
-      with_search_app("app/models/zed.rb" => "aaa\n\t12\tqqmarker\nbbb\n") do
-        text = described_class.call(pattern: "qqmarker", context_lines: 2).content.first[:text]
-
-        expect(header_count(text)).to eq("1")
-      end
     end
 
     it "reports a file's whole match count beside what the page shows" do
