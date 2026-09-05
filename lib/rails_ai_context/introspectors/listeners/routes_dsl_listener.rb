@@ -221,7 +221,7 @@ module RailsAiContext
                        base: base,
                        member_path: member_path(base, singular, param),
                        singular_route_name: route_name_for(key),
-                       plural_route_name: route_name_for(route_key(name, opts))
+                       plural_route_name: route_name_for(collection_route_key(name, opts, singular: singular))
                      })
         end
 
@@ -230,7 +230,7 @@ module RailsAiContext
           controller = resource_controller(name, opts, singular: singular)
           actions = requested_actions(singular ? SINGULAR_ACTIONS : PLURAL_ACTIONS, opts)
           param = resource_param(opts)
-          plural_name = route_name_for(route_key(name, opts))
+          plural_name = route_name_for(collection_route_key(name, opts, singular: singular))
           singular_name = route_name_for(singular_route_key(name, opts, singular: singular))
 
           actions.each do |action|
@@ -252,6 +252,19 @@ module RailsAiContext
         # path and the controller on the resource's own name.
         def route_key(name, opts)
           (opts[:as] || name).to_s
+        end
+
+        # Rails' Resource#collection_name: the route key pluralized, and
+        # `_index` appended when it pluralizes to itself, so `resources :sheep`
+        # names its index route sheep_index and not the member's sheep.
+        # SingletonResource aliases collection_name to the singular, so a
+        # `collection` block inside `resource :confirmation` stays singular.
+        def collection_route_key(name, opts, singular:)
+          key = route_key(name, opts)
+          return key if singular
+
+          plural = key.pluralize
+          plural == key.singularize ? "#{plural}_index" : plural
         end
 
         def singular_route_key(name, opts, singular:)
