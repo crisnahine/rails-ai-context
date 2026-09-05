@@ -178,4 +178,19 @@ RSpec.describe RailsAiContext::GemLock do
     end
     expect(lock.reason).to be_nil
   end
+
+  # Which gems resolved and which Ruby the app declares are two facts, and the
+  # Gemfile answers the second whether or not a lockfile answers the first.
+  it "reads the Gemfile's ruby line when there is no lockfile at all" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "Gemfile"), "source \"https://rubygems.org\"\n\nruby \"3.2.4\"\n")
+
+      spec = described_class.for(dir)
+
+      expect(spec.ruby_version).to eq("3.2.4")
+      expect(spec.absent?).to be true
+      expect(spec.reason).to eq("No Gemfile.lock found")
+      expect(spec.present?("rails")).to be false
+    end
+  end
 end

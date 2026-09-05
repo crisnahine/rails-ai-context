@@ -76,13 +76,13 @@ RSpec.describe RailsAiContext::Tools::Onboard do
     end
 
     # With no RUBY VERSION in the lockfile and no ruby line in the Gemfile the
-    # context falls back to the interpreter running the CLI, which the app
-    # declared nowhere.
+    # introspector refuses rather than naming the interpreter running the CLI,
+    # which the app declared nowhere.
     it "claims no declared ruby version when nothing declares one" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",
         rails_version: "8.0",
-        ruby_version: RUBY_VERSION,
+        ruby_version: RailsAiContext::Confidence.unavailable("app declares none"),
         gems: { declared_ruby_version: nil },
         tier: "static"
       })

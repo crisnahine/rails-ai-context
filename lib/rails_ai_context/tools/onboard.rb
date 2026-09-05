@@ -603,11 +603,14 @@ module RailsAiContext
         # The version a sentence may name, or nil. Statically that is the one
         # the app declares; with nothing declared, the value is the interpreter
         # running this tool and says nothing about the app.
+        # Keyed on the value the sentence would print, not on a sibling
+        # section: an app with a Gemfile and no lockfile declares a Ruby
+        # version that the gems section cannot answer for.
         def named_ruby_version(ctx)
-          return ctx[:ruby_version] unless ctx[:tier].to_s == "static"
-          return nil unless Payload.section(ctx, :gems)&.dig(:declared_ruby_version)
+          version = ctx[:ruby_version].to_s
+          return nil if version.empty? || version.start_with?("[UNAVAILABLE")
 
-          ctx[:ruby_version]
+          version
         end
 
         def central_models(models, limit = 5)

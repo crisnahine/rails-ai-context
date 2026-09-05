@@ -73,7 +73,15 @@ module RailsAiContext
         cached = CACHE[path]
         return cached[:spec] if cached && cached[:stamp] == stamp
 
-        spec = stamp.first ? parse(path, gemfile) : Spec.new({}, reason: "No Gemfile.lock found", absent: true)
+        # Which gems resolved and which Ruby the app declares are two facts,
+        # and the Gemfile answers the second whether or not a lockfile answers
+        # the first.
+        spec = if stamp.first
+          parse(path, gemfile)
+        else
+          Spec.new({}, ruby_version: gemfile_ruby_version(gemfile),
+                       reason: "No Gemfile.lock found", absent: true)
+        end
         CACHE[path] = { stamp: stamp, spec: spec }
         spec
       end
