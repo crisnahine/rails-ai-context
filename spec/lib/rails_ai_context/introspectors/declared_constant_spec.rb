@@ -74,4 +74,23 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.resolve(source, "PostsController")).to eq("PostsController")
     end
   end
+
+  describe ".renamed?" do
+    # Rails names the anonymous join class it builds for a
+    # has_and_belongs_to_many through a singleton `name=`, so it answers
+    # "HABTM_Tags" while it lives at "Account::HABTM_Tags".
+    it "is true for a class whose name is not its constant path" do
+      klass = Class.new
+      stub_const("Account::HABTM_Tags", klass)
+      def klass.name = "HABTM_Tags"
+
+      expect(described_class.renamed?(klass)).to be(true)
+    end
+
+    it "is false for a class that answers its own constant path" do
+      stub_const("Account", Class.new)
+
+      expect(described_class.renamed?(Account)).to be(false)
+    end
+  end
 end

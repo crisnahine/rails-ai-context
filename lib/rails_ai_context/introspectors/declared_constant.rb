@@ -30,6 +30,19 @@ module RailsAiContext
         declared_names(source).find { |name| name.casecmp?(path_name) } || path_name
       end
 
+      # A loaded class that answers a name no constant carries belongs to no
+      # file - Rails names the anonymous join class it builds for a
+      # has_and_belongs_to_many through a singleton `name=`, so it answers
+      # "HABTM_Tags" while it lives at "Account::HABTM_Tags". Keyed by that
+      # name it would overwrite the real entry, or collapse two owners of one
+      # association name onto one.
+      #
+      # @param klass [Class] a loaded class
+      # @return [Boolean]
+      def renamed?(klass)
+        klass.name != klass.to_s
+      end
+
       # @return [Boolean] whether the source declares a class at all. A file
       #   that declares only modules is a mixin, whatever directory it sits in.
       def declares_class?(source)
