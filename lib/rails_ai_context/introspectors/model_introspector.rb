@@ -89,6 +89,10 @@ module RailsAiContext
                                                     table_name: resolve_table_name(class_name, candidates),
                                                     inherited_from: sti_bases(class_name, candidates),
                                                     sti: static_sti_info(class_name, sti_parents))
+        rescue => e
+          # What the booted tier does with a model that raises: the entry says
+          # so and the rest of the section still answers.
+          result[class_name] = { error: e.message }
         end
       end
 

@@ -86,6 +86,44 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(unresolved).to eq([ "Discard::Model" ])
   end
 
+  # A concern the walk cannot read costs its own declarations. It used to
+  # raise out of the walk, and the section-level rescue above it turned one
+  # unreadable file into an error for every model in the app.
+  it "names a concern whose file it cannot read" do
+    path = File.join(concern_dir, "publishable.rb")
+    File.write(path, "module Publishable\n  has_many :revisions\nend\n")
+    make_unreadable(path)
+
+    collected, unresolved = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations])
+
+    expect(unresolved).to eq([ "Publishable" ])
+    expect(collected).to eq({})
+  ensure
+    File.chmod(0o644, path) if path && File.exist?(path)
+  end
+
+  # Not only a permission bit: a path that stats but does not read bites the
+  # same way for a user who can read everything.
+  it "names a concern whose path is not a readable file" do
+    FileUtils.mkdir_p(File.join(concern_dir, "publishable.rb"))
+
+    collected, unresolved = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations])
+
+    expect(unresolved).to eq([ "Publishable" ])
+    expect(collected).to eq({})
+  end
+
+  it "keeps walking the concerns it can read" do
+    File.write(File.join(concern_dir, "readable.rb"), "module Readable\n  has_many :notes\nend\n")
+    FileUtils.mkdir_p(File.join(concern_dir, "blocked.rb"))
+    mixins = mixin("Blocked") + mixin("Readable")
+
+    collected, unresolved = described_class.collect(tmpdir, mixins, keys: %i[associations])
+
+    expect(unresolved).to eq([ "Blocked" ])
+    expect(collected[:associations].map { |a| a[:name] }).to eq([ :notes ])
+  end
+
   # A model tier walks the same concern once per model that includes it, and
   # AstCache caches the parse but not the listener dispatch.
   it "walks a concern file once per run when a cache is passed" do

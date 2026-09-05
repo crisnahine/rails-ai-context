@@ -39,12 +39,12 @@ module RailsAiContext
           next unless @seen.add?(name)
 
           path = ConcernPaths.find_file(@root, name, within: within, dirs: @dirs)
-          if path.nil? || File.size(path) > RailsAiContext.configuration.max_file_size
+          data = path && introspect(path)
+          if data.nil?
             @unresolved << name
             next
           end
 
-          data = introspect(path)
           @keys.each do |key|
             Array(data[key]).each { |entry| @collected[key] << tagged(entry, name) }
           end
@@ -55,10 +55,25 @@ module RailsAiContext
 
       private
 
+      # The cache carries a file the walk could not read as well, so an app
+      # where 100 models include one unreadable concern reads it once.
       def introspect(path)
-        return Introspectors::SourceIntrospector.call(path) if @cache.nil?
+        return read(path) if @cache.nil?
+        return @cache[path] if @cache.key?(path)
 
-        @cache[path] ||= Introspectors::SourceIntrospector.call(path)
+        @cache[path] = read(path)
+      end
+
+      # A concern too big or unreadable costs its own declarations, not the
+      # including class's whole entry. The size check stays in front of the
+      # rescue: max_file_size can be configured above AstCache::MAX_PARSE_SIZE,
+      # and the parse raises on its own limit.
+      def read(path)
+        return nil if File.size(path) > RailsAiContext.configuration.max_file_size
+
+        Introspectors::SourceIntrospector.call(path)
+      rescue StandardError
+        nil
       end
 
       def tagged(entry, concern_name)

@@ -433,6 +433,49 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "#static_call" do
+    # A concern the walk cannot read used to raise out of the section, so one
+    # unreadable file answered `error` for every model in the app.
+    it "keeps the other models when a concern cannot be read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            include Publishable
+            belongs_to :author
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "tag.rb"), "class Tag < ApplicationRecord\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns", "publishable.rb"))
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Post", "Tag")
+        expect(result["Post"][:associations].map { |a| a[:name] }).to eq([ "author" ])
+        expect(result["Post"][:concerns_unread]).to eq([ "Publishable" ])
+        expect(result["Tag"]).not_to have_key(:error)
+      end
+    end
+
+    # The booted tier answers `{ error: }` for the one model that raised and
+    # keeps the rest; the static tier lost the whole section.
+    it "costs one model, not the section, when reading its details raises" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "tag.rb"), "class Tag < ApplicationRecord\nend\n")
+        # The introspector resolves its paths, so /var and /private/var name
+        # the same file and only one of them matches a literal.
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:call).and_call_original
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:call)
+          .with(a_string_ending_with("app/models/post.rb")).and_raise(Errno::EACCES, "post.rb")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Post"][:error]).to include("Permission denied")
+        expect(result["Tag"][:confidence]).to eq(RailsAiContext::Confidence::STATIC)
+      end
+    end
+
     # The static builder passed the listener's raw records through where the
     # booted one merges the attribute-macro mappers, so every mapped key was
     # nil and five consumers rendered nothing.
