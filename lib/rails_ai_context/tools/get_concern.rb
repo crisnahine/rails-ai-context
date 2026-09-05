@@ -339,17 +339,15 @@ module RailsAiContext
         []
       end
 
+      # The listener knows every callback macro Rails has, so the section no
+      # longer spells its own list and drops the ones it forgot. One
+      # declaration resolves to one record per `on:` event, so the rendered
+      # lines are deduped back down to the lines the file holds.
       private_class_method def self.parse_concern_callbacks(source)
-        callbacks = []
-        callback_pattern = /\A\s*(before_validation|after_validation|before_save|after_save|before_create|after_create|before_update|after_update|before_destroy|after_destroy|around_save|around_create|around_update|around_destroy)\s+(.+)/
-
-        source.each_line do |line|
-          if (match = line.match(callback_pattern))
-            callbacks << "#{match[1]} #{match[2].strip}"
-          end
-        end
-
-        callbacks
+        Introspectors::SourceIntrospector
+          .walk_source(source, { callbacks: Introspectors::Listeners::CallbacksListener })[:callbacks]
+          .map { |cb| callback_declaration(cb) }
+          .uniq
       rescue => e
         $stderr.puts "[rails-ai-context] parse_concern_callbacks failed: #{e.message}" if ENV["DEBUG"]
         []

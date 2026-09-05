@@ -401,6 +401,43 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("before_save")
         expect(text).to include("after_create")
       end
+
+      # The section used to spell its own macro list, so a callback the
+      # Macros section named was missing from the Callbacks section.
+      it "names every callback the macros section names" do
+        File.write(File.join(model_concerns_dir, "rate_limitable.rb"), <<~RUBY)
+          module RateLimitable
+            extend ActiveSupport::Concern
+
+            included do
+              before_save :normalize
+              after_commit :announce, on: :create
+              after_rollback :undo
+              after_touch :bust
+              after_initialize :seed
+              after_find :log
+              after_create_commit :ping
+              around_create Some::CallbackObject
+              after_update do
+                bump!
+              end
+            end
+          end
+        RUBY
+
+        text = described_class.call(name: "RateLimitable").content.first[:text]
+        callbacks = text.split("## Callbacks").last
+
+        expect(callbacks).to include("before_save :normalize")
+        expect(callbacks).to include("after_commit :announce, on: :create")
+        expect(callbacks).to include("after_rollback :undo")
+        expect(callbacks).to include("after_touch :bust")
+        expect(callbacks).to include("after_initialize :seed")
+        expect(callbacks).to include("after_find :log")
+        expect(callbacks).to include("after_create_commit :ping")
+        expect(callbacks).to include("around_create Some::CallbackObject")
+        expect(callbacks).to include("after_update do")
+      end
     end
 
     context "with concerns outside app/models and app/controllers" do

@@ -131,6 +131,16 @@ module RailsAiContext
             .sub(%r{\A.*app/models/}, "").sub(/\.rb\z/, "")
         end
 
+        # The example name ships inside a file the user pastes, so it names a
+        # block as a block instead of printing this gem's own marker.
+        def callback_example_subject(target)
+          if target.to_s == RailsAiContext::Introspectors::Listeners::CallbacksListener::INLINE_BLOCK
+            "runs its inline block"
+          else
+            "calls #{callback_target(target.to_s)}"
+          end
+        end
+
         def generate_rspec_model(name, data, patterns, tests_data)
           # The spec mirrors the model's own path, and underscoring the name
           # does not reproduce it: OAuthClientConfig is oauth_client_config.rb.
@@ -254,7 +264,7 @@ module RailsAiContext
             lines << "  describe \"callbacks\" do"
             callbacks.each do |type, methods|
               Array(methods).each do |m|
-                lines << "    it \"#{type} calls #{m}\" do"
+                lines << "    it \"#{type} #{callback_example_subject(m)}\" do"
                 lines << "      # TODO: verify callback behavior"
                 lines << "    end"
               end

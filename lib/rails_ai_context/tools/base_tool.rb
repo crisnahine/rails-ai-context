@@ -396,7 +396,7 @@ module RailsAiContext
         def unavailable_note(section_data)
           return nil unless section_data.is_a?(Hash) && section_data[:unavailable]
 
-          "[UNAVAILABLE: #{section_data[:unavailable]}]"
+          Confidence.unavailable(section_data[:unavailable])
         end
 
         # A key the introspector named as unanswered has no finding behind it,
@@ -406,7 +406,7 @@ module RailsAiContext
         end
 
         def unavailable_text
-          Confidence.unavailable(Introspectors::StaticTier.unavailable_reason)
+          unavailable_note(unavailable: Introspectors::StaticTier.unavailable_reason)
         end
 
         # API-only apps legitimately have no views, partials, Stimulus, or
@@ -579,6 +579,28 @@ module RailsAiContext
 
         def method_name?(method)
           method.to_s.match?(/\A\w+[?!=]?\z/)
+        end
+
+        # One callback record rendered as the line the file declares. The
+        # declared macro, not the resolved type: `after_commit_on_create` is
+        # a key this gem synthesizes, not something the source says.
+        def callback_declaration(callback)
+          name = callback[:name] || callback[:type]
+          "#{name} #{callback_target(callback[:method].to_s)}#{callback_options_tail(callback[:options])}"
+        end
+
+        # Without the tail, four `after_commit` lines that differ only in
+        # `on:` read as the same declaration four times.
+        def callback_options_tail(options)
+          return "" unless options.is_a?(Hash) && options.any?
+
+          ", " + options.map { |key, value| "#{key}: #{callback_option_value(value)}" }.join(", ")
+        end
+
+        # A value the walk could not resolve is a marker, not a string the
+        # app wrote, so it is printed bare the way every other marker is.
+        def callback_option_value(value)
+          value == RailsAiContext::Confidence::INFERRED ? value : value.inspect
         end
 
         # What the session record should remember about this call. SafeCall

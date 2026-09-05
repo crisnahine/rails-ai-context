@@ -47,6 +47,31 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).to include(".active")
     end
 
+    # The marker is this gem's word for "a block lives here", not something
+    # the user can paste into an example name.
+    it "names a block callback as a block rather than by the marker" do
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "rspec", factories: { count: 1 }, factory_names: {} },
+        models: {
+          "Status" => {
+            associations: [], validations: [], scopes: [], enums: {},
+            callbacks: {
+              "around_create" => %w[Mastodon::Snowflake::Callbacks],
+              "after_create" => [ "[inline_block]" ],
+              "before_save" => %w[normalize]
+            }
+          }
+        }
+      })
+
+      text = described_class.call(model: "Status").content.first[:text]
+
+      expect(text).to include(%(it "around_create calls Mastodon::Snowflake::Callbacks" do))
+      expect(text).to include(%(it "after_create runs its inline block" do))
+      expect(text).to include(%(it "before_save calls :normalize" do))
+      expect(text).not_to include("[inline_block]")
+    end
+
     it "generates minitest-style output when framework is minitest" do
       allow(described_class).to receive(:cached_context).and_return({
         tests: { framework: "minitest" },
