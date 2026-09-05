@@ -151,6 +151,25 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    # The payload-less listing reads the same app/views directory, so its
+    # heading has to reconcile against the same files.
+    context "when the payload carries no views section" do
+      before { allow(described_class).to receive(:cached_context).and_return({}) }
+
+      it "counts layouts and partials in the heading it reads off disk" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to match(/# Views \(\d+ templates?, \d+ partials?, \d+ layouts?\)/)
+      end
+
+      it "leaves layouts out of the heading when the listing is one controller" do
+        text = described_class.call(controller: "posts", detail: "summary").content.first[:text]
+
+        expect(text).to match(/# Views \(\d+ templates?, \d+ partials?\)/)
+        expect(text).not_to include("layout)")
+      end
+    end
+
     context "when the app is API-only" do
       before do
         allow(described_class).to receive(:cached_context).and_return(

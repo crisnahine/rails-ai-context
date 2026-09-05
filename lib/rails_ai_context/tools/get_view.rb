@@ -437,22 +437,23 @@ module RailsAiContext
         end
 
         # List views from disk
-        templates = Dir.glob(File.join(views_dir, "**", "*"))
-          .reject { |f| File.directory?(f) || File.basename(f).start_with?("_") || f.include?("/layouts/") }
+        files = Dir.glob(File.join(views_dir, "**", "*"))
+          .reject { |f| File.directory?(f) || f.include?("/layouts/") }
           .map { |f| f.sub("#{views_dir}/", "") }
           .sort
 
         if controller
           ctrl_lower = RailsAiContext::Payload.controller_route_key(cached_context, controller)
           ctrl_lower_alt = controller.downcase.delete_suffix("controller")
-          templates = templates.select { |t|
+          files = files.select { |t|
             t_down = t.downcase
             t_down.start_with?(ctrl_lower + "/") || t_down.start_with?(ctrl_lower_alt + "/")
           }
         end
 
-        lines = [ "# Views (#{count_phrase(templates.size, "template")})", "" ]
-        templates.each { |t| lines << "- #{t}" }
+        templates, partials = files.partition { |f| !File.basename(f).start_with?("_") }
+        lines = views_header_lines(templates, partials, controller ? [] : layout_files)
+        files.each { |f| lines << "- #{f}" }
         text_response(lines.join("\n"))
       end
     end

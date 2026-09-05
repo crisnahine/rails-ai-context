@@ -236,6 +236,16 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(second_tables.keys).not_to eq(first_tables.keys)
     end
 
+    # A page past the end is still a JSON request. It answered prose, which
+    # no caller parsing the body can read.
+    %w[summary standard full].each do |level|
+      it "answers an empty #{level} page as JSON" do
+        result = described_class.call(detail: level, format: "json", offset: 9999)
+
+        expect(JSON.parse(result.content.first[:text])["tables"]).to eq({})
+      end
+    end
+
     # The markdown banner rides on every static-tier response; appended to a
     # JSON body it stops the body parsing, so it moves inside the document.
     it "still parses in the static tier, with the tier note inside the document" do
