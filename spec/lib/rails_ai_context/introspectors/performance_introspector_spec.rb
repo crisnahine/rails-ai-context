@@ -141,6 +141,28 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         )
       end
 
+      # The suggestion has to name the class the app can look up, or it sends
+      # the reader to a constant a namespaced app does not have.
+      it "names the resolved belongs_to side by its qualified constant" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
+          File.write(File.join(dir, "app", "models", "billing", "invoice.rb"),
+                     "module Billing\n  class Invoice < ApplicationRecord\n    has_many :tokens\n  end\nend\n")
+          File.write(File.join(dir, "app", "models", "billing", "token.rb"),
+                     "module Billing\n  class Token < ApplicationRecord\n    belongs_to :invoice\n  end\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"),
+                     "create_table \"invoices\" do |t|\n  t.integer \"tokens_count\"\nend\n")
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+
+          expect(missing).to contain_exactly(
+            a_hash_including(model: "Billing::Invoice",
+                             suggestion: "Add counter_cache: true to belongs_to :invoice in Billing::Token")
+          )
+        end
+      end
+
       it "finds the declared counter cache on a child nested in the same module body" do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))

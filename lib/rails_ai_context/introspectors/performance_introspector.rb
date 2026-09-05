@@ -291,7 +291,8 @@ module RailsAiContext
                 association: assoc_name,
                 column: count_col,
                 suggestion: "Add counter_cache: true to belongs_to " \
-                            ":#{model[:name].demodulize.underscore} in #{assoc_name.classify}"
+                            ":#{model[:name].demodulize.underscore} in " \
+                            "#{belongs_to_model&.dig(:name) || assoc_name.classify}"
               }
             end
           end
