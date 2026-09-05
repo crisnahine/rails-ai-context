@@ -101,8 +101,11 @@ module RailsAiContext
             end
 
             @replaying.push(key)
-            replay_dispatcher.dispatch(block)
-            @replaying.pop
+            begin
+              replay_dispatcher.dispatch(block)
+            ensure
+              @replaying.pop
+            end
           end
         end
 

@@ -231,6 +231,32 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     expect(results.count { |r| r[:type] == :dynamic }).to eq(1)
   end
 
+  it "leaves no concern on the recursion guard when a replay raises" do
+    listener = described_class.new
+    raise_next_replay = true
+    allow_any_instance_of(Prism::Dispatcher).to receive(:dispatch).and_wrap_original do |original, *args|
+      if raise_next_replay && caller.any? { |line| line.include?("replay_concerns") }
+        raise_next_replay = false
+        raise "replay failed"
+      end
+      original.call(*args)
+    end
+
+    first = Prism.parse('concern :commentable do
+      resources :comments, only: [:index]
+    end
+    resources :posts, only: [], concerns: :commentable').value
+    expect {
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(first)
+    }.to raise_error("replay failed")
+
+    second = Prism.parse("resources :photos, only: [], concerns: :commentable").value
+    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(second)
+
+    expect(listener.results.map { |r| r[:type] }).to eq([ :route ])
+    expect(listener.results.first[:path]).to end_with("/photos/:photo_id/comments")
+  end
+
   it "merges with_options defaults under each route's own options" do
     records = route_records('with_options to: "accounts#show" do
       get "/@:username", as: :short_account

@@ -79,6 +79,24 @@ RSpec.describe RailsAiContext::Doctor do
       expect(lines[index + 1]).to include("Fix: database_stats: Database not found: no_such_db")
       expect(lines[index + 1]).not_to include("stimulus")
     end
+
+    # The emoji icons are not one width, so indenting the Fix line by the
+    # icon above it put the rake report's Fix lines at three columns.
+    it "indents every Fix line to the same column under the emoji icons" do
+      result = {
+        checks: [
+          described_class::Check.new(name: "Schema", status: :fail, message: "missing", fix: "run db:migrate"),
+          described_class::Check.new(name: "Views", status: :warn, message: "none", fix: "add a view"),
+          described_class::Check.new(name: "Gems", status: :pass, message: "ok", fix: nil)
+        ]
+      }
+
+      lines = described_class.report_lines(result, icons: described_class::EMOJI_ICONS)
+      fixes = lines.grep(/Fix:/)
+
+      expect(fixes.size).to eq(2)
+      expect(fixes.map { |line| line.index("Fix:") }.uniq.size).to eq(1)
+    end
   end
 
   describe "#check_introspector_health" do
@@ -119,9 +137,15 @@ RSpec.describe RailsAiContext::Doctor do
 
     it "shows the first three errors and counts the rest" do
       only_introspectors(:gems, :routes, :schema, :controllers, :views)
-      failing = instance_double(RailsAiContext::Introspectors::GemIntrospector, call: { error: "boom" })
-      allow_any_instance_of(RailsAiContext::Introspector)
-        .to receive(:resolve_introspector).and_return(failing)
+      [
+        RailsAiContext::Introspectors::GemIntrospector,
+        RailsAiContext::Introspectors::RouteIntrospector,
+        RailsAiContext::Introspectors::SchemaIntrospector,
+        RailsAiContext::Introspectors::ControllerIntrospector,
+        RailsAiContext::Introspectors::ViewIntrospector
+      ].each do |klass|
+        allow_any_instance_of(klass).to receive(:call).and_raise(StandardError, "boom")
+      end
 
       expect(check.fix.scan("boom").size).to eq(3)
       expect(check.fix).to include("and 2 more introspectors")
