@@ -11,8 +11,8 @@ module RailsAiContext
 
       # ripgrep's own field separators, so the parse is exact rather than two
       # ambiguous regexes tried in order: a match line whose content reads
-      # `\t12\tsomething` used to parse as a context row and vanish from the
-      # match count. Neither character appears in a path or a line number.
+      # `\t12\tsomething` is a context row to the ambiguous one, and vanishes
+      # from the count. Neither character appears in a path or a line number.
       CONTEXT_FIELD_SEPARATOR = "\t"
       MATCH_FIELD_SEPARATOR = "\x1f"
 
@@ -525,8 +525,8 @@ module RailsAiContext
 
               # Route chain for controller callers
               route_hint = ""
-              # `match?` answers the question without setting the capture, so
-              # the name this looked routes up by was always nil.
+              # `match` and not `match?`: the capture is what the route lookup
+              # below reads, and `match?` sets none.
               controller_match = file.match(%r{app/controllers/(.+)_controller\.rb})
               if category == "Controller" && controller_match
                 route_actions = extract_controller_actions_from_matches(matches)

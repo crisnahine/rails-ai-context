@@ -753,14 +753,26 @@ module RailsAiContext
         located = Object.const_source_location(model.name)&.first
         return located if located && File.expand_path(located).start_with?("#{root}/")
 
-        # Every directory the app keeps models in, so a pack or engine model
-        # is read from its own file too.
-        relative = "#{model.name.underscore}.rb"
-        owned = PathResolver.model_dirs(root).map { |dir| File.join(dir, relative) }
-                            .find { |path| File.exist?(path) }
-        owned || located
+        declared_source_path(model.name) || located
       rescue NameError, TypeError
         nil
+      end
+
+      # The file that declares the constant, from the walk that read the
+      # files. A name does not round-trip to a path - an app inflection only
+      # changes case, so `ActivityPub::Activity` lives in activitypub/ - and a
+      # model in a pack or an engine is not under app/models at all.
+      #
+      # Built on the first miss and held for the run: a booted answer reaches
+      # it only for a model whose constant Ruby cannot place inside the app.
+      def declared_source_path(class_name)
+        # Joined onto the app's own spelling of its root, not the realpath the
+        # scan walked: the answer is relativized against that spelling, and on
+        # a symlinked root (macOS /var) the two do not match.
+        @declared_paths ||= static_candidates.each_with_object({}) do |(name, candidate), map|
+          map[name] = candidate[:file] ? File.join(app.root.to_s, candidate[:file]) : candidate[:path]
+        end
+        @declared_paths[class_name.to_s]
       end
 
       DEVISE_CLASS_METHOD_PATTERNS = %w[

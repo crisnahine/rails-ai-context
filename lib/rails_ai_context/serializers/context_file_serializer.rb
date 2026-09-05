@@ -31,6 +31,21 @@ module RailsAiContext
 
       ALL_FORMATS = (FORMAT_MAP.keys + SPLIT_ONLY_FORMATS).freeze
 
+      # Which serializer writes each format's root file, and which writes its
+      # rules directory. Tables rather than two case statements, so a spec
+      # asking "does every generated file carry X" reads the same list the
+      # generator runs. Codex reuses OpenCode's files.
+      ROOT_SERIALIZERS = {
+        json: JsonSerializer, claude: ClaudeSerializer, opencode: OpencodeSerializer,
+        codex: OpencodeSerializer, copilot: CopilotSerializer
+      }.freeze
+
+      RULES_SERIALIZERS = {
+        claude: ClaudeRulesSerializer, cursor: CursorRulesSerializer,
+        opencode: OpencodeRulesSerializer, codex: OpencodeRulesSerializer,
+        copilot: CopilotInstructionsSerializer
+      }.freeze
+
       # Section markers live exclusively on SectionMarkerWriter - anyone
       # who needs them references SectionMarkerWriter::BEGIN_MARKER /
       # END_MARKER directly. (Re-exports were considered for back-compat
@@ -114,13 +129,7 @@ module RailsAiContext
       private
 
       def serialize(fmt)
-        case fmt
-        when :json             then JsonSerializer.new(context).call
-        when :claude           then ClaudeSerializer.new(context).call
-        when :opencode, :codex then OpencodeSerializer.new(context).call
-        when :copilot          then CopilotSerializer.new(context).call
-        else MarkdownSerializer.new(context).call
-        end
+        (ROOT_SERIALIZERS[fmt] || MarkdownSerializer).new(context).call
       end
 
       # JSON and other formats that don't support HTML comments
@@ -158,13 +167,7 @@ module RailsAiContext
       end
 
       def generate_split_rules(formats, output_dir, written, skipped, not_applicable)
-        serializers = []
-        serializers << ClaudeRulesSerializer if formats.include?(:claude)
-        serializers << CursorRulesSerializer if formats.include?(:cursor)
-        serializers << OpencodeRulesSerializer if formats.include?(:opencode)
-        serializers << CopilotInstructionsSerializer if formats.include?(:copilot)
-        # Codex reuses OpenCode's directory-level AGENTS.md split rules
-        serializers << OpencodeRulesSerializer if formats.include?(:codex) && !formats.include?(:opencode)
+        serializers = formats.filter_map { |fmt| RULES_SERIALIZERS[fmt] }.uniq
 
         serializers.each do |serializer|
           result = serializer.new(context).call(output_dir)

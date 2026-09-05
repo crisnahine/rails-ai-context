@@ -3,10 +3,9 @@
 module RailsAiContext
   module Serializers
     # The facts every context surface states about a Rails app, each rendered
-    # in one place. Five serializers and three tools carried their own copy
-    # of these lines; the copies drifted, and a warnings section that only
-    # two of four generated files rendered made a half-failed run look clean
-    # in the other two.
+    # in one place: five serializers and three tools state them, and a section
+    # one surface renders while another drops makes a half-failed run look
+    # clean on the surface that dropped it.
     module SectionFacts
       module_function
 

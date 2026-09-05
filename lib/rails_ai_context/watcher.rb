@@ -39,8 +39,8 @@ module RailsAiContext
       listener = @watch.start { |_paths, _reloaded| regenerate }
       return unless listener
 
-      # After the listener, not before: printed first the line announced a
-      # watch that a missing `listen` or an empty watch list never started.
+      # After the listener, not before: the banner is only true once a watch
+      # is running, and a missing `listen` or an empty watch list starts none.
       $stderr.puts "[rails-ai-context] Watching for changes..."
       $stderr.puts "[rails-ai-context] Directories: #{dirs.map { |d| d.sub("#{root}/", '') }.join(', ')}"
 

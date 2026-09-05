@@ -30,7 +30,8 @@ module RailsAiContext
     ].freeze
 
     # Dates and times because a hand-added `generated_at:` is ordinary in a
-    # config file, and refusing to load one used to cost the user the whole file.
+    # config file, and a class outside this list costs the whole file, not the
+    # one key.
     PERMITTED_YAML_CLASSES = [ Symbol, Date, Time ].freeze
 
     # Not config, and not a typo either: an annotation the installer round-trips.
@@ -49,8 +50,8 @@ module RailsAiContext
       config = RailsAiContext.configuration
 
       data.each do |key, value|
-        # A permitted Date or Time key has no to_sym, and the NoMethodError
-        # escaped this method into app boot.
+        # A permitted Date or Time key has no `to_sym`, and a NoMethodError
+        # here escapes into app boot.
         key_sym = key.to_s.to_sym
         next if IGNORED_YAML_KEYS.include?(key_sym)
         if RUBY_ONLY_KEYS.include?(key_sym)
@@ -59,7 +60,7 @@ module RailsAiContext
           next
         end
         unless YAML_KEYS.include?(key_sym)
-          # A dropped key used to look exactly like an applied one.
+          # Without this line a dropped key reads exactly like an applied one.
           nearest = nearest_yaml_key(key_sym)
           hint = nearest ? " (did you mean `#{nearest}`?)" : ""
           $stderr.puts "[rails-ai-context] WARNING: #{path}: unknown key `#{key}`#{hint}. Ignored."

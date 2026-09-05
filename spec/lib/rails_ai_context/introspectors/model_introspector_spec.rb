@@ -1477,6 +1477,29 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # An app inflection only changes case, so the name does not round-trip to
+    # the path: `ActivityPub::Activity` underscores to activity_pub/activity.rb
+    # and the file is at activitypub/activity.rb. The walk that read the files
+    # knows which one declares the constant.
+    it "reads a model whose namespace the app inflected" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "activitypub"))
+        File.write(File.join(dir, "app", "models", "activitypub", "activity.rb"), <<~RUBY)
+          module ActivityPub
+            class Activity < ApplicationRecord
+              scope :recent, -> { all }
+            end
+          end
+        RUBY
+        cref = File.join(Gem.path.first.to_s, "gems", "zeitwerk-2.8.3", "lib", "zeitwerk", "cref.rb")
+
+        details = details_for(dir, "ActivityPub::Activity", [ cref, 47 ])
+
+        expect(details[:file]).to eq("app/models/activitypub/activity.rb")
+        expect(details[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
+      end
+    end
+
     # An engine keeps its models under engines/<name>/app/models, and a
     # configured extra path is a model directory the same way.
     it "reads an engine model's own file" do

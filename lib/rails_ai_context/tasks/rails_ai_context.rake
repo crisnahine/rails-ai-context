@@ -171,15 +171,13 @@ namespace :ai do
     runner = RailsAiContext::CLI::ToolRunner.new(name, params, json_mode: json_mode)
     puts runner.run
     exit 1 if runner.error
-  rescue RailsAiContext::CLI::ToolRunner::ToolNotFoundError => e
-    $stderr.puts "Error: #{e.message}"
-    exit 1
-  rescue RailsAiContext::CLI::ToolRunner::InvalidArgumentError => e
-    $stderr.puts "Error: #{e.message}"
-    exit 3
+  # One status for a question that went unanswered, whichever surface asked
+  # it: docs/CLI.md states it as the rule and the binary has always answered
+  # it. This task answered 3 for a bad argument and 2 for anything else, so a
+  # wrapper keying on the status got two answers to one typo.
   rescue => e
     $stderr.puts "Error: #{e.message}"
-    exit 2
+    exit 1
   end
 
   desc "Generate AI context files for configured AI tools (prompts on first run)"

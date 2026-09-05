@@ -41,16 +41,14 @@ module RailsAiContext
 
       skips = own_skips(ctx, controller_name, info, action, root: root, source: source)
       skipped = absolute_names(skips, action)
-      # A record the walk marked as a skip states what does not run, so it is
-      # never a filter, on the class that declared it or on a child.
+      # A skip record states what does not run, so it is never a filter.
       declared = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
       parent, dropped, inherited_conditions, declares = parent_filters(ctx, info[:parent_class], action, skipped,
                                                                        root: root, within: controller_name.to_s)
       conditions = merge_conditions(inherited_conditions, conditions_by_name(skips, action))
-      # The runtime tier's list is the whole chain, so an ancestor's skip has
-      # to be taken out of this class's list too. What this body declares
-      # itself survives an ancestor's skip: Rails re-adds a callback the class
-      # declares again. Its own skip binds it either way.
+      # The runtime tier's list is the whole chain, so an ancestor's skip
+      # applies here too - except to what this body declares again, which
+      # Rails re-adds.
       inherited_skips = dropped - skipped.map(&:to_s)
       applicable = declared.select { |f| applies?(f, action) }
         .reject { |f| skipped.include?(f[:name].to_s) }
@@ -70,12 +68,9 @@ module RailsAiContext
         skipped: skipped }
     end
 
-    # Nothing can be skipped that the chain does not run, so a conditional
-    # skip of a name no ancestor the payload carries declares is still
-    # evidence the filter is there. Concerns are the usual reason the walk
-    # cannot see the declaration. `known` is every name the chain does
-    # declare: a filter the walk saw and then took out for this action must
-    # not come back as one that runs.
+    # A skip of a name no ancestor in the payload declares is the only
+    # evidence the filter is in the chain, usually because a concern declared
+    # it. `known` keeps a filter the walk saw and took out from coming back.
     def unplaced_conditional_skips(placed, conditions, action, known = Set.new)
       names = placed.map { |f| f[:name].to_s }.to_set | known
       conditions.reject { |name, _| names.include?(name) }.map do |name, skip|
@@ -83,18 +78,14 @@ module RailsAiContext
       end
     end
 
-    # A skip carrying if:/unless: takes the filter out on some requests and
-    # not on others, so it never removes the filter from the chain. The
-    # filter keeps its place and carries the condition, which is the only
-    # honest answer to "does this run".
+    # A conditional skip never removes the filter; the record carries the
+    # condition. See CONTEXT.md, "Filter chain".
     def conditional?(skip, action)
       !skip[:if].nil? || !skip[:unless].nil? || partial?(skip, action)
     end
 
-    # A skip naming only:/except: takes the filter out on those actions and
-    # leaves it running on the rest, so an answer covering every action keeps
-    # it too. A per-action answer has already put the skip through `applies?`,
-    # so there the skip is absolute.
+    # Partial only where the answer covers every action: a per-action answer
+    # has already put the skip through `applies?`.
     def partial?(skip, action)
       action.nil? && (Array(skip[:only]).any? || Array(skip[:except]).any?)
     end
@@ -108,9 +99,8 @@ module RailsAiContext
         .to_h { |skip| [ skip[:name], skip ] }
     end
 
-    # An evidence record says only that the filter is in the chain, so a real
-    # condition on the same name always outranks it, however close the class
-    # carrying the evidence is.
+    # A real condition always outranks an evidence record, however close the
+    # class carrying the evidence.
     def merge_conditions(weaker, stronger)
       weaker.merge(stronger) { |_name, weak, strong| strong[:evidence] ? weak : strong }
     end
@@ -309,9 +299,9 @@ module RailsAiContext
     end
 
     # ApplicationController is deliberately not in the listing: it would sit in
-    # every chain. The walk used to end there, so a filter every controller
-    # runs was missing from the static answer while the generated overview read
-    # the same file and printed it. Only a name the app has a file for is read,
+    # every chain, and a walk that ended there would miss a filter every
+    # controller runs while the generated overview, reading the same file,
+    # printed it. Only a name the app has a file for is read,
     # so a gem-owned parent, or one an inflection renames, still ends the walk.
     def base_controller_source(name, root)
       root ||= default_root

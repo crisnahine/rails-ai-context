@@ -59,8 +59,8 @@ class RailsAiContextCLI < Thor
     end
 
     # Thor reads a leading switch as "no command given" and falls back to
-    # `help`, so `rails-ai-context --app-path /x doctor` printed usage and
-    # exited 0 having checked nothing. Move every switch this binary declares
+    # `help`, which answers `rails-ai-context --app-path /x doctor` with usage
+    # and exit 0. Move every switch this binary declares
     # (global or per-command) behind the command name; anything else is left
     # where it is, so `--help`, `--version` and an unknown switch keep their
     # own answers.
@@ -520,7 +520,7 @@ class RailsAiContextCLI < Thor
       # process cwd is the app root, so honor --app-path by moving there.
       Dir.chdir(app_root) if app_path_opt
       # Apps read RAILS_ENV in config/boot.rb, before anything the gem can
-      # rescue; leaving it unset made the documented default unreachable.
+      # rescue, so the default is only reachable if it is set here.
       # The chain is Rails' own (`Rails.env`): RAILS_ENV, then RACK_ENV, then
       # development, with an empty value read as unset.
       ambient = [ environment_opt, ENV["RAILS_ENV"], ENV["RACK_ENV"] ]

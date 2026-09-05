@@ -30,8 +30,8 @@ module RailsAiContext
       listener = @watch.start(debounce: debounce) { |paths, reloaded| react(paths, reloaded) }
       return unless listener
 
-      # After the listener, not before: printed first these lines announced a
-      # watch that a missing `listen` never started.
+      # After the listener, not before: these lines are only true once a
+      # watch is running, and a missing `listen` starts none.
       $stderr.puts "[rails-ai-context] Live reload enabled (debounce: #{debounce}s)"
       $stderr.puts "[rails-ai-context] Watching: #{dirs.map { |d| d.sub("#{app.root}/", "") }.join(", ")}"
 

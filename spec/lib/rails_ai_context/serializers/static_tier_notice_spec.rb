@@ -9,15 +9,11 @@ RSpec.describe "The static-tier notice in generated files" do
   let(:static_context) { IntrospectedFixture.context.merge(tier: "static") }
   let(:booted_context) { IntrospectedFixture.context.merge(tier: "booted") }
 
-  # Assigned inside a describe block, a bare constant lands on Object and is
-  # visible to every later example in the run. A local carries the same list
-  # and goes away with the file.
-  root_serializers = [
-    RailsAiContext::Serializers::ClaudeSerializer,
-    RailsAiContext::Serializers::CopilotSerializer,
-    RailsAiContext::Serializers::OpencodeSerializer,
-    RailsAiContext::Serializers::MarkdownSerializer
-  ].freeze
+  # Read off the tables the generator dispatches through, so a serializer
+  # added there joins this contract without being typed in here. A local, not
+  # a constant: one assigned inside a describe block lands on Object.
+  root_serializers = (RailsAiContext::Serializers::ContextFileSerializer::ROOT_SERIALIZERS.values.uniq -
+    [ RailsAiContext::Serializers::JsonSerializer ]) + [ RailsAiContext::Serializers::MarkdownSerializer ]
 
   root_serializers.each do |klass|
     it "#{klass.name.split('::').last} says the answer is static, near the top" do
@@ -41,11 +37,12 @@ RSpec.describe "The static-tier notice in generated files" do
     RailsAiContext.configuration.context_mode = :compact
   end
 
-  [
-    RailsAiContext::Serializers::ClaudeRulesSerializer,
-    RailsAiContext::Serializers::CursorRulesSerializer,
-    RailsAiContext::Serializers::CopilotInstructionsSerializer
-  ].each do |klass|
+  # OpenCode's rules serializer writes into app/models and app/controllers
+  # rather than a rules directory, so it is exercised on its own below.
+  rules_serializers = RailsAiContext::Serializers::ContextFileSerializer::RULES_SERIALIZERS.values.uniq -
+    [ RailsAiContext::Serializers::OpencodeRulesSerializer ]
+
+  rules_serializers.each do |klass|
     it "#{klass.name.split('::').last} marks the rules file it writes" do
       Dir.mktmpdir do |dir|
         result = klass.new(static_context).call(dir)
@@ -98,16 +95,29 @@ RSpec.describe "The static-tier notice in generated files" do
     end
   end
 
-  it "OpencodeRulesSerializer marks the split AGENTS.md files" do
+  it "OpencodeRulesSerializer marks every split AGENTS.md it writes" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "app", "models"))
       FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
 
-      RailsAiContext::Serializers::OpencodeRulesSerializer.new(static_context).call(dir)
+      result = RailsAiContext::Serializers::OpencodeRulesSerializer.new(static_context).call(dir)
 
-      expect(File.read(File.join(dir, "app", "models", "AGENTS.md")))
-        .to include(RailsAiContext::Confidence::STATIC)
+      expect(result[:written].size).to be > 1
+      result[:written].each do |path|
+        expect(File.read(path)).to include(RailsAiContext::Confidence::STATIC), "#{path} has no static notice"
+      end
     end
+  end
+
+  # The two lists above are derived from the generator's own tables; this is
+  # the guard that they still name every serializer it runs.
+  it "covers every serializer the generator dispatches to" do
+    dispatched = (RailsAiContext::Serializers::ContextFileSerializer::ROOT_SERIALIZERS.values +
+      RailsAiContext::Serializers::ContextFileSerializer::RULES_SERIALIZERS.values).uniq
+    covered = root_serializers + rules_serializers +
+      [ RailsAiContext::Serializers::JsonSerializer, RailsAiContext::Serializers::OpencodeRulesSerializer ]
+
+    expect(dispatched - covered).to be_empty
   end
 
   it "the JSON dump carries the tier as a key" do

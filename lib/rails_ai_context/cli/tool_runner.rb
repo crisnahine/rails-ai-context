@@ -269,10 +269,9 @@ module RailsAiContext
                 next
               end
 
-              # A value-taking flag with nothing after it used to become the
-              # Boolean true, which reached the tool as a type it never
-              # accepts and crashed there. An unknown flag still passes
-              # through, so the unknown-param message names it.
+              # A value-taking flag with nothing after it would reach the tool
+              # as the Boolean true, a type it never accepts. An unknown flag
+              # still passes through, so the unknown-param message names it.
               raise InvalidArgumentError, missing_value_message(key, prop) if prop[:type]
 
               result[key] = true
@@ -351,9 +350,9 @@ module RailsAiContext
       def coerce_value(raw, property_schema, key = nil)
         case property_schema[:type]
         when "integer"
-          # `--limit abc` used to become 0 and answer a question nobody
-          # asked. Record it instead, so validation can refuse it the way an
-          # out-of-enum value is refused.
+          # `--limit abc` is 0 through `to_i`, which answers a question
+          # nobody asked. Record it instead, so validation refuses it the way
+          # an out-of-enum value is refused.
           if raw.is_a?(Integer) || raw.to_s.strip.match?(/\A[-+]?\d+\z/)
             raw.to_i
           else
@@ -392,7 +391,7 @@ module RailsAiContext
 
         # A value the schema's type cannot hold is dropped with a warning, the
         # same treatment an out-of-enum value gets, so the tool applies its own
-        # default instead of the zero `to_i` used to invent.
+        # default rather than the zero `to_i` would invent.
         @out_of_type.each do |key, raw|
           prop = properties[key] || {}
           $stderr.puts "Warning: '#{raw}' is not a valid value for #{key}. Expected #{prop[:type]}. Using default."
