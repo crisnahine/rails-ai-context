@@ -4,9 +4,10 @@ module RailsAiContext
   module Tools
     class GetCallbacks < BaseTool
       tool_name "rails_get_callbacks"
-      description "Get ActiveRecord model callbacks in execution order: before/after/around for validation, save, create, update, destroy. " \
+      description "Get ActiveRecord model callbacks grouped by type, in Rails event order: before/after/around for validation, save, create, update, destroy. " \
         "Use when: understanding side effects, debugging callback chains, or checking what happens on save/create/destroy. " \
-        "Specify model:\"User\" for one model's callbacks in execution order. detail:\"full\" includes callback method source code."
+        "Specify model:\"User\" for one model's callbacks. detail:\"full\" includes callback method source code. " \
+        "The list is what the model file and its concerns declare, and within one type the order is declaration order."
 
       CALLBACK_EXECUTION_ORDER = %w[
         before_validation
@@ -43,7 +44,7 @@ module RailsAiContext
           detail: {
             type: "string",
             enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: model names + callback counts. standard: callbacks in execution order (default). full: callbacks with method source code."
+            description: "Detail level. summary: model names + callback counts. standard: callbacks by type in Rails event order (default). full: callbacks with method source code."
           }
         }
       )
@@ -52,14 +53,14 @@ module RailsAiContext
         order: 13,
         mcp: "rails_get_callbacks(model:\"X\")",
         cli_args: "model=X",
-        summary: "Callbacks in Rails execution order with source"
+        summary: "Callbacks by type in Rails event order, with source"
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(model: nil, detail: "standard", server_context: nil)
         fetch_section(:models, subject: "Model introspection") do |models|
-          # Specific model - show callbacks in execution order
+          # Specific model - show callbacks by type
           if model
             key = fuzzy_find_key(models.keys, model) || model
             data = models[key]
@@ -85,12 +86,12 @@ module RailsAiContext
 
         lines = [ "# #{name} - Callbacks", "" ]
 
-        # Organize callbacks in execution order
+        # Organize callbacks by type, in Rails event order
         ordered = order_callbacks(callbacks)
 
         if RailsAiContext::DetailLevel.full?(detail)
           # Show callback source code
-          lines << "_Callbacks shown in execution order with source code:_"
+          lines << "_Callbacks by type, in Rails event order, with source code:_"
           lines << ""
 
           ordered.each do |type, methods|
@@ -109,8 +110,8 @@ module RailsAiContext
             end
           end
         else
-          # Standard: show callbacks in execution order
-          lines << "_Callbacks in execution order:_"
+          # Standard: show callbacks by type
+          lines << "_Callbacks by type, in Rails event order:_"
           lines << ""
 
           ordered.each do |type, methods|
@@ -158,7 +159,7 @@ module RailsAiContext
             types = data[:callbacks].keys.join(", ")
             lines << "- **#{name}** - #{count_phrase(total, "callback")} (#{types})"
           end
-          lines << "" << "_Use `model:\"Name\"` for callbacks in execution order._"
+          lines << "" << "_Use `model:\"Name\"` for callbacks by type._"
 
         when "standard"
           models_with_callbacks.sort_by { |_name, data| -(data[:callbacks]&.values&.flatten&.size || 0) }.each do |name, data|

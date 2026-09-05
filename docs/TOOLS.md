@@ -163,9 +163,11 @@ Concerns as `[UNAVAILABLE]` rather than dropped.
 
 ### `rails_get_callbacks`
 
-All callbacks in Rails execution order with source code. The execution order
-covers concern-declared callbacks too, and the "From Concerns" section says
-which concern declared each one.
+Callbacks grouped by type, in Rails event order, with source code. The list
+covers concern-declared callbacks too, with the body read from the concern
+file, and the "From Concerns" section says which concern declared each one.
+Within one type the order is declaration order (the model file first, then
+its concerns), not the order Rails registered them in.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
