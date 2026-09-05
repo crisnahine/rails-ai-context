@@ -16,7 +16,7 @@ module RailsAiContext
     attr_reader :app
 
     def initialize(app = nil)
-      @app = app || Rails.application
+      @app = app || RailsAiContext.default_app
       @watch = ChangeWatch.new(@app)
     end
 

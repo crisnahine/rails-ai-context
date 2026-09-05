@@ -115,6 +115,115 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     end
   end
 
+  # Thor reads a leading switch as "no command given" and falls back to
+  # `help`, so a CI job wrapping `rails-ai-context --app-path <dir> doctor`
+  # went green having checked nothing.
+  describe "a global option typed before the command" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    it "runs the command instead of printing usage" do
+      Dir.mktmpdir do |dir|
+        out = `ruby -I #{lib} #{exe} --app-path #{dir} doctor 2>&1`
+
+        expect($?.exitstatus).to eq(1), out
+        expect(out).to include("No Rails app found in ")
+        expect(out).to include(File.basename(dir))
+        expect(out).not_to include("Usage:\n  rails-ai-context doctor")
+      end
+    end
+
+    it "carries the value through to the command" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        out = `ruby -I #{lib} #{exe} --app-path #{dir} tool model_details --no-boot 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("Widget")
+      end
+    end
+
+    it "accepts the equals spelling" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        out = `ruby -I #{lib} #{exe} --app-path=#{dir} tool model_details --no-boot 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("Widget")
+      end
+    end
+
+    # `--no-boot` is declared per command rather than globally, and typing it
+    # first is the same mistake with the same silent answer.
+    it "moves a command's own switch behind the command too" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        out = `ruby -I #{lib} #{exe} --app-path #{dir} --no-boot tool model_details 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("Widget")
+      end
+    end
+
+    it "still answers --version and --help" do
+      version = `ruby -I #{lib} #{exe} --version 2>&1`
+      expect($?.exitstatus).to eq(0), version
+      expect(version).to include("rails-ai-context v")
+
+      help = `ruby -I #{lib} #{exe} --help 2>&1`
+      expect($?.exitstatus).to eq(0), help
+      expect(help).to include("rails-ai-context doctor")
+    end
+
+    it "still refuses a leading unknown switch" do
+      out = `ruby -I #{lib} #{exe} --bogus doctor 2>&1`
+      expect($?.exitstatus).to eq(1), out
+    end
+  end
+
+  # Nine frames of backtrace where a one-line refusal belongs. `tool` already
+  # gave one; doctor, inspect and watch did not.
+  describe "an --app-path that does not exist" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    [ "doctor", "inspect", "watch", "tool schema" ].each do |command|
+      it "refuses in one line from #{command}" do
+        out = `ruby -I #{lib} #{exe} #{command} --app-path /nonexistent-app-path 2>&1`
+
+        expect($?.exitstatus).to eq(1), out
+        expect(out).to include("/nonexistent-app-path")
+        expect(out).not_to include("(NameError)")
+        expect(out).not_to match(/^\s+from /)
+      end
+    end
+  end
+
+  # docs/CLI.md lists watch among the commands that take --no-boot, and it
+  # died with an uninitialized-constant backtrace.
+  it "watches a source-only tree with --no-boot" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+      # `listen` is not in this bundle, so the watcher reaches its own refusal
+      # for the missing gem rather than running forever.
+      out = `ruby -I #{lib} #{exe} watch --no-boot --app-path #{dir} 2>&1`
+
+      expect(out).not_to include("uninitialized constant")
+      expect(out).to include("listen")
+    end
+  end
+
   it "documents the static-tier flags" do
     help = `ruby #{File.expand_path('../exe/rails-ai-context', __dir__)} help serve 2>&1`
     expect(help).to include("--no-boot")
