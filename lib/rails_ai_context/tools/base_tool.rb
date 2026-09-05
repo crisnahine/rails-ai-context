@@ -558,6 +558,19 @@ module RailsAiContext
           extract_method_source_from_string(source, method_name)
         end
 
+        # A callback target is a method name, an inline block, or a callback
+        # object. Only the first is a symbol, so only the first takes a colon.
+        def callback_target(method)
+          method = method.to_s
+          return "do" if method == RailsAiContext::Introspectors::Listeners::CallbacksListener::INLINE_BLOCK
+
+          method_name?(method) ? ":#{method}" : method
+        end
+
+        def method_name?(method)
+          method.to_s.match?(/\A\w+[?!=]?\z/)
+        end
+
         # What the session record should remember about this call. SafeCall
         # asks every tool, so no tool has to remember to record anything;
         # override to reshape a value that should not be kept verbatim.

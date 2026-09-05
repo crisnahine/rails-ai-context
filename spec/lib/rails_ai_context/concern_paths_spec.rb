@@ -93,4 +93,37 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(described_class.type_for("/srv/x/lib/concerns")).to eq("other")
     end
   end
+
+  describe ".find_file" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    # `resolve` sorts, so app/controllers/concerns won a shared basename and
+    # a model merged a controller concern's filters into its callbacks.
+    it "prefers the concerns directory belonging to the owner kind" do
+      %w[controllers models].each do |owner|
+        FileUtils.mkdir_p(File.join(tmpdir, "app", owner, "concerns"))
+        File.write(File.join(tmpdir, "app", owner, "concerns", "searchable.rb"), "module Searchable\nend\n")
+      end
+
+      expect(described_class.find_file(tmpdir, "Searchable", prefer: "model"))
+        .to eq(File.join(tmpdir, "app", "models", "concerns", "searchable.rb"))
+      expect(described_class.find_file(tmpdir, "Searchable", prefer: "controller"))
+        .to eq(File.join(tmpdir, "app", "controllers", "concerns", "searchable.rb"))
+    end
+
+    # `include DebugConcern` inside Fasp::Provider resolves at runtime to
+    # Fasp::Provider::DebugConcern; underscoring the literal spelling finds
+    # nothing.
+    it "walks the enclosing namespaces outward" do
+      dir = File.join(tmpdir, "app", "models", "concerns", "fasp", "provider")
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "debug_concern.rb"), "module DebugConcern\nend\n")
+
+      expect(described_class.find_file(tmpdir, "DebugConcern", within: "Fasp::Provider"))
+        .to eq(File.join(dir, "debug_concern.rb"))
+      expect(described_class.find_file(tmpdir, "DebugConcern")).to be_nil
+    end
+  end
 end

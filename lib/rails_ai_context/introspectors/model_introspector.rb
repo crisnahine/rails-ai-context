@@ -277,7 +277,11 @@ module RailsAiContext
 
       def extract_model_details(model)
         # AST-based source introspection (replaces all regex parsing)
-        source_data = introspect_source(model)
+        own_source = introspect_source(model)
+        # Reflection covers associations, validations and enums, but scopes,
+        # macros and custom validates are read off the file - so the concerns
+        # are merged here too, or the static tier out-answers this one.
+        source_data, = merge_concern_macros(own_source, model.name)
 
         details = {
           table_name:       model.table_name,
@@ -288,6 +292,7 @@ module RailsAiContext
           enums:            extract_enums(model),
           callbacks:        extract_callbacks(model, source_data),
           concerns:         extract_concerns(model),
+          concern_callbacks: concern_callbacks(source_data[:callbacks]),
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           scopes:           extract_scopes_from_ast(source_data),
@@ -333,8 +338,10 @@ module RailsAiContext
       # ── Reflection-based extraction (unchanged) ─────────────────────
 
       def extract_associations(model)
-        excluded = config.excluded_association_names
-        model.reflect_on_all_associations.reject { |assoc| excluded.include?(assoc.name.to_s) }.map do |assoc|
+        # The reject stays ahead of the map: class_name/foreign_key on an
+        # excluded reflection with a broken :through raises, and `call`'s
+        # per-model rescue would replace the whole model with one error line.
+        model.reflect_on_all_associations.reject { |assoc| excluded_association?(assoc.name) }.map do |assoc|
           detail = {
             name: assoc.name.to_s,
             type: assoc.macro.to_s,
@@ -404,24 +411,21 @@ module RailsAiContext
         nil
       end
 
+      # Rails registers one chain per event, holding before, after and around
+      # together - there is no `_before_save_callbacks` and no separate around
+      # chain, so the kind comes off the entry rather than the chain name.
+      CALLBACK_EVENTS = %i[validation save create update destroy touch commit rollback initialize find].freeze
+
       def extract_callbacks(model, source_data)
-        callback_types = %i[
-          before_validation after_validation
-          before_save after_save
-          before_create after_create
-          before_update after_update
-          before_destroy after_destroy
-          after_commit after_rollback
-        ]
+        result = CALLBACK_EVENTS.each_with_object({}) do |event, hash|
+          chain = :"_#{event}_callbacks"
+          next unless model.respond_to?(chain, true)
 
-        result = callback_types.each_with_object({}) do |type, hash|
-          callbacks = model.send(:"_#{type}_callbacks").reject do |cb|
-            cb.filter.nil? || cb.filter.to_s.start_with?(*EXCLUDED_CALLBACKS) || cb.filter.is_a?(Proc)
+          model.send(chain).each do |cb|
+            next if cb.filter.nil? || cb.filter.to_s.start_with?(*EXCLUDED_CALLBACKS) || cb.filter.is_a?(Proc)
+
+            (hash["#{cb.kind}_#{event}"] ||= []) << cb.filter.to_s
           end
-
-          next if callbacks.empty?
-
-          hash[type.to_s] = callbacks.map { |cb| cb.filter.to_s }
         end
 
         # If reflection returned nothing, fall back to AST-based extraction
@@ -700,31 +704,90 @@ module RailsAiContext
         []
       end
 
+      # The listener names an association with a Symbol and reflection with a
+      # String, so the key is compared as text on both tiers.
+      def excluded_association?(name)
+        config.excluded_association_names.include?(name.to_s)
+      end
+
+      def reject_excluded_associations(associations)
+        Array(associations).reject { |assoc| excluded_association?(assoc[:name]) }
+      end
+
       def sanitize_options(options)
         options.reject { |_k, v| v.is_a?(Proc) || v.is_a?(Regexp) }
                .transform_values(&:to_s)
       end
 
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil)
-        data = SourceIntrospector.call(path)
-        {
+        own = SourceIntrospector.call(path)
+        data, unread = merge_concern_macros(own, class_name)
+        details = {
           confidence: Confidence::STATIC,
           table_name: table_name || TableName.stem(path),
-          associations: data[:associations],
+          associations: reject_excluded_associations(data[:associations]),
           validations: data[:validations],
+          custom_validates: extract_custom_validates_from_ast(data),
           scopes: data[:scopes],
-          enums: data[:enums],
+          # The booted tier answers a Hash of attribute => value map, and
+          # every renderer destructures one; the listener's records are a
+          # different shape under the same key.
+          enums: static_enums(data[:enums]),
           # Same shape as the booted tier: a Hash keyed by callback type. The
           # listener hands back a flat Array, and every consumer filters on
           # `callbacks.is_a?(Hash)` - so passing it through rendered "No models
           # with callbacks found" and then raised a TypeError on a Hash lookup
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
-          concerns: static_concerns(data[:mixins]),
+          concerns: static_concerns(own[:mixins]),
+          concern_callbacks: concern_callbacks(data[:callbacks]),
+          concerns_unread: (unread if unread.any?),
           macros: data[:macros],
-          methods: ActionResolver.own_methods(data[:methods], class_name),
+          methods: ActionResolver.own_methods(own[:methods], class_name),
           file: file
         }
+        details.merge!(extract_macros_from_ast(data, path))
+        details.merge!(extract_detailed_macros_from_ast(data))
+        details.compact
+      end
+
+      MERGED_CONCERN_KEYS = %i[associations validations scopes enums callbacks macros].freeze
+
+      # The mixin names are in the same walk and their files are on disk, so
+      # the class's own declarations and its concerns' answer as one. Methods
+      # and mixins stay the model's own: those are its interface, not the
+      # sum of what it included.
+      def merge_concern_macros(own, class_name)
+        collected, unread = ConcernMacros.collect(
+          app.root.to_s, own[:mixins] || [],
+          keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name
+        )
+        return [ own, unread ] if collected.empty?
+
+        merged = own.merge(collected) { |_key, mine, inherited| Array(mine) + inherited }
+        merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
+        merged[:scopes] = dedup(merged[:scopes]) { |s| s[:name] }
+        [ merged, unread ]
+      end
+
+      # The model's own declaration wins: it is the one whose options the
+      # class actually runs with.
+      def dedup(entries)
+        Array(entries).uniq { |entry| entry.is_a?(Hash) ? yield(entry) : entry }
+      end
+
+      def concern_callbacks(callbacks)
+        found = Array(callbacks).select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
+        found if found.any?
+      end
+
+      # `defined_enums` keys both levels with Strings; the listener uses
+      # Symbols, and a consumer that looks a value up by name misses.
+      def static_enums(enums)
+        Array(enums).each_with_object({}) do |enum, hash|
+          values = enum[:values]
+          hash[enum[:name].to_s] = values.is_a?(Hash) ? values.transform_keys(&:to_s) : values
+        end
       end
 
       # Consumers used to turn a model name back into
@@ -801,7 +864,7 @@ module RailsAiContext
                         .map { |m| { name: m[:args].first, type: m[:options][:type] }.compact },
           embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
                         .map { |m| { type: m[:macro], name: m[:args].first } },
-          associations: data[:associations],
+          associations: reject_excluded_associations(data[:associations]),
           validations: data[:validations],
           scopes: data[:scopes],
           # Same shape as the booted tier: a Hash keyed by callback type. The

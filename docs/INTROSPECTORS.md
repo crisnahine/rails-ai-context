@@ -84,7 +84,7 @@ end
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
 | SchemaIntrospector | `:schema` | Database tables, columns, types, indexes, defaults, encrypted hints |
-| ModelIntrospector | `:models` | Associations, validations, scopes, enums, concerns (AST-based) |
+| ModelIntrospector | `:models` | Associations, validations, scopes, enums, concerns (AST-based). Both tiers merge what the included concerns declare, tagged `from_concern:`; a concern whose file could not be read is listed in `concerns_unread` |
 | RouteIntrospector | `:routes` | Routes with helpers, HTTP methods, constraints |
 | ControllerIntrospector | `:controllers` | Actions, filters, strong params, render paths |
 | ViewIntrospector | `:views` | View files, layouts, partials |
@@ -182,7 +182,7 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 | ValidationsListener | `validates`, `validates_*_of`, custom `validate :method` |
 | ScopesListener | `scope :name, -> { ... }` |
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
-| CallbacksListener | All AR callback types, `after_commit` with `on:` resolution |
+| CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]` |
 | MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` |
 | MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`; `include_initialize: true` adds the constructor a caller reports on its own |
 | MixinsListener | `include`, `prepend`, `extend`, flagging the ones that reach the ancestor chain |

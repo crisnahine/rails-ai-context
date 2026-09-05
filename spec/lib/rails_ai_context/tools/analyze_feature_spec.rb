@@ -420,4 +420,32 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       RailsAiContext.configuration.excluded_controllers = original
     end
   end
+
+  # A callback object and an inline block are not symbols, so the callback
+  # line stopped prefixing every target with a colon.
+  describe "callback targets that are not method names" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Status" => {
+            table_name: "statuses",
+            callbacks: {
+              "around_create" => %w[Mastodon::Snowflake::Callbacks],
+              "before_validation" => %w[[inline_block] set_slug]
+            }
+          }
+        }
+      )
+    end
+
+    it "names the callback object and the block without a colon" do
+      text = described_class.call(feature: "status").content.first[:text]
+
+      expect(text).to include("Status: around_create Mastodon::Snowflake::Callbacks")
+      expect(text).to include("Status: before_validation do")
+      expect(text).to include("Status: before_validation :set_slug")
+      expect(text).not_to include(":Mastodon")
+    end
+  end
 end

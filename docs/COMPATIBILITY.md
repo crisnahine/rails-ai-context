@@ -204,6 +204,14 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
 
 ## Known limits
 
+- **A superclass's own declarations, in the static tier.** The static model
+  answer walks the model file and the files of the concerns it includes, so a
+  macro declared in a concern is merged in and tagged with the concern that
+  declared it. What a parent class declares is still missing, and so are the
+  validations Rails generates at boot (implicit `belongs_to` presence,
+  attachment validations) - those are runtime-only and stay marked
+  `[UNAVAILABLE]`. A concern whose file cannot be found, a gem's module for
+  example, is named under `Concerns` as not read.
 - **Concern-style Mongoid documents in runtime results.** Mongoid documents
   are invisible to ActiveRecord reflection, so `ModelIntrospector#call` falls
   back to the same source-parsing pass used in the static tier even when the

@@ -1,0 +1,88 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+require "tmpdir"
+require "fileutils"
+
+RSpec.describe RailsAiContext::ConcernMacros do
+  let(:tmpdir) { Dir.mktmpdir }
+  let(:concern_dir) { File.join(tmpdir, "app", "models", "concerns") }
+
+  before { FileUtils.mkdir_p(concern_dir) }
+  after { FileUtils.remove_entry(tmpdir) }
+
+  def mixin(name)
+    [ { name: name, kind: :include, ancestor: true } ]
+  end
+
+  it "collects the macros a concern declares inside included do" do
+    File.write(File.join(concern_dir, "publishable.rb"), <<~RUBY)
+      module Publishable
+        extend ActiveSupport::Concern
+
+        included do
+          has_many :revisions
+          validates :body, presence: true
+          scope :published, -> { where(published: true) }
+          before_save :stamp
+        end
+      end
+    RUBY
+
+    collected, unresolved = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations validations scopes callbacks])
+
+    expect(unresolved).to be_empty
+    expect(collected[:associations].map { |a| a[:name] }).to eq([ :revisions ])
+    expect(collected[:validations].size).to eq(1)
+    expect(collected[:scopes].map { |s| s[:name] }).to eq([ "published" ])
+    expect(collected[:callbacks].map { |c| c[:method] }).to eq([ "stamp" ])
+  end
+
+  it "tags every entry with the concern it came from" do
+    File.write(File.join(concern_dir, "wired.rb"), "module Wired\n  has_many :wires\nend\n")
+
+    collected, = described_class.collect(tmpdir, mixin("Wired"), keys: %i[associations])
+
+    expect(collected[:associations].first[:from_concern]).to eq("Wired")
+  end
+
+  it "follows a concern that includes another concern" do
+    File.write(File.join(concern_dir, "outer.rb"), <<~RUBY)
+      module Outer
+        include Inner
+        has_many :outers
+      end
+    RUBY
+    File.write(File.join(concern_dir, "inner.rb"), "module Inner\n  has_many :inners\nend\n")
+
+    collected, = described_class.collect(tmpdir, mixin("Outer"), keys: %i[associations])
+
+    expect(collected[:associations].map { |a| a[:name] }).to contain_exactly(:outers, :inners)
+  end
+
+  it "stops at a mutual include instead of recursing forever" do
+    File.write(File.join(concern_dir, "left.rb"), "module Left\n  include Right\n  has_many :lefts\nend\n")
+    File.write(File.join(concern_dir, "right.rb"), "module Right\n  include Left\n  has_many :rights\nend\n")
+
+    collected, = described_class.collect(tmpdir, mixin("Left"), keys: %i[associations])
+
+    expect(collected[:associations].map { |a| a[:name] }).to contain_exactly(:lefts, :rights)
+  end
+
+  it "names a concern whose file it cannot find" do
+    _collected, unresolved = described_class.collect(tmpdir, mixin("Discard::Model"), keys: %i[associations])
+
+    expect(unresolved).to eq([ "Discard::Model" ])
+  end
+
+  it "does not reach outside the owner kind's concerns directory" do
+    FileUtils.mkdir_p(File.join(tmpdir, "app", "controllers", "concerns"))
+    File.write(File.join(tmpdir, "app", "controllers", "concerns", "searchable.rb"),
+      "module Searchable\n  before_action :require_login\nend\n")
+    File.write(File.join(concern_dir, "searchable.rb"), "module Searchable\n  scope :search, -> { all }\nend\n")
+
+    collected, = described_class.collect(tmpdir, mixin("Searchable"), keys: %i[scopes], prefer: "model")
+
+    expect(collected[:scopes].map { |s| s[:name] }).to eq([ "search" ])
+  end
+end

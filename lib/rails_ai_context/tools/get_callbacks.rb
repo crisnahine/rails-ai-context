@@ -98,13 +98,13 @@ module RailsAiContext
             methods.each do |method_name|
               source = extract_callback_source(name, method_name)
               if source
-                lines << "### :#{method_name} (lines #{source[:start_line]}-#{source[:end_line]})"
+                lines << "### #{callback_target(method_name)} (lines #{source[:start_line]}-#{source[:end_line]})"
                 lines << "```ruby"
                 lines << source[:code]
                 lines << "```"
                 lines << ""
               else
-                lines << "- `:#{method_name}`"
+                lines << "- `#{callback_target(method_name)}`"
               end
             end
           end
@@ -114,20 +114,20 @@ module RailsAiContext
           lines << ""
 
           ordered.each do |type, methods|
-            method_list = methods.map { |m| "`:#{m}`" }.join(", ")
-            lines << "- **#{type}** → #{method_list}"
+            lines << "- **#{type}** → #{format_targets(methods)}"
           end
         end
 
         # Concern-provided callbacks
-        concern_callbacks = find_concern_callbacks(name, data)
+        concern_callbacks = find_concern_callbacks(data)
         if concern_callbacks.any?
           lines << "" << "## From Concerns"
           if RailsAiContext::DetailLevel.full?(detail)
-            concern_callbacks.each do |concern_name, info|
+            concern_callbacks.each do |concern_name, entries|
               lines << "### #{concern_name}"
-              info[:callbacks].each do |cb|
-                source = extract_method_source_from_file(info[:path], cb[:method_name])
+              path = concern_file(concern_name)
+              entries.each do |cb|
+                source = path && cb[:method_name] && extract_method_source_from_file(path, cb[:method_name])
                 lines << "- #{cb[:declaration]}"
                 if source
                   lines << "```ruby"
@@ -138,9 +138,8 @@ module RailsAiContext
               end
             end
           else
-            concern_callbacks.each do |concern_name, info|
-              declarations = info[:callbacks].map { |cb| cb[:declaration] }
-              lines << "- **#{concern_name}:** #{declarations.join(', ')}"
+            concern_callbacks.each do |concern_name, entries|
+              lines << "- **#{concern_name}:** #{entries.map { |cb| cb[:declaration] }.join(', ')}"
             end
           end
         end
@@ -179,8 +178,7 @@ module RailsAiContext
             ordered = order_callbacks(data[:callbacks])
             lines << "## #{name}"
             ordered.each do |type, methods|
-              method_list = methods.map { |m| "`:#{m}`" }.join(", ")
-              lines << "- **#{type}** → #{method_list}"
+              lines << "- **#{type}** → #{format_targets(methods)}"
             end
             lines << ""
           end
@@ -194,10 +192,10 @@ module RailsAiContext
               methods.each do |method_name|
                 source = extract_callback_source(name, method_name)
                 if source
-                  lines << "### #{type} :#{method_name} (lines #{source[:start_line]}-#{source[:end_line]})"
+                  lines << "### #{type} #{callback_target(method_name)} (lines #{source[:start_line]}-#{source[:end_line]})"
                   lines << "```ruby" << source[:code] << "```" << ""
                 else
-                  lines << "- **#{type}** → `:#{method_name}`"
+                  lines << "- **#{type}** → `#{callback_target(method_name)}`"
                 end
               end
             end
@@ -229,42 +227,39 @@ module RailsAiContext
       end
 
       private_class_method def self.extract_callback_source(model_name, method_name)
+        return nil unless method_name?(method_name)
+
         path = rails_app.root.join(RailsAiContext::Payload.model_file(cached_context, model_name))
         extract_method_source_from_file(path, method_name)
       end
 
-      private_class_method def self.find_concern_callbacks(model_name, data)
-        concern_callbacks = {}
-        concerns = data[:concerns] || []
-        max_size = RailsAiContext.configuration.max_file_size
+      private_class_method def self.format_targets(methods)
+        methods.map { |m| "`#{callback_target(m.to_s)}`" }.join(", ")
+      end
 
-        concerns.each do |concern_name|
-          next unless concern_name.is_a?(String)
+      # The introspector already walks the concern files and tags what it
+      # found, on both tiers, so the section regroups that rather than
+      # reading the same files a second time and disagreeing.
+      private_class_method def self.find_concern_callbacks(data)
+        Array(data[:concern_callbacks])
+          .select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
+          .group_by { |cb| cb[:from_concern] }
+          .transform_values { |entries| entries.map { |cb| concern_callback_entry(cb) } }
+      end
 
-          # Membership is decided at the introspector seam; a gem's concern
-          # has no file here, so find_file already narrows to the app's own.
-          concern_path = ConcernPaths.find_file(rails_app.root.to_s, concern_name)
-          next unless concern_path
-          next if File.size(concern_path) > max_size
+      private_class_method def self.concern_callback_entry(callback)
+        method = callback[:method].to_s
+        # The declared macro, not the resolved type: `after_commit_on_create`
+        # is a key this gem synthesizes, not something the file says.
+        declaration = "#{callback[:name] || callback[:type]} #{callback_target(method)}"
+        { declaration: declaration, method_name: (method if method_name?(method)) }
+      end
 
-          source = RailsAiContext::SafeFile.read(concern_path) or next
-          callbacks = []
-
-          source.each_line do |line|
-            if (match = line.match(/\A\s*(before_\w+|after_\w+|around_\w+)\s+[: ]*(\w+)/))
-              callbacks << { declaration: "#{match[1]} :#{match[2]}", method_name: match[2] }
-            end
-          end
-
-          if callbacks.any?
-            concern_callbacks[concern_name] = { callbacks: callbacks, path: concern_path }
-          end
-        end
-
-        concern_callbacks
+      private_class_method def self.concern_file(concern_name)
+        ConcernPaths.find_file(rails_app.root.to_s, concern_name, prefer: "model")
       rescue => e
-        $stderr.puts "[rails-ai-context] find_concern_callbacks failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        $stderr.puts "[rails-ai-context] concern_file failed: #{e.message}" if ENV["DEBUG"]
+        nil
       end
     end
   end

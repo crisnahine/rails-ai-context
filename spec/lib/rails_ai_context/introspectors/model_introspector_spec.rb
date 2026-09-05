@@ -41,6 +41,53 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       RailsAiContext.configuration = RailsAiContext::Configuration.new
     end
 
+    it "filters excluded_association_names on the static tier too" do
+      RailsAiContext.configuration.excluded_association_names += %w[comments]
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            belongs_to :author
+            has_many :comments
+          end
+        RUBY
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        names = static["Post"][:associations].map { |a| a[:name].to_s }
+        expect(names).to include("author")
+        expect(names).not_to include("comments")
+      end
+    ensure
+      RailsAiContext.configuration = RailsAiContext::Configuration.new
+    end
+
+    it "filters excluded_association_names on both tiers of a Mongoid app" do
+      RailsAiContext.configuration.excluded_association_names += %w[tickets]
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "customer.rb"), <<~RUBY)
+          class Customer
+            include Mongoid::Document
+            has_many :tickets
+            has_many :invoices
+          end
+        RUBY
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        [ introspector.static_call, introspector.call ].each do |models|
+          names = models["Customer"][:associations].map { |a| a[:name].to_s }
+          expect(names).to include("invoices")
+          expect(names).not_to include("tickets")
+        end
+      end
+    ensure
+      RailsAiContext.configuration = RailsAiContext::Configuration.new
+    end
+
     it "extracts validations" do
       vals = result["User"][:validations]
       expect(vals).to include(a_hash_including(kind: "presence", attributes: [ "email" ]))
@@ -386,6 +433,47 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "#static_call" do
+    # The static builder passed the listener's raw records through where the
+    # booted one merges the attribute-macro mappers, so every mapped key was
+    # nil and five consumers rendered nothing.
+    it "maps attribute macros, enums and custom validates the same way the booted tier does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "keypair.rb"), <<~RUBY)
+          class Keypair < ApplicationRecord
+            ROLES = %w[owner guest].freeze
+
+            enum :kind, { rsa: 0, ed25519: 1 }
+            encrypts :private_key, deterministic: true
+            normalizes :email, with: ->(e) { e.strip }
+            serialize :prefs
+            store :settings
+            has_one_attached :avatar
+            has_secure_password
+            generates_token_for :password_reset, expires_in: 2.hours
+            delegate :name, to: :account
+            validate :key_is_sane
+          end
+        RUBY
+
+        data = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Keypair"]
+
+        expect(data[:encrypts]).to eq([ "private_key" ])
+        expect(data[:normalizes]).to eq([ "email" ])
+        expect(data[:serialize]).to eq([ "prefs" ])
+        expect(data[:store]).to eq([ "settings" ])
+        expect(data[:has_one_attached]).to eq([ "avatar" ])
+        expect(data[:has_secure_password]).to be(true)
+        expect(data[:generates_token_for]).to eq([ "password_reset" ])
+        expect(data[:delegations]).to eq([ { methods: [ "name" ], to: "account" } ])
+        expect(data[:constants]).to include(a_hash_including(name: "ROLES"))
+        expect(data[:encryption_details]).to eq([ { field: "private_key", options: { deterministic: true } } ])
+        expect(data[:token_generation]).to include(a_hash_including(purpose: "password_reset"))
+        expect(data[:custom_validates]).to eq([ "key_is_sane" ])
+        expect(data[:enums]).to eq({ "kind" => { "rsa" => 0, "ed25519" => 1 } })
+      end
+    end
+
     # The skip was `relative.start_with?("concerns/")`, which only sees the
     # top-level directory Rails autoloads. A nested one - OpenProject has
     # app/models/queries/operators/concerns - walked straight past it, and four
@@ -941,6 +1029,177 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
           expect(result.keys).to contain_exactly("Good")
         end
+      end
+    end
+  end
+
+  # Rails registers a chain per event - `_save_callbacks` holds before, after
+  # and around together - so asking for `_before_save_callbacks` raised on the
+  # first iteration and every booted model quietly fell back to the AST.
+  describe "#extract_callbacks from reflection" do
+    before do
+      stub_const("SnowflakeCallbacks", Class.new)
+    end
+
+    let(:model) do
+      Class.new(ApplicationRecord) do
+        self.table_name = "posts"
+
+        def self.name = "Snowflaked"
+
+        around_create SnowflakeCallbacks
+        before_save :normalize
+        after_touch :bust
+        after_initialize :prepare
+      end
+    end
+
+    let(:source_data) { { associations: [], validations: [], scopes: [], enums: [], callbacks: [], macros: [], methods: [] } }
+
+    subject(:callbacks) { introspector.send(:extract_callbacks, model, source_data) }
+
+    it "reports around callbacks from the event chain" do
+      expect(callbacks["around_create"]).to be_an(Array)
+      expect(callbacks["around_create"]).to include("SnowflakeCallbacks")
+    end
+
+    it "reports before and after callbacks from the same chain" do
+      expect(callbacks["before_save"]).to include("normalize")
+    end
+
+    it "reports the touch and initialize chains" do
+      expect(callbacks["after_touch"]).to include("bust")
+      expect(callbacks["after_initialize"]).to include("prepare")
+    end
+  end
+
+  # The static builder walked the model's own file alone, so a model whose
+  # associations all live in concerns answered `0 assoc` with no marker.
+  describe "#static_call concern-declared macros" do
+    it "merges what the concerns declare and tags each entry" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            include Publishable
+
+            belongs_to :author
+            validates :title, presence: true
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "concerns", "publishable.rb"), <<~RUBY)
+          module Publishable
+            extend ActiveSupport::Concern
+
+            included do
+              has_many :revisions
+              belongs_to :editor
+              validates :body, presence: true
+              scope :published, -> { where(published: true) }
+              before_save :stamp
+              encrypts :secret
+            end
+          end
+        RUBY
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post[:associations].map { |a| a[:name] }).to contain_exactly(:author, :revisions, :editor)
+        expect(post[:validations].size).to eq(2)
+        expect(post[:scopes].map { |s| s[:name] }).to include("published")
+        expect(post[:callbacks]["before_save"]).to include("stamp")
+        expect(post[:encrypts]).to eq([ "secret" ])
+        expect(post[:associations].find { |a| a[:name] == :revisions }[:from_concern]).to eq("Publishable")
+        expect(post[:associations].find { |a| a[:name] == :author }).not_to have_key(:from_concern)
+        expect(post).not_to have_key(:concerns_unread)
+      end
+    end
+
+    it "sees a macro in a bare module body too" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\n  include Wired\nend\n")
+        File.write(File.join(dir, "app", "models", "concerns", "wired.rb"), "module Wired\n  has_many :wires\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Widget"][:associations].map { |a| a[:name] }).to contain_exactly(:wires)
+      end
+    end
+
+    it "does not report an association twice when the model redeclares one" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), <<~RUBY)
+          class Widget < ApplicationRecord
+            include Wired
+            has_many :wires, dependent: :destroy
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "concerns", "wired.rb"), "module Wired\n  has_many :wires\nend\n")
+
+        wires = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Widget"][:associations]
+
+        expect(wires.size).to eq(1)
+        expect(wires.first[:options]).to include(dependent: :destroy)
+      end
+    end
+
+    # A gem's module is genuinely out of reach, and the footer promises that
+    # is marked rather than silently dropped.
+    it "names the concerns whose file it could not read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\n  include Discard::Model\nend\n")
+
+        widget = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Widget"]
+
+        expect(widget[:concerns_unread]).to eq([ "Discard::Model" ])
+      end
+    end
+  end
+
+  # Reflection answers associations, validations and enums, but scopes,
+  # macros and custom validates come off the model's own file - so without
+  # the same merge the static tier would out-answer the booted one.
+  describe "#extract_model_details concern-declared macros" do
+    it "merges concern scopes and macros into the booted answer" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        model_path = File.join(dir, "app", "models", "widget.rb")
+        File.write(model_path, <<~RUBY)
+          class Widget < ApplicationRecord
+            include Wired
+            scope :own, -> { all }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "concerns", "wired.rb"), <<~RUBY)
+          module Wired
+            extend ActiveSupport::Concern
+
+            included do
+              scope :shared, -> { all }
+              encrypts :secret
+              before_save :stamp
+            end
+          end
+        RUBY
+
+        stub_const("Wired", Module.new)
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          include Wired
+          def self.name = "Widget"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:model_source_path).and_return(model_path)
+
+        details = introspector.send(:extract_model_details, model)
+
+        expect(details[:scopes].map { |s| s[:name] }).to contain_exactly("own", "shared")
+        expect(details[:encrypts]).to eq([ "secret" ])
+        expect(details[:concern_callbacks].map { |c| c[:method] }).to eq([ "stamp" ])
       end
     end
   end
