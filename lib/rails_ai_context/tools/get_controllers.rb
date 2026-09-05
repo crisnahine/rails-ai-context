@@ -139,9 +139,9 @@ module RailsAiContext
               if names.size > 2 && app_controllers[names.first][:parent_class] != "ApplicationController"
                 # Compress group: show once with all names
                 info = app_controllers[names.first]
-                short_names = names.map { |n| n.sub(/Controller$/, "").split("::").last }
                 parent = info[:parent_class] || "ApplicationController"
-                lines << "## #{names.first.split('::').first}::* (#{short_names.join(', ')})"
+                lines << "## #{group_heading(names)}"
+                lines << "- Members: #{names.join(', ')}"
                 lines << "- Inherits: #{parent}"
                 lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
                 lines.concat(Serializers::SectionFacts.controller_summary_lines(info))
@@ -165,6 +165,20 @@ module RailsAiContext
             list = paginated_names.map { |c| "- #{c}" }.join("\n")
             text_response("# Controllers (#{page[:total]})\n\n#{list}#{pagination_hint}")
           end
+        end
+      end
+
+      # A compressed group is headed by the namespace every member is really
+      # in, and never by one taken from a single member's own class name.
+      private_class_method def self.group_heading(names)
+        shared = shared_namespace(names)
+        count = count_phrase(names.size, "controller")
+        shared.empty? ? count : "#{shared.join('::')}::* (#{count})"
+      end
+
+      private_class_method def self.shared_namespace(names)
+        names.map { |name| name.split("::")[0..-2] }.reduce do |common, segments|
+          common.zip(segments).take_while { |a, b| a == b }.map(&:first)
         end
       end
 
