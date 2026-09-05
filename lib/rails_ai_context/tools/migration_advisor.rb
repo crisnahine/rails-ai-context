@@ -381,7 +381,7 @@ module RailsAiContext
           when "remove_column"
             [
               "**`remove_column` is unsafe under load.** strong_migrations requires:",
-              "  1. Add the column to `self.ignored_columns += %w[#{column}]` in `app/models/#{table.singularize}.rb` first.",
+              "  1. Add the column to `self.ignored_columns += %w[#{column}]` in `#{model_file_for_table(table)}` first.",
               "  2. Deploy that change.",
               "  3. THEN run the migration in a separate deploy.",
               "  Or wrap in `safety_assured do ... end` if you accept the risk."
@@ -444,31 +444,50 @@ module RailsAiContext
           false
         end
 
+        def model_file_for_table(table)
+          models = Payload.models(cached_context)
+          name = models_for_table(table, models).first || table.singularize.camelize
+          Payload.model_file(cached_context, name)
+        end
+
         def show_affected_models(table, models)
-          lines = [ "", "## Affected Models", "" ]
+          rows = affected_model_rows(table, models)
+          return [] if rows.empty?
 
-          return lines if models.empty?
+          [ "", "## Affected Models", "" ] + rows
+        end
 
-          model_name = table.singularize.camelize
-          if models.key?(model_name.to_sym) || models.key?(model_name)
-            lines << "- **#{model_name}** - directly affected (table: #{table})"
-          end
+        def affected_model_rows(table, models)
+          return [] if models.empty?
 
-          # Find models with associations pointing to this table
+          owners = models_for_table(table, models)
+          rows = owners.map { |name| "- **#{name}** - directly affected (table: #{table})" }
+
           models.each do |name, data|
             next unless data.is_a?(Hash)
-            assocs = data[:associations] || []
-            related = assocs.select { |a|
-              a[:class_name]&.underscore&.pluralize == table ||
-              a[:name]&.to_s&.pluralize == table ||
-              a[:name]&.to_s&.singularize == table.singularize
-            }
-            related.each do |a|
-              lines << "- **#{name}** - #{a[:macro] || a[:type]} :#{a[:name]}"
+
+            Array(data[:associations]).grep(Hash).each do |a|
+              next unless owners.include?(a[:class_name].to_s) ||
+                a[:name].to_s.pluralize == table ||
+                a[:name].to_s.singularize == table.singularize
+
+              rows << "- **#{name}** - #{a[:macro] || a[:type]} :#{a[:name]}"
             end
           end
 
-          lines
+          rows.uniq
+        end
+
+        # The payload records the table each model reads, so the models for a
+        # table are looked up rather than derived: "admin_action_logs"
+        # camelizes to a constant no app declares. The derived name is the
+        # fallback for a payload whose models record no table.
+        def models_for_table(table, models)
+          named = models.select { |_, d| d.is_a?(Hash) && d[:table_name].to_s == table }.keys.map(&:to_s)
+          return named if named.any?
+
+          derived = table.singularize.camelize
+          models.key?(derived.to_sym) || models.key?(derived) ? [ derived ] : []
         end
 
         def column_exists?(table, column)
