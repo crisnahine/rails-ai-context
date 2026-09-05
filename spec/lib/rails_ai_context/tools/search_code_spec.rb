@@ -453,4 +453,34 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       expect(described_class.send(:ripgrep_available?)).to eq(false)
     end
   end
+
+  # Every read of the shared cache is a deep copy of the whole payload, and a
+  # trace read it once per controller file that calls the method.
+  describe "shared context reads in a trace" do
+    def reads_for(count)
+      described_class.reset_cache!
+      reads = 0
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        { routes: { by_controller: {} } }
+      end
+
+      files = { "app/models/helper.rb" => "class Helper\n  def helper_x\n    1\n  end\nend\n" }
+      (1..count).each do |i|
+        files["app/controllers/thing#{i}_controller.rb"] =
+          "class Thing#{i}Controller\n  def index\n    helper_x\n  end\nend\n"
+      end
+
+      with_search_app(files) do
+        described_class.call(pattern: "helper_x", match_type: "trace")
+      end
+      reads
+    end
+
+    it "reads the shared context the same number of times for 3 calling controllers as for 30" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      expect(reads_for(30)).to eq(reads_for(3))
+    end
+  end
 end
