@@ -438,4 +438,24 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(text).to include("def instrument")
     end
   end
+
+  # One Rails event, two declared spellings. The synthesized key was absent
+  # from the order list, so it sorted to the end and the event's second half
+  # printed below after_rollback.
+  describe "the two spellings of one commit event" do
+    it "keeps them together, and both above after_rollback" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Status" => { name: "Status", callbacks: {
+          "after_rollback" => [ "undo" ],
+          "after_commit_on_create" => [ "announce" ],
+          "after_create_commit" => [ "store_uri" ]
+        } } }
+      })
+
+      lines = described_class.call(model: "Status").content.first[:text].lines
+      order = lines.filter_map { |l| l[/^- \*\*(\w+)\*\*/, 1] }
+
+      expect(order).to eq(%w[after_create_commit after_commit_on_create after_rollback])
+    end
+  end
 end

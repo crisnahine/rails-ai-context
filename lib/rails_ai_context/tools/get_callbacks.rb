@@ -9,6 +9,10 @@ module RailsAiContext
         "Specify model:\"User\" for one model's callbacks. detail:\"full\" includes callback method source code. " \
         "The list is what the model file and its concerns declare, and within one type the order is declaration order."
 
+      # `after_create_commit :x` and `after_commit :y, on: :create` run at the
+      # same point and keep their own declared spellings, so the two sit
+      # together here. A key this list does not name sorts to the end, which
+      # put one Rails event's second spelling below after_rollback.
       CALLBACK_EXECUTION_ORDER = %w[
         before_validation
         after_validation
@@ -26,8 +30,11 @@ module RailsAiContext
         after_destroy
         after_commit
         after_create_commit
+        after_commit_on_create
         after_update_commit
+        after_commit_on_update
         after_destroy_commit
+        after_commit_on_destroy
         after_save_commit
         after_rollback
         after_touch
