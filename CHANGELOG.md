@@ -742,8 +742,10 @@ to #181), and the sibling defects behind them.
   was.
 - **`docs/CLI.md` documented `tool models`, which is not a tool.** The command
   is `tool model_details`. The page also gained the `facts`, `preset` and
-  `tree` sections it was missing, and it now says which path refusals exit 1
-  and which absences exit 0.
+  `tree` sections it was missing, it now says which path refusals exit 1 and
+  which absences exit 0, and it names `--app-path` and `--environment`, which
+  were documented only in `--help` and decide which app and which database
+  configuration get read.
 - **A `path:` install printed a git error on every bundler command.** The
   gemspec built its file list with `git ls-files` and left git's stderr
   attached to the caller, so a vendored or `path:` Gemfile entry re-evaluating
