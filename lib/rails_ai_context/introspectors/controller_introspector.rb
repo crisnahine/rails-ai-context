@@ -266,10 +266,10 @@ module RailsAiContext
       # the class's own body is the only thing that says which of those names
       # it declares itself and what it took out. Both go on the record: the
       # skips the way the static tier carries them, and `declared` on the rest.
-      # A skip and a later re-declaration of the same name are decided by the
-      # order the body wrote them, which the callback chain does not keep, so
-      # the names the body declares take the body's order and the ones it only
-      # inherits stay ahead of them.
+      # The chain's own order is the run order, so it is kept: each skip is
+      # spliced in beside the record it takes out, and the body's order
+      # decides only whether the skip reads before or after a re-declaration
+      # of the same name.
       def merge_own_source(filters, source)
         return filters unless source
 
@@ -277,10 +277,25 @@ module RailsAiContext
         declared = own.reject { |f| f[:skipped] }.map { |f| f[:name] }.to_set
         by_name = filters.group_by { |f| f[:name] }
         declared.each { |name| Array(by_name[name]).each { |f| f[:declared] = true } }
-        return filters unless own.any? { |f| f[:skipped] }
+        skips = own.select { |f| f[:skipped] }
+        return filters if skips.empty?
 
-        (filters.reject { |f| declared.include?(f[:name]) } +
-          own.flat_map { |f| f[:skipped] ? [ f ] : Array(by_name[f[:name]]) }).uniq
+        splice_skips(filters, own, skips)
+      end
+
+      def splice_skips(filters, own, skips)
+        placed = Set.new
+        merged = filters.flat_map do |f|
+          name = f[:name]
+          mine = skips.select { |s| s[:name] == name }
+          next [ f ] if mine.empty? || placed.include?(name)
+
+          placed << name
+          skip_at = own.index { |o| o[:name] == name && o[:skipped] }
+          declare_at = own.index { |o| o[:name] == name && !o[:skipped] }
+          declare_at && skip_at < declare_at ? mine + [ f ] : [ f ] + mine
+        end
+        merged + skips.reject { |s| placed.include?(s[:name]) }
       end
 
       def extract_filters_from_source(source)

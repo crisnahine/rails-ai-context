@@ -68,22 +68,28 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
   end
 
   describe ".filters_line" do
-    it "names each filter by kind" do
-      data = { filters: [ { kind: "before", name: "authenticate" }, { kind: "after", name: "track" } ] }
+    def context_for(filters)
+      { controllers: { controllers: { "PostsController" => { filters: filters } } } }
+    end
 
-      expect(described_class.filters_line(data)).to eq("- Filters: before authenticate, after track")
+    it "names each filter by kind" do
+      ctx = context_for([ { kind: "before", name: "authenticate" }, { kind: "after", name: "track" } ])
+
+      expect(described_class.filters_line(ctx, "PostsController"))
+        .to eq("- Filters: before authenticate, after track")
     end
 
     # The per-action answer and docs/CONFIGURATION.md both spell a skip
     # `~~name~~ _(skipped)_`, and one fact reads one way everywhere.
     it "strikes a skipped filter through the way the per-action answer does" do
-      data = { filters: [ { kind: "before", name: "authenticate", skipped: true } ] }
+      ctx = context_for([ { kind: "before", name: "authenticate", skipped: true } ])
 
-      expect(described_class.filters_line(data)).to eq("- Filters: ~~authenticate~~ _(skipped)_")
+      expect(described_class.filters_line(ctx, "PostsController"))
+        .to eq("- Filters: ~~authenticate~~ _(skipped)_")
     end
 
     it "answers nil for a controller with no filters" do
-      expect(described_class.filters_line({})).to be_nil
+      expect(described_class.filters_line(context_for([]), "PostsController")).to be_nil
     end
   end
 
@@ -111,24 +117,28 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
         rescue_from: [ { exception: "ActiveRecord::RecordNotFound", handler: "not_found" } ]
       }
     end
+    let(:ctx) { { controllers: { controllers: { "PostsController" => controller_data } } } }
+
+    def summary_lines(data = controller_data, **options)
+      described_class.controller_summary_lines(data, ctx: ctx, name: "PostsController", **options)
+    end
 
     it "states the filters and the strong params, in that order" do
-      expect(described_class.controller_summary_lines(controller_data))
-        .to eq([ "- Filters: before authenticate", "- Strong params: post_params" ])
+      expect(summary_lines).to eq([ "- Filters: before authenticate", "- Strong params: post_params" ])
     end
 
     it "adds the rescue handlers for a surface that renders them" do
-      expect(described_class.controller_summary_lines(controller_data, rescue_handlers: true).last)
+      expect(summary_lines(rescue_handlers: true).last)
         .to eq("- Rescue from: ActiveRecord::RecordNotFound -> not_found")
     end
 
     it "answers an empty list for a controller with none of them" do
-      expect(described_class.controller_summary_lines({}, rescue_handlers: true)).to eq([])
+      expect(described_class.controller_summary_lines({}, ctx: { controllers: { controllers: {} } },
+                                                          name: "Nope", rescue_handlers: true)).to eq([])
     end
 
     it "states the error of an entry the walk could not read" do
-      expect(described_class.controller_summary_lines({ error: "unreadable" }))
-        .to eq([ "- Could not be read: unreadable" ])
+      expect(summary_lines({ error: "unreadable" })).to eq([ "- Could not be read: unreadable" ])
     end
   end
 

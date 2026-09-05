@@ -474,6 +474,63 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(records.map { |f| f[:skipped] }).to eq([ true, nil ])
       expect(records.last[:only]).to eq(%w[admin])
     end
+
+    # Rebuilding the list put every name the body declares behind every name
+    # it only inherits, so a prepended filter was reported last, and only
+    # when the body also carried a skip. The routes hint shows the first
+    # three, so the prepend was the one cut.
+    it "keeps the chain's order whether or not the body carries a skip" do
+      ctrl = Class.new(ActionController::Base) do
+        before_action :audit
+        before_action :load_thing
+      end
+      child = Class.new(ctrl) do
+        prepend_before_action :set_locale
+        skip_before_action :require_login, raise: false
+      end
+      ctrl.define_singleton_method(:name) { "ApplicationController" }
+      child.define_singleton_method(:name) { "PostsController" }
+      with_skip = <<~RUBY
+        class PostsController < ApplicationController
+          prepend_before_action :set_locale
+          skip_before_action :require_login, raise: false
+        end
+      RUBY
+      without_skip = with_skip.lines.reject { |l| l.include?("skip_before_action") }.join
+
+      names = ->(source) { introspector.send(:extract_filters, child, source).map { |f| f[:name] } }
+
+      expect(child._process_action_callbacks.map(&:filter)).to eq(%i[set_locale audit load_thing])
+      expect(names.call(without_skip)).to eq(%w[set_locale audit load_thing])
+      expect(names.call(with_skip)).to eq(%w[set_locale audit load_thing require_login])
+    end
+
+    # A body that skips a name and then declares it again writes the skip
+    # first, and the pair has to read in that order for the skip to be
+    # recognised as undone.
+    it "puts a skip ahead of the re-declaration the body writes after it" do
+      ctrl = Class.new(ActionController::Base) do
+        before_action :authenticate!
+        before_action :audit
+      end
+      child = Class.new(ctrl) do
+        skip_before_action :authenticate!
+        before_action :authenticate!, only: [ :admin ]
+      end
+      ctrl.define_singleton_method(:name) { "ApplicationController" }
+      child.define_singleton_method(:name) { "PublicController" }
+      source = <<~RUBY
+        class PublicController < ApplicationController
+          skip_before_action :authenticate!
+          before_action :authenticate!, only: [ :admin ]
+        end
+      RUBY
+
+      records = introspector.send(:extract_filters, child, source)
+
+      expect(records.map { |f| [ f[:name], f[:skipped] ] })
+        .to eq([ [ "audit", nil ], [ "authenticate!", true ], [ "authenticate!", nil ] ])
+    end
   end
 
   describe "#static_call" do
@@ -732,11 +789,10 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
             end
           RUBY
 
-          info = described_class.new(RailsAiContext::StaticApp.new(dir))
-            .static_call[:controllers]["WebhooksController"]
+          ctx = { controllers: described_class.new(RailsAiContext::StaticApp.new(dir)).static_call }
 
-          expect(RailsAiContext::Serializers::SectionFacts.filters_line(info))
-            .to eq("- Filters: ~~verify_authenticity_token~~ _(skipped)_, before require_sig")
+          expect(RailsAiContext::Serializers::SectionFacts.filters_line(ctx, "WebhooksController", root: dir))
+            .to eq("- Filters: before require_sig, ~~verify_authenticity_token~~ _(skipped)_")
         end
       end
     end
