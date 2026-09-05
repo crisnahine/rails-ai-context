@@ -8,6 +8,7 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Provide at least one of")
+      expect(result.error?).to be(true)
     end
 
     it "returns an MCP::Tool::Response" do

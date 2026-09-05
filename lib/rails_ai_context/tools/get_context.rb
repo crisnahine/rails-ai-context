@@ -53,7 +53,7 @@ module RailsAiContext
         elsif feature
           feature_context(feature)
         else
-          return text_response("Provide at least one of: controller, model, or feature.")
+          return error_response("Provide at least one of: controller, model, or feature.")
         end
 
         # Append additional context sections if include: is specified

@@ -106,7 +106,28 @@ RSpec.describe RailsAiContext::BootManager do
       expect(raised.status).to eq(1)
       expect(errors.string).to include("Mastodon now requires that these variables are set:")
       expect(errors.string).to include("[rails-ai-context] App exited during boot (status 1)")
-      expect(errors.string).to include("--no-boot")
+    end
+  end
+
+  describe ".boot! with an app that exits" do
+    it "reports the exit as a boot failure the static tier can answer around" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "environment.rb"), %(abort "no RAILS_ENV"\n))
+
+        errors = StringIO.new
+        original = $stderr
+        $stderr = errors
+        begin
+          result = described_class.boot!(app_root: dir)
+        ensure
+          $stderr = original
+        end
+
+        expect(result).not_to be_booted
+        expect(result.error).to be_a(described_class::BootExitError)
+        expect(result.failure_summary).to include("App called exit(1) during boot")
+      end
     end
   end
 

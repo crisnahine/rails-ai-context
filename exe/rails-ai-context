@@ -180,6 +180,10 @@ class RailsAiContextCLI < Thor
       # the boot, is the one that still fails.
       boot_rails!(command: "context", allow_static: true)
 
+      # Before the cleanup prompt and the introspection, both of which a
+      # format nothing can write would waste.
+      ::RailsAiContext::Serializers::ContextFileSerializer.validate_format!(options[:format]&.to_sym)
+
       if options[:format]
         cleanup_tools = options[:format] == "all" ? nil : [ options[:format].to_sym ]
       else
@@ -515,7 +519,9 @@ class RailsAiContextCLI < Thor
       # Relative paths inside the app (log/, tmp/, sqlite files) assume the
       # process cwd is the app root, so honor --app-path by moving there.
       Dir.chdir(app_root) if app_path_opt
-      ENV["RAILS_ENV"] = environment_opt if environment_opt
+      # Apps read RAILS_ENV in config/boot.rb, before anything the gem can
+      # rescue; leaving it unset made the documented default unreachable.
+      ENV["RAILS_ENV"] = environment_opt || ENV["RAILS_ENV"] || "development"
 
       # A command that can serve the static tier reads a source-only tree
       # instead of refusing it.

@@ -107,10 +107,14 @@ and is the same whatever put the gem in the static tier.
 so it always requires a bootable app.
 
 Boot failure degrades `serve`/`tool` to the static tier automatically (proven
-across four boot-failure modes - raises, prints to stdout, writes via the
-`STDOUT` constant, and hangs past the timeout - in
+across five boot-failure modes - raises, prints to stdout, writes via the
+`STDOUT` constant, calls `exit`/`abort`, and hangs past the timeout - in
 `spec/e2e/boot_resilience_spec.rb`); `--no-boot` forces it without attempting a
 boot at all (`spec/e2e/static_tier_spec.rb`).
+
+The exit mode is the standalone binary only. The rake tasks boot inside the
+app's own process, where `exit` is that process deciding to stop, so
+`rails ai:serve` on an app that aborts stops with it.
 
 ### Confidence vocabulary
 

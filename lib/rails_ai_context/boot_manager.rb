@@ -25,6 +25,10 @@ module RailsAiContext
     # failures without parsing error message text.
     class BootTimeoutError < BootError; end
 
+    # An initializer calling exit() or abort(). A distinct class so the CLI's
+    # degrade path can name the mode without parsing message text.
+    class BootExitError < BootError; end
+
     DEFAULT_TIMEOUT = 60
 
     # Ruby quotes the method name differently across versions.
@@ -58,9 +62,11 @@ module RailsAiContext
     end
 
     # Attempts to boot the Rails app rooted at app_root. Returns a Result;
-    # never raises for boot problems. SystemExit passes through, announced on
-    # stderr - an initializer calling exit() is an explicit process-level
-    # decision.
+    # never raises for boot problems, including an initializer that exits.
+    # This process belongs to the standalone binary, not to the app, and the
+    # caller has a static tier to answer from - so an exit here is a boot
+    # failure like any other. `guard` still lets the exit stand for callers
+    # running inside the app's own process.
     def self.boot!(app_root: Dir.pwd, timeout: DEFAULT_TIMEOUT)
       environment_rb = File.join(app_root, "config", "environment.rb")
       unless File.exist?(environment_rb)
@@ -71,6 +77,8 @@ module RailsAiContext
       end
 
       guard(timeout: timeout) { require environment_rb }
+    rescue SystemExit => e
+      Result.new(status: :failed, error: BootExitError.new("App called exit(#{e.status}) during boot"))
     end
 
     # The same three protections for callers that boot through their own
@@ -82,11 +90,11 @@ module RailsAiContext
       end
       Result.new(status: :booted)
     rescue SystemExit => e
-      # The exit stands: an initializer calling exit() is an explicit
-      # process-level decision, and its own message is already on stderr.
-      # Without this line nothing says the call came from here, or that the
-      # static tier answers it without booting.
-      $stderr.puts "[rails-ai-context] App exited during boot (status #{e.status}); rerun with --no-boot for the static tier."
+      # The exit stands for callers booting inside the app's own process (the
+      # rake tasks), where it is an explicit process-level decision. Its own
+      # message is already on stderr; without this line nothing says the call
+      # came from here.
+      $stderr.puts "[rails-ai-context] App exited during boot (status #{e.status})."
       raise
     rescue Timeout::Error
       # Timeout::Error's own message ("execution expired") names neither the
