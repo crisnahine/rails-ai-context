@@ -37,6 +37,9 @@ module RailsAiContext
       MAX_DIFF_LINES_PER_FILE = 30
 
       def self.call(ref: "HEAD", files: nil, server_context: nil)
+        refused = refuse_unsafe_paths(files)
+        return refused if refused
+
         root = rails_app.root.to_s
 
         # Verify git is available. Child stderr goes to File::NULL so git's own

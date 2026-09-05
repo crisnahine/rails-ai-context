@@ -19,7 +19,12 @@ RSpec.describe "path refusal contract" do
     RailsAiContext::Tools::GetPartialInterface => -> { call(partial: "../../etc/passwd") },
     RailsAiContext::Tools::SearchCode => -> { call(pattern: "root", path: "../..") },
     RailsAiContext::Tools::ReadLogs => -> { call(file: "../../etc/passwd") },
-    RailsAiContext::Tools::Validate => -> { call(files: [ "../../etc/passwd" ]) }
+    RailsAiContext::Tools::Validate => -> { call(files: [ "../../etc/passwd" ]) },
+    RailsAiContext::Tools::GetTestInfo => -> { call(model: "../../etc/passwd") },
+    RailsAiContext::Tools::SecurityScan => -> { call(files: [ "../../etc/passwd" ]) },
+    RailsAiContext::Tools::ReviewChanges => -> { call(files: [ "../../etc/passwd" ]) },
+    RailsAiContext::Tools::GenerateTest => -> { call(file: "../../etc/passwd") },
+    RailsAiContext::Tools::Diagnose => -> { call(error: "NoMethodError", file: "../../etc/passwd") }
   }
 
   refusals.each do |tool, refuse|
@@ -41,7 +46,11 @@ RSpec.describe "path refusal contract" do
     RailsAiContext::Tools::GetView => -> { call(path: "/etc/passwd") },
     RailsAiContext::Tools::GetEditContext => -> { call(file: "/etc/passwd", near: "root") },
     RailsAiContext::Tools::GetPartialInterface => -> { call(partial: "/etc/passwd") },
-    RailsAiContext::Tools::SearchCode => -> { call(pattern: "root", path: "/etc") }
+    RailsAiContext::Tools::SearchCode => -> { call(pattern: "root", path: "/etc") },
+    RailsAiContext::Tools::GenerateTest => -> { call(file: "/etc/passwd") },
+    RailsAiContext::Tools::Diagnose => -> { call(error: "NoMethodError", file: "/etc/passwd") },
+    RailsAiContext::Tools::ReviewChanges => -> { call(files: [ "/etc/passwd" ]) },
+    RailsAiContext::Tools::SecurityScan => -> { call(files: [ "/etc/passwd" ]) }
   }
 
   absolute_refusals.each do |tool, refuse|
@@ -52,6 +61,19 @@ RSpec.describe "path refusal contract" do
       expect(text_of(response)).to match(/not allowed|denied|sensitive/)
       expect(response.error?).to be(true)
     end
+  end
+
+  # The list above is what someone remembered to type. This is what the
+  # registry says the list has to hold, so a new tool taking a path from the
+  # caller cannot quietly skip the contract.
+  it "covers every tool that takes a path-shaped parameter" do
+    path_params = %w[path file files partial]
+    takers = RailsAiContext::Server.builtin_tools.select do |tool|
+      properties = (tool.input_schema_value&.to_h || {})[:properties] || {}
+      properties.keys.map(&:to_s).any? { |name| path_params.include?(name) }
+    end
+
+    expect(takers - (refusals.keys + absolute_refusals.keys)).to be_empty
   end
 
   it "keeps a directory that is simply not there an ordinary empty answer" do

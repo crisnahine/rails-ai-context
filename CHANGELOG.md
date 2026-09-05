@@ -986,6 +986,16 @@ Changed.
   paragraph, so the notice read as part of the generator credit. It goes
   through the same helper the other renders use and keeps its own blank lines.
 
+- **Five tools took a path from the caller and answered a refusal with exit 0.**
+  `rails_get_test_info` said "the name was refused, it leaves the app root or
+  names a sensitive file" and exited 0 as though it had looked; `rails_security_scan`
+  filtered brakeman's warnings by an unvalidated path, so `files: ["/etc/passwd"]`
+  printed "No security warnings found in /etc/passwd", an answer about a file it
+  never opened; `rails_review_changes`, `rails_generate_test` and `rails_diagnose`
+  took one the same way. All five refuse now, in the wording the other tools
+  already use, through one helper on the base class. The contract's spec no
+  longer trusts a hand-typed list either: it asks the tool registry which tools
+  declare a path-shaped parameter and fails when one of them is not covered.
 - **`ApplicationController`'s filters reached the generated files and no tool.**
   The listing leaves that class out - it would sit in every row - and the chain
   walk looks each ancestor up in the listing, so the walk ended on the first

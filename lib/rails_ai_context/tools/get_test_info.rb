@@ -243,7 +243,7 @@ module RailsAiContext
         # A refused candidate was never read, so listing it reads as a search
         # that happened. When every one was refused, the name is the answer.
         if contained.empty?
-          return empty_response("No test file found for #{name}: the name was refused, it leaves the app root " \
+          return error_response("No test file found for #{name}: the name was refused, it leaves the app root " \
                                 "or names a sensitive file.")
         end
 

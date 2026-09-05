@@ -46,6 +46,9 @@ module RailsAiContext
           return error_response("Provide at least one of: `model`, `controller`, or `file`.")
         end
 
+        refused = refuse_unsafe_paths([ file ])
+        return refused if refused
+
         tests_data = cached_context[:tests] || {}
         framework = tests_data[:framework] || detect_framework
         patterns = detect_patterns(framework)

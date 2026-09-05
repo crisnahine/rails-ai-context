@@ -63,6 +63,11 @@ module RailsAiContext
       }.freeze
 
       def self.call(files: nil, confidence: "weak", checks: nil, detail: "standard", server_context: nil)
+        # Filtering by a path outside the app would report "no warnings found
+        # in /etc/passwd", which reads as a file this tool looked at.
+        refused = refuse_unsafe_paths(files)
+        return refused if refused
+
         unless brakeman_available?
           return text_response(
             "Brakeman is not installed. Add it to your Gemfile:\n\n" \

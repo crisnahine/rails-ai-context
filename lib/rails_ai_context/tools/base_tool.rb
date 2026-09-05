@@ -788,6 +788,24 @@ module RailsAiContext
           RailsAiContext::SafePath.sensitive?(relative_path)
         end
 
+        # The refusal every tool that takes a path from the caller answers
+        # with, so a script reading the exit status can tell a refusal from an
+        # answer. A path that is simply not there is not refused: that is an
+        # ordinary empty answer, and each tool words its own.
+        #
+        # @return [MCP::Tool::Response, nil] the error result, or nil to carry on
+        def refuse_unsafe_paths(paths)
+          refused = Array(paths).compact.reject { |path| path.to_s.strip.empty? }.filter_map do |path|
+            refusal = RailsAiContext::SafePath.locate(path.to_s, under: rails_app.root.to_s).refusal
+            [ path, refusal ] if %i[sensitive traversal outside].include?(refusal)
+          end
+          return nil if refused.empty?
+
+          error_response(refused.map { |path, refusal|
+            refusal == :sensitive ? "Path not allowed: #{path} (sensitive file)" : "Path not allowed: #{path}"
+          }.join("\n"))
+        end
+
         # Resolve a Dir.glob result to a realpath that is:
         #   (a) separator-aware contained under `real_dir` (blocks sibling bypass)
         #   (b) not a sensitive file via symlink indirection
