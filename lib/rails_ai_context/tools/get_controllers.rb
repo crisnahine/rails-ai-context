@@ -140,22 +140,14 @@ module RailsAiContext
                 lines << "## #{names.first.split('::').first}::* (#{short_names.join(', ')})"
                 lines << "- Inherits: #{parent}"
                 lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-                filters_line = Serializers::SectionFacts.filters_line(info)
-                lines << filters_line if filters_line
-                param_names = Serializers::SectionFacts.strong_param_names(info)
-                lines << "- Strong params: #{param_names.join(', ')}" if param_names.any?
+                lines.concat(Serializers::SectionFacts.controller_summary_lines(info))
                 lines << ""
               else
                 names.each do |name|
                   info = app_controllers[name]
                   lines << "## #{name}"
                   lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-                  filters_line = Serializers::SectionFacts.filters_line(info)
-                  lines << filters_line if filters_line
-                  param_names = Serializers::SectionFacts.strong_param_names(info)
-                  lines << "- Strong params: #{param_names.join(', ')}" if param_names.any?
-                  rescue_lines = Serializers::SectionFacts.rescue_handler_lines(info)
-                  lines << "- Rescue from: #{rescue_lines.join(', ')}" if rescue_lines.any?
+                  lines.concat(Serializers::SectionFacts.controller_summary_lines(info, rescue_handlers: true))
                   lines << "- Rate limit: #{info[:rate_limit]}" if info[:rate_limit]
                   lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
                   lines << ""

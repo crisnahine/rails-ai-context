@@ -69,6 +69,22 @@ module RailsAiContext
         "- Filters: #{parts.join(', ')}"
       end
 
+      # What every controller listing states under the name, in one order.
+      # `rescue_handlers:` because only the per-controller listing renders
+      # them; the compressed group and the generated files do not.
+      def controller_summary_lines(controller_data, rescue_handlers: false)
+        lines = []
+        filters = filters_line(controller_data)
+        lines << filters if filters
+        params = strong_param_names(controller_data)
+        lines << "- Strong params: #{params.join(', ')}" if params.any?
+        return lines unless rescue_handlers
+
+        rescues = rescue_handler_lines(controller_data)
+        lines << "- Rescue from: #{rescues.join(', ')}" if rescues.any?
+        lines
+      end
+
       # A block-form rescue_from carries no handler, so the exception name
       # alone is the whole line.
       def rescue_handler_lines(controller_data)
