@@ -806,6 +806,28 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe "view counts" do
+    def check_named(dir, name)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).run[:checks].find { |c| c.name == name }
+    end
+
+    # Two lines of one report counted different populations under the same
+    # noun, so a reader saw two view counts and could not tell which was which.
+    it "says what each of the two view lines counted" do
+      Dir.mktmpdir do |dir|
+        views = File.join(dir, "app", "views", "posts")
+        FileUtils.mkdir_p(views)
+        File.write(File.join(views, "index.html.erb"), "<h1>Posts</h1>\n")
+        File.write(File.join(views, "show.html.erb"), "<h1>Post</h1>\n")
+        File.write(File.join(views, "index.json.jbuilder"), "json.posts []\n")
+
+        expect(check_named(dir, "Views").message).to eq("3 files under app/views")
+        expect(check_named(dir, "View aggregation size").message)
+          .to start_with("2 erb/haml/slim templates")
+      end
+    end
+  end
+
   describe "model count" do
     it "is what SourceScan.paths resolves for the fixture, concerns included" do
       root = IntrospectedFixture::ROOT
