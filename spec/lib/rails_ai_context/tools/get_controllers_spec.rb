@@ -399,6 +399,63 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("- Filters: before authenticate_user!")
     end
 
+    # The listing resolves the parent and the single-controller answer read
+    # the raw spelling, so one tool named two parents for one controller.
+    it "heads both answers with the same parent for one controller" do
+      member = { actions: %w[index], filters: [], strong_params: [], parent_class: "BaseController" }
+      stub_controllers({
+        "Settings::BaseController" => {
+          actions: [], strong_params: [], parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "authenticate_user!" } ]
+        },
+        "Settings::Exports::BookmarksController" => member.dup,
+        "Settings::Exports::ListsController" => member.dup,
+        "Settings::Exports::MutedAccountsController" => member.dup
+      })
+
+      listing = described_class.call(detail: "full").content.first[:text]
+      single = described_class.call(controller: "Settings::Exports::BookmarksController").content.first[:text]
+
+      expect(listing).to include("- Inherits: Settings::BaseController")
+      expect(single).to include("**Parent:** `Settings::BaseController`")
+    end
+
+    # Nothing in the payload can qualify a framework or gem base, and
+    # inventing a namespace for it would be a guess.
+    it "keeps the raw spelling of a parent no entry resolves" do
+      stub_controllers({
+        "Api::WidgetsController" => {
+          actions: %w[index], filters: [], strong_params: [], parent_class: "ActionController::Metal"
+        },
+        "WidgetsController" => {
+          actions: %w[index], filters: [], strong_params: [], parent_class: "Grape::API"
+        }
+      })
+
+      namespaced = described_class.call(controller: "Api::WidgetsController").content.first[:text]
+      plain = described_class.call(controller: "WidgetsController").content.first[:text]
+
+      expect(namespaced).to include("**Parent:** `ActionController::Metal`")
+      expect(plain).to include("**Parent:** `Grape::API`")
+    end
+
+    # A controller that defines no action of its own is an answer. Omitting
+    # the line left a reader unable to tell it from a walk that did not look,
+    # which is the reason the other listings say "(no public actions)".
+    it "says a controller has no public actions in every detail level" do
+      stub_controllers({
+        "Admin::BaseController" => { actions: [], filters: [], strong_params: [], parent_class: "ApplicationController" }
+      })
+
+      standard = described_class.call(detail: "standard").content.first[:text]
+      full = described_class.call(detail: "full").content.first[:text]
+      single = described_class.call(controller: "Admin::BaseController").content.first[:text]
+
+      expect(standard).to include("- **Admin::BaseController** - (no public actions)")
+      expect(full).to include("- Actions: (no public actions)")
+      expect(single).to include("## Actions\n(no public actions)")
+    end
+
     # A skip's constraint decides whether the filter is struck through, so
     # two controllers whose skips differ only in the constraint must not
     # share a group and one rendered chain.

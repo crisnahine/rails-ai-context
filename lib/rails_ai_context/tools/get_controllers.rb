@@ -145,7 +145,7 @@ module RailsAiContext
                 lines << "## #{group_heading(names)}"
                 lines << "- Members: #{names.join(', ')}"
                 lines << "- Inherits: #{parent}"
-                lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
+                lines.concat(actions_lines(info))
                 lines.concat(Serializers::SectionFacts.controller_summary_lines(
                   info, ctx: cached_context, name: names.first, root: rails_app&.root&.to_s
                 ))
@@ -154,7 +154,7 @@ module RailsAiContext
                 names.each do |name|
                   info = app_controllers[name]
                   lines << "## #{name}"
-                  lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
+                  lines.concat(actions_lines(info))
                   lines.concat(Serializers::SectionFacts.controller_summary_lines(
                     info, rescue_handlers: true,
                     ctx: cached_context, name: name, root: rails_app&.root&.to_s
@@ -184,6 +184,15 @@ module RailsAiContext
         Introspectors::ActionResolver.resolve_entry_name(
           Payload.controllers(cached_context), info[:parent_class], name
         )
+      end
+
+      # A class that defines no action of its own is an answer, and dropping
+      # the line left it reading as a walk that did not look. An unread entry
+      # already gets a line of its own, so it is not said twice.
+      private_class_method def self.actions_lines(info)
+        return [] if Serializers::SectionFacts.unread_phrase(info)
+
+        [ "- Actions: #{Serializers::SectionFacts.actions_phrase(info)}" ]
       end
 
       # Only a skip's constraints reach the group's filter line: `only:` and
@@ -408,13 +417,15 @@ module RailsAiContext
 
       private_class_method def self.format_controller(name, info)
         lines = [ "# #{name}", "" ]
-        lines << "**Parent:** `#{info[:parent_class]}`" if info[:parent_class]
+        lines << "**Parent:** `#{resolved_parent(name, info)}`" if info[:parent_class]
         lines << "**API controller:** yes" if info[:api_controller]
         lines << "**Formats:** #{info[:respond_to_formats].join(', ')}" if info[:respond_to_formats]&.any?
 
-        if info[:actions]&.any?
-          lines << "" << "## Actions"
-          lines << info[:actions].map { |a| "- `#{a}`" }.join("\n")
+        lines << "" << "## Actions"
+        lines << if info[:actions]&.any?
+          info[:actions].map { |a| "- `#{a}`" }.join("\n")
+        else
+          Serializers::SectionFacts.actions_phrase(info)
         end
 
         chain = RailsAiContext::ActionFilters.for_controller(cached_context, name, root: rails_app.root.to_s)
