@@ -146,17 +146,17 @@ module RailsAiContext
           end
           return unless node.block
 
-          opts = extract_keyword_options(node)
+          opts = route_options(node)
           push_frame(node,
                      prefix: join_path(current_prefix, (opts[:path] || name).to_s),
-                     mod: name.to_s,
-                     name_prefix: name.to_s)
+                     mod: (opts[:module] || name).to_s,
+                     name_prefix: (opts[:as] || name).to_s)
         end
 
         def enter_scope(node)
           return unless node.block
 
-          opts = extract_keyword_options(node)
+          opts = route_options(node)
           first = literal_first_arg(node)
           path = (first || opts[:path])&.to_s
           push_frame(node,
