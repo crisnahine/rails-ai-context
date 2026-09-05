@@ -337,7 +337,7 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
 
       it "stamps the supported floor and says so, so the code still parses" do
         text = text_for(action: "add_index", table: "accounts", column: "domain")
-        expect(text).to include("ActiveRecord::Migration[#{described_class::SUPPORTED_RAILS_FLOOR}]")
+        expect(text).to include("ActiveRecord::Migration[7.0]")
         expect(text).to include("Could not determine this app's Rails version")
       end
     end

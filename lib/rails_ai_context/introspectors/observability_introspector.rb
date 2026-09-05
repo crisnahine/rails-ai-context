@@ -82,7 +82,7 @@ module RailsAiContext
       # The Fanout notifier splits subscribers across @string_subscribers
       # (exact-name → Array) and @other_subscribers (Regexp/nil patterns →
       # flat Array). This shape has been stable since Rails 6.0 - the gem's
-      # supported floor is Rails 7.1, so both ivars are always present.
+      # supported floor is Rails 7.0, so both ivars are always present.
       def extract_subscribers_from_notifier(notifier)
         all = []
         if (str_subs = notifier.instance_variable_get(:@string_subscribers))

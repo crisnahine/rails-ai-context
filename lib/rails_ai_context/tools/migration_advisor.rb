@@ -55,7 +55,7 @@ module RailsAiContext
       # Stamped on generated migrations when neither the app's context nor a
       # loaded Rails names a version. The bracket selects a compatibility
       # mode, so the tool says so in its output when it falls back here.
-      SUPPORTED_RAILS_FLOOR = "7.1"
+      SUPPORTED_RAILS_FLOOR = "7.0"
 
       def self.call(action: nil, table: nil, column: nil, type: nil, new_name: nil, options: nil, server_context: nil)
         action = action.to_s.strip
