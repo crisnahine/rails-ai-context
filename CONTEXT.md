@@ -54,6 +54,12 @@ Distinct from the **Static tier** sense of "declared": that one is about declari
 
 The other half of the same problem is the reverse trip. Once a name is the declared one, no consumer can rebuild the path from it - and a pack or an in-repo engine breaks that derivation too, inflection or not. So controllers and models carry `file:` from whichever tier found them, and consumers read it through `Payload` (`controller_file`, `controller_route_key`, `controller_for_route_key`, `model_file`). The rule: a tool that needs a path for a name reads it, never underscores it.
 
+## Table name
+
+The table a model reads. Rails builds it as `table_name_prefix` + the demodulized class name pluralized + `table_name_suffix`, unless the class assigns one itself or is an STI child, which reads its parent's. The static tier answers the same order from source: an explicit `self.table_name =`, else the table of the model it inherits from, else the prefix and suffix the enclosing modules declare around the file's own basename pluralized. Never the underscored constant - that turns `Admin::ActionLog` into `admin/action_logs` and `OAuthClientConfig` into `o_auth_client_configs`, neither of which is a table.
+
+`TableName` reads those three declarations out of a source and holds the two derivations; walking the namespace and the superclass chain belongs to the caller, because only it has the other files. A reader that starts from a model name instead of a file asks `TableName.for_model_name`, which takes the table the model tier already recorded before falling back to the convention. A prefix declared outside the model directories is still invisible, so the answer stays [STATIC].
+
 ## Static tier
 
 The mode where the app did not boot, or `--no-boot` was passed. What an introspector answers here is what it declared, never what a runtime check happened to detect. Every introspector in `INTROSPECTOR_MAP` extends `StaticTier` and names one of three kinds:

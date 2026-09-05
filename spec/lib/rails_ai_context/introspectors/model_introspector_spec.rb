@@ -85,6 +85,41 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Rails names the anonymous join class it builds for a
+  # has_and_belongs_to_many through a singleton `name=`, so it answers a name
+  # no constant carries: "HABTM_Tags" while it lives at "Account::HABTM_Tags".
+  describe "a class that answers a name no constant carries" do
+    # Autoloading a model makes Rails walk ActiveRecord::Base.descendants to
+    # rebuild callbacks, so the app is loaded before the stub is in place or
+    # that walk reaches the doubles.
+    let(:loaded) do
+      introspector.call
+      ActiveRecord::Base.descendants
+    end
+
+    def add_descendant(model)
+      list = loaded + [ model ]
+      allow(ActiveRecord::Base).to receive(:descendants).and_return(list)
+    end
+
+    it "is not reported as a model" do
+      add_descendant(double("HABTM_Tags", name: "HABTM_Tags", to_s: "Account::HABTM_Tags",
+                                          abstract_class?: false))
+
+      keys = introspector.call.keys
+
+      expect(keys).to include("Post")
+      expect(keys).not_to include("HABTM_Tags")
+    end
+
+    it "is rejected by the name it answers, not by the HABTM spelling" do
+      add_descendant(double("Renamed", name: "Renamed", to_s: "Owner::Renamed",
+                                       abstract_class?: false))
+
+      expect(introspector.call.keys).not_to include("Renamed")
+    end
+  end
+
   describe "AST-based macro extraction via #call" do
     let(:fixture_model) { File.join(Rails.root, "app/models/employee.rb") }
 
@@ -697,6 +732,14 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   # a table no app has. The file's own name is the reliable source: Zeitwerk
   # resolved the constant from it, so it already carries the inflection.
   describe "the table a model reads" do
+    def write_models(dir, files)
+      files.each do |relative, source|
+        path = File.join(dir, "app", "models", relative)
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, source)
+      end
+    end
+
     it "reads it from the file, not from the inflected name" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
@@ -721,6 +764,77 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         expect(result["Billing::Invoice"][:table_name]).to eq("invoices")
       end
+    end
+
+    it "prepends the table_name_prefix the enclosing module declares" do
+      Dir.mktmpdir do |dir|
+        write_models(dir,
+          "admin.rb" => "module Admin\n  def self.table_name_prefix\n    'admin_'\n  end\nend\n",
+          "admin/action_log.rb" => "module Admin\n  class ActionLog < ApplicationRecord\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Admin::ActionLog"][:table_name]).to eq("admin_action_logs")
+      end
+    end
+
+    it "appends the table_name_suffix the enclosing module declares" do
+      Dir.mktmpdir do |dir|
+        write_models(dir,
+          "legacy.rb" => "module Legacy\n  self.table_name_suffix = '_v1'\nend\n",
+          "legacy/invoice.rb" => "module Legacy\n  class Invoice < ApplicationRecord\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Legacy::Invoice"][:table_name]).to eq("invoices_v1")
+      end
+    end
+
+    it "reads an explicit assignment the model makes" do
+      Dir.mktmpdir do |dir|
+        write_models(dir,
+          "follow_recommendation.rb" =>
+            "class FollowRecommendation < ApplicationRecord\n  self.table_name = :global_follow_recommendations\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["FollowRecommendation"][:table_name]).to eq("global_follow_recommendations")
+      end
+    end
+
+    # An STI child has no table of its own; it reads its parent's.
+    it "takes the table of the model it inherits from" do
+      Dir.mktmpdir do |dir|
+        write_models(dir,
+          "post.rb" => "class Post < ApplicationRecord\nend\n",
+          "article.rb" => "class Article < Post\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Article"][:table_name]).to eq("posts")
+      end
+    end
+
+    it "keeps its own table under an abstract base" do
+      Dir.mktmpdir do |dir|
+        write_models(dir,
+          "analytics/record.rb" =>
+            "module Analytics\n  class Record < ApplicationRecord\n    self.abstract_class = true\n  end\nend\n",
+          "analytics/visit.rb" => "module Analytics\n  class Visit < Analytics::Record\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Analytics::Visit"][:table_name]).to eq("visits")
+      end
+    end
+
+    # The two tiers must answer the same table for the same file.
+    it "matches the booted tier on the fixture app's explicit assignment" do
+      root = File.expand_path("../../../fixtures/static_app", __dir__)
+
+      result = described_class.new(RailsAiContext::StaticApp.new(root)).static_call
+
+      expect(result["Tagging"][:table_name]).to eq("comments")
     end
   end
 

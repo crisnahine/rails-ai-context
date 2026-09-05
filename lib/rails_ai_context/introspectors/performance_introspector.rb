@@ -77,6 +77,10 @@ module RailsAiContext
           {
             name: class_name,
             file: record.file,
+            # This walk keeps no view of the other model files, so a
+            # table_name_prefix declared by an enclosing module is out of
+            # reach here and the stem stands alone.
+            table_name: TableName.explicit(record.source, class_name) || TableName.stem(record.path),
             has_many: has_many,
             belongs_to: belongs_to,
             includes_calls: includes_calls
@@ -256,10 +260,9 @@ module RailsAiContext
           model[:has_many].each do |assoc|
             assoc_name = assoc[:name]
             # Check if a counter_cache column exists but counter_cache isn't declared
-            table_name = model[:name].underscore.pluralize
             count_col = "#{assoc_name}_count"
 
-            table = schema_data[table_name]
+            table = schema_data[model[:table_name]]
             next unless table
 
             has_count_column = table[:columns].any? { |c| c[:name] == count_col }

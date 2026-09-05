@@ -180,6 +180,19 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       text = result.content.first[:text]
       expect(text).to include("Table: users")
     end
+
+    # Underscoring a namespaced model asks for `admin/action_logs`, a table no
+    # app has. The model already carries the table it reads.
+    it "resolves a namespaced model through the table its model recorded" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: tables, total_tables: 3 },
+        models: { "Admin::Comment" => { table_name: "comments" } }
+      })
+
+      result = described_class.call(table: "Admin::Comment")
+
+      expect(result.content.first[:text]).to include("Table: comments")
+    end
   end
 
   describe ".call with JSON format" do
