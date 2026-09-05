@@ -130,6 +130,16 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       expect(cli_steps).not_to be_empty
     end
 
+    it "both surfaces reject an unknown preset by name and exit non-zero" do
+      cli_result = @cli.cli("preset", "bogus")
+      expect(cli_result.success?).to be(false), cli_result.to_s
+      expect(cli_result.stderr).to include("Unknown preset: bogus")
+
+      rake_result = @cli.run([ "bin/rails", "ai:preset[bogus]" ])
+      expect(rake_result.success?).to be(false), rake_result.to_s
+      expect(rake_result.stderr).to include("Unknown preset: bogus")
+    end
+
     it "`rails-ai-context doctor` exits 0 and emits a readiness score" do
       result = @cli.cli("doctor")
       expect(result.success?).to be(true), result.to_s

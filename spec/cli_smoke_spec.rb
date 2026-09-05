@@ -97,6 +97,24 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     end
   end
 
+  # A listing the user asked for belongs on stdout; only the error framing and
+  # the listing that follows a rejected name go to stderr.
+  it "puts the bare preset listing on stdout and a rejected name on stderr" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+
+    Dir.mktmpdir do |dir|
+      listing = `cd #{dir} && ruby -I #{lib} #{exe} preset 2>/dev/null`
+      expect($?.exitstatus).to eq(0), listing
+      expect(listing).to include("Available presets:")
+
+      rejected = `cd #{dir} && ruby -I #{lib} #{exe} preset bogus 2>&1 1>/dev/null`
+      expect($?.exitstatus).to eq(1), rejected
+      expect(rejected).to include("Unknown preset: bogus")
+      expect(rejected).to include("Available presets:")
+    end
+  end
+
   it "documents the static-tier flags" do
     help = `ruby #{File.expand_path('../exe/rails-ai-context', __dir__)} help serve 2>&1`
     expect(help).to include("--no-boot")
