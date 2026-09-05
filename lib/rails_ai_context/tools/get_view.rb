@@ -279,8 +279,8 @@ module RailsAiContext
       private_class_method def self.read_view_file(path)
         content, result = RailsAiContext::ViewFile.read(rails_app.root.to_s, path)
         case result.refusal
-        when :traversal, :outside then return text_response("Path not allowed: #{path}")
-        when :sensitive then return text_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
+        when :traversal, :outside then return error_response("Path not allowed: #{path}")
+        when :sensitive then return error_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
         when :too_large then return text_response("File too large: #{path}")
         when :missing
           dir = File.dirname(path.to_s.delete_prefix("app/views/"))

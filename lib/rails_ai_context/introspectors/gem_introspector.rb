@@ -161,7 +161,7 @@ module RailsAiContext
       # @return [Hash] gem analysis
       def call
         lock = RailsAiContext::GemLock.for(app.root)
-        return { error: "No Gemfile.lock found" } if lock.missing?
+        return { error: lock.reason } if lock.missing?
 
         notable = detect_notable_gems(lock)
 

@@ -336,6 +336,78 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(response.error?).to be(true)
       expect(response.content.first[:text]).to include("rails_spec_probe failed")
     end
+
+    # The frame names a file inside the gem, which on an installed gem is an
+    # absolute path under the machine's GEM_HOME.
+    it "keeps the install path out of the frame it names" do
+      tool = build_tool do
+        input_schema(properties: {})
+        def self.call(server_context: nil)
+          RailsAiContext::Tools::BaseTool.find_closest_match(nil, nil)
+        end
+      end
+
+      text = tool.call.content.first[:text]
+
+      gem_root = File.expand_path("../../../..", __dir__)
+      expect(text).to match(%r{At: \S*lib/rails_ai_context/tools/base_tool\.rb:\d+})
+      expect(text).not_to include(gem_root)
+    end
+  end
+
+  # An unknown parameter reached the tool as an unknown keyword, so the answer
+  # was an ArgumentError with a backtrace. The CLI refuses the same mistake by
+  # naming the params the tool takes.
+  describe "unknown parameters" do
+    it "refuses a parameter the tool does not take and names the valid ones" do
+      tool = build_tool do
+        input_schema(properties: { view: { type: "string" }, detail: { type: "string" } })
+        def self.call(view: nil, detail: nil, server_context: nil)
+          text_response("ok")
+        end
+      end
+
+      response = tool.call(views: "posts/index")
+
+      expect(response.error?).to be(true)
+      text = response.content.first[:text]
+      expect(text).to include("Unknown param: 'views' - did you mean 'view'?")
+      expect(text).to include("Valid params: view, detail")
+      expect(text).not_to include("ArgumentError")
+    end
+
+    it "says a tool takes no params rather than naming none" do
+      tool = build_tool do
+        input_schema(properties: {})
+        def self.call(server_context: nil)
+          text_response("ok")
+        end
+      end
+
+      expect(tool.call(table: "users").content.first[:text]).to include("This tool takes no params.")
+    end
+
+    it "reads the schema, not the signature, so a loose tool refuses the same" do
+      tool = build_tool do
+        input_schema(properties: { view: { type: "string" } })
+        def self.call(**kwargs)
+          text_response("got #{kwargs.keys.sort.join(', ')}")
+        end
+      end
+
+      expect(tool.call(anything: 1).content.first[:text]).to include("Unknown param: 'anything'")
+    end
+
+    it "lets the internal server_context through" do
+      tool = build_tool do
+        input_schema(properties: { view: { type: "string" } })
+        def self.call(view: nil, server_context: nil)
+          text_response("ok")
+        end
+      end
+
+      expect(tool.call(view: "posts/index", server_context: {}).content.first[:text]).to include("ok")
+    end
   end
   # executor.wrap reports anything crossing it to the host app's
   # error_reporter as unhandled. A tool failure is handled here - it becomes an

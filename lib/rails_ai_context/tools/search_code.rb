@@ -149,7 +149,7 @@ module RailsAiContext
         rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, Errno::ENAMETOOLONG
           return text_response("Path not found: #{path}")
         end
-        return text_response("Path not allowed: #{path}") unless RailsAiContext::SafePath.contained?(real_search, real_root)
+        return error_response("Path not allowed: #{path}") unless RailsAiContext::SafePath.contained?(real_search, real_root)
 
         # One row past the cap, so a cut list is knowable rather than silent.
         fetch_limit = max_results_cap + 1

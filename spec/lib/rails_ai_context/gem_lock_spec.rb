@@ -146,10 +146,20 @@ RSpec.describe RailsAiContext::GemLock do
     end
   end
 
-  it "answers no gems for a file with no specs section" do
+  # This used to answer like an app with no gems, so a truncated or corrupt
+  # lockfile made every gem-dependent answer say the app does not use the gem.
+  it "does not answer a file with no gem entries as an app with no gems" do
     File.write(File.join(@root, "Gemfile.lock"), "not a lockfile\n  GEM\n specs")
     File.utime(Time.now + 2, Time.now + 2, File.join(@root, "Gemfile.lock"))
+    expect(described_class.for(@root).missing?).to be true
+    expect(described_class.for(@root).reason).to eq("Gemfile.lock has no specs section")
     expect(described_class.for(@root).present?("rails")).to be false
-    expect(described_class.for(@root).missing?).to be false
+  end
+
+  it "names which of the two ways it could not answer" do
+    Dir.mktmpdir do |bare|
+      expect(described_class.for(bare).reason).to eq("No Gemfile.lock found")
+    end
+    expect(lock.reason).to be_nil
   end
 end

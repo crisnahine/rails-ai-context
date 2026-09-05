@@ -151,7 +151,7 @@ module RailsAiContext
       dir = File.join(app.root, "app/views")
       if Dir.exist?(dir)
         count = Dir.glob(File.join(dir, "**/*")).reject { |f| File.directory?(f) }.size
-        Check.new(name: "Views", status: :pass, message: "#{count_phrase(count, "view file")} found", fix: nil)
+        Check.new(name: "Views", status: :pass, message: "#{count_phrase(count, "file")} under app/views", fix: nil)
       else
         Check.new(name: "Views", status: :warn, message: "No view files", fix: nil)
       end
@@ -698,11 +698,11 @@ module RailsAiContext
 
       if pct >= 80
         Check.new(name: "View aggregation size", status: :warn,
-          message: "#{count_phrase(count, "view file")} totaling #{(total_size / 1_000_000.0).round(1)}MB (#{pct}% of #{(limit / 1_000_000.0).round}MB limit for UI pattern extraction)",
+          message: "#{count_phrase(count, "erb/haml/slim template")} totaling #{(total_size / 1_000_000.0).round(1)}MB (#{pct}% of #{(limit / 1_000_000.0).round}MB limit for UI pattern extraction)",
           fix: "Increase `config.max_view_total_size` or `config.max_view_file_size`")
       else
         Check.new(name: "View aggregation size", status: :pass,
-          message: "#{count_phrase(count, "view file")} (#{(total_size / 1024.0).round}KB total, within limits)",
+          message: "#{count_phrase(count, "erb/haml/slim template")} (#{(total_size / 1024.0).round}KB total, within limits)",
           fix: nil)
       end
     end

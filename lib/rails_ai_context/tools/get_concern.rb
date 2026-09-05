@@ -70,8 +70,8 @@ module RailsAiContext
 
         located = RailsAiContext::SafePath.locate(concern_relative(name), under: root, root: root)
         case located.refusal
-        when :traversal then text_response("Path not allowed: #{name}")
-        when :sensitive then text_response("Path not allowed: #{name} (sensitive file)")
+        when :traversal then error_response("Path not allowed: #{name}")
+        when :sensitive then error_response("Path not allowed: #{name} (sensitive file)")
         end
       end
 
@@ -108,7 +108,7 @@ module RailsAiContext
           case located.refusal
           when :too_large
             return text_response("Concern file too large: #{located.realpath} (#{File.size(located.realpath)} bytes, max: #{max_size})")
-          when :sensitive then return text_response("Path not allowed: #{name} (sensitive file)")
+          when :sensitive then return error_response("Path not allowed: #{name} (sensitive file)")
           when :missing, :outside then next
           end
 

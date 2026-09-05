@@ -48,6 +48,13 @@ module RailsAiContext
       def self.call(lines: nil, level: "all", file: nil, search: nil, server_context: nil, **_extra)
         warnings = []
 
+        # A log is named, not located: the name is reduced to its basename, so
+        # a path would otherwise come back as the log of that basename not
+        # being there rather than as the refusal it is.
+        if file.to_s.match?(%r{[/\\]|\.\.})
+          return error_response("Path not allowed: #{file}. Name a log file in log/, without a path (e.g. 'production').")
+        end
+
         # Normalize and validate lines
         original_lines = lines
         lines = (lines || config.log_lines).to_i

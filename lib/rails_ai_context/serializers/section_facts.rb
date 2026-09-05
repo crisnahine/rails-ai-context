@@ -67,9 +67,20 @@ module RailsAiContext
         Array(controller_data[:strong_params]).map { |sp| (sp.is_a?(Hash) ? sp[:name] : sp).to_s }
       end
 
+      # A file the walk could not read carries an error and no facts. Saying
+      # nothing there reads as a controller with nothing in it, which is a
+      # different answer, so every surface states the error instead.
+      def unread_phrase(controller_data)
+        error = controller_data.is_a?(Hash) ? controller_data[:error] : nil
+        error ? "(could not be read: #{error})" : nil
+      end
+
       # A base controller declares no action of its own. Joining an empty list
       # leaves the listing line ending in a dash, so it says what it found.
       def actions_phrase(controller_data)
+        unread = unread_phrase(controller_data)
+        return unread if unread
+
         actions = Array(controller_data[:actions])
         actions.any? ? actions.join(", ") : "(no public actions)"
       end
@@ -90,6 +101,9 @@ module RailsAiContext
       # `rescue_handlers:` because only the per-controller listing renders
       # them; the compressed group and the generated files do not.
       def controller_summary_lines(controller_data, rescue_handlers: false)
+        unread = unread_phrase(controller_data)
+        return [ "- Could not be read: #{controller_data[:error]}" ] if unread
+
         lines = []
         filters = filters_line(controller_data)
         lines << filters if filters

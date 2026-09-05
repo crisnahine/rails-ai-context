@@ -375,7 +375,7 @@ module RailsAiContext
 
         # Check for unknown params and raise a helpful error with suggestions.
         # server_context is always allowed (internal MCP param).
-        unknown = kwargs.keys.map(&:to_s) - known_keys - [ "server_context" ]
+        unknown = Tools::BaseTool.unknown_param_names(kwargs.keys, properties)
         if unknown.any?
           msgs = unknown.map do |k|
             suggestion = Tools::BaseTool.find_closest_match(k, known_keys)

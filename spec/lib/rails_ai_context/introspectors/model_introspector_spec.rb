@@ -1066,6 +1066,34 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Zeitwerk never loads a file with a syntax error, so reflection never sees
+  # the class and the answer was that the model does not exist - while its
+  # table was listed as having no model at all.
+  describe "a model file the app cannot load" do
+    let(:broken) { Rails.root.join("app", "models", "broken_widget.rb") }
+
+    around do |example|
+      File.write(broken, "class BrokenWidget < ApplicationRecord\n  def x\n    if true\nend\n")
+      example.run
+    ensure
+      FileUtils.rm_f(broken)
+    end
+
+    it "is named with the error rather than left out of the booted answer" do
+      result = described_class.new(Rails.application).call
+
+      expect(result).to have_key("BrokenWidget")
+      expect(result["BrokenWidget"][:error]).to be_a(String)
+      expect(result["BrokenWidget"][:file]).to eq("app/models/broken_widget.rb")
+    end
+
+    it "still names the table it maps to, so the table is not read as orphaned" do
+      result = described_class.new(Rails.application).call
+
+      expect(result["BrokenWidget"][:table_name]).to eq("broken_widgets")
+    end
+  end
+
   # Rebuilding app/models/<underscored>.rb from the name is wrong for a model
   # in a pack or an engine, and wrong wherever the app registers an inflection,
   # so the file travels with the model the way it does with a controller.

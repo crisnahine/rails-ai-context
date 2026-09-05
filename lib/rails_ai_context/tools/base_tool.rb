@@ -476,6 +476,13 @@ module RailsAiContext
           )
         end
 
+        # The params a caller sent that this tool does not declare. The CLI and
+        # the MCP wrapper both refuse them, in their own words, off this one
+        # answer. server_context is the SDK's, not the caller's.
+        def unknown_param_names(keys, properties)
+          keys.map(&:to_s) - (properties || {}).keys.map(&:to_s) - [ "server_context" ]
+        end
+
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
         def find_closest_match(input, available)
           return nil if available.empty?
@@ -699,9 +706,11 @@ module RailsAiContext
 
         # Helper: wrap text in an MCP::Tool::Response flagged as an error
         # (isError: true) so MCP clients and the CLI treat the call as failed
-        # (non-zero exit). Mirrors the SafeCall rescue wrapper. Use for genuine
-        # execution failures only - policy blocks and guidance messages stay
-        # informational via text_response.
+        # (non-zero exit). Mirrors the SafeCall rescue wrapper. Use for an
+        # execution failure, and for a path refused on policy - outside the
+        # app, a traversal, a sensitive file - which is a request the tool
+        # would not answer. Guidance and "found nothing" stay informational
+        # via text_response and empty_response.
         def error_response(text)
           # A failed call must not leak its recorded params into the next
           # call's session entry.
