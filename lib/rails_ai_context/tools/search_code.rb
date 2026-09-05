@@ -9,6 +9,13 @@ module RailsAiContext
       # no per-match timeout, so the pattern is built without one there.
       REGEXP_TIMEOUT_SUPPORTED = Regexp.respond_to?(:timeout)
 
+      # ripgrep's own field separators, so the parse is exact rather than two
+      # ambiguous regexes tried in order: a match line whose content reads
+      # `\t12\tsomething` used to parse as a context row and vanish from the
+      # match count. Neither character appears in a path or a line number.
+      CONTEXT_FIELD_SEPARATOR = "\t"
+      MATCH_FIELD_SEPARATOR = "\x1f"
+
       tool_name "rails_search_code"
       description "Search the Rails codebase with smart modes. " \
         "Use match_type:\"trace\" to see where a method is defined, who calls it, and what it calls - in one call. " \
@@ -40,7 +47,7 @@ module RailsAiContext
           },
           exact_match: {
             type: "boolean",
-            description: "Match whole words only (wraps pattern in \\b word boundaries). Default: false."
+            description: "Match the pattern literally, whole-word where its edges are word characters. `def reblog?` will not match `def reblog`. Default: false."
           },
           exclude_tests: {
             type: "boolean",
@@ -52,11 +59,11 @@ module RailsAiContext
           },
           offset: {
             type: "integer",
-            description: "Skip this many results for pagination. Default: 0."
+            description: "Skip this many emitted lines for pagination. Default: 0."
           },
           limit: {
             type: "integer",
-            description: "Max results to return. Default: auto-sized based on total matches."
+            description: "Max lines to return. Default: auto-sized so the page holds a useful number of matches."
           },
           context_lines: {
             type: "integer",
@@ -100,15 +107,17 @@ module RailsAiContext
         when "definition"
           cleaned = pattern.sub(/\A\s*def\s+/, "")
           escaped = Regexp.escape(cleaned)
-          exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}\\b" : "^\\s*def\\s+(self\\.)?#{escaped}"
+          # `def\s+` already anchors the left edge, so only a trailing boundary.
+          exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}#{trailing_boundary(cleaned)}" : "^\\s*def\\s+(self\\.)?#{escaped}"
         when "class"
           cleaned = pattern.sub(/\A\s*(class|module)\s+/, "")
           escaped = Regexp.escape(cleaned)
-          exact_match ? "^\\s*(class|module)\\s+\\w*#{escaped}\\b" : "^\\s*(class|module)\\s+\\w*#{escaped}"
+          # `\w*` stays unbounded so a CamelCase prefix still resolves.
+          exact_match ? "^\\s*(class|module)\\s+\\w*#{escaped}#{trailing_boundary(cleaned)}" : "^\\s*(class|module)\\s+\\w*#{escaped}"
         when "call"
-          exact_match ? "\\b#{pattern}\\b" : pattern
+          exact_match ? exact_pattern(pattern) : pattern
         else
-          exact_match ? "\\b#{pattern}\\b" : pattern
+          exact_match ? exact_pattern(pattern) : pattern
         end
 
         # Validate regex syntax early
@@ -142,12 +151,15 @@ module RailsAiContext
         end
         return text_response("Path not allowed: #{path}") unless RailsAiContext::SafePath.contained?(real_search, real_root)
 
-        # Fetch all results (capped at 200 for safety)
+        # One row past the cap, so a cut list is knowable rather than silent.
+        fetch_limit = max_results_cap + 1
         all_results = if ripgrep_available?
-          search_with_ripgrep(search_pattern, search_path, file_type, max_results_cap, root, context_lines, exclude_tests: exclude_tests)
+          search_with_ripgrep(search_pattern, search_path, file_type, fetch_limit, root, context_lines, exclude_tests: exclude_tests)
         else
-          search_with_ruby(search_pattern, search_path, file_type, max_results_cap, root, exclude_tests: exclude_tests)
+          search_with_ruby(search_pattern, search_path, file_type, fetch_limit, root, exclude_tests: exclude_tests)
         end
+        truncated = all_results.size > max_results_cap
+        all_results = all_results.first(max_results_cap) if truncated
 
         # Filter out definitions for match_type:"call"
         all_results.reject! { |r| r[:content].match?(/\A\s*def\s/) } if match_type == "call"
@@ -156,33 +168,43 @@ module RailsAiContext
           return empty_response("No results found for '#{original_pattern}' in #{path || 'app'}.")
         end
 
-        # Smart default limit: <10 → all, 10-100 → half, >100 → 100
-        total = all_results.size
-        default_limit = if total <= 10 then total
-        elsif total <= 100 then (total / 2.0).ceil
+        # A non-empty row list whose flags all went missing still found
+        # something, so the count falls back to rows rather than saying zero.
+        unflagged = match_count(all_results).zero?
+        match_total = unflagged ? all_results.size : match_count(all_results)
+
+        # Smart default limit: <10 → all, 10-100 → half, >100 → 100. Sized in
+        # matches, then read back as a row index so `offset` stays row-based.
+        budget = if match_total <= 10 then match_total
+        elsif match_total <= 100 then (match_total / 2.0).ceil
         else 100
         end
+        match_rows = all_results.each_index.select { |i| match_row?(all_results[i]) }
+        default_limit = budget < match_rows.size ? match_rows[budget] : all_results.size
 
-        page = paginate(all_results, offset: offset, limit: limit, default_limit: [ default_limit, 1 ].max)
+        page = paginate(all_results, offset: offset, limit: limit, default_limit: [ default_limit, 1 ].max,
+                        noun: "line", truncated: truncated)
         paginated = page[:items]
 
-        if paginated.empty? && total > 0
+        if paginated.empty?
           return text_response(page[:hint])
         end
 
         pagination = page[:hint].empty? ? "" : "\n#{page[:hint]}"
 
-        showing = paginated.size.to_s
-        header = "# Search: `#{original_pattern}`\n**#{count_phrase(total, "total result")}**#{" in #{path}" if path}, showing #{showing}\n"
-
         # When context lines are interleaved with matches, prefix matches with
         # '>' and context with a space so they stay distinguishable. Pure-match
         # output (context_lines: 0, Ruby fallback) keeps the plain format.
-        mixed = paginated.any? { |r| r[:match] == false }
+        mixed = paginated.any? { |r| !match_row?(r) }
+        scanned = truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
+        with_context = mixed ? " (#{count_phrase(paginated.size, 'line')} with context)" : ""
+        header = "# Search: `#{original_pattern}`\n" \
+          "**#{count_phrase(match_total, 'match')}#{scanned}**#{" in #{path}" if path}, " \
+          "showing #{unflagged ? paginated.size : match_count(paginated)}#{with_context}\n"
         header += "`>` = match line\n" if mixed
 
         if group_by_file
-          text_response(header + "\n" + format_grouped(paginated, mixed) + pagination)
+          text_response(header + "\n" + format_grouped(paginated, mixed, all_results) + pagination)
         else
           output = paginated.map { |r|
             "#{line_marker(r, mixed)}#{r[:file]}:#{r[:line_number]}: #{r[:content].strip}"
@@ -191,11 +213,17 @@ module RailsAiContext
         end
       end
 
+      # A literal, whole-word pattern: the user's text is regex source
+      # otherwise, so `def reblog?` would match `def reblog` too.
+      private_class_method def self.exact_pattern(pattern)
+        "#{leading_boundary(pattern)}#{Regexp.escape(pattern)}#{trailing_boundary(pattern)}"
+      end
+
       # "> " for match lines, "  " for context lines; empty when the result
       # set has no context lines to distinguish from.
       private_class_method def self.line_marker(result, mixed)
         return "" unless mixed
-        result[:match] == false ? "  " : "> "
+        match_row?(result) ? "> " : "  "
       end
 
       # Build a Regexp, applying the ReDoS timeout only on runtimes that
@@ -218,11 +246,8 @@ module RailsAiContext
         cmd = [ "rg", "--no-heading", "--line-number", "--sort=path", "--max-count", max_results.to_s ]
         if ctx_lines > 0
           cmd.push("-C", ctx_lines.to_s)
-          # Tab-separate context lines so parse_rg_output can tell them apart
-          # from match lines (colon-separated). The default '-' separator is
-          # ambiguous with filenames containing dashes; tabs never appear in
-          # file paths or line numbers.
-          cmd.push("--field-context-separator", "\t")
+          cmd.push("--field-context-separator", CONTEXT_FIELD_SEPARATOR)
+          cmd.push("--field-match-separator", MATCH_FIELD_SEPARATOR)
         end
 
         RailsAiContext.configuration.excluded_paths.each do |p|
@@ -323,13 +348,26 @@ module RailsAiContext
       end
 
 
-      # Group results by file for cleaner output
-      private_class_method def self.format_grouped(results, mixed = false)
+      # Rows are matches plus context lines; only the flagged ones are matches.
+      private_class_method def self.match_row?(row)
+        row[:match] != false
+      end
+
+      private_class_method def self.match_count(rows)
+        rows.count { |r| match_row?(r) }
+      end
+
+      # Group results by file for cleaner output. The file's heading counts the
+      # whole result set, not the page, so a per-file label is not a page count.
+      private_class_method def self.format_grouped(results, mixed = false, all_results = results)
+        file_totals = all_results.group_by { |r| r[:file] }.transform_values { |rows| match_count(rows) }
         grouped = results.group_by { |r| r[:file] }
         lines = []
         grouped.each do |file, matches|
-          match_count = matches.count { |r| r[:match] != false }
-          lines << "## #{file} (#{count_phrase(match_count, "match")})"
+          shown = match_count(matches)
+          total = file_totals.fetch(file, shown)
+          heading = shown < total ? "#{count_phrase(total, "match")}, #{shown} shown" : count_phrase(shown, "match")
+          lines << "## #{file} (#{heading})"
           lines << "```"
           matches.each { |r| lines << "#{line_marker(r, mixed)}#{r[:line_number]}: #{r[:content].strip}" }
           lines << "```"
@@ -338,14 +376,16 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      # Match lines arrive colon-separated, context lines tab-separated (see
-      # --field-context-separator above), so each result carries a :match flag
-      # the renderers use to mark actual matches distinctly from context.
+      # Each row carries a :match flag the renderers and the header count read.
+      # With context on, both kinds arrive under their own separator; without
+      # it there are no context rows and match lines keep ripgrep's default.
       private_class_method def self.parse_rg_output(output, root)
         output.lines.filter_map do |line|
           next if line.strip == "--" # Skip group separators from -C context output
 
-          if (m = line.match(/^([^\t]+)\t(\d+)\t(.*)$/))
+          if (m = line.match(/^(.+?)#{MATCH_FIELD_SEPARATOR}(\d+)#{MATCH_FIELD_SEPARATOR}(.*)$/o))
+            { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: true }
+          elsif (m = line.match(/^([^\t]+)#{CONTEXT_FIELD_SEPARATOR}(\d+)#{CONTEXT_FIELD_SEPARATOR}(.*)$/o))
             { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: false }
           elsif (m = line.match(/^(.+?):(\d+):(.*)$/))
             { file: m[1].sub("#{root}/", ""), line_number: m[2].to_i, content: m[3], match: true }
@@ -364,9 +404,8 @@ module RailsAiContext
         search_path = path ? File.join(root, path) : root
         lines = [ "# Trace: `#{cleaned}`", "" ]
 
-        # 1. Find the definition (no \b after ? or ! since they ARE word boundaries)
-        def_pattern = "^\\s*def\\s+(self\\.)?#{Regexp.escape(cleaned)}"
-        def_pattern += "\\b" unless cleaned.end_with?("?") || cleaned.end_with?("!")
+        # 1. Find the definition
+        def_pattern = "^\\s*def\\s+(self\\.)?#{Regexp.escape(cleaned)}#{trailing_boundary(cleaned)}"
         def_results = quick_search(def_pattern, search_path, root, 10, exclude_tests)
 
         if def_results.any?
@@ -410,12 +449,11 @@ module RailsAiContext
         end
 
         # 2. Find all callers (everywhere the method is referenced, excluding the def line)
-        call_pattern = if cleaned.end_with?("?") || cleaned.end_with?("!")
-          "#{Regexp.escape(cleaned)}"
-        else
-          "\\b#{Regexp.escape(cleaned)}\\b"
-        end
-        call_results = quick_search(call_pattern, search_path, root, max_results_cap, exclude_tests)
+        call_pattern = exact_pattern(cleaned)
+        call_results = quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests)
+        call_truncated = call_results.size > max_results_cap
+        call_results = call_results.first(max_results_cap) if call_truncated
+        scanned = call_truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
         callers = call_results.reject { |r| r[:content].match?(/\A\s*def\s/) }
 
         # Exclude the definition file+line to avoid self-reference
@@ -428,7 +466,7 @@ module RailsAiContext
           test_callers = callers.select { |r| r[:file].match?(/\A(test|spec)\//) }
 
           if app_callers.any?
-            lines << "## Called from (#{count_phrase(app_callers.size, "site")})"
+            lines << "## Called from (#{count_phrase(app_callers.size, "site")}#{scanned})"
             grouped = app_callers.group_by { |r| r[:file] }
             grouped.each do |file, matches|
               category = case file
@@ -459,7 +497,7 @@ module RailsAiContext
           end
 
           if test_callers.any?
-            lines << "" << "## Tested by (#{count_phrase(test_callers.size, "reference")})"
+            lines << "" << "## Tested by (#{count_phrase(test_callers.size, "reference")}#{scanned})"
             test_callers.group_by { |r| r[:file] }.each do |file, matches|
               lines << "- `#{file}` (#{count_phrase(matches.size, "reference")})"
             end
