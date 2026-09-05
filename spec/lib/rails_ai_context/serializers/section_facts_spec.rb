@@ -67,6 +67,26 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
     end
   end
 
+  describe ".filters_line" do
+    it "names each filter by kind" do
+      data = { filters: [ { kind: "before", name: "authenticate" }, { kind: "after", name: "track" } ] }
+
+      expect(described_class.filters_line(data)).to eq("- Filters: before authenticate, after track")
+    end
+
+    # The per-action answer and docs/CONFIGURATION.md both spell a skip
+    # `~~name~~ _(skipped)_`, and one fact reads one way everywhere.
+    it "strikes a skipped filter through the way the per-action answer does" do
+      data = { filters: [ { kind: "before", name: "authenticate", skipped: true } ] }
+
+      expect(described_class.filters_line(data)).to eq("- Filters: ~~authenticate~~ _(skipped)_")
+    end
+
+    it "answers nil for a controller with no filters" do
+      expect(described_class.filters_line({})).to be_nil
+    end
+  end
+
   describe ".rescue_handler_lines" do
     it "pairs each exception with its handler" do
       data = { rescue_from: [ { exception: "ActiveRecord::RecordInvalid", handler: "not_found" } ] }

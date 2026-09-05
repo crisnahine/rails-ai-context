@@ -58,13 +58,13 @@ module RailsAiContext
       end
 
       # A skipped filter is not one the action runs, so the listings say so
-      # the way the per-action answer does.
+      # the way the per-action answer and docs/CONFIGURATION.md do.
       def filters_line(controller_data)
         filters = Array(controller_data[:filters]).grep(Hash)
         return nil if filters.empty?
 
         parts = filters.map do |f|
-          f[:skipped] ? "~~#{f[:name]}~~ (skipped)" : "#{f[:kind]} #{f[:name]}"
+          f[:skipped] ? "~~#{f[:name]}~~ _(skipped)_" : "#{f[:kind]} #{f[:name]}"
         end
         "- Filters: #{parts.join(', ')}"
       end
