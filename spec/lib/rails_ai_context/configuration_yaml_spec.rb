@@ -149,7 +149,7 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
 
         stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
 
-        expect(stderr).to include("excluded_concerns: invalid pattern")
+        expect(stderr).to include('excluded_concerns: invalid pattern "Post["')
         expect(RailsAiContext::ConcernMembership.payload?("Turbo::Broadcastable")).to be false
         expect(config.cache_ttl).to eq(120)
       end
@@ -160,14 +160,41 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
         yaml_path = File.join(dir, ".rails-ai-context.yml")
         File.write(yaml_path, YAML.dump({
           "ai_tools" => %w[claude],
-          "not_a_real_key" => "should be ignored",
-          "custom_tools" => "also ignored"
+          "not_a_real_key" => "should be ignored"
         }))
 
         stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
 
         expect(stderr).to include("unknown key `not_a_real_key`")
-        expect(stderr).to include("unknown key `custom_tools`")
+        expect(config.ai_tools).to eq(%i[claude])
+      end
+    end
+
+    # A key the gem documents as initializer-only is not a typo, and reporting
+    # it as unknown sends the reader looking for a spelling mistake.
+    it "says a Ruby-only key belongs in the initializer, not that it is unknown" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({ "ai_tools" => %w[claude], "custom_tools" => "also ignored" }))
+
+        stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
+
+        expect(stderr).to include("`custom_tools` can only be set in the initializer, not in YAML. Ignored.")
+        expect(stderr).not_to include("unknown key `custom_tools`")
+        expect(config.ai_tools).to eq(%i[claude])
+      end
+    end
+
+    # An unquoted date-shaped key parses to a Date, which has no to_sym, and
+    # the NoMethodError escaped load_config_file! into app boot.
+    it "warns on a key that is not a string instead of raising" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, "2026-09-04: notes\nai_tools:\n  - claude\n")
+
+        stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
+
+        expect(stderr).to include("unknown key `2026-09-04`")
         expect(config.ai_tools).to eq(%i[claude])
       end
     end
@@ -620,6 +647,13 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
       documented = section.scan(/^- `(\w+)`/).flatten.map(&:to_sym)
 
       expect(documented).to match_array(writers - RailsAiContext::Configuration::YAML_KEYS - %i[app_root])
+    end
+
+    # The warning the loader prints has to name the same keys the doc does, or
+    # one of them starts reporting a real option as a typo.
+    it "warns about exactly the keys it documents as Ruby-only" do
+      expect(RailsAiContext::Configuration::RUBY_ONLY_KEYS)
+        .to match_array(writers - RailsAiContext::Configuration::YAML_KEYS - %i[app_root])
     end
   end
 end
