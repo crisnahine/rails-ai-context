@@ -14,7 +14,13 @@ module RailsAiContext
     # fixed for the run and `seen`, `collected` and `unresolved` accumulate
     # across it, so they belong to the run rather than to every call.
     class Run
-      attr_reader :collected, :unresolved
+      attr_reader :unresolved
+
+      # The default block belongs to the walk. Once the entries leave it, a
+      # caller reading a key the walk never produced would grow one.
+      def collected
+        {}.merge(@collected)
+      end
 
       def initialize(root, dirs, keys, cache)
         @root = root

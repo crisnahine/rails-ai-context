@@ -747,6 +747,10 @@ module RailsAiContext
         details.compact
       end
 
+      # Both tiers collect all six. The booted tier reads five of them off the
+      # source too - a concern's `validate :x` reaches custom_validates, its
+      # enum options reach enum_options - and reflection overwrites the sixth,
+      # associations, on that tier.
       MERGED_CONCERN_KEYS = %i[associations validations scopes enums callbacks macros].freeze
 
       # Reflection answers these whether or not the concern's file was read,

@@ -444,9 +444,13 @@ module RailsAiContext
           false
         end
 
+        # ignored_columns has to go on the class that owns the table, and
+        # every STI class records that same table, so a child that sorts
+        # earlier would otherwise win. The conventional name is the base.
         def model_file_for_table(table)
-          models = Payload.models(cached_context)
-          name = models_for_table(table, models).first || table.singularize.camelize
+          conventional = table.singularize.camelize
+          owners = models_for_table(table, Payload.models(cached_context))
+          name = owners.find { |owner| owner == conventional } || owners.first || conventional
           Payload.model_file(cached_context, name)
         end
 

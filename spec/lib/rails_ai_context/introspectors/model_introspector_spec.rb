@@ -1164,8 +1164,16 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           end
         RUBY
 
-        expect(booted_callbacks(dir, "Committer")).to eq(static_callbacks(dir, "Committer"))
-        expect(booted_callbacks(dir, "Committer")).to include("after_create_commit" => [ "refresh" ])
+        # Both tiers read the same source through the same grouping now, so
+        # the parity line alone would stay green through a change of shape in
+        # that one producer. The literal is what pins the shape.
+        expect(booted_callbacks(dir, "Committer")).to eq(
+          "after_create_commit" => [ "refresh" ],
+          "after_commit_on_create" => [ "announce" ],
+          "around_create" => [ "Snowflake" ],
+          "after_touch" => [ "bust" ]
+        )
+        expect(static_callbacks(dir, "Committer")).to eq(booted_callbacks(dir, "Committer"))
       end
     end
   end

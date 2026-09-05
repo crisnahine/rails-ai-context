@@ -46,6 +46,17 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(collected[:associations].first[:from_concern]).to eq("Wired")
   end
 
+  # The walk accumulates into a Hash with a default block; a caller that
+  # probed a key it never asked for used to grow one on read.
+  it "hands back a plain hash, so reading a key the walk never produced adds none" do
+    File.write(File.join(concern_dir, "wired.rb"), "module Wired\n  has_many :wires\nend\n")
+
+    collected, = described_class.collect(tmpdir, mixin("Wired"), keys: %i[associations])
+    collected[:enums]
+
+    expect(collected.keys).to eq([ :associations ])
+  end
+
   it "follows a concern that includes another concern" do
     File.write(File.join(concern_dir, "outer.rb"), <<~RUBY)
       module Outer
