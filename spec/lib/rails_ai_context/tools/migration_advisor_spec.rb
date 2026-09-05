@@ -265,4 +265,82 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       end
     end
   end
+  describe "the migration superclass version" do
+    def text_for(**args)
+      described_class.call(**args).content.first[:text]
+    end
+
+    context "when the app's context names a Rails version" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          rails_version: "8.1.3.1",
+          schema: { adapter: "PostgreSQL", tables: { "accounts" => { columns: [ { name: "domain", type: "string" } ] } } },
+          models: {}
+        })
+      end
+
+      it "stamps the app's version, not the Rails the gem process loaded" do
+        expect(text_for(action: "add_index", table: "accounts", column: "domain"))
+          .to include("ActiveRecord::Migration[8.1]")
+      end
+
+      it "does the same for create_table" do
+        expect(text_for(action: "create_table", table: "widgets", column: "name:string"))
+          .to include("ActiveRecord::Migration[8.1]")
+      end
+
+      it "does the same for add_column" do
+        expect(text_for(action: "add_column", table: "accounts", column: "note", type: "string"))
+          .to include("ActiveRecord::Migration[8.1]")
+      end
+
+      it "does not note a fallback" do
+        expect(text_for(action: "add_index", table: "accounts", column: "domain"))
+          .not_to include("Could not determine this app's Rails version")
+      end
+    end
+
+    context "when the context carries an unavailable marker" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          rails_version: "[UNAVAILABLE: app not booted]", schema: { tables: {} }, models: {}
+        })
+      end
+
+      it "falls back to the loaded Rails rather than emitting the marker" do
+        expect(text_for(action: "add_index", table: "accounts", column: "domain"))
+          .to match(/ActiveRecord::Migration\[\d+\.\d+\]/)
+      end
+    end
+
+    context "when nothing names a Rails version" do
+      before do
+        hide_const("Rails")
+        allow(described_class).to receive(:cached_context).and_return({
+          rails_version: "[UNAVAILABLE: app not booted]", schema: { tables: {} }, models: {}
+        })
+      end
+
+      it "stamps the supported floor and says so, so the code still parses" do
+        text = text_for(action: "add_index", table: "accounts", column: "domain")
+        expect(text).to include("ActiveRecord::Migration[#{described_class::SUPPORTED_RAILS_FLOOR}]")
+        expect(text).to include("Could not determine this app's Rails version")
+      end
+    end
+
+    context "rendered against the static fixture app" do
+      before do
+        described_class.reset_cache!
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT))
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      end
+
+      after { described_class.reset_cache! }
+
+      it "reads the version the fixture's Gemfile.lock pins" do
+        expect(text_for(action: "add_index", table: "users", column: "email"))
+          .to include("ActiveRecord::Migration[7.2]")
+      end
+    end
+  end
 end

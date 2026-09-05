@@ -444,7 +444,7 @@ Model/service dependency graph in Mermaid or text format.
 
 ### `rails_migration_advisor`
 
-Migration code generation with duplicate/nonexistent column warnings, reversibility flags, table name normalization.
+Migration code generation with duplicate/nonexistent column warnings, reversibility flags, table name normalization. The generated class is stamped with the app's own Rails version (from the booted app, or from `Gemfile.lock` under `--no-boot`); when neither names one, the output says which version it fell back to.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
