@@ -14,8 +14,6 @@ module RailsAiContext
 
       attr_reader :app, :config
 
-      EXCLUDED_CALLBACKS = %w[autosave_associated_records_for].freeze
-
       def initialize(app)
         @app    = app
         @config = RailsAiContext.configuration
@@ -290,7 +288,9 @@ module RailsAiContext
           associations:     extract_associations(model),
           validations:      extract_validations(model),
           enums:            extract_enums(model),
-          callbacks:        extract_callbacks(model, source_data),
+          # Rails' event chains carry the framework's own registrations and
+          # hold no block callbacks, so both tiers read the model's source.
+          callbacks:        extract_callbacks_from_ast(source_data),
           concerns:         extract_concerns(model),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
           # AST-based (replaces regex source parsing)
@@ -409,31 +409,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] extract_sti_info failed: #{e.message}" if ENV["DEBUG"]
         nil
-      end
-
-      # Rails registers one chain per event, holding before, after and around
-      # together - there is no `_before_save_callbacks` and no separate around
-      # chain, so the kind comes off the entry rather than the chain name.
-      CALLBACK_EVENTS = %i[validation save create update destroy touch commit rollback initialize find].freeze
-
-      def extract_callbacks(model, source_data)
-        result = CALLBACK_EVENTS.each_with_object({}) do |event, hash|
-          chain = :"_#{event}_callbacks"
-          next unless model.respond_to?(chain, true)
-
-          model.send(chain).each do |cb|
-            next if cb.filter.nil? || cb.filter.to_s.start_with?(*EXCLUDED_CALLBACKS) || cb.filter.is_a?(Proc)
-
-            (hash["#{cb.kind}_#{event}"] ||= []) << cb.filter.to_s
-          end
-        end
-
-        # If reflection returned nothing, fall back to AST-based extraction
-        return result if result.any?
-        extract_callbacks_from_ast(source_data)
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_callbacks failed: #{e.message}" if ENV["DEBUG"]
-        extract_callbacks_from_ast(source_data)
       end
 
       # ── AST-based extraction (replaces all regex parsing) ──────────

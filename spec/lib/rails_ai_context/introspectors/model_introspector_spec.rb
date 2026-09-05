@@ -1033,43 +1033,55 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
-  # Rails registers a chain per event - `_save_callbacks` holds before, after
-  # and around together - so asking for `_before_save_callbacks` raised on the
-  # first iteration and every booted model quietly fell back to the AST.
-  describe "#extract_callbacks from reflection" do
-    before do
-      stub_const("SnowflakeCallbacks", Class.new)
+  # Both tiers read the callbacks off the model's own source. The booted tier
+  # used to answer off Rails' event chains, which carry the framework's own
+  # registrations and drop every block callback.
+  describe "callbacks in both tiers" do
+    def write_model(dir, class_name, source)
+      path = File.join(dir, "app", "models", "#{class_name.underscore}.rb")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, source)
+      path
     end
 
-    let(:model) do
-      Class.new(ApplicationRecord) do
-        self.table_name = "posts"
+    def booted_callbacks(dir, class_name)
+      model = Class.new(ApplicationRecord) { self.table_name = "posts" }
+      model.define_singleton_method(:name) { class_name }
+      described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)[:callbacks]
+    end
 
-        def self.name = "Snowflaked"
+    def static_callbacks(dir, class_name)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[class_name][:callbacks]
+    end
 
-        around_create SnowflakeCallbacks
-        before_save :normalize
-        after_touch :bust
-        after_initialize :prepare
+    it "reports a block callback booted, and names no framework filter" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Blocky", <<~RUBY)
+          class Blocky < ApplicationRecord
+            before_save do
+              self.title = title.to_s.strip
+            end
+          end
+        RUBY
+
+        expect(booted_callbacks(dir, "Blocky")).to eq("before_save" => [ "[inline_block]" ])
       end
     end
 
-    let(:source_data) { { associations: [], validations: [], scopes: [], enums: [], callbacks: [], macros: [], methods: [] } }
+    it "keys the commit family the same in both tiers" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Committer", <<~RUBY)
+          class Committer < ApplicationRecord
+            after_create_commit :refresh
+            after_commit :announce, on: :create
+            around_create Snowflake
+            after_touch :bust
+          end
+        RUBY
 
-    subject(:callbacks) { introspector.send(:extract_callbacks, model, source_data) }
-
-    it "reports around callbacks from the event chain" do
-      expect(callbacks["around_create"]).to be_an(Array)
-      expect(callbacks["around_create"]).to include("SnowflakeCallbacks")
-    end
-
-    it "reports before and after callbacks from the same chain" do
-      expect(callbacks["before_save"]).to include("normalize")
-    end
-
-    it "reports the touch and initialize chains" do
-      expect(callbacks["after_touch"]).to include("bust")
-      expect(callbacks["after_initialize"]).to include("prepare")
+        expect(booted_callbacks(dir, "Committer")).to eq(static_callbacks(dir, "Committer"))
+        expect(booted_callbacks(dir, "Committer")).to include("after_create_commit" => [ "refresh" ])
+      end
     end
   end
 
