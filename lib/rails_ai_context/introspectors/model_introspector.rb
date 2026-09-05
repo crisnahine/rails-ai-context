@@ -284,22 +284,13 @@ module RailsAiContext
         !DeclaredConstant.declares_class?(source)
       end
 
-      # Rails names the anonymous join class it builds for a
-      # has_and_belongs_to_many through a singleton `name=`, so it answers
-      # "HABTM_Tags" while it lives at "Account::HABTM_Tags". A name that is
-      # not the constant path belongs to no file and cannot key a payload -
-      # two owners of the same association name collapse onto one entry.
-      def renamed_class?(model)
-        model.name != model.to_s
-      end
-
       def discover_models
         return [] unless defined?(ActiveRecord::Base)
 
         models = ActiveRecord::Base.descendants.reject do |model|
           model.abstract_class? ||
             model.name.nil? ||
-            renamed_class?(model) ||
+            DeclaredConstant.renamed?(model) ||
             config.excluded_models.include?(model.name)
         end
 

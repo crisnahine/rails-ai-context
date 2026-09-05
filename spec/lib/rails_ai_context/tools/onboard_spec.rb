@@ -58,6 +58,33 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).not_to include("error")
     end
 
+    # Statically the ruby version is the one the lockfile declares, and
+    # nothing is running it.
+    it "says the static tier's ruby version is declared, not running" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: "3.4",
+        tier: "static"
+      })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("declaring Ruby 3.4")
+      expect(text).not_to include("running Ruby")
+    end
+
+    it "says a booted run is running that ruby" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: "3.4",
+        tier: "booted"
+      })
+
+      expect(described_class.call(detail: "standard").content.first[:text]).to include("running Ruby 3.4")
+    end
+
     it "renders mounted engines from the introspector's own keys" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",

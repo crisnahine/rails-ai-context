@@ -74,4 +74,20 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.resolve(source, "PostsController")).to eq("PostsController")
     end
   end
+
+  # The model and controller walks both drop a class whose name is not its
+  # constant path, and they ask the same question here.
+  describe ".renamed?" do
+    it "is false for a class that lives at its own name" do
+      expect(described_class.renamed?(String)).to be(false)
+    end
+
+    it "is true for a class renamed the way a habtm join class is" do
+      klass = Class.new
+      stub_const("Account::Tags", klass)
+      def klass.name = "HABTM_Tags"
+
+      expect(described_class.renamed?(klass)).to be(true)
+    end
+  end
 end

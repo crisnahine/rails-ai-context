@@ -95,6 +95,7 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
 
         expect(text).not_to include("Searchable")
         expect(text).to include("# Concerns (1)")
+        expect(text).to include("1 concern hidden by `excluded_concerns`")
       ensure
         RailsAiContext.configuration.excluded_concerns = original
       end

@@ -48,35 +48,33 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
     end
   end
 
-  describe ".prefix" do
+  describe "the prefix and suffix a module declares" do
     it "reads the method form" do
       source = "module Admin\n  def self.table_name_prefix\n    'admin_'\n  end\nend\n"
 
-      expect(described_class.prefix(source, "Admin")).to eq("admin_")
+      expect(described_class.declarations(source, "Admin")[:table_name_prefix]).to eq("admin_")
     end
 
     it "reads the assignment form" do
       source = "module Web\n  self.table_name_prefix = 'web_'\nend\n"
 
-      expect(described_class.prefix(source, "Web")).to eq("web_")
+      expect(described_class.declarations(source, "Web")[:table_name_prefix]).to eq("web_")
     end
 
     it "answers nil for a method that computes its value" do
       source = "module Admin\n  def self.table_name_prefix\n    ENV['PREFIX']\n  end\nend\n"
 
-      expect(described_class.prefix(source, "Admin")).to be_nil
+      expect(described_class.declarations(source, "Admin")[:table_name_prefix]).to be_nil
     end
 
     it "answers nil for a module that declares none" do
-      expect(described_class.prefix("module Admin\nend\n", "Admin")).to be_nil
+      expect(described_class.declarations("module Admin\nend\n", "Admin")[:table_name_prefix]).to be_nil
     end
-  end
 
-  describe ".suffix" do
-    it "reads the method form" do
+    it "reads a suffix in the method form" do
       source = "module Legacy\n  def self.table_name_suffix\n    '_v1'\n  end\nend\n"
 
-      expect(described_class.suffix(source, "Legacy")).to eq("_v1")
+      expect(described_class.declarations(source, "Legacy")[:table_name_suffix]).to eq("_v1")
     end
   end
 
