@@ -27,10 +27,15 @@ module RailsAiContext
       end
 
       debounce = RailsAiContext.configuration.live_reload_debounce
+      listener = @watch.start(debounce: debounce) { |paths, reloaded| react(paths, reloaded) }
+      return unless listener
+
+      # After the listener, not before: printed first these lines announced a
+      # watch that a missing `listen` never started.
       $stderr.puts "[rails-ai-context] Live reload enabled (debounce: #{debounce}s)"
       $stderr.puts "[rails-ai-context] Watching: #{dirs.map { |d| d.sub("#{app.root}/", "") }.join(", ")}"
 
-      @watch.start(debounce: debounce) { |paths, reloaded| react(paths, reloaded) }
+      listener
     end
 
     # Stop the background listener thread.

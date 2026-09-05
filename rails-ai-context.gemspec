@@ -47,8 +47,10 @@ Gem::Specification.new do |spec|
       rails ai:serve
   MSG
 
+  # A `path:` or vendored Gemfile entry re-evaluates this outside a checkout,
+  # where git's "not a git repository" would land on the host app's stderr.
   spec.files = Dir.chdir(__dir__) do
-    `git ls-files -z`.split("\x0").reject do |f|
+    IO.popen([ "git", "ls-files", "-z" ], err: IO::NULL, &:read).split("\x0").reject do |f|
       (File.expand_path(f) == __FILE__) ||
         f.start_with?(*%w[bin/ test/ spec/ features/ .git .github appveyor Gemfile])
     end

@@ -630,4 +630,35 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).not_to include("_(from Admin::BaseController)_")
     end
   end
+
+  # Every read of the shared cache is a deep copy of the whole payload, so a
+  # listing that reads it once per controller pays for the app twice over.
+  describe "shared context reads in the full listing" do
+    def context_with(count)
+      entries = (1...(count + 1)).to_h do |i|
+        [ "Admin::Group#{i}Controller", {
+          actions: %w[index show], filters: [], strong_params: [],
+          parent_class: "Admin::BaseController"
+        } ]
+      end
+      entries["Admin::BaseController"] = { actions: [], filters: [], parent_class: "ApplicationController" }
+      { controllers: { controllers: entries } }
+    end
+
+    def reads_for(count)
+      described_class.reset_cache!
+      reads = 0
+      ctx = context_with(count)
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(detail: "full", limit: 400)
+      reads
+    end
+
+    it "reads the shared context the same number of times for 3 controllers as for 40" do
+      expect(reads_for(40)).to eq(reads_for(3))
+    end
+  end
 end
