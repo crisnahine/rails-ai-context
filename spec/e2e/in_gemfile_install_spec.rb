@@ -204,15 +204,22 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
     # via subprocess per describe block would push wall-clock past 5
     # minutes; the in-process ToolRunner smoke spec covers complete
     # coverage (spec/cli_smoke_spec.rb, 45 tools in 0.15s).
-    %w[schema routes model_details controllers conventions context get_gems].each do |short|
+    # `context` answers about one thing, so it is asked about one: called bare
+    # it refuses, which is the documented exit 1 and not what this block is
+    # for. The scaffolded Post is the app's own model.
+    {
+      "schema" => {}, "routes" => {}, "model_details" => {}, "controllers" => {},
+      "conventions" => {}, "context" => { model: "Post" }, "get_gems" => {}
+    }.each do |short, params|
       it "rake `ai:tool[#{short}]` exits 0" do
-        result = @cli.rake_tool(short)
+        result = @cli.rake_tool(short, params)
         expect(result.success?).to be(true), "#{short} failed:\n#{result}"
         expect(result.stdout).not_to be_empty
       end
 
       it "`rails-ai-context tool #{short}` exits 0" do
-        result = @cli.cli_tool(short)
+        args = params.flat_map { |k, v| [ "--#{k.to_s.tr('_', '-')}", v.to_s ] }
+        result = @cli.cli_tool(short, args)
         expect(result.success?).to be(true), "#{short} failed:\n#{result}"
         expect(result.stdout).not_to be_empty
       end
