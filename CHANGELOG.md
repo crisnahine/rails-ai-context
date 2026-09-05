@@ -398,6 +398,20 @@ to #181), and the sibling defects behind them.
   copies and spent 8.2 of its 8.6 seconds in them. The listing reads the
   payload once and passes it down. Rendered output is unchanged and the run
   takes 4.3 seconds.
+- **`rails_get_schema` and `rails_get_routes` copied the whole payload once
+  per row.** Every read of the shared cache deep-copies the introspection
+  payload under a mutex, and both listings read it inside their loop, over
+  tables and over controller headings. Mastodon's 116 tables cost 350 copies
+  and 7.5 of an 8.1 second run; its 657 static routes cost 297 copies and 6.0
+  of 6.4 seconds. Both read the payload once and pass it down now, and the
+  runs take 5.5 and 4.3 seconds with the rendered output unchanged.
+- **The same copy-per-row shape was in `rails_get_callbacks` and a
+  `rails_search_code` trace.** The full callback listing resolved the model
+  file through the shared cache once per callback of every model, 152 copies
+  on Mastodon, and a trace read it once per controller file among the call
+  sites, 70 for `current_user`. Each reads once for the whole listing now, and
+  a single-controller `rails_get_controllers` request went from five reads to
+  one.
 - **The single-controller answer named a different parent than the listing did
   for the same controller.** It printed the superclass as the source spells it
   while the listing resolved it, so `Settings::Exports::BookmarksController`
