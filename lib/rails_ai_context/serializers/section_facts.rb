@@ -106,9 +106,24 @@ module RailsAiContext
       # questions with the same name, and only the second one is
       # available_locales. Say which one this answer is.
       def available_locales_label(i18n_data)
-        return "Available locales" unless i18n_data[:available_locales_source] == "locale_files"
+        return "Available locales" unless locales_from_files?(i18n_data)
 
         "Available locales (from locale files)"
+      end
+
+      # The stack line the generated files carry makes the same claim the
+      # Internationalization section does, so it carries the same qualifier.
+      def i18n_line(ctx)
+        i18n_data = Payload.section(ctx, :i18n) || {}
+        locales = Payload.available_locales(ctx)
+        return nil unless locales.size > 1
+
+        qualifier = locales_from_files?(i18n_data) ? " from locale files" : ""
+        "- I18n: #{CountPhrase.call(locales.size, "locale")}#{qualifier} (#{locales.first(5).join(', ')})"
+      end
+
+      def locales_from_files?(i18n_data)
+        i18n_data[:available_locales_source] == "locale_files"
       end
 
       # Introspector failures, so a half-failed run cannot read as a clean

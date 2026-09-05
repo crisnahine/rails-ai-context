@@ -264,9 +264,9 @@ module RailsAiContext
       return nil unless File.exist?(path)
 
       content = File.read(path)
-      if Install::InitializerFile.configures?(content) && !Install::InitializerFile.guarded?(content)
+      if Install::InitializerFile.configures?(content) && !Install::InitializerFile.any_guard_before_configure?(content)
         return Check.new(name: "Initializer guard", status: :warn,
-          message: "config/initializers/rails_ai_context.rb has no guard around the `configure` block",
+          message: "config/initializers/rails_ai_context.rb has no recognised guard around the `configure` block",
           fix: "Wrap it in `if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)` - " \
                "without one it raises where the gem is not loaded, such as standalone mode or a group-scoped Gemfile entry")
       end

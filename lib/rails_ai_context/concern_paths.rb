@@ -72,14 +72,17 @@ module RailsAiContext
       dirs.partition { |dir| type_for(dir) == prefer }.flatten
     end
 
-    # The reference itself first, then the enclosing namespaces from the
-    # innermost outward - Ruby's own constant lookup order.
+    # The enclosing namespaces from the innermost outward, then the reference
+    # itself - Ruby's own constant lookup order, which reaches the top level
+    # last. Bare-name-first would bind Fasp::Provider's `include DebugConcern`
+    # to a top-level DebugConcern the runtime never sees.
     def candidate_names(concern_name, within)
       name = concern_name.to_s
       return [ name ] if within.nil? || name.include?("::")
 
       scopes = within.to_s.split("::")
-      [ name ] + scopes.size.downto(1).map { |n| "#{scopes.first(n).join('::')}::#{name}" }
+      scopes.size.downto(1).map { |n| "#{scopes.first(n).join('::')}::#{name}" } + [ name ]
     end
+    private_class_method :candidate_names
   end
 end

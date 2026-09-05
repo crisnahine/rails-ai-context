@@ -369,7 +369,7 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       # it replaced the app's whole list with the gem's one locale.
       it "ignores a config.available_locales that does not name i18n" do
         result = with_config({
-          "aaa_some_gem.rb" => "SomeGem.configure do |config|\n  config.available_locales = [:zz]\nend\n",
+          "zzz_some_gem.rb" => "SomeGem.configure do |config|\n  config.available_locales = [:zz]\nend\n",
           "i18n.rb"         => "Rails.application.configure do\n  config.i18n.available_locales = [:en, :es]\nend\n"
         })
 
@@ -399,6 +399,18 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
 
       it "falls back to the files when the value is computed" do
         result = with_config({ "i18n.rb" => "Rails.application.configure do\n  config.i18n.available_locales += [:zz]\nend\n" })
+
+        expect(result[:available_locales]).to eq(%w[en es tlh])
+        expect(result[:available_locales_source]).to eq("locale_files")
+      end
+
+      # A literal the app later overwrites with a computed value is not what
+      # Rails ends up handing I18n, so it is not the answer either.
+      it "falls back to the files when a later assignment supersedes the literal" do
+        result = with_config(
+          { "i18n.rb" => "Rails.application.configure do\n  config.i18n.available_locales = Locale.enabled.map(&:code)\nend\n" },
+          application: "module Dummy\n  class Application < Rails::Application\n    config.i18n.available_locales = [:en, :fr]\n  end\nend\n"
+        )
 
         expect(result[:available_locales]).to eq(%w[en es tlh])
         expect(result[:available_locales_source]).to eq("locale_files")

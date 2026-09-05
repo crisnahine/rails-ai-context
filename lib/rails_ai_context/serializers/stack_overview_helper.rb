@@ -37,8 +37,8 @@ module RailsAiContext
           lines << "- API: #{parts.join(', ')}" if parts.any?
         end
 
-        locales = Payload.available_locales(ctx)
-        lines << "- I18n: #{count_phrase(locales.size, "locale")} (#{locales.first(5).join(', ')})" if locales.size > 1
+        i18n_line = SectionFacts.i18n_line(ctx)
+        lines << i18n_line if i18n_line
 
         attachments = Payload.storage_attachments(ctx)
         if attachments.any?

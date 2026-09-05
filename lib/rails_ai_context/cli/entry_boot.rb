@@ -77,7 +77,7 @@ module RailsAiContext
           if result.error.is_a?(BootManager::BootTimeoutError)
             messages << "[rails-ai-context]   If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
           end
-          configure_hint(result).each { |line| messages << "[rails-ai-context]   #{line}" }
+          result.configure_hint.each { |line| messages << "[rails-ai-context]   #{line}" }
           messages << "[rails-ai-context] Serving static analysis; runtime-only data is marked [UNAVAILABLE]."
           messages << "[rails-ai-context] Run `rails-ai-context doctor` for boot diagnostics."
           restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
@@ -124,23 +124,6 @@ module RailsAiContext
       end
       private_class_method :absent
 
-      # The gem is required only after a successful boot, so while
-      # config/initializers runs RailsAiContext is the bare namespace this
-      # binary opened: an unguarded `configure` call has nothing to call.
-      # Ruby quotes the method name differently across versions.
-      CONFIGURE_WITHOUT_GEM = /undefined method .?configure.? for (module )?RailsAiContext/
-
-      def self.configure_hint(result)
-        return [] unless result.failure_summary.to_s.match?(CONFIGURE_WITHOUT_GEM)
-
-        [
-          "config/initializers calls RailsAiContext.configure, but the app does not bundle the gem.",
-          "Either `bundle add rails-ai-context --group development`, or move those",
-          "settings into .rails-ai-context.yml, which standalone mode reads."
-        ]
-      end
-      private_class_method :configure_hint
-
       def self.boot_failed(result, root, timeout, messages)
         messages << "Error: Rails app failed to boot in #{root}"
         messages << "  #{result.failure_summary}"
@@ -150,7 +133,7 @@ module RailsAiContext
           messages << "  Run with DEBUG=1 for the full backtrace."
         end
 
-        hint = configure_hint(result)
+        hint = result.configure_hint
         if result.error.is_a?(BootManager::BootTimeoutError)
           messages << "  The app took longer than #{timeout}s to boot. Raise the limit with"
           messages << "  RAILS_AI_CONTEXT_BOOT_TIMEOUT=<seconds> (current: #{timeout}s)."

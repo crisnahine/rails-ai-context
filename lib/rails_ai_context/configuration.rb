@@ -36,6 +36,10 @@ module RailsAiContext
     # Not config, and not a typo either: an annotation the installer round-trips.
     IGNORED_YAML_KEYS = %i[generated_at].freeze
 
+    # Real options a YAML file cannot carry, because their value is a Ruby
+    # object. Reported as such, so nobody hunts for a misspelling.
+    RUBY_ONLY_KEYS = %i[custom_tools].freeze
+
     # Load configuration from a YAML file, applying values to the current config instance.
     # Only keys present in the YAML are set; absent keys keep their defaults.
     def self.load_from_yaml(path)
@@ -45,8 +49,15 @@ module RailsAiContext
       config = RailsAiContext.configuration
 
       data.each do |key, value|
-        key_sym = key.to_sym
+        # A permitted Date or Time key has no to_sym, and the NoMethodError
+        # escaped this method into app boot.
+        key_sym = key.to_s.to_sym
         next if IGNORED_YAML_KEYS.include?(key_sym)
+        if RUBY_ONLY_KEYS.include?(key_sym)
+          $stderr.puts "[rails-ai-context] WARNING: #{path}: `#{key}` can only be set in the initializer, " \
+                       "not in YAML. Ignored."
+          next
+        end
         unless YAML_KEYS.include?(key_sym)
           # A dropped key used to look exactly like an applied one.
           nearest = nearest_yaml_key(key_sym)
@@ -452,9 +463,15 @@ module RailsAiContext
     # raise RegexpError inside an introspector, far from the file that named
     # it. Compile at load, and report a bad pattern the way a bad value is.
     def excluded_concerns=(value)
-      @excluded_concerns = Array(value).map { |pattern| pattern.is_a?(Regexp) ? pattern : Regexp.new(pattern.to_s) }
-    rescue RegexpError => e
-      raise ArgumentError, "invalid pattern (#{e.message})"
+      @excluded_concerns = Array(value).map do |pattern|
+        next pattern if pattern.is_a?(Regexp)
+
+        begin
+          Regexp.new(pattern.to_s)
+        rescue RegexpError => e
+          raise ArgumentError, "invalid pattern #{pattern.to_s.inspect} (#{e.message})"
+        end
+      end
     end
 
     def output_dir_for(app)

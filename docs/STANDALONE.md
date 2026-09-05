@@ -96,7 +96,7 @@ One config option is Ruby-only and can't be set via YAML:
 
 - `custom_tools` - a tool class is a Ruby class reference, which a YAML file cannot name
 
-For that one, use the initializer approach (in-Gemfile mode).
+For that one, use the initializer approach (in-Gemfile mode). Naming it in the YAML file warns that it is initializer-only and ignores it.
 
 Every other option is a YAML key, `excluded_concerns` included: write the patterns as strings and each is compiled at load. A YAML list replaces the framework defaults rather than adding to them, and a string is an unanchored pattern - see [Configuration](CONFIGURATION.md#filtering).
 
@@ -104,7 +104,7 @@ A key the gem does not know warns on stderr and is ignored; the rest of the file
 
 ### Precedence
 
-In standalone mode `.rails-ai-context.yml` is the only config source. The gem is not loaded while `config/initializers` runs, so a `config/initializers/rails_ai_context.rb` contributes nothing: the generated file, which guards on `defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`, is a silent no-op, and one without that guard raises `NoMethodError` and drops the command into the static tier.
+In standalone mode `.rails-ai-context.yml` is the only config source. The gem is not loaded while `config/initializers` runs, so a `config/initializers/rails_ai_context.rb` contributes nothing: the generated file, which guards on `defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`, is a silent no-op, and one without that guard raises `NameError` for an undefined constant and drops the command into the static tier.
 
 For in-Gemfile installs both sources apply and merge key by key - see [Precedence](CONFIGURATION.md#precedence).
 

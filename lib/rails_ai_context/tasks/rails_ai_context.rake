@@ -29,6 +29,7 @@ def abort_boot_failure(result, timeout)
   if result.error.is_a?(RailsAiContext::BootManager::BootTimeoutError)
     $stderr.puts "  If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
   end
+  result.configure_hint.each { |line| $stderr.puts "  #{line}" }
   exit 1
 end
 

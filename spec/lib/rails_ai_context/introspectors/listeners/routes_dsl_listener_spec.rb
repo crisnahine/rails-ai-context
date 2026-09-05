@@ -341,6 +341,36 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     )
   end
 
+  # Rails builds the collection helper from (as || name).pluralize, so a
+  # singular as: still names the index route in the plural.
+  it "pluralizes a singular as: for the collection helper" do
+    records = route_records('resources :photos, as: :image, only: [:index, :show]')
+    expect(records.map { |r| [ r[:action], r[:name] ] }).to contain_exactly(
+      [ "index", "images" ],
+      [ "show", "image" ]
+    )
+  end
+
+  # collection_name appends _index when the name pluralizes to itself.
+  it "names the collection helper of an uncountable resource with _index" do
+    records = route_records('resources :sheep, only: [:index, :show]')
+    expect(records.map { |r| [ r[:action], r[:name] ] }).to contain_exactly(
+      [ "index", "sheep_index" ],
+      [ "show", "sheep" ]
+    )
+  end
+
+  # SingletonResource aliases collection_name to the singular, so a collection
+  # route under a singular resource does not pluralize.
+  it "keeps a singular resource's collection route singular" do
+    records = route_records('resource :confirmation, only: [:create] do
+      collection do
+        post :resend
+      end
+    end')
+    expect(records.map { |r| r[:name] }).to include("resend_confirmation")
+  end
+
   it "uses param: for the member segment and the nested prefix" do
     records = route_records('resources :accounts, path: "users", only: [:show, :edit], param: :username do
       resources :statuses, only: [:index]

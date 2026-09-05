@@ -53,6 +53,14 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(text).to include("en, es, fr, de")
     end
 
+    # The generated files make the same claim the tool does, so they carry the
+    # same qualifier when the list came off config/locales.
+    it "qualifies the I18n line when the locales came from the locale files" do
+      ctx = { i18n: { available_locales: %w[en fr], available_locales_source: "locale_files" } }
+      helper = test_class.new(ctx)
+      expect(helper.full_preset_stack_lines.join("\n")).to include("I18n: 2 locales from locale files (en, fr)")
+    end
+
     it "skips I18n when only one locale" do
       ctx = { i18n: { available_locales: %w[en] } }
       helper = test_class.new(ctx)
