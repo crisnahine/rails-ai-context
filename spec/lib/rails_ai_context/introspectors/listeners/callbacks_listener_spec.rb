@@ -78,4 +78,11 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
     results = parse_and_dispatch("after_commit :sync, on: :create")
     expect(results.first).to include(name: "after_commit", type: "after_commit_on_create")
   end
+
+  # `after_commit on: :create` has no target at all; reporting a block that
+  # is not in the source made every renderer print "runs a block here".
+  it "reports nothing for a macro that carries only keyword options" do
+    expect(parse_and_dispatch("after_commit on: :create")).to be_empty
+    expect(parse_and_dispatch("after_save unless: :skip?")).to be_empty
+  end
 end

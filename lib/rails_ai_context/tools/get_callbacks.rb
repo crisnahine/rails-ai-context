@@ -256,7 +256,9 @@ module RailsAiContext
         Array(data[:concern_callbacks])
           .select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
           .group_by { |cb| cb[:from_concern] }
-          .transform_values { |entries| entries.map { |cb| concern_callback_entry(cb) } }
+          # One declaration resolves to one record per `on:` event, so the
+          # declarations are deduped back down to the lines the file holds.
+          .transform_values { |entries| entries.map { |cb| concern_callback_entry(cb) }.uniq }
       end
 
       private_class_method def self.concern_callback_entry(callback)
@@ -271,7 +273,13 @@ module RailsAiContext
       private_class_method def self.options_tail(options)
         return "" unless options.is_a?(Hash) && options.any?
 
-        ", " + options.map { |key, value| "#{key}: #{value.inspect}" }.join(", ")
+        ", " + options.map { |key, value| "#{key}: #{option_value(value)}" }.join(", ")
+      end
+
+      # A value the walk could not resolve is a marker, not a string the app
+      # wrote, so it is printed bare the way every other marker is.
+      private_class_method def self.option_value(value)
+        value == RailsAiContext::Confidence::INFERRED ? value : value.inspect
       end
     end
   end

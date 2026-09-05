@@ -244,6 +244,8 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
 
             around_create Some::CallbackObject
             after_commit :announce, on: :create
+            after_commit :sync, on: [ :create, :update ]
+            before_validation :relax_policy, if: -> { quote_policy? }
             after_rollback do
               rate_limiter.rollback!
             end
@@ -296,6 +298,22 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       text = described_class.call(model: "Status", detail: "standard").content.first[:text]
 
       expect(text).to include("after_commit :announce, on: :create")
+    end
+
+    # One declaration resolves to one record per `on:` event, and the section
+    # prints declarations, not resolved types.
+    it "prints a multi-event after_commit once" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text.scan("after_commit :sync, on: [:create, :update]").size).to eq(1)
+    end
+
+    # A quoted marker reads as a string the app wrote.
+    it "leaves an unresolved option value unquoted" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("before_validation :relax_policy, if: [INFERRED]")
+      expect(text).not_to include(%(if: "[INFERRED]"))
     end
 
     it "attaches no method source to a block callback at detail:full" do
