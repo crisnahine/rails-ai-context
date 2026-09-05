@@ -209,6 +209,39 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       parsed = JSON.parse(text)
       expect(parsed).to have_key("tables")
     end
+
+    it "returns JSON for the default table listing" do
+      result = described_class.call(format: "json")
+      text = result.content.first[:text]
+
+      expect { JSON.parse(text) }.not_to raise_error
+      expect(JSON.parse(text)["tables"]).to include("users")
+    end
+
+    it "returns JSON for a summary listing" do
+      result = described_class.call(detail: "summary", format: "json")
+
+      expect(JSON.parse(result.content.first[:text])["tables"]).to include("users")
+    end
+
+    it "honours limit and offset in the JSON listing" do
+      result = described_class.call(detail: "summary", format: "json", limit: 1)
+
+      expect(JSON.parse(result.content.first[:text])["tables"].size).to eq(1)
+    end
+
+    # The markdown banner rides on every static-tier response; appended to a
+    # JSON body it stops the body parsing, so it moves inside the document.
+    it "still parses in the static tier, with the tier note inside the document" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      allow(RailsAiContext).to receive(:static_reason).and_return("static mode requested with --no-boot")
+      allow(RailsAiContext).to receive(:static_kind).and_return(:requested)
+
+      parsed = JSON.parse(described_class.call(format: "json").content.first[:text])
+
+      expect(parsed["_static_tier"]).to include("[STATIC]")
+      expect(parsed["tables"]).to include("users")
+    end
   end
 
   describe ".call with pagination" do

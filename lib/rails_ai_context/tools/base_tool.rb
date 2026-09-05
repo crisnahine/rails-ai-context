@@ -444,6 +444,16 @@ module RailsAiContext
         # mistake static analysis for runtime-confirmed data. Rides the
         # suffix mechanism so it survives truncation.
         def static_tier_banner
+          note = static_tier_note
+          return nil unless note
+
+          "\n\n---\n_#{note}_"
+        end
+
+        # The banner without its markdown wrapper, so a JSON body can carry
+        # the same sentence under a key instead of a footer that would stop it
+        # parsing.
+        def static_tier_note
           return nil unless RailsAiContext.static_tier?
 
           reason = RailsAiContext.static_reason
@@ -453,8 +463,8 @@ module RailsAiContext
           when :requested, :source_only then "Static mode (#{reason})"
           else reason ? "App boot failed (#{reason})" : "Static mode"
           end
-          "\n\n---\n_[STATIC] #{headline}. Serving static analysis; runtime-only data is marked " \
-            "[UNAVAILABLE]. Run `rails-ai-context doctor` for details._"
+          "[STATIC] #{headline}. Serving static analysis; runtime-only data is marked " \
+            "[UNAVAILABLE]. Run `rails-ai-context doctor` for details."
         end
 
         # Tools that only make sense against a booted app must refuse in the
@@ -684,13 +694,7 @@ module RailsAiContext
           suffix = [ suffix, static_tier_banner ].compact.join
           suffix = nil if suffix.empty?
 
-          # Auto-track: record this tool call in session context (skip SessionContext itself to avoid recursion)
-          if respond_to?(:tool_name) && tool_name != "rails_session_context"
-            summary = text.lines.first&.strip&.truncate(80)
-            params = Thread.current[:rails_ai_context_call_params] || {}
-            session_record(tool_name, params, summary)
-            Thread.current[:rails_ai_context_call_params] = nil
-          end
+          record_call(text)
 
           max = RailsAiContext.configuration.max_tool_response_chars
           if max && text.length > max
@@ -702,6 +706,22 @@ module RailsAiContext
             text += suffix if suffix
             MCP::Tool::Response.new([ { type: "text", text: text } ])
           end
+        end
+
+        # Key the static-tier note rides under in a JSON body. Underscored the
+        # way JsonBudget's own report key is, so a reader tells it from data.
+        STATIC_TIER_KEY = "_static_tier"
+
+        # A JSON body has to parse, so it cannot take the markdown banner and
+        # cannot be sliced at the response cap: JsonBudget drops whole
+        # elements instead, and the tier note rides under a reserved key.
+        def json_response(data)
+          note = static_tier_note
+          data = data.merge(STATIC_TIER_KEY => note) if note && data.is_a?(Hash)
+
+          text = JsonBudget.generate(data, RailsAiContext.configuration.max_tool_response_chars)
+          record_call(text)
+          MCP::Tool::Response.new([ { type: "text", text: text } ])
         end
 
         # Helper: wrap text in an MCP::Tool::Response flagged as an error
@@ -721,6 +741,17 @@ module RailsAiContext
         end
 
         private
+
+        # Every answered call is recorded so session_context(action:"status")
+        # can list it. SessionContext itself is skipped to avoid recursion.
+        def record_call(text)
+          return unless respond_to?(:tool_name) && tool_name != "rails_session_context"
+
+          summary = text.lines.first&.strip&.truncate(80)
+          params = Thread.current[:rails_ai_context_call_params] || {}
+          session_record(tool_name, params, summary)
+          Thread.current[:rails_ai_context_call_params] = nil
+        end
 
         def session_key(tool_name, params)
           normalized = tool_name.to_s.sub(/\Arails_/, "")
