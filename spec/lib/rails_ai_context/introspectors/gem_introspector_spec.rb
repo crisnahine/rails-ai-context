@@ -15,6 +15,12 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
       expect(result).to eq({ error: "No Gemfile.lock found" })
     end
 
+    it "says why rather than reporting no gems when the lockfile has no gem entries" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), "not a lockfile\n")
+
+      expect(introspector.call).to eq({ error: "Gemfile.lock has no specs section" })
+    end
+
     context "with a Gemfile.lock" do
       let(:lockfile_content) do
         <<~LOCK

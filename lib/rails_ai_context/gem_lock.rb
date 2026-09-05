@@ -18,16 +18,19 @@ module RailsAiContext
     PLAIN_VERSION = /\A\d+(?:\.\d+)*\S*\z/
 
     class Spec
-      attr_reader :ruby_version
+      attr_reader :ruby_version, :reason
 
-      def initialize(versions, ruby_version: nil, missing: false)
+      def initialize(versions, ruby_version: nil, reason: nil)
         @versions = versions
         @ruby_version = ruby_version
-        @missing = missing
+        @reason = reason
       end
 
+      # No lockfile, and a lockfile that named no gem, are both "the app's
+      # gems are unknown". Neither is an app that resolved no gems, and a
+      # caller reading them that way answers that the app uses none of them.
       def missing?
-        @missing
+        !@reason.nil?
       end
 
       def present?(name)
@@ -62,7 +65,7 @@ module RailsAiContext
         cached = CACHE[path]
         return cached[:spec] if cached && cached[:stamp] == stamp
 
-        spec = stamp.first ? parse(path, gemfile) : Spec.new({}, missing: true)
+        spec = stamp.first ? parse(path, gemfile) : Spec.new({}, reason: "No Gemfile.lock found")
         CACHE[path] = { stamp: stamp, spec: spec }
         spec
       end
@@ -77,16 +80,18 @@ module RailsAiContext
 
     def parse(path, gemfile)
       content = SafeFile.read(path, max_size: MAX_SIZE)
-      return Spec.new({}, missing: true) unless content
+      return Spec.new({}, reason: "Gemfile.lock could not be read") unless content
 
       versions = {}
       ruby_version = nil
       in_specs = false
+      specs_section = false
       content.each_line do |line|
         if line.match?(/\A\S/)
           in_specs = false
         elsif line.strip == "specs:"
           in_specs = true
+          specs_section = true
         elsif in_specs && (match = line.match(SPEC_LINE))
           # A platform-specific gem is "name (1.2.3-x86_64-linux)", one line
           # per platform. The text before the first hyphen is the version; a
@@ -96,7 +101,12 @@ module RailsAiContext
           ruby_version = match[1]
         end
       end
-      Spec.new(versions, ruby_version: ruby_version || gemfile_ruby_version(gemfile), missing: false)
+      # An empty Gemfile still locks to a file with a specs: section, so no
+      # gems is an answer there. A file without one is not a lockfile at all,
+      # and answering it as an app with no gems denies every gem it holds.
+      return Spec.new({}, reason: "Gemfile.lock has no specs section") unless specs_section
+
+      Spec.new(versions, ruby_version: ruby_version || gemfile_ruby_version(gemfile))
     end
     private_class_method :parse
 
