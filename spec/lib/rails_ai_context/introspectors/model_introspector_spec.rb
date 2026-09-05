@@ -535,7 +535,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         widget = result["Widget"]
         expect(widget[:confidence]).to eq("[STATIC]")
         expect(widget[:table_name]).to eq("widgets")
-        expect(widget[:associations].map { |a| a[:name] }).to contain_exactly(:factory, :parts)
+        expect(widget[:associations].map { |a| a[:name] }).to contain_exactly("factory", "parts")
         expect(widget[:validations]).not_to be_empty
         expect(result["Admin::Report"][:table_name]).to eq("reports")
       end
@@ -561,8 +561,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         article = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Article"]
 
         expect(article[:table_name]).to eq("posts")
-        expect(article[:associations].map { |a| a[:name] }).to contain_exactly(:comments)
-        expect(article[:validations].map { |v| v[:kind] }).to contain_exactly(:presence)
+        expect(article[:associations].map { |a| a[:name] }).to contain_exactly("comments")
+        expect(article[:validations].map { |v| v[:kind] }).to contain_exactly("presence")
         expect(article[:scopes].map { |s| s[:name] }).to contain_exactly("published")
         expect(article[:callbacks]).to include("before_save")
         expect(article[:encrypts]).to contain_exactly("secret")
@@ -585,7 +585,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         article = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Article"]
 
-        comments = article[:associations].select { |a| a[:name] == :comments }
+        comments = article[:associations].select { |a| a[:name] == "comments" }
         expect(comments.size).to eq(1)
         expect(comments.first[:options][:dependent]).to eq(:nullify)
       end
@@ -698,7 +698,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result.keys).to contain_exactly("User", "Invoice", "Store::Order")
-        expect(result["Invoice"][:associations].map { |a| a[:name] }).to eq([ :user ])
+        expect(result["Invoice"][:associations].map { |a| a[:name] }).to eq([ "user" ])
         expect(result["Store::Order"][:table_name]).to eq("orders")
       end
     end
@@ -761,7 +761,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           expect(customer[:mongoid]).to be(true)
           expect(customer[:fields]).to include(name: :name, type: "String")
           expect(customer[:embeds]).to include(type: :embeds_many, name: :orders)
-          expect(customer[:associations].map { |a| a[:name] }).to include(:tickets)
+          expect(customer[:associations].map { |a| a[:name] }).to include("tickets")
           expect(customer).not_to have_key(:table_name)
         end
       end
@@ -790,7 +790,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         widget = result["Widget"]
         expect(widget[:table_name]).to eq("widgets")
-        expect(widget[:associations].map { |a| a[:name] }).to contain_exactly(:factory)
+        expect(widget[:associations].map { |a| a[:name] }).to contain_exactly("factory")
         expect(widget).not_to have_key(:mongoid)
 
         customer = result["Customer"]
@@ -1237,13 +1237,13 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
 
-        expect(post[:associations].map { |a| a[:name] }).to contain_exactly(:author, :revisions, :editor)
+        expect(post[:associations].map { |a| a[:name] }).to contain_exactly("author", "revisions", "editor")
         expect(post[:validations].size).to eq(2)
         expect(post[:scopes].map { |s| s[:name] }).to include("published")
         expect(post[:callbacks]["before_save"]).to include("stamp")
         expect(post[:encrypts]).to eq([ "secret" ])
-        expect(post[:associations].find { |a| a[:name] == :revisions }[:from_concern]).to eq("Publishable")
-        expect(post[:associations].find { |a| a[:name] == :author }).not_to have_key(:from_concern)
+        expect(post[:associations].find { |a| a[:name] == "revisions" }[:from_concern]).to eq("Publishable")
+        expect(post[:associations].find { |a| a[:name] == "author" }).not_to have_key(:from_concern)
         expect(post).not_to have_key(:concerns_unread)
         expect(post[:concern_callbacks].map { |cb| cb[:confidence] }).to eq([ RailsAiContext::Confidence::STATIC ])
       end
@@ -1257,7 +1257,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result["Widget"][:associations].map { |a| a[:name] }).to contain_exactly(:wires)
+        expect(result["Widget"][:associations].map { |a| a[:name] }).to contain_exactly("wires")
       end
     end
 

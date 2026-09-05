@@ -13,8 +13,11 @@ module RailsAiContext
         def on_call_node_enter(node)
           return unless ASSOCIATION_METHODS.include?(node.name) && node.receiver.nil?
 
+          # The booted tier reads the macro off `assoc.macro.to_s`, so a
+          # static record spells it the same way or no consumer can compare
+          # the two.
           @results << {
-            type:       node.name,
+            type:       node.name.to_s,
             name:       extract_first_symbol(node),
             options:    extract_keyword_options(node),
             location:   node.location.start_line,

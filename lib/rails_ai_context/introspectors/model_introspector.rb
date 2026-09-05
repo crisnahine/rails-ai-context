@@ -466,7 +466,7 @@ module RailsAiContext
 
       def extract_custom_validates_from_ast(source_data)
         source_data[:validations]
-          .select { |v| v[:kind] == :custom }
+          .select { |v| v[:kind] == "custom" }
           .flat_map { |v| v[:attributes] }
       end
 
@@ -728,6 +728,29 @@ module RailsAiContext
 
       def reject_excluded_associations(associations)
         Array(associations).reject { |assoc| excluded_association?(assoc[:name]) }
+                           .map { |assoc| booted_association_shape(assoc) }
+      end
+
+      # The booted tier lifts these options onto the record and spells every
+      # name as a String, and each renderer reads them there; a static record
+      # that leaves them nested under `options` reads as an association with
+      # no `dependent:` and no `through:` at all.
+      LIFTED_ASSOCIATION_OPTIONS = %i[through dependent class_name foreign_key polymorphic optional].freeze
+      BOOLEAN_ASSOCIATION_OPTIONS = %i[polymorphic optional].freeze
+
+      def booted_association_shape(assoc)
+        return assoc unless assoc.is_a?(Hash)
+
+        shaped = assoc.merge(assoc[:name] ? { name: assoc[:name].to_s } : {})
+        options = assoc[:options]
+        return shaped unless options.is_a?(Hash)
+
+        LIFTED_ASSOCIATION_OPTIONS.each_with_object(shaped) do |key, acc|
+          next unless options.key?(key) && !acc.key?(key)
+
+          value = options[key]
+          acc[key] = BOOLEAN_ASSOCIATION_OPTIONS.include?(key) ? value : value.to_s
+        end
       end
 
       def sanitize_options(options)
@@ -746,7 +769,7 @@ module RailsAiContext
           # The booted tier's validations come from model.validators, which
           # never holds a `validate :method`; those are reported once, under
           # custom_validates.
-          validations: Array(data[:validations]).reject { |v| v[:kind] == :custom },
+          validations: Array(data[:validations]).reject { |v| v[:kind] == "custom" },
           custom_validates: extract_custom_validates_from_ast(data),
           scopes: data[:scopes],
           # The booted tier answers a Hash of attribute => value map, and

@@ -13,14 +13,14 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ValidationsListener do
   it "detects validates with presence" do
     results = parse_and_dispatch("validates :email, presence: true")
     expect(results.size).to eq(1)
-    expect(results.first[:kind]).to eq(:presence)
+    expect(results.first[:kind]).to eq("presence")
     expect(results.first[:attributes]).to eq([ "email" ])
   end
 
   it "splits multiple validation kinds" do
     results = parse_and_dispatch("validates :email, presence: true, uniqueness: true")
     kinds = results.map { |r| r[:kind] }
-    expect(kinds).to contain_exactly(:presence, :uniqueness)
+    expect(kinds).to contain_exactly("presence", "uniqueness")
   end
 
   it "detects multiple attributes" do
@@ -30,13 +30,13 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ValidationsListener do
 
   it "detects validates_presence_of" do
     results = parse_and_dispatch("validates_presence_of :title")
-    expect(results.first[:kind]).to eq(:presence)
+    expect(results.first[:kind]).to eq("presence")
     expect(results.first[:attributes]).to eq([ "title" ])
   end
 
   it "detects custom validate" do
     results = parse_and_dispatch("validate :check_constraints")
-    expect(results.first[:kind]).to eq(:custom)
+    expect(results.first[:kind]).to eq("custom")
     expect(results.first[:attributes]).to eq([ "check_constraints" ])
   end
 
@@ -45,6 +45,31 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ValidationsListener do
     expect(results.size).to eq(2)
     methods = results.flat_map { |r| r[:attributes] }
     expect(methods).to contain_exactly("check_a", "check_b")
+  end
+
+  it "names absence as the kind, not the macro" do
+    results = parse_and_dispatch("validates :followers_url, absence: true")
+    expect(results.first[:kind]).to eq("absence")
+    expect(results.first[:options]).to eq({})
+  end
+
+  it "gives a rule that names two kinds on one attribute a row each" do
+    results = parse_and_dispatch("validates :uri, absence: true, exclusion: { in: [''] }")
+    expect(results.map { |r| r[:kind] }).to contain_exactly("absence", "exclusion")
+    expect(results.find { |r| r[:kind] == "exclusion" }[:options]).to eq({ in: [ "" ] })
+    expect(results.find { |r| r[:kind] == "absence" }[:options]).to eq({})
+  end
+
+  it "names an app's own validator by the option key that carries it" do
+    results = parse_and_dispatch("validates :note, note_length: { maximum: 5 }, if: :local?")
+    expect(results.first[:kind]).to eq("note_length")
+    expect(results.first[:options]).to eq({ if: :local?, maximum: 5 })
+  end
+
+  it "keeps a shared option off the kinds" do
+    results = parse_and_dispatch("validates_length_of :title, maximum: 5, on: :create")
+    expect(results.map { |r| r[:kind] }).to eq([ "length" ])
+    expect(results.first[:options]).to eq({ maximum: 5, on: :create })
   end
 
   it "includes confidence tag" do

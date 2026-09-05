@@ -428,4 +428,38 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
   end
+
+  # The rspec branch matched the macro against Strings while the static walk
+  # reported Symbols, so every row was dropped and the block came out empty.
+  describe "a model parsed without booting" do
+    it "fills the rspec associations and validations blocks" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "account.rb"), <<~RUBY)
+          class Account < ApplicationRecord
+            belongs_to :owner
+            has_many :statuses, dependent: :destroy
+            has_one :profile
+            validates :username, presence: true
+            validates :followers_url, absence: true
+          end
+        RUBY
+
+        app = RailsAiContext::StaticApp.new(dir)
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(app).static_call
+        allow(described_class).to receive(:cached_context)
+          .and_return({ tests: { framework: "rspec" }, models: models })
+        allow(described_class).to receive(:rails_app).and_return(app)
+
+        text = described_class.call(model: "Account").content.first[:text]
+
+        expect(text).to include("it { is_expected.to belong_to(:owner) }")
+        expect(text).to include("it { is_expected.to have_many(:statuses).dependent(:destroy) }")
+        expect(text).to include("it { is_expected.to have_one(:profile) }")
+        expect(text).to include("it { is_expected.to validate_presence_of(:username) }")
+        expect(text).to include("validates absence of followers_url")
+        expect(text).not_to include(%(describe "associations" do\n  end))
+      end
+    end
+  end
 end
