@@ -1307,6 +1307,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)
     end
 
+    # Marked, because every other model's file resolves against the app root
+    # and this one does not exist there.
     it "carries the gem's own path, not an invented app path" do
       Dir.mktmpdir do |dir|
         gem_file = File.join(Gem.path.first.to_s, "gems", "doorkeeper-5.8.2", "app", "models",
@@ -1314,7 +1316,15 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         details = details_for(dir, "Doorkeeper::AccessGrant", [ gem_file, 1 ])
 
-        expect(details[:file]).to eq("doorkeeper-5.8.2/app/models/doorkeeper/access_grant.rb")
+        expect(details[:file]).to eq("gem:doorkeeper-5.8.2/app/models/doorkeeper/access_grant.rb")
+      end
+    end
+
+    it "leaves an app-owned model's file unmarked" do
+      Dir.mktmpdir do |dir|
+        details = details_for(dir, "Widget", [ File.join(dir, "app", "models", "widget.rb"), 1 ])
+
+        expect(details[:file]).to eq("app/models/widget.rb")
       end
     end
 

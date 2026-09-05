@@ -869,7 +869,7 @@ module RailsAiContext
       def relative_to_root(path)
         return nil if path.nil?
 
-        PortablePath.relativize(path, app.root.to_s)
+        PortablePath.relativize_marked(path, app.root.to_s)
       end
 
       # This sees the model file alone, where the booted tier also walks what
