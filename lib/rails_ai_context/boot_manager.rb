@@ -27,6 +27,9 @@ module RailsAiContext
 
     DEFAULT_TIMEOUT = 60
 
+    # Ruby quotes the method name differently across versions.
+    CONFIGURE_WITHOUT_GEM = /undefined method .?configure.? for (module )?RailsAiContext/
+
     Result = Struct.new(:status, :error, keyword_init: true) do
       def booted?
         status == :booted
@@ -37,6 +40,20 @@ module RailsAiContext
         return nil if booted?
 
         "#{error.class}: #{error.message.to_s.lines.first&.strip}"
+      end
+
+      # An unguarded `RailsAiContext.configure` in config/initializers has
+      # nothing to call where the gem is not loaded, and the bare
+      # NoMethodError does not say what to do about it. Every surface that
+      # relays a boot failure relays these lines with it.
+      def configure_hint
+        return [] unless failure_summary.to_s.match?(CONFIGURE_WITHOUT_GEM)
+
+        [
+          "config/initializers calls RailsAiContext.configure, but the app does not bundle the gem.",
+          "Either `bundle add rails-ai-context --group development`, or move those",
+          "settings into .rails-ai-context.yml, which standalone mode reads."
+        ]
       end
     end
 
