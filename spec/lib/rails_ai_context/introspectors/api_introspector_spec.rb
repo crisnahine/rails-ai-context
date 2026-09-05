@@ -223,7 +223,42 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
     end
   end
 
+  describe "serializers and jbuilder views in a pack" do
+    let(:pack) { File.join(Rails.root, "packs", "billing", "app") }
+
+    before do
+      FileUtils.mkdir_p(File.join(pack, "serializers"))
+      FileUtils.mkdir_p(File.join(pack, "views", "invoices"))
+      File.write(File.join(pack, "serializers", "invoice_serializer.rb"), <<~RUBY)
+        class InvoiceSerializer
+        end
+      RUBY
+      File.write(File.join(pack, "views", "invoices", "show.json.jbuilder"), "json.id @invoice.id\n")
+    end
+
+    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
+
+    it "counts a pack's serializers and jbuilder templates" do
+      result = described_class.new(Rails.application).call
+      expect(result[:serializers][:serializer_classes]).to include("InvoiceSerializer")
+      expect(result[:serializers][:jbuilder]).to eq(1)
+    end
+  end
+
   describe "#static_call" do
+    it "names serializers by the constant they declare, not by camelizing the path" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/serializers/activitypub"))
+        File.write(File.join(root, "app/serializers/activitypub/x_serializer.rb"), <<~RUBY)
+          class ActivityPub::XSerializer
+          end
+        RUBY
+
+        static = described_class.new(RailsAiContext::StaticApp.new(root)).static_call
+        expect(static[:serializers][:serializer_classes]).to eq([ "ActivityPub::XSerializer" ])
+      end
+    end
+
     it "answers every key the booted tier answers, since only the mode needs a runtime" do
       static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
       booted = described_class.new(Rails.application).call

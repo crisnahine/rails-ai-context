@@ -53,18 +53,14 @@ module RailsAiContext
         result = {}
 
         # Jbuilder templates
-        views_dir = File.join(root, "app/views")
-        if Dir.exist?(views_dir)
-          jbuilder_files = Dir.glob(File.join(views_dir, "**/*.jbuilder"))
-          result[:jbuilder] = jbuilder_files.size if jbuilder_files.any?
-        end
+        jbuilder = PathResolver.view_dirs(root).sum { |dir| Dir.glob(File.join(dir, "**/*.jbuilder")).size }
+        result[:jbuilder] = jbuilder if jbuilder > 0
 
-        # Serializer classes (Alba, Blueprinter, JSONAPI, etc.)
-        serializers_dir = File.join(root, "app/serializers")
-        if Dir.exist?(serializers_dir)
-          files = Dir.glob(File.join(serializers_dir, "**/*.rb"))
-          result[:serializer_classes] = files.map { |f| f.sub("#{serializers_dir}/", "").sub(/\.rb\z/, "").camelize }.sort
-        end
+        # Serializer classes (Alba, Blueprinter, JSONAPI, etc.). Named by the
+        # class each file declares: camelizing the path asks the global
+        # inflector, which the static tier never loaded the app's acronyms into.
+        names = SourceScan.classes(root, kind: "app/serializers").map { |name, _record| name }.sort
+        result[:serializer_classes] = names if names.any?
 
         result
       end
