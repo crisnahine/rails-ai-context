@@ -26,7 +26,7 @@ module RailsAiContext
           system_tests: detect_system_tests,
           test_helpers: detect_test_helpers,
           test_helper_setup: detect_test_helper_setup,
-          test_files: detect_test_files,
+          test_files: test_categories,
           vcr_cassettes: detect_vcr,
           ci_config: detect_ci,
           coverage: detect_coverage,
@@ -186,10 +186,6 @@ module RailsAiContext
         setup.uniq
       end
 
-      def detect_test_files
-        test_categories
-      end
-
       def detect_vcr
         dirs = [
           File.join(root, "spec/cassettes"),
@@ -295,7 +291,12 @@ module RailsAiContext
       # Only files named for a test framework are counted. Globbing every .rb
       # counted whatever a project keeps beside its specs - mailer previews,
       # shared contexts, page objects - under a heading that promises tests.
+      # Two payload keys are built from this walk, so it runs once per call.
       def test_categories
+        @test_categories ||= build_test_categories
+      end
+
+      def build_test_categories
         rows = Hash.new { |h, k| h[k] = [] }
 
         %w[spec test].each do |base|
@@ -318,7 +319,7 @@ module RailsAiContext
           .transform_values { |pairs| { location: pairs.map(&:first).join(", "), count: pairs.sum(&:last) } }
           .sort_by { |cat, row| [ -row[:count], cat ] }
           .to_h
-      rescue SystemCallError => e
+      rescue => e
         $stderr.puts "[rails-ai-context] test_categories failed: #{e.message}" if ENV["DEBUG"]
         {}
       end

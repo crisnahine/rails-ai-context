@@ -73,13 +73,6 @@ module RailsAiContext
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
 
-            if data[:test_count_by_category].is_a?(Hash) && data[:test_count_by_category].any?
-              lines << "" << "## Test Counts by Category"
-              data[:test_count_by_category].each do |cat, count|
-                lines << "- #{cat}: #{count}"
-              end
-            end
-
             if data[:test_files]&.any?
               lines << "" << "## Test Files"
               data[:test_files].each do |cat, info|
@@ -110,13 +103,6 @@ module RailsAiContext
             lines << "- **Framework:** #{data[:framework]}"
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
-
-            if data[:test_count_by_category].is_a?(Hash) && data[:test_count_by_category].any?
-              lines << "" << "## Test Counts by Category"
-              data[:test_count_by_category].each do |cat, count|
-                lines << "- #{cat}: #{count}"
-              end
-            end
 
             if data[:factory_traits]&.any?
               lines << "" << "## Factory Traits"
