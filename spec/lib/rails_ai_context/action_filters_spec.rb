@@ -291,4 +291,70 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
   end
+
+  # Rails removes the callback at the skip and re-adds it at the next line, so
+  # the later record decides. Reporting the name as skipped said an auth
+  # filter does not run on an action where it does.
+  describe "a class body that skips a filter and then declares it again" do
+    around do |example|
+      Dir.mktmpdir("action-filters-redeclare") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/controllers"))
+        File.write(File.join(dir, "app/controllers/public_controller.rb"), <<~RUBY)
+          class PublicController < ApplicationController
+            skip_before_action :authenticate_user!
+            before_action :authenticate_user!, only: [ :admin ]
+
+            def index; end
+            def admin; end
+          end
+        RUBY
+        example.run
+      end
+    end
+
+    let(:redeclare_context) do
+      { controllers: { controllers: {
+        "PublicController" => {
+          parent_class: "ApplicationController",
+          filters: [
+            { kind: "before", name: "authenticate_user!", skipped: true },
+            { kind: "before", name: "authenticate_user!", only: %w[admin] }
+          ],
+          file: "app/controllers/public_controller.rb"
+        },
+        "ChildController" => { parent_class: "PublicController", filters: [] }
+      } } }
+    end
+
+    it "runs the re-declared filter on the action it names" do
+      result = described_class.for(redeclare_context, "PublicController", "admin", root: @root)
+
+      expect(result[:own].map { |f| f[:name] }).to eq(%w[authenticate_user!])
+      expect(result[:skipped]).to eq([])
+    end
+
+    it "still reports the skip on an action the re-declaration leaves out" do
+      result = described_class.for(redeclare_context, "PublicController", "index", root: @root)
+
+      expect(result[:own]).to eq([])
+      expect(result[:skipped]).to eq(%w[authenticate_user!])
+    end
+
+    it "hands the re-declared filter down to a child" do
+      result = described_class.for(redeclare_context, "ChildController", "admin", root: @root)
+
+      expect(result[:inherited].map { |f| [ f[:name], f[:from] ] })
+        .to eq([ %w[authenticate_user! PublicController] ])
+    end
+
+    it "keeps a plain skip of a filter it never re-declares out of the child" do
+      redeclare_context[:controllers][:controllers]["PublicController"][:filters] =
+        [ { kind: "before", name: "authenticate_user!", skipped: true } ]
+
+      result = described_class.for(redeclare_context, "ChildController", "admin")
+
+      expect(result[:inherited]).to eq([])
+    end
+  end
 end
