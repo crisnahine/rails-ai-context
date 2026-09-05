@@ -207,6 +207,14 @@ A file whose section has nothing in it is not written. An app with no models get
 
 Commit **all files except `.ai-context.json`** (which is gitignored). This gives your entire team AI-assisted context automatically.
 
+### Telling a static file from a booted one
+
+A run that could not boot the app, or was given `--no-boot`, reads source files
+instead of a running Rails. The counts differ, so every generated file says so:
+a `[STATIC]` line under the header, and a `"tier": "static"` key in
+`.ai-context.json`. A booted run says nothing extra, so an unmarked file was
+generated with the app running.
+
 ---
 
 ## All Commands

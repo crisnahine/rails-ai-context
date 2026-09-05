@@ -130,6 +130,13 @@ route, controller, and mailbox-routing introspectors as they walk the AST
 marks a section with no static path, or (in either tier) a data source that
 genuinely doesn't exist for this app.
 
+A generated context file says the same thing. A run that did not boot writes a
+`[STATIC]` line under the header of every file that has one (CLAUDE.md,
+AGENTS.md, the Copilot instructions, the per-tool overview rules file and the
+split AGENTS.md pair), and `.ai-context.json` carries the tier as a `tier` key
+reading `static` or `booted`. A booted run adds nothing: an unmarked file is a
+booted one.
+
 ## Shape matrix
 
 Rows are app shapes; columns are schema, models, routes, and controllers

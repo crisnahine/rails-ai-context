@@ -55,6 +55,9 @@ module RailsAiContext
           "> Check here first for scopes, constants, associations. Read model files for business logic/methods.",
           ""
         ]
+        if (notice = SectionFacts.static_notice(context))
+          lines.insert(-2, "> #{notice}")
+        end
 
         models.keys.sort.first(30).each do |name|
           data = models[name]
@@ -89,6 +92,9 @@ module RailsAiContext
           "> Read controller files directly when editing. Use MCP tools for reference only.",
           ""
         ]
+        if (notice = SectionFacts.static_notice(context))
+          lines.insert(-2, "> #{notice}")
+        end
 
         # ApplicationController before_actions
         before_actions = detect_before_actions

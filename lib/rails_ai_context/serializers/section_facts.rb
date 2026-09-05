@@ -10,6 +10,16 @@ module RailsAiContext
     module SectionFacts
       module_function
 
+      # A file generated without booting the app carries different counts from
+      # one generated with it. Every surface that renders a header says which
+      # it is holding, in these words.
+      def static_notice(ctx)
+        return nil unless ctx[:tier].to_s == "static"
+
+        "#{Confidence::STATIC} Generated without booting the app: read from source files, " \
+          "so counts can differ from a booted run."
+      end
+
       def models_line(ctx)
         models = Payload.models(ctx)
         models.any? ? "- Models: #{models.size}" : nil

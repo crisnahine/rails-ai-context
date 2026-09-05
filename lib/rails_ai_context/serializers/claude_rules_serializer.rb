@@ -37,6 +37,9 @@ module RailsAiContext
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
+        if (notice = SectionFacts.static_notice(context))
+          lines.insert(-2, notice)
+        end
 
         # Compact counts - gems and architecture are already in the root file (CLAUDE.md/AGENTS.md)
         if (db_line = SectionFacts.database_line(context))
