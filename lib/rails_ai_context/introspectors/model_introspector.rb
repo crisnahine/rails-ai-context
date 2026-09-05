@@ -216,7 +216,11 @@ module RailsAiContext
 
       def extract_model_details(model)
         # AST-based source introspection (replaces all regex parsing)
-        source_data = introspect_source(model)
+        own_source = introspect_source(model)
+        # Reflection covers associations, validations and enums, but scopes,
+        # macros and custom validates are read off the file - so the concerns
+        # are merged here too, or the static tier out-answers this one.
+        source_data, = merge_concern_macros(own_source, model.name)
 
         details = {
           table_name:       model.table_name,
@@ -227,6 +231,7 @@ module RailsAiContext
           enums:            extract_enums(model),
           callbacks:        extract_callbacks(model, source_data),
           concerns:         extract_concerns(model),
+          concern_callbacks: concern_callbacks(source_data[:callbacks]),
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           scopes:           extract_scopes_from_ast(source_data),
@@ -654,7 +659,8 @@ module RailsAiContext
       end
 
       def static_model_details(path, class_name, file: relative_to_root(path))
-        data = SourceIntrospector.call(path)
+        own = SourceIntrospector.call(path)
+        data, unread = merge_concern_macros(own, class_name)
         details = {
           confidence: Confidence::STATIC,
           # Rails derives the table through its own inflector, and the file's
@@ -676,14 +682,46 @@ module RailsAiContext
           # with callbacks found" and then raised a TypeError on a Hash lookup
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
-          concerns: static_concerns(data[:mixins]),
+          concerns: static_concerns(own[:mixins]),
+          concern_callbacks: concern_callbacks(data[:callbacks]),
+          concerns_unread: (unread if unread.any?),
           macros: data[:macros],
-          methods: ActionResolver.own_methods(data[:methods], class_name),
+          methods: ActionResolver.own_methods(own[:methods], class_name),
           file: file
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
         details.compact
+      end
+
+      MERGED_CONCERN_KEYS = %i[associations validations scopes enums callbacks macros].freeze
+
+      # The mixin names are in the same walk and their files are on disk, so
+      # the class's own declarations and its concerns' answer as one. Methods
+      # and mixins stay the model's own: those are its interface, not the
+      # sum of what it included.
+      def merge_concern_macros(own, class_name)
+        collected, unread = ConcernMacros.collect(
+          app.root.to_s, own[:mixins] || [],
+          keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name
+        )
+        return [ own, unread ] if collected.empty?
+
+        merged = own.merge(collected) { |_key, mine, inherited| Array(mine) + inherited }
+        merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
+        merged[:scopes] = dedup(merged[:scopes]) { |s| s[:name] }
+        [ merged, unread ]
+      end
+
+      # The model's own declaration wins: it is the one whose options the
+      # class actually runs with.
+      def dedup(entries)
+        Array(entries).uniq { |entry| entry.is_a?(Hash) ? yield(entry) : entry }
+      end
+
+      def concern_callbacks(callbacks)
+        found = Array(callbacks).select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
+        found if found.any?
       end
 
       # `defined_enums` keys both levels with Strings; the listener uses

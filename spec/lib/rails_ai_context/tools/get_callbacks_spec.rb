@@ -29,6 +29,15 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
     allow(described_class).to receive(:cached_context).and_return({ models: models })
   end
 
+  # The payload key the introspector fills, built the way it builds it, so
+  # these render what a real run would hand the tool.
+  def payload_concern_callbacks(root, concern_name)
+    collected, = RailsAiContext::ConcernMacros.collect(
+      root, [ { name: concern_name, ancestor: true } ], keys: %i[callbacks], prefer: "model"
+    )
+    collected[:callbacks] || []
+  end
+
   describe "detail levels for all models" do
     it "returns model names with callback counts for detail:summary" do
       result = described_class.call(detail: "summary")
@@ -107,6 +116,7 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
       allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+      models["Post"][:concern_callbacks] = payload_concern_callbacks(tmpdir, "HtmlSanitizable")
     end
 
     after { FileUtils.remove_entry(tmpdir) }
@@ -175,6 +185,7 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
       allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+      models["Post"][:concern_callbacks] = payload_concern_callbacks(tmpdir, "HtmlSanitizable")
     end
 
     after { FileUtils.remove_entry(tmpdir) }
@@ -243,12 +254,18 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
         end
       RUBY
 
-      allow(described_class).to receive(:cached_context).and_return(
-        models: { "Status" => { callbacks: { "before_save" => %w[touch_thread] }, concerns: %w[RateLimitable] } }
-      )
       allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
       allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Status" => {
+            callbacks: { "before_save" => %w[touch_thread] },
+            concerns: %w[RateLimitable],
+            concern_callbacks: payload_concern_callbacks(tmpdir, "RateLimitable")
+          }
+        }
+      )
     end
 
     after { FileUtils.remove_entry(tmpdir) }
@@ -277,6 +294,41 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
 
       expect(text).to include("after_create do")
       expect(text).not_to include("def rate_limiter")
+    end
+  end
+
+  # The section used to walk the concern files itself, so it disagreed with
+  # the callbacks the payload already carries and it resolved a namespaced
+  # concern differently.
+  describe "the concern section reads the payload" do
+    it "groups the payload's concern-tagged callbacks by the concern that declared them" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Status" => {
+            callbacks: { "before_validation" => %w[set_visibility] },
+            concerns: %w[Status::Visibility],
+            concern_callbacks: [
+              { name: "before_validation", type: "before_validation", method: "set_visibility",
+                from_concern: "Status::Visibility" }
+            ]
+          }
+        }
+      )
+
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("## From Concerns")
+      expect(text).to include("**Status::Visibility:** before_validation :set_visibility")
+    end
+
+    it "renders no concern section when the payload tags nothing" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Status" => { callbacks: { "before_save" => %w[touch] }, concerns: %w[Discard::Model] } }
+      )
+
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).not_to include("## From Concerns")
     end
   end
 end

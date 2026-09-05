@@ -152,10 +152,15 @@ AST-parsed model internals. Every result carries `[VERIFIED]` or `[INFERRED]` co
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 Returns: associations, validations, scopes, enums, callbacks, macros, methods, concerns.
+What the included concerns declare is merged in, so the answer does not stop
+at the model file. A concern whose file could not be read is named under
+Concerns as `[UNAVAILABLE]` rather than dropped.
 
 ### `rails_get_callbacks`
 
-All callbacks in Rails execution order with source code.
+All callbacks in Rails execution order with source code. The execution order
+covers concern-declared callbacks too, and the "From Concerns" section says
+which concern declared each one.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

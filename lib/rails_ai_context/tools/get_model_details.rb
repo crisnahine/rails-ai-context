@@ -352,6 +352,11 @@ module RailsAiContext
                 lines << "- #{c}"
               end
             end
+            unread = data[:concerns_unread]
+            if unread&.any?
+              lines << "#{RailsAiContext::Confidence::UNAVAILABLE} " \
+                "#{count_phrase(unread.size, "concern")} not read: #{unread.join(', ')}"
+            end
           end
         end
 

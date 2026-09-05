@@ -119,14 +119,15 @@ module RailsAiContext
         end
 
         # Concern-provided callbacks
-        concern_callbacks = find_concern_callbacks(name, data)
+        concern_callbacks = find_concern_callbacks(data)
         if concern_callbacks.any?
           lines << "" << "## From Concerns"
           if RailsAiContext::DetailLevel.full?(detail)
-            concern_callbacks.each do |concern_name, info|
+            concern_callbacks.each do |concern_name, entries|
               lines << "### #{concern_name}"
-              info[:callbacks].each do |cb|
-                source = cb[:method_name] && extract_method_source_from_file(info[:path], cb[:method_name])
+              path = concern_file(concern_name)
+              entries.each do |cb|
+                source = path && cb[:method_name] && extract_method_source_from_file(path, cb[:method_name])
                 lines << "- #{cb[:declaration]}"
                 if source
                   lines << "```ruby"
@@ -137,9 +138,8 @@ module RailsAiContext
               end
             end
           else
-            concern_callbacks.each do |concern_name, info|
-              declarations = info[:callbacks].map { |cb| cb[:declaration] }
-              lines << "- **#{concern_name}:** #{declarations.join(', ')}"
+            concern_callbacks.each do |concern_name, entries|
+              lines << "- **#{concern_name}:** #{entries.map { |cb| cb[:declaration] }.join(', ')}"
             end
           end
         end
@@ -237,48 +237,29 @@ module RailsAiContext
         methods.map { |m| "`#{callback_target(m.to_s)}`" }.join(", ")
       end
 
-      private_class_method def self.find_concern_callbacks(model_name, data)
-        concern_callbacks = {}
-        concerns = data[:concerns] || []
-        max_size = RailsAiContext.configuration.max_file_size
-
-        concerns.each do |concern_name|
-          next unless concern_name.is_a?(String)
-
-          # Membership is decided at the introspector seam; a gem's concern
-          # has no file here, so find_file already narrows to the app's own.
-          concern_path = ConcernPaths.find_file(rails_app.root.to_s, concern_name)
-          next unless concern_path
-          next if File.size(concern_path) > max_size
-
-          source = RailsAiContext::SafeFile.read(concern_path) or next
-          callbacks = concern_callback_entries(source)
-
-          if callbacks.any?
-            concern_callbacks[concern_name] = { callbacks: callbacks, path: concern_path }
-          end
-        end
-
-        concern_callbacks
-      rescue => e
-        $stderr.puts "[rails-ai-context] find_concern_callbacks failed: #{e.message}" if ENV["DEBUG"]
-        {}
+      # The introspector already walks the concern files and tags what it
+      # found, on both tiers, so the section regroups that rather than
+      # reading the same files a second time and disagreeing.
+      private_class_method def self.find_concern_callbacks(data)
+        Array(data[:concern_callbacks])
+          .select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
+          .group_by { |cb| cb[:from_concern] }
+          .transform_values { |entries| entries.map { |cb| concern_callback_entry(cb) } }
       end
 
-      # The listener the rest of the gem uses, so a block and a class object
-      # are named the way the model file's own callbacks are.
-      private_class_method def self.concern_callback_entries(source)
-        walked = Introspectors::SourceIntrospector.walk_source(
-          source, { callbacks: Introspectors::Listeners::CallbacksListener }
-        )
+      private_class_method def self.concern_callback_entry(callback)
+        method = callback[:method].to_s
+        # The declared macro, not the resolved type: `after_commit_on_create`
+        # is a key this gem synthesizes, not something the file says.
+        declaration = "#{callback[:name] || callback[:type]} #{callback_target(method)}"
+        { declaration: declaration, method_name: (method if method_name?(method)) }
+      end
 
-        Array(walked[:callbacks]).map do |cb|
-          method = cb[:method].to_s
-          # The declared macro, not the resolved type: `after_commit_on_create`
-          # is a key this gem synthesizes, not something the file says.
-          declaration = "#{cb[:name] || cb[:type]} #{callback_target(method)}"
-          { declaration: declaration, method_name: (method if method_name?(method)) }
-        end
+      private_class_method def self.concern_file(concern_name)
+        ConcernPaths.find_file(rails_app.root.to_s, concern_name, prefer: "model")
+      rescue => e
+        $stderr.puts "[rails-ai-context] concern_file failed: #{e.message}" if ENV["DEBUG"]
+        nil
       end
     end
   end

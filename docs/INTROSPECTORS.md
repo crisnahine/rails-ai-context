@@ -84,7 +84,7 @@ end
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
 | SchemaIntrospector | `:schema` | Database tables, columns, types, indexes, defaults, encrypted hints |
-| ModelIntrospector | `:models` | Associations, validations, scopes, enums, concerns (AST-based) |
+| ModelIntrospector | `:models` | Associations, validations, scopes, enums, concerns (AST-based). Both tiers merge what the included concerns declare, tagged `from_concern:`; a concern whose file could not be read is listed in `concerns_unread` |
 | RouteIntrospector | `:routes` | Routes with helpers, HTTP methods, constraints |
 | ControllerIntrospector | `:controllers` | Actions, filters, strong params, render paths |
 | ViewIntrospector | `:views` | View files, layouts, partials |

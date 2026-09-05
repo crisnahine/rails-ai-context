@@ -344,4 +344,28 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).not_to include("- **phone** - [INFERRED]")
     end
   end
+
+  # The footer promises runtime-only data is marked; a concern whose file
+  # cannot be found is not runtime-only, it is unread.
+  describe "concerns the static tier could not read" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Widget" => {
+            table_name: "widgets",
+            concerns: %w[Wired Discard::Model],
+            concerns_unread: %w[Discard::Model]
+          }
+        }
+      )
+    end
+
+    it "names them under the Concerns section" do
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).to include("## Concerns")
+      expect(text).to include("[UNAVAILABLE] 1 concern not read: Discard::Model")
+    end
+  end
 end
