@@ -136,6 +136,7 @@ module RailsAiContext
           "# Models (#{models.size})",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
 
         lines << "Check here first for scopes, constants, associations. Read model files for business logic/methods."
         lines << ""
@@ -170,6 +171,7 @@ module RailsAiContext
           "# Controllers (#{controllers.size})",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
 
         lines.concat(render_compact_controllers_list(controllers))
 

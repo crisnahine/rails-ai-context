@@ -100,10 +100,11 @@ module RailsAiContext
           "---",
           "",
           "# ActiveRecord Models (#{models.size})",
-          "",
-          "Check here first for scopes, constants, associations. Read model files for business logic/methods.",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
+        lines << "Check here first for scopes, constants, associations. Read model files for business logic/methods."
+        lines << ""
 
         models.keys.sort.first(30).each do |name|
           data = models[name]
@@ -129,10 +130,11 @@ module RailsAiContext
           "---",
           "",
           "# Controllers (#{controllers.size})",
-          "",
-          "Use `rails_get_controllers` MCP tool for full details.",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
+        lines << "Use `rails_get_controllers` MCP tool for full details."
+        lines << ""
 
         lines.concat(render_compact_controllers_list(controllers))
 

@@ -20,6 +20,13 @@ module RailsAiContext
           "so counts can differ from a booted run."
       end
 
+      # A rules file opens with frontmatter the editor parses, so the notice
+      # goes under the heading instead of at the top of the file.
+      def static_notice_lines(ctx)
+        notice = static_notice(ctx)
+        notice ? [ notice, "" ] : []
+      end
+
       def models_line(ctx)
         models = Payload.models(ctx)
         models.any? ? "- Models: #{models.size}" : nil
