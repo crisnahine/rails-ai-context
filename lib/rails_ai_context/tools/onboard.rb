@@ -53,8 +53,12 @@ module RailsAiContext
           app = ctx[:app_name] || "This Rails app"
           purpose = infer_app_purpose(ctx)
 
-          parts = [ "**#{app}** is a Rails #{ctx[:rails_version]} app#{ruby_clause(ctx)}" ]
-          parts << purpose if purpose
+          # The inferred purpose is this sentence's noun ("a news aggregation
+          # app with ..."), so the head supplies one only when there is none.
+          version = named_ruby_version(ctx)
+          head = "**#{app}** is a Rails #{ctx[:rails_version]}"
+          head += " / Ruby #{version}" if version
+          parts = [ head, purpose || "app" ]
 
           # Stats: tables, models, jobs
           stats = []
@@ -590,10 +594,20 @@ module RailsAiContext
         # is the interpreter running this tool, which says nothing about the
         # app. Then the sentence names no Ruby at all.
         def ruby_clause(ctx)
-          return " running Ruby #{ctx[:ruby_version]}" unless ctx[:tier].to_s == "static"
-          return "" unless Payload.section(ctx, :gems)&.dig(:declared_ruby_version)
+          version = named_ruby_version(ctx)
+          return "" unless version
 
-          " declaring Ruby #{ctx[:ruby_version]}"
+          ctx[:tier].to_s == "static" ? " declaring Ruby #{version}" : " running Ruby #{version}"
+        end
+
+        # The version a sentence may name, or nil. Statically that is the one
+        # the app declares; with nothing declared, the value is the interpreter
+        # running this tool and says nothing about the app.
+        def named_ruby_version(ctx)
+          return ctx[:ruby_version] unless ctx[:tier].to_s == "static"
+          return nil unless Payload.section(ctx, :gems)&.dig(:declared_ruby_version)
+
+          ctx[:ruby_version]
         end
 
         def central_models(models, limit = 5)

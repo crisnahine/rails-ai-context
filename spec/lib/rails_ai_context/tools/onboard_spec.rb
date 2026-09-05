@@ -110,6 +110,31 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).not_to include("UNAVAILABLE")
     end
 
+    # The quick sentence lets the inferred purpose be its noun, so a version
+    # clause carrying its own noun gave the sentence two of them: "is a Rails
+    # 8.1 app declaring Ruby 4.0.6 news aggregation app with ...".
+    it "does not put a second noun in front of the purpose it infers" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: "3.4",
+        models: {
+          "Article" => { associations: [ { type: "belongs_to", name: "site" } ] },
+          "Site" => { associations: [ { type: "has_many", name: "articles" } ] }
+        },
+        jobs: { jobs: [ { name: "RssSiteJob" }, { name: "ArticleJob" } ] },
+        gems: { declared_ruby_version: "3.4" },
+        tier: "static"
+      })
+      allow(described_class).to receive(:extract_service_names).and_return([])
+
+      text = described_class.call(detail: "quick").content.first[:text]
+
+      expect(text).to include("news aggregation app")
+      expect(text).to include("TestApp** is a Rails 8.0 / Ruby 3.4 ")
+      expect(text).not_to include("app declaring")
+    end
+
     it "says a booted run is running that ruby" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",
@@ -256,7 +281,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         text = result.content.first[:text]
 
         expect(text).to include("GenericApp")
-        expect(text).to include("Rails 8.0 app running Ruby 3.4")
+        expect(text).to include("Rails 8.0 / Ruby 3.4 app")
         expect(text).not_to include("app with")
       end
 
