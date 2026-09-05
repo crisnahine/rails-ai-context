@@ -180,6 +180,10 @@ class RailsAiContextCLI < Thor
       # the boot, is the one that still fails.
       boot_rails!(command: "context", allow_static: true)
 
+      # Before the cleanup prompt and the introspection, both of which a
+      # format nothing can write would waste.
+      ::RailsAiContext::Serializers::ContextFileSerializer.validate_format!(options[:format]&.to_sym)
+
       if options[:format]
         cleanup_tools = options[:format] == "all" ? nil : [ options[:format].to_sym ]
       else

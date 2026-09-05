@@ -99,7 +99,7 @@ in which tier.
 `--no-boot` and still exits 1 when the app cannot start.
 
 ```bash
-rails-ai-context tool models --no-boot        # no boot, no database, no Gemfile
+rails-ai-context tool model_details --no-boot # no boot, no database, no Gemfile
 rails-ai-context context --no-boot            # writes CLAUDE.md from source
 ```
 
@@ -181,6 +181,32 @@ Print introspection summary as JSON.
 
 ```bash
 rails-ai-context inspect
+```
+
+### `facts`
+
+Print a schema facts summary: tables, associations and dependencies.
+
+```bash
+rails-ai-context facts
+rails-ai-context facts --no-boot
+```
+
+### `preset`
+
+Run a named group of tools in one pass. With no name it lists the presets.
+
+```bash
+rails-ai-context preset
+rails-ai-context preset architecture
+```
+
+### `tree`
+
+Print a tree of every command and its options.
+
+```bash
+rails-ai-context tree
 ```
 
 ---

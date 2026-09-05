@@ -40,6 +40,17 @@ module RailsAiContext
         @format  = format
       end
 
+      # Callers that pay for an introspection before writing check the format
+      # first, so a name nothing can write is refused before the work.
+      def self.validate_format!(format)
+        return if format.nil? || format == :all
+
+        unknown = Array(format).reject { |fmt| ALL_FORMATS.include?(fmt) }
+        return if unknown.empty?
+
+        raise ArgumentError, "Unknown format: #{unknown.first}. Valid formats: #{ALL_FORMATS.map(&:to_s).join(', ')}"
+      end
+
       # Write context files, skipping unchanged ones.
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call
@@ -53,6 +64,7 @@ module RailsAiContext
         when Array            then format.empty? ? [] : format | [ :json ]
         else Array(format)
         end
+        self.class.validate_format!(formats)
         # `default_app` is the tier-aware handle: the booted application, or the
         # filesystem-rooted stand-in. Reaching for `Rails.application` directly
         # raises NameError under `--no-boot`, where Rails is never loaded at all
@@ -69,10 +81,6 @@ module RailsAiContext
           next if SPLIT_ONLY_FORMATS.include?(fmt)
 
           filename = FORMAT_MAP[fmt]
-          unless filename
-            valid = ALL_FORMATS.map(&:to_s).join(", ")
-            raise ArgumentError, "Unknown format: #{fmt}. Valid formats: #{valid}"
-          end
 
           # Deduplicate: skip if this root file was already written (e.g. AGENTS.md for both :opencode and :codex)
           next if seen_root_files.include?(filename)
