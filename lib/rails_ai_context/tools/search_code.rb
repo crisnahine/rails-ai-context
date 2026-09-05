@@ -300,7 +300,15 @@ module RailsAiContext
         cmd << pattern
         cmd << search_path
 
-        output, _status = Open3.capture2(*cmd, err: File::NULL)
+        output, status = Open3.capture2(*cmd, err: File::NULL)
+
+        # rg exits 1 for "no matches" and 2 for a run it could not make - an
+        # unsupported flag on an older rg, most of all. Answering an empty
+        # list there would report no matches for a search that never ran.
+        unless status.success? || status.exitstatus == 1
+          return search_with_ruby(pattern, search_path, file_type, max_results, root, exclude_tests: exclude_tests)
+        end
+
         parse_rg_output(output, root)
           .reject { |r| sensitive_file?(r[:file]) }
           .first(max_results)

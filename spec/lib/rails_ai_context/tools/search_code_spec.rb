@@ -270,6 +270,25 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     end
   end
 
+  # ripgrep exits 1 when it matched nothing and 2 when the run itself failed,
+  # which is what an rg too old for --field-match-separator does.
+  describe "when the ripgrep run fails" do
+    before do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      allow(described_class).to receive(:ripgrep_available?).and_return(true)
+      allow(Open3).to receive(:capture2).and_return([ "", instance_double(Process::Status, success?: false, exitstatus: 2) ])
+    end
+
+    it "answers from the Ruby backend rather than reporting no results" do
+      with_search_app("app/models/status.rb" => "class Status\n  def reblog?\n  end\nend\n") do
+        text = described_class.call(pattern: "def reblog?", context_lines: 2).content.first[:text]
+
+        expect(text).to include("def reblog?")
+        expect(text).not_to include("No results found")
+      end
+    end
+  end
+
   # The search returns rows - match rows and context rows - so a count taken
   # off the row list moves with context_lines and stops at the line cap.
   describe "result counts" do
@@ -299,7 +318,8 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       with_search_app("app/models/status.rb" => padded_source) do
         text = described_class.call(pattern: "def reblog?", exact_match: true, context_lines: 2).content.first[:text]
 
-        expect(text.lines.count { |l| l.start_with?("> ") }).to eq(text[/showing (\d+)/, 1].to_i)
+        expect(text.lines.count { |l| l.start_with?("> ") }).to eq(3)
+        expect(text).to include("showing 3")
         expect(text).to include("lines with context")
       end
     end
