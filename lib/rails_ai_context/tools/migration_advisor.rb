@@ -93,7 +93,7 @@ module RailsAiContext
         lines = [ "# Migration Advisor", "" ]
 
         if rails_version_unknown?
-          lines << "**Note:** Could not determine this app's Rails version (no `rails` entry in Gemfile.lock). " \
+          lines << "**Note:** Could not determine this app's Rails version. " \
             "The migration below is stamped with #{SUPPORTED_RAILS_FLOOR}; check that against your app."
           lines << ""
         end

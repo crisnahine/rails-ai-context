@@ -156,7 +156,7 @@ end
 
 `rails ai:context` generates **20 files** across all AI assistants:
 
-A file whose section has nothing in it is not written. An app with no models gets no `.claude/rules/rails-models.md`, and every surface reports it as `Not applicable: <file> (no models)` so a deliberate omission is not mistaken for a failed run.
+A file whose section has nothing in it is not written. An app with no models gets no `.claude/rules/rails-models.md`, and every surface names the file and the reason so a deliberate omission is not mistaken for a failed run. `rails ai:context` and the installer print `➖  .claude/rules/rails-models.md (no models)`; the CLI and the watcher print `Not applicable: .claude/rules/rails-models.md (no models)`.
 
 ### Claude Code (6 files)
 

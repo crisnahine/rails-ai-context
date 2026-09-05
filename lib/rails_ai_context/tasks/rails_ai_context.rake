@@ -390,7 +390,7 @@ namespace :ai do
     outcome = RailsAiContext::Presets.dispatch(
       args[:name], invocation: ->(k) { "rails 'ai:preset[#{k}]'" }
     )
-    exit 1 unless %i[listed ran].include?(outcome)
+    exit 1 unless RailsAiContext::Presets.ok?(outcome)
   end
 
   desc "Print a concise schema facts summary (tables, columns, indexes, associations, dependencies)"

@@ -274,6 +274,42 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).to include("params: { article: { title: @article.title } }")
     end
 
+    it "builds the placeholder record from the model's columns, not every permitted param" do
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "rspec", factories: nil, factory_names: nil },
+        models: { "Account" => { table_name: "accounts" } },
+        schema: {
+          tables: {
+            "accounts" => {
+              columns: [
+                { name: "id", type: "integer" },
+                { name: "username", type: "string" },
+                { name: "note", type: "text" }
+              ]
+            }
+          }
+        },
+        controllers: {
+          controllers: {
+            "AccountsController" => {
+              strong_params: [ { name: "account_params", requires: "account", permits: %w[username email password agreement] } ]
+            }
+          }
+        },
+        routes: {
+          by_controller: {
+            "accounts" => [ { verb: "GET", path: "/accounts/:id", action: "show", name: "account" } ]
+          }
+        }
+      })
+
+      text = described_class.call(controller: "AccountsController").content.first[:text]
+
+      expect(text).to include("Account.create!({ username: \"MyString\" })")
+      expect(text).to include("agreement, email, password")
+      expect(text).to include("not columns of accounts")
+    end
+
     it "detects file type from path" do
       allow(described_class).to receive(:cached_context).and_return({
         tests: { framework: "rspec" },
@@ -363,6 +399,31 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         ))
 
         expect(text).not_to include("sign_in")
+        expect(text).to include("Doorkeeper")
+      end
+    end
+
+    it "skips the fixture sign_in for a Doorkeeper controller in the minitest generator" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "api_base_controller.rb"), <<~RUBY)
+          class ApiBaseController < ActionController::API
+            before_action -> { doorkeeper_authorize! :read }
+          end
+        RUBY
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(dir))
+
+        text = generated(devise_context(
+          framework: "minitest",
+          tests: { fixture_names: { "users" => [ "alice" ] } },
+          controllers: {
+            "PostsController" => { parent_class: "ApiBaseController", file: "app/controllers/posts_controller.rb" },
+            "ApiBaseController" => { file: "app/controllers/api_base_controller.rb" }
+          }
+        ))
+
+        expect(text).not_to include("sign_in")
+        expect(text).not_to include("users(:alice)")
         expect(text).to include("Doorkeeper")
       end
     end

@@ -320,7 +320,12 @@ module RailsAiContext
           lines << ""
           lines << "class ModelNameTest < ActiveSupport::TestCase"
           lines << "  test \"should be valid with required attributes\" do"
-          lines << "    record = model_names(:fixture_name)"
+          if data[:fixture_names]&.any?
+            lines << "    record = model_names(:fixture_name)"
+          else
+            lines << "    # TODO: build the record with this app's own test data"
+            lines << "    record = ModelName.new"
+          end
           lines << "    assert record.valid?"
           lines << "  end"
           lines << ""
@@ -347,7 +352,10 @@ module RailsAiContext
             lines << "  end"
             lines << ""
             lines << "  test \"shows page for signed in user\" do"
-            lines << "    sign_in users(:one)" if has_sign_in
+            if has_sign_in
+              user_key = fixture_key_for("users", data)
+              lines << (user_key ? "    sign_in users(:#{user_key})" : "    # TODO: sign in a user built from this app's own test data")
+            end
             lines << "    get feature_path"
             lines << "    assert_response :success"
             lines << "  end"

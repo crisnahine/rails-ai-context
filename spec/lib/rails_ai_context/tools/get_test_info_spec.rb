@@ -84,6 +84,61 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
     end
   end
 
+  # The minitest half of the template reads the app's own test directory, so
+  # each example builds one.
+  describe "the minitest test template" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "test", "controllers"))
+        File.write(
+          File.join(dir, "test", "controllers", "posts_controller_test.rb"),
+          "class PostsControllerTest < ActionDispatch::IntegrationTest\n" \
+          "  include Devise::Test::IntegrationHelpers\n" \
+          "  test \"x\" do\n    sign_in users(:admin)\n  end\nend\n"
+        )
+        @root = dir
+        example.run
+      end
+    end
+
+    def call_with(tests)
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+      allow(described_class).to receive(:cached_context).and_return({ tests: tests })
+      described_class.call.content.first[:text]
+    end
+
+    let(:minitest_data) do
+      {
+        framework: "minitest",
+        factories: nil,
+        fixtures: { location: "test/fixtures", count: 2 },
+        fixture_names: { "users" => %w[admin member], "posts" => %w[first_post] },
+        test_files: { "models" => { location: "test/models", count: 1 } }
+      }
+    end
+
+    it "signs in the app's own users fixture" do
+      text = call_with(minitest_data)
+
+      expect(text).to include("sign_in users(:admin)")
+      expect(text).not_to include("users(:one)")
+    end
+
+    it "leaves the tests unauthenticated when the app owns no users fixture" do
+      text = call_with(minitest_data.merge(fixture_names: { "posts" => %w[first_post] }))
+
+      expect(text).not_to include("sign_in users(")
+      expect(text).to include("# TODO: sign in a user built from this app's own test data")
+    end
+
+    it "does not hand fixture syntax to an app with no fixtures" do
+      text = call_with(minitest_data.merge(fixtures: nil, fixture_names: nil))
+
+      expect(text).not_to include("model_names(:fixture_name)")
+      expect(text).to include("record = ModelName.new")
+    end
+  end
+
   describe ".call with detail:summary" do
     it "returns compact summary with counts" do
       result = described_class.call(detail: "summary")

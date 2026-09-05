@@ -261,6 +261,17 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       end
     end
 
+    it "keeps a serializer file that declares no class, under the name its path spells" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/serializers"))
+        File.write(File.join(root, "app/serializers/shared_fields.rb"), "module SharedFields\nend\n")
+        File.write(File.join(root, "app/serializers/post_serializer.rb"), "class PostSerializer\nend\n")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(root)).static_call
+        expect(static[:serializers][:serializer_classes]).to eq([ "PostSerializer", "SharedFields" ])
+      end
+    end
+
     it "answers every key the booted tier answers, since only the mode needs a runtime" do
       static = described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).static_call
       booted = described_class.new(Rails.application).call

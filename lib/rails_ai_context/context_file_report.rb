@@ -22,11 +22,23 @@ module RailsAiContext
       }.freeze
     }.freeze
 
+    # What each bucket means to a surface that paints its output. A fact
+    # about the bucket, so it lives beside the wording rather than in a
+    # second table the next bucket would have to be added to as well.
+    COLORS = { written: :green, skipped: :yellow, not_applicable: :yellow }.freeze
+
     module_function
 
     # @param name [Symbol] :plain or :emoji
     def style(name)
       STYLES.fetch(name)
+    end
+
+    # @param bucket [Symbol]
+    # @return [Symbol] the colour for this bucket. Fetched, so a new bucket
+    #   raises here instead of printing uncoloured.
+    def color(bucket)
+      COLORS.fetch(bucket)
     end
 
     # @param result [Hash] { written:, skipped:, not_applicable: }

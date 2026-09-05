@@ -44,7 +44,9 @@ module RailsAiContext
     end
 
     # Framing goes to err and tool output to out so a pipe keeps its order;
-    # one failing tool costs itself, not the rest of the preset.
+    # one failing tool costs itself, not the rest of the preset. A run that
+    # produced nothing at all answers false, which is what the surfaces exit
+    # non-zero on.
     def self.run(name, out: $stdout, err: $stderr)
       key = resolve(name)
       return false unless key
@@ -55,16 +57,24 @@ module RailsAiContext
       err.puts " Preset: #{name} - #{preset[:desc]}"
       err.puts "=" * 60
       err.puts ""
+      produced = 0
       preset[:tools].each do |tool_spec|
         err.puts "-" * 40
         err.puts "Running: #{tool_spec[:name]}"
         err.puts "-" * 40
         out.puts CLI::ToolRunner.new(tool_spec[:name], tool_spec[:params]).run
         out.puts ""
+        produced += 1
       rescue => e
         err.puts "  [error] #{tool_spec[:name]}: #{e.message}"
       end
-      true
+      produced.positive?
+    end
+
+    # The one place an outcome becomes a success or a failure, so the CLI and
+    # the rake task cannot exit differently on the same answer.
+    def self.ok?(outcome)
+      %i[listed ran].include?(outcome)
     end
 
     # The whole typed-name rule, so the two surfaces cannot drift in wording
