@@ -1455,6 +1455,38 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # A model whose file raised partway through leaves Ruby recording the
+    # autoload registration site instead of the file. The fallback used to
+    # know app/models alone, so the same model one directory over kept
+    # Zeitwerk's cref.rb as its file.
+    it "reads a pack model's own file, not the autoload site Ruby recorded" do
+      Dir.mktmpdir do |dir|
+        pack = File.join(dir, "packs", "billing", "app", "models")
+        FileUtils.mkdir_p(pack)
+        File.write(File.join(pack, "invoice.rb"), "class Invoice < ApplicationRecord\nend\n")
+        cref = File.join(Gem.path.first.to_s, "gems", "zeitwerk-2.8.3", "lib", "zeitwerk", "cref.rb")
+
+        details = details_for(dir, "Invoice", [ cref, 47 ])
+
+        expect(details[:file]).to eq("packs/billing/app/models/invoice.rb")
+      end
+    end
+
+    # An engine keeps its models under engines/<name>/app/models, and a
+    # configured extra path is a model directory the same way.
+    it "reads an engine model's own file" do
+      Dir.mktmpdir do |dir|
+        engine = File.join(dir, "engines", "billing", "app", "models")
+        FileUtils.mkdir_p(engine)
+        File.write(File.join(engine, "ledger.rb"), "class Ledger < ApplicationRecord\nend\n")
+        cref = File.join(Gem.path.first.to_s, "gems", "zeitwerk-2.8.3", "lib", "zeitwerk", "cref.rb")
+
+        details = details_for(dir, "Ledger", [ cref, 47 ])
+
+        expect(details[:file]).to eq("engines/billing/app/models/ledger.rb")
+      end
+    end
+
     # Every example above stubs const_source_location, and the real thing does
     # not always name the file holding the `class` keyword: when Zeitwerk sets
     # the constant rather than letting the file define it, Ruby records
