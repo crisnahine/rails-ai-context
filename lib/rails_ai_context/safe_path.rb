@@ -22,7 +22,7 @@ module RailsAiContext
     # the sensitive patterns are matched against (the app root for most tools).
     def locate(relative, under:, root: under, max_size: nil)
       relative = relative.to_s
-      return refuse(:traversal) if relative.include?("..") || relative.start_with?("/") || relative.include?("\0")
+      return refuse(:traversal) if traversal?(relative)
       return refuse(:sensitive) if sensitive?(relative)
 
       real = File.realpath(File.join(under.to_s, relative))
@@ -47,6 +47,14 @@ module RailsAiContext
       return [ nil, resolution ] unless resolution.ok?
 
       [ RailsAiContext::SafeFile.read(resolution.realpath, max_size: max_size), resolution ]
+    end
+
+    # A path that escapes by construction, refused before any stat so the
+    # answer cannot depend on what is out there. Named on its own for callers
+    # that resolve a directory rather than a file and so cannot use `locate`.
+    def traversal?(relative)
+      relative = relative.to_s
+      relative.include?("..") || relative.start_with?("/") || relative.include?("\0")
     end
 
     def sensitive?(relative)
