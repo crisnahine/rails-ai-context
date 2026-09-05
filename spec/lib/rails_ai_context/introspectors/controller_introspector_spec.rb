@@ -645,7 +645,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result[:controllers]["Settings::ProfileController"][:actions]).to eq([])
+        expect(result[:controllers]["Settings::ProfileController"][:actions]).to eq(%w[show])
       end
     end
   end

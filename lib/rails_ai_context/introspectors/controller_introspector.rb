@@ -74,10 +74,11 @@ module RailsAiContext
       # over the finished listing, walked by the parent name each entry
       # carries. Only entries with no actions of their own are touched.
       def fill_inherited_actions(result)
-        result.each_value do |info|
+        result.each do |name, info|
           next unless info.is_a?(Hash) && Array(info[:actions]).empty?
 
-          inherited = ActionResolver.inherited_actions_by_name(result, info[:parent_class], kind: :controller)
+          inherited = ActionResolver.inherited_actions_by_name(result, info[:parent_class],
+                                                               kind: :controller, within: name)
           info[:actions] = inherited if inherited.any?
         end
         result
