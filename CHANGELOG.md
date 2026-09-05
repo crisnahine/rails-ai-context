@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`docs/RELEASING.md`.** Every release rediscovered the same list by reading
   the release workflow: the changelog heading the notes are extracted from, the
   two files carrying the version, and the end-to-end run the gate wants against
-  the exact commit before a tag will publish. `CONTRIBUTING.md` points at it.
+  the exact commit before a tag will publish. Its first step picks the version
+  from the Changed section, which nothing downstream checks. `CONTRIBUTING.md`
+  points at it.
 
 ### Fixed
 
@@ -983,6 +985,36 @@ Changed.
   files.** Markdown renders two lines with no blank between them as one
   paragraph, so the notice read as part of the generator credit. It goes
   through the same helper the other renders use and keeps its own blank lines.
+
+- **One unreadable concern file cost the whole models section.** The concern
+  walk guarded a file it could not find and a file too big, and nothing else,
+  so a file that stats but does not read raised out of the walk and the only
+  rescue above it was the section's. Every model in a `--no-boot` answer came
+  back as `error`, carrying the absolute machine path. A directory in place of
+  the file does the same as root, where a permission bit does nothing. The
+  walk reads through a guard now and the concern lands in the unread list, and
+  the static tier answers `{ error: }` for one model and keeps the rest, which
+  is what the booted tier already did.
+- **A pack or engine model kept Zeitwerk's `cref.rb` as its file.** The
+  fallback that keeps a model off the autoload registration site knew
+  `app/models` alone, so the same model one directory over answered
+  `file: "gem:zeitwerk-2.8.3/lib/zeitwerk/cref.rb"`, no callbacks, no methods,
+  and `Zeitwerk::RealModName` as a concern it could not read. It walks every
+  model directory now: packs, in-repo engines and the configured extra paths.
+- **A concern hidden by `excluded_concerns` took its declarations with it,
+  silently.** Both tiers merge what an included concern declares, and the key
+  that hides the name also stops the walk reading the file, so the model lost
+  that concern's associations, scopes, callbacks and macros with nothing on
+  the record saying so. Model output says how many concerns went, in the
+  wording the concern listing already uses, and counts only a concern the walk
+  would have read. The count and not the names: naming them would undo the
+  hiding.
+- **The boot exit notice read as the run stopping, on the path where it does
+  not.** An app whose `config/environment.rb` calls `abort` printed "App
+  exited during boot", then "Serving static analysis", then a full answer at
+  exit 0. The line says "App called exit(N) during boot." now, which is the
+  sentence the boot failure itself carries, so it states what the app did and
+  leaves the consequence to the line under it.
 
 ### Changed
 
