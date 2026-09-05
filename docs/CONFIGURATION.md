@@ -108,7 +108,12 @@ takes the filter out on some requests only, so the filter keeps its place in
 the chain and the line names the condition instead:
 `- \`before\` **require_functional!** (skipped unless: limited_federation_mode?)`.
 A condition written as a lambda has no name to print and reads `[INFERRED]`,
-the same way a filter's own `if:` does.
+the same way a filter's own `if:` does. A skip carrying `only:` or `except:`
+takes the filter out on those actions only, so a whole-controller answer
+keeps the filter and names them:
+`- \`before\` **authenticate!** (skipped on: index)`. Ask about one action
+and the answer is absolute again: on that action the filter either runs or
+is struck through.
 
 ### File Size Limits
 

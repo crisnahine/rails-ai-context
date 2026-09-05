@@ -97,6 +97,51 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(result[:inherited].map { |f| [ f[:name], f[:from] ] })
         .to eq([ %w[authenticate_admin! AdminController] ])
     end
+
+    # The whole-controller answer covers every action, and the filter runs on
+    # all but the ones the skip names, so calling it skipped there
+    # contradicted the same tool's per-action answer.
+    it "keeps the filter in the whole-controller answer and names the actions it loses" do
+      result = described_class.for_controller(constrained_context, "ReportsController")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].map { |f| [ f[:name], f[:skipped_on] ] })
+        .to eq([ [ "authenticate_admin!", "index" ] ])
+    end
+
+    it "names the actions an except:-constrained skip leaves alone" do
+      ctx = { controllers: { controllers: {
+        "AdminController" => { filters: [ { kind: "before", name: "authenticate_admin!" } ] },
+        "ReportsController" => {
+          parent_class: "AdminController",
+          filters: [ { kind: "before", name: "authenticate_admin!", skipped: true, except: %w[show] } ]
+        }
+      } } }
+
+      result = described_class.for_controller(ctx, "ReportsController")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].map { |f| f[:skipped_except] }).to eq([ "show" ])
+    end
+
+    # A child never declared the skip, so the constrained skip must not take
+    # the filter out of the child's chain either.
+    it "carries a constrained skip down to a child that inherits it" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "authenticate!" } ] },
+        "Admin::BaseController" => {
+          parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "authenticate!", skipped: true, only: %w[index] } ]
+        },
+        "Admin::ReportsController" => { parent_class: "Admin::BaseController", filters: [] }
+      } } }
+
+      result = described_class.for_controller(ctx, "Admin::ReportsController")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited].map { |f| [ f[:name], f[:skipped_on] ] })
+        .to eq([ [ "authenticate!", "index" ] ])
+    end
   end
 
   # The payload the CLI builds without booting, from real files, through the
@@ -127,6 +172,11 @@ RSpec.describe RailsAiContext::ActionFilters do
         expect(show[:own].map { |f| f[:name] }).to eq(%w[authenticate_admin!])
         expect(index[:skipped]).to eq(%w[authenticate_admin!])
         expect(index[:own]).to eq([])
+
+        whole = described_class.for_controller(ctx, "ReportsController", root: dir)
+        expect(whole[:skipped]).to eq([])
+        expect(whole[:own].map { |f| [ f[:name], f[:skipped_on] ] })
+          .to eq([ [ "authenticate_admin!", "index" ] ])
       end
     end
   end
@@ -545,5 +595,80 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(result[:skipped]).to eq([])
       expect(result[:inherited].map { |f| f[:skipped_unless] }).to eq([ "limited_federation_mode?" ])
     end
+
+    # A concern declares the filter, so no controller entry carries it. A
+    # conditional skip of a name is still evidence the chain runs it, and the
+    # answer says nothing about where it was declared.
+    it "keeps a conditional skip whose filter no entry declares" do
+      ctx = { controllers: { controllers: {
+        "Api::BaseController" => {
+          filters: [ { kind: "before", name: "require_functional!", skipped: true, unless: "limited_federation_mode?" } ]
+        },
+        "Api::V1::AccountsController" => { parent_class: "Api::BaseController", filters: [] }
+      } } }
+
+      result = described_class.for_controller(ctx, "Api::V1::AccountsController")
+
+      expect(result[:skipped]).to eq([])
+      expect(result[:inherited]).to eq([
+        { kind: "before", name: "require_functional!", skipped_unless: "limited_federation_mode?" }
+      ])
+    end
+  end
+
+  # A name missing from the placed list is not always a declaration the walk
+  # could not see: the walk may have seen it and taken it out for this action.
+  # Reporting it anyway put a filter that cannot run under "Applicable
+  # Filters", with no ancestor named.
+  describe "a conditional skip of a filter the chain does declare" do
+    it "says nothing for an action the ancestor's own constraint excludes" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "authenticate_user!", except: %w[index] } ] },
+        "PostsController" => {
+          parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "authenticate_user!", skipped: true, if: "public_request?" } ]
+        }
+      } } }
+
+      expect(described_class.for(ctx, "PostsController", "index"))
+        .to eq({ own: [], inherited: [], skipped: [] })
+      expect(described_class.for(ctx, "PostsController", "show")[:inherited].map { |f| f[:from] })
+        .to eq([ "ApplicationController" ])
+    end
+
+    it "says nothing when the class itself constrains the filter away from this action" do
+      ctx = { controllers: { controllers: {
+        "PostsController" => {
+          filters: [
+            { kind: "before", name: "foo", only: %w[index] },
+            { kind: "before", name: "foo", skipped: true, unless: "admin?" }
+          ]
+        }
+      } } }
+
+      expect(described_class.for(ctx, "PostsController", "show"))
+        .to eq({ own: [], inherited: [], skipped: [] })
+    end
+
+    it "says nothing when an intermediate ancestor took the filter out outright" do
+      ctx = { controllers: { controllers: {
+        "BaseController" => { filters: [ { kind: "before", name: "foo" } ] },
+        "MidController" => {
+          parent_class: "BaseController",
+          filters: [ { kind: "before", name: "foo", skipped: true } ]
+        },
+        "PostsController" => {
+          parent_class: "MidController",
+          filters: [ { kind: "before", name: "foo", skipped: true, unless: "admin?" } ]
+        }
+      } } }
+
+      expect(described_class.for_controller(ctx, "PostsController"))
+        .to eq({ own: [], inherited: [], skipped: [] })
+    end
+  end
+
+  it "keeps unplaced_conditional_skips off the public surface" do
+    expect(described_class).not_to respond_to(:unplaced_conditional_skips)
   end
 end
