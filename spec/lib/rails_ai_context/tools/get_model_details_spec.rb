@@ -462,6 +462,47 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  # The key hides a concern's declarations along with its name, so a reader
+  # comparing the model file against this answer would otherwise call the
+  # difference a bug.
+  describe "concerns excluded_concerns hid" do
+    before { described_class.reset_cache! }
+
+    it "says how many, beside the concerns it did list" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Widget" => { table_name: "widgets", concerns: %w[Wired], concerns_hidden: 2 } }
+      )
+
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).to include("## Concerns")
+      expect(text).to include("- Wired")
+      expect(text).to include("_2 concerns hidden by `excluded_concerns`._")
+    end
+
+    # The section is keyed off the concerns it can name, so a model whose only
+    # concern was hidden had nowhere to say so.
+    it "says so when every concern was hidden" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Widget" => { table_name: "widgets", concerns: [], concerns_hidden: 1 } }
+      )
+
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).to include("_1 concern hidden by `excluded_concerns`._")
+    end
+
+    it "says nothing when the key hid none" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Widget" => { table_name: "widgets", concerns: %w[Wired] } }
+      )
+
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).not_to include("excluded_concerns")
+    end
+  end
+
   # An STI child carries its base's declarations, so a base the walk could not
   # read is a gap the reader has to be told about even when the child includes
   # no concern at all.

@@ -43,30 +43,39 @@ module RailsAiContext
       Array(names).select { |name| payload?(name) }
     end
 
-    # Booted reading: the ancestor chain's non-class modules, through the
-    # payload rule.
-    def from_ancestors(klass)
+    # Booted reading: the ancestor chain's non-class modules.
+    def ancestor_names(klass)
       klass.ancestors
         .select { |mod| mod.is_a?(Module) && !mod.is_a?(Class) }
         .map(&:name)
         .compact
-        .select { |name| payload?(name) }
     end
 
-    # Static reading: only the mixins reflection would report (the listener's
-    # ancestor flag), through the same rule, so both tiers answer alike.
+    # Static reading: only the mixins reflection would report, by the
+    # listener's ancestor flag, so both tiers name the same modules.
+    def mixin_names(mixins)
+      Array(mixins).select { |mixin| mixin[:ancestor] }.map { |mixin| mixin[:name] }.uniq
+    end
+
+    def from_ancestors(klass)
+      payload(ancestor_names(klass))
+    end
+
     def from_mixins(mixins)
-      Array(mixins)
-        .select { |mixin| mixin[:ancestor] }
-        .map { |mixin| mixin[:name] }
-        .select { |name| payload?(name) }
-        .uniq
+      payload(mixin_names(mixins))
     end
 
     # The narrower display sense: concerns the app itself defines, decided by
     # whether ConcernPaths can name their file.
     def app_owned(names, root)
       payload(names).select { |name| ConcernPaths.find_file(root.to_s, name) }
+    end
+
+    # The concerns `excluded_concerns` hid that the walk would otherwise have
+    # read. Hiding a concern hides what it declared too, so a record carrying
+    # merged declarations has to be able to say how many went with it.
+    def hidden(names, root)
+      Array(names).select { |name| excluded?(name) && ConcernPaths.find_file(root.to_s, name) }
     end
   end
 end

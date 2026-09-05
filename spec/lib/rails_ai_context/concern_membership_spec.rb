@@ -70,4 +70,25 @@ RSpec.describe RailsAiContext::ConcernMembership do
       end
     end
   end
+
+  describe ".hidden" do
+    around do |example|
+      original = RailsAiContext.configuration.excluded_concerns
+      RailsAiContext.configuration.excluded_concerns = [ /\AAudit/ ]
+      example.run
+      RailsAiContext.configuration.excluded_concerns = original
+    end
+
+    # The key hides the concern's declarations along with its name, so a
+    # record has to be able to say how many went with it.
+    it "names the hidden concerns the app has a file for" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "models", "concerns"))
+        File.write(File.join(root, "app", "models", "concerns", "auditable.rb"), "module Auditable\nend\n")
+
+        names = %w[Auditable AuditGem::Tracked Searchable]
+        expect(described_class.hidden(names, root)).to eq(%w[Auditable])
+      end
+    end
+  end
 end

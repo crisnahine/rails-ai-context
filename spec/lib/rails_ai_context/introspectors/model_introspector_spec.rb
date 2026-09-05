@@ -1502,6 +1502,77 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # `excluded_concerns` hides the concern's name, and since both tiers merge
+  # what a concern declared, it hides those declarations too. The record says
+  # how many concerns went with it; naming them would undo the hiding.
+  describe "a concern the excluded_concerns key hides" do
+    around do |example|
+      original = RailsAiContext.configuration.excluded_concerns
+      RailsAiContext.configuration.excluded_concerns = [ /\AAuditable\z/ ]
+      example.run
+      RailsAiContext.configuration.excluded_concerns = original
+    end
+
+    def app_with_hidden_concern(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+      File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+        class Post < ApplicationRecord
+          include Auditable
+          belongs_to :author
+        end
+      RUBY
+      File.write(File.join(dir, "app", "models", "concerns", "auditable.rb"), <<~RUBY)
+        module Auditable
+          has_many :audits
+        end
+      RUBY
+    end
+
+    it "counts it on the static record" do
+      Dir.mktmpdir do |dir|
+        app_with_hidden_concern(dir)
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post[:concerns_hidden]).to eq(1)
+        expect(post[:concerns]).to be_empty
+        expect(post[:associations].map { |a| a[:name] }).to eq([ "author" ])
+      end
+    end
+
+    it "counts nothing when the app has no file for the hidden name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            include Auditable
+          end
+        RUBY
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post).not_to have_key(:concerns_hidden)
+      end
+    end
+
+    it "counts it on the booted record" do
+      Dir.mktmpdir do |dir|
+        app_with_hidden_concern(dir)
+        stub_const("Auditable", Module.new)
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          include Auditable
+          def self.name = "Post"
+        end
+
+        details = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)
+
+        expect(details[:concerns_hidden]).to eq(1)
+        expect(details[:concerns]).not_to include("Auditable")
+      end
+    end
+  end
+
   describe "#extract_model_details concern-declared macros" do
     it "merges concern scopes and macros into the booted answer" do
       Dir.mktmpdir do |dir|

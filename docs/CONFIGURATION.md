@@ -97,6 +97,11 @@ preset: full
 | `excluded_association_names` | Array | 7 framework associations | Association names to hide from model output |
 | `excluded_concerns` | Array of Regex or String | Framework concerns | Concerns to hide everywhere they are listed |
 
+A hidden concern's associations, scopes, callbacks and macros are hidden with
+it: both tiers merge what a concern declared into the model, and the walk
+never reads a concern the key hides. Model output says how many went, as
+"1 concern hidden by `excluded_concerns`", without naming them.
+
 > [!NOTE]
 > A YAML `excluded_concerns` list replaces the framework defaults, so `ActionText`, `ActiveStorage`, `Devise::Models`, `Turbo::` and `DEBUGGER__::` concerns come back into model and controller output. Use the initializer's `config.excluded_concerns += [...]` to add to them instead. Each string is compiled to an unanchored pattern, so `Post` also hides `Postable`; write `^Post$` when you mean the one concern.
 

@@ -404,6 +404,7 @@ module RailsAiContext
           # hold no block callbacks, so both tiers read the model's source.
           callbacks:        extract_callbacks_from_ast(source_data),
           concerns:         extract_concerns(model),
+          concerns_hidden:  hidden_concern_count(ConcernMembership.ancestor_names(model)),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
           concerns_unread:  (unread if unread.any?),
           bases_unread:     (bases_unread if bases_unread.any?),
@@ -869,6 +870,7 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(own[:mixins]),
+          concerns_hidden: hidden_concern_count(ConcernMembership.mixin_names(own[:mixins])),
           concern_callbacks: concern_callbacks(data[:callbacks]),
           concerns_unread: (unread if unread.any?),
           bases_unread: (bases_unread if bases_unread.any?),
@@ -1010,6 +1012,14 @@ module RailsAiContext
       # its superclass and its concerns pulled in.
       def static_concerns(mixins)
         ConcernMembership.from_mixins(mixins)
+      end
+
+      # Hiding a concern hides what it declared, so the record says how many
+      # concerns went with their declarations. The count and not the names:
+      # naming them would undo the hiding the key was asked for.
+      def hidden_concern_count(names)
+        count = ConcernMembership.hidden(names, app.root.to_s).size
+        count if count.positive?
       end
 
       # Mongoid documents are invisible to ActiveRecord reflection, so both

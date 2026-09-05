@@ -354,22 +354,23 @@ module RailsAiContext
         end
 
         # The payload is already membership-filtered at the introspector seam
-        # (ConcernMembership), so render it as-is.
-        if data[:concerns]&.any?
-          app_concerns = data[:concerns]
-          if app_concerns.any?
-            lines << "" << "## Concerns"
-            app_concerns.each do |c|
-              methods = extract_concern_methods(c)
-              if methods&.any?
-                lines << "- **#{c}** - #{methods.join(', ')}"
-              else
-                lines << "- #{c}"
-              end
+        # (ConcernMembership), so render it as-is. A model whose every concern
+        # was hidden still reaches the section: the hidden count is the only
+        # thing that says its declarations went somewhere.
+        hidden = data[:concerns_hidden].to_i
+        if data[:concerns]&.any? || hidden.positive?
+          lines << "" << "## Concerns"
+          Array(data[:concerns]).each do |c|
+            methods = extract_concern_methods(c)
+            if methods&.any?
+              lines << "- **#{c}** - #{methods.join(', ')}"
+            else
+              lines << "- #{c}"
             end
-            unread = data[:concerns_unread]
-            lines << unread_concerns_line(unread) if unread&.any?
           end
+          unread = data[:concerns_unread]
+          lines << unread_concerns_line(unread) if unread&.any?
+          lines << "_#{count_phrase(hidden, "concern")} hidden by `excluded_concerns`._" if hidden.positive?
         end
 
         # Class methods - only show methods defined in the actual model file
