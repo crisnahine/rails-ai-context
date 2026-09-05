@@ -17,7 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 Defects found by a ninth QA round of v5.25.0 against Mastodon (issues #160
-to #181), and the sibling defects behind them.
+to #181), the sibling defects behind them, and what nine review rounds and
+repeated from-scratch verification found in the fixes themselves. Most of the
+entries below are older than the twenty-two reports; the reports are where the
+looking started. One entry is a consumer-visible key rename and is under
+Changed.
 
 - **`excluded_association_names` was ignored everywhere except the booted
   ActiveRecord path.** The key had one call site, inside the reflection-only
@@ -595,7 +599,10 @@ to #181), and the sibling defects behind them.
   size is sized in matches, the pagination hint and the per-file group
   headings carry the same two facts, and trace mode marks a caller list that
   stopped at the cap. Against Mastodon, `def reblog?` with `--context-lines 5`
-  reports 3 matches rather than 30, and `def call` reports its 103 matches.
+  reports 3 matches rather than 30, and `def call` reports its 103 matches once
+  the context lines no longer fill the cap. At the default two lines of context
+  the same search reaches the cap at 40 and says so, which is the floor the cap
+  can honestly claim rather than a total.
 - **A ripgrep run that failed, or that recovered from an unreadable file,
   answered wrong.** The exit status of the `rg` run was discarded, so a run
   that failed outright looked the same as a run that matched nothing, and a
