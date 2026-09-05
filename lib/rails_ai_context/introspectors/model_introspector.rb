@@ -641,17 +641,18 @@ module RailsAiContext
 
       # Ruby knows where the class was defined, and the name does not: a model
       # in a pack or engine does not live under app/models, and an inflected
-      # namespace does not underscore back to its own directory. The
-      # containment check keeps a gem-defined constant from being reported as
-      # the app's own file.
+      # namespace does not underscore back to its own directory. A gem's model
+      # keeps the gem's own path rather than an app/models file the app does
+      # not have; the conventional path is a fallback only when it is a file
+      # that is really there.
       def model_source_path(model)
-        root = app.root.to_s
         located = Object.const_source_location(model.name)&.first
-        return located if located && File.expand_path(located).start_with?("#{File.expand_path(root)}/")
+        return located if located
 
-        File.join(root, "app", "models", "#{model.name.underscore}.rb")
+        conventional = File.join(app.root.to_s, "app", "models", "#{model.name.underscore}.rb")
+        conventional if File.exist?(conventional)
       rescue NameError, TypeError
-        File.join(root, "app", "models", "#{model.name.underscore}.rb")
+        nil
       end
 
       DEVISE_CLASS_METHOD_PATTERNS = %w[
@@ -816,9 +817,13 @@ module RailsAiContext
       # Consumers used to turn a model name back into
       # app/models/<underscored>.rb, which is wrong for a model in a pack or an
       # engine and wrong wherever the app registers an inflection. The path
-      # travels with the model instead.
+      # travels with the model instead. It goes into .ai-context.json, which
+      # the app commits, so a gem path keeps the gem and drops the install
+      # prefix.
       def relative_to_root(path)
-        path.to_s.sub(%r{\A#{Regexp.escape(app.root.to_s)}/}, "")
+        return nil if path.nil?
+
+        PortablePath.relativize(path, app.root.to_s)
       end
 
       # This sees the model file alone, where the booted tier also walks what

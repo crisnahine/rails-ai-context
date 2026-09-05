@@ -1260,6 +1260,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   # Reflection answers associations, validations and enums, but scopes,
   # macros and custom validates come off the model's own file - so without
   # the same merge the static tier would out-answer the booted one.
+  # A gem's model was reported at app/models/<name>.rb, a file the app does
+  # not have, and that path shipped into the app's own .ai-context.json.
+  describe "#extract_model_details for a model the app does not own" do
+    def details_for(dir, class_name, source_location)
+      model = Class.new(ApplicationRecord) { self.table_name = "oauth_access_grants" }
+      model.define_singleton_method(:name) { class_name }
+      allow(Object).to receive(:const_source_location).and_call_original
+      allow(Object).to receive(:const_source_location).with(class_name).and_return(source_location)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)
+    end
+
+    it "carries the gem's own path, not an invented app path" do
+      Dir.mktmpdir do |dir|
+        gem_file = File.join(Gem.path.first.to_s, "gems", "doorkeeper-5.8.2", "app", "models",
+                             "doorkeeper", "access_grant.rb")
+
+        details = details_for(dir, "Doorkeeper::AccessGrant", [ gem_file, 1 ])
+
+        expect(details[:file]).to eq("doorkeeper-5.8.2/app/models/doorkeeper/access_grant.rb")
+      end
+    end
+
+    it "records no file when Ruby knows of no source for the class" do
+      Dir.mktmpdir do |dir|
+        expect(details_for(dir, "Doorkeeper::AccessToken", nil)).not_to have_key(:file)
+      end
+    end
+  end
+
   describe "#extract_model_details concern-declared macros" do
     it "merges concern scopes and macros into the booted answer" do
       Dir.mktmpdir do |dir|
