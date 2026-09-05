@@ -36,13 +36,13 @@ to #181), and the sibling defects behind them.
   whose colon was optional, so `after_create do` printed as `after_create :do`
   and `around_create Some::CallbackObject` as `around_create :Some`. The
   listener kept only symbol arguments, so a callback whose target is a class
-  object was dropped in both tiers. The booted branch asked Rails for
-  `_before_save_callbacks`, which does not exist, so it raised on its first
-  iteration and every model silently fell through to the AST. Callbacks now
-  print the declared macro, a lambda reports as a block, `after_touch`,
-  `after_initialize` and `after_find` join the execution order, and the booted
-  branch reads the event chain and takes the kind off the entry, which is
-  where `around` lives.
+  object was dropped in both tiers. Callbacks now print the declared macro, a
+  lambda reports as a block, and `after_touch`, `after_initialize` and
+  `after_find` join the execution order. Both tiers read the declarations off
+  the model's own source, so the booted answer keys `after_create_commit` the
+  way the static one does and keeps a `before_save do ... end`: Rails' event
+  chains carry the framework's own registrations and hold no block callbacks,
+  so they are not read.
 - **The static tier answered `0 assoc` for a model whose associations all live
   in concerns.** It walked the model file alone, so Mastodon's `Account`
   reported no associations where 68 are declared across the 21 concerns it
@@ -52,7 +52,11 @@ to #181), and the sibling defects behind them.
   and deduping on the model's own declaration. A concern whose file cannot be
   found is named under Concerns as not read, and `find_file` prefers the
   owner's concerns directory and walks the enclosing namespaces outward so a
-  namespace-relative `include` resolves the way Ruby resolves it.
+  namespace-relative `include` resolves the way Ruby resolves it. The "From
+  Concerns" section of `rails_get_callbacks` attributes each callback to the
+  concern that declared it and stops there, instead of printing the
+  declaration and its body a second time under the execution order. A concern
+  shared by many models is walked once per run.
 - **Rails' anonymous join class for a `has_and_belongs_to_many` was reported
   as one of the app's models.** Rails names it through a singleton `name=`, so
   it answered `HABTM_Tags` while living at `Account::HABTM_Tags`, and the
@@ -80,13 +84,17 @@ to #181), and the sibling defects behind them.
   it became a frame of default options that every call inside merges under its
   own - which is what stops six of Mastodon's account routes being filed under
   a controller named `@:username`, and stops `with_options only: [:index]`
-  expanding a resource into all eight RESTful rows. `module:` on a resource
-  moves the controller and never the path, so `admin/distributions` is
-  `admin/announcements/distributions` and
+  expanding a resource into all eight RESTful rows. Those defaults reach a
+  `namespace` or `scope` inside the block too, where a `module:` or `as:` from
+  them replaces the block's own name, as `defaults.merge!(options)` does in
+  the mapper. `module:` on a resource moves the controller and never the path,
+  so `admin/distributions` is `admin/announcements/distributions` and
   `admin/terms_of_service/distributions` again. `as:` and `param:` on a
   resource are read too, so the new rows carry the helper name and the member
   segment the app actually has (`/users/:account_username`, not
-  `/users/:account_id`).
+  `/users/:account_id`). On Mastodon the static total falls, 658 routes to 657
+  and 22 undisclosed dynamic constructs to 21: 69 real rows arrive and 76
+  fabricated ones go.
 - **`controllers` with `detail:"full"` crashed on an app whose controller had
   two strong-params methods under a parent other than
   `ApplicationController`.** The grouping fingerprint sorted the hashes the
@@ -109,6 +117,14 @@ to #181), and the sibling defects behind them.
   had asked to hide. The source parser applies it too. A filter the controller
   explicitly skips is still shown as a struck-through `~~name~~ _(skipped)_`
   line, which is a fact about the class rather than a filter that runs.
+- **A skipped filter was listed as one the action runs.** The static walk
+  folded `skip_before_action` into a plain `before` kind, so `tool controllers
+  detail=full` printed "before authenticate_user!" for a controller whose file
+  skips it, while the booted tier struck the same filter through. The record
+  now carries the skip, one renderer draws the listing for the tool and the
+  generated markdown, and an ancestor's own skip no longer reaches a child as
+  an inherited filter - Mastodon's Api::V1 controllers listed
+  `require_functional!` that way.
 - **Static `get_api` named serializers by camelizing the file path, so an app
   acronym came out miscased.** `ActivityPub::AcceptFollowSerializer` was
   reported as `Activitypub::AcceptFollowSerializer` and
@@ -191,6 +207,12 @@ to #181), and the sibling defects behind them.
   Filtering table now says. The config loader and the installer's record also
   disagreed on what YAML classes to permit, so one hand-added `generated_at:`
   line voided every key in the file; both read one constant.
+- **An unknown config key was answered with an unrelated one.** A three-letter
+  key in `.rails-ai-context.yml` matched the first known key starting with it,
+  so `max` was told to mean `max_file_size` and `out` to mean `output_dir`.
+  The suggestion now also asks that the typed name cover at least half the key
+  it matches, so a truncation like `output_di` still points at `output_dir`
+  and a short prefix says nothing.
 - **Four doc pages described a config precedence the gem stopped having in
   5.25.0.** `docs/STANDALONE.md`, `TROUBLESHOOTING.md`, `FAQ.md` and
   `GUIDE.md` all said the initializer outranks `.rails-ai-context.yml` and
