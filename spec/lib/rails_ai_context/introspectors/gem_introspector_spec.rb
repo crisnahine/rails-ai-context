@@ -10,9 +10,12 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
   after { FileUtils.remove_entry(tmpdir) }
 
   describe "#call" do
-    it "returns error when Gemfile.lock is missing" do
+    # An absent lockfile is a source the app never wrote, which every other
+    # section reports as unavailable; a lockfile it could not read is a
+    # failure and stays one.
+    it "reports a missing Gemfile.lock as unavailable, not as a failure" do
       result = introspector.call
-      expect(result).to eq({ error: "No Gemfile.lock found" })
+      expect(result).to eq({ unavailable: "No Gemfile.lock found" })
     end
 
     it "says why rather than reporting no gems when the lockfile has no gem entries" do

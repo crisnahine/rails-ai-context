@@ -20,10 +20,11 @@ module RailsAiContext
     class Spec
       attr_reader :ruby_version, :reason
 
-      def initialize(versions, ruby_version: nil, reason: nil)
+      def initialize(versions, ruby_version: nil, reason: nil, absent: false)
         @versions = versions
         @ruby_version = ruby_version
         @reason = reason
+        @absent = absent
       end
 
       # No lockfile, and a lockfile that named no gem, are both "the app's
@@ -31,6 +32,13 @@ module RailsAiContext
       # caller reading them that way answers that the app uses none of them.
       def missing?
         !@reason.nil?
+      end
+
+      # An app with no lockfile at all, as opposed to one whose lockfile
+      # could not be read: the first is an absent source, the second a
+      # failure, and a caller reporting them has to say which.
+      def absent?
+        @absent
       end
 
       def present?(name)
@@ -65,7 +73,7 @@ module RailsAiContext
         cached = CACHE[path]
         return cached[:spec] if cached && cached[:stamp] == stamp
 
-        spec = stamp.first ? parse(path, gemfile) : Spec.new({}, reason: "No Gemfile.lock found")
+        spec = stamp.first ? parse(path, gemfile) : Spec.new({}, reason: "No Gemfile.lock found", absent: true)
         CACHE[path] = { stamp: stamp, spec: spec }
         spec
       end
