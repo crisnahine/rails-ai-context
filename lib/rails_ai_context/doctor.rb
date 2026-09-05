@@ -239,12 +239,19 @@ module RailsAiContext
     # A guard written before the respond_to? check was added only tests
     # `defined?(RailsAiContext)`, which the gemspec's version stub satisfies
     # even outside this gem's Bundler group - `.configure` then raises
-    # NoMethodError in that environment.
+    # NoMethodError in that environment. No guard at all fails the same way
+    # wherever the gem is not loaded, standalone mode included.
     def check_initializer_guard
       path = File.join(app.root, "config/initializers/rails_ai_context.rb")
       return nil unless File.exist?(path)
 
       content = File.read(path)
+      if Install::InitializerFile.configures?(content) && !Install::InitializerFile.guarded?(content)
+        return Check.new(name: "Initializer guard", status: :warn,
+          message: "config/initializers/rails_ai_context.rb has no guard around the `configure` block",
+          fix: "Wrap it in `if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)` - " \
+               "without one it raises where the gem is not loaded, such as standalone mode or a group-scoped Gemfile entry")
+      end
       return nil unless Install::InitializerFile.bare_guard?(content)
 
       Check.new(name: "Initializer guard", status: :warn,

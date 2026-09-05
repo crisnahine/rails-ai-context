@@ -314,6 +314,24 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    # An unguarded file is correct in an app that bundles the gem everywhere,
+    # so this is a warn about another environment, never a fail.
+    context "when the initializer has no guard at all" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          RailsAiContext.configure do |config|
+          end
+        RUBY
+      end
+
+      it "warns that it breaks where the gem is not loaded" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("no guard")
+        expect(check.fix).to include("defined?(RailsAiContext)")
+      end
+    end
+
     context "when the initializer already guards with respond_to?" do
       before do
         allow(File).to receive(:exist?).with(initializer_path).and_return(true)

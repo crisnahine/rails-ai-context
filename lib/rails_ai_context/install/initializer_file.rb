@@ -15,8 +15,15 @@ module RailsAiContext
       BARE_GUARD = /^([ \t]*)if defined\?\(RailsAiContext\)$/
       CURRENT_GUARD = /^[ \t]*if defined\?\(RailsAiContext\)\s*&&\s*RailsAiContext\.respond_to\?\(:configure\)$/
       GUARD_LINE = "if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)"
+      CONFIGURE_CALL = /^[ \t]*RailsAiContext\.configure\b/
 
       module_function
+
+      # What a guard is there to protect: a file that never calls into the gem
+      # needs none.
+      def configures?(content)
+        content.match?(CONFIGURE_CALL)
+      end
 
       def bare_guard?(content)
         content.match?(BARE_GUARD)

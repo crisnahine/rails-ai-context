@@ -39,7 +39,7 @@ preset: full
 ### Precedence
 
 > [!IMPORTANT]
-> `configure` block > YAML > Defaults, merged key by key. The file is read once, at boot, before `config/initializers`, so an initializer may assign a key or edit it in place (`config.skip_tools << "rails_query"`) and both survive. A block that runs *before* the file - in `config/application.rb` or an environment file - must assign a key to keep it (`config.skip_tools = ["rails_query"]`), because an in-place edit there is replaced when the file loads. A key no block assigns keeps the YAML value. Corrupted YAML degrades gracefully with a warning.
+> `configure` block > YAML > Defaults, merged key by key. The file is read once, at boot, before `config/initializers`, so an initializer may assign a key or edit it in place (`config.skip_tools << "rails_query"`) and both survive. A block that runs *before* the file - in `config/application.rb` or an environment file - must assign a key to keep it (`config.skip_tools = ["rails_query"]`), because an in-place edit there is replaced when the file loads. A key no block assigns keeps the YAML value. Corrupted YAML degrades gracefully with a warning, and a key the gem does not know warns on stderr and is ignored while the rest of the file applies.
 
 ---
 
@@ -95,7 +95,10 @@ preset: full
 | `excluded_middleware` | Array | 25 framework middleware | Middleware to skip in listing |
 | `excluded_paths` | Array | `["node_modules", "tmp", "log", "vendor", ".git", "doc", "docs"]` | Paths excluded from search |
 | `excluded_association_names` | Array | 7 framework associations | Association names to hide from model output |
-| `excluded_concerns` | Array of Regex | Framework concerns | Concerns to skip (supports regex) |
+| `excluded_concerns` | Array of Regex or String | Framework concerns | Concerns to hide everywhere they are listed |
+
+> [!NOTE]
+> A YAML `excluded_concerns` list replaces the framework defaults, so `ActionText`, `ActiveStorage`, `Devise::Models`, `Turbo::` and `DEBUGGER__::` concerns come back into model and controller output. Use the initializer's `config.excluded_concerns += [...]` to add to them instead. Each string is compiled to an unanchored pattern, so `Post` also hides `Postable`; write `^Post$` when you mean the one concern.
 
 `excluded_filters` hides a name from a controller's filter list in both
 tiers. A filter the controller explicitly skips is still shown, as a
@@ -158,7 +161,7 @@ the class rather than a filter that runs.
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register |
+| `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register (initializer only - a class reference cannot be written in YAML) |
 | `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`) |
 
 ### Output

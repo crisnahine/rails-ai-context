@@ -3,6 +3,7 @@
 require "yaml"
 require "date"
 require "fileutils"
+require_relative "../configuration"
 
 module RailsAiContext
   module Install
@@ -18,9 +19,9 @@ module RailsAiContext
       INITIALIZER = "config/initializers/rails_ai_context.rb"
       YAML_KEY = "ai_tools"
 
-      # Dates and times because a hand-added `generated_at:` is ordinary in a
-      # config file, and refusing to load one used to cost the user the write.
-      PERMITTED_YAML = [ Symbol, Date, Time ].freeze
+      # The two readers of .rails-ai-context.yml must permit the same classes,
+      # or a file one of them accepts voids every key for the other.
+      PERMITTED_YAML = Configuration::PERMITTED_YAML_CLASSES
 
       # Matches the line the installer writes, and nothing else. Anchored past
       # any leading whitespace but not past a `#`, so the commented-out
