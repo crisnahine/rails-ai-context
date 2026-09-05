@@ -255,7 +255,7 @@ module RailsAiContext
 
         lines = [ "## Internationalization" ]
         lines << "- Default locale: #{data[:default_locale]}"
-        lines << "- Available locales: #{data[:available_locales]&.join(', ')}"
+        lines << "- #{SectionFacts.available_locales_label(data)}: #{data[:available_locales]&.join(', ')}"
         lines << "- Locale files: #{data[:total_locale_files]}" if data[:total_locale_files]&.positive?
         lines.join("\n")
       end

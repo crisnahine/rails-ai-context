@@ -21,7 +21,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
         "controllers" => { location: "spec/controllers", count: 4 },
         "requests" => { location: "spec/requests", count: 6 }
       },
-      test_count_by_category: { "models" => 42, "requests" => 18, "system" => 5 },
+      test_count_by_category: { "models" => 8, "requests" => 6, "controllers" => 4 },
       ci_config: %w[github_actions],
       coverage: "simplecov"
     }
@@ -45,6 +45,15 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       text = result.content.first[:text]
       expect(text).to include("models: 8 files")
       expect(text).to include("requests: 6 files")
+    end
+
+    # The counts and the locations are one walk, so one section states both.
+    it "lists each category once, with its count and location" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- models: 8 files (spec/models)")
+      expect(text).not_to include("Test Counts by Category")
+      expect(text.scan(/^- models:/).size).to eq(1)
     end
 
     it "shows CI config" do
@@ -105,11 +114,11 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("FactoryBot::Syntax::Methods")
     end
 
-    it "shows test counts by category" do
-      result = described_class.call(detail: "full")
-      text = result.content.first[:text]
-      expect(text).to include("Test Counts by Category")
-      expect(text).to include("models: 42")
+    it "lists each category once, with its count and location" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- models: 8 files (spec/models)")
+      expect(text.scan(/^- models:/).size).to eq(1)
     end
 
     it "shows test helper files" do

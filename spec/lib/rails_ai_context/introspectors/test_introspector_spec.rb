@@ -231,6 +231,23 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(payload[:system_tests]).to eq(location: "spec/system, test/system", count: 2)
     end
 
+    it "walks each test directory once per introspection" do
+      write_file("spec/models/user_spec.rb")
+      allow(Dir).to receive(:children).and_call_original
+
+      payload
+
+      expect(Dir).to have_received(:children).with(File.join(@root, "spec")).once
+    end
+
+    it "costs the categories, not the whole section, when the walk fails" do
+      write_file("spec/models/user_spec.rb")
+      allow(Dir).to receive(:children).and_raise(ArgumentError, "invalid byte sequence in UTF-8")
+
+      expect(payload).to include(framework: "rspec", test_files: {}, test_count_by_category: {})
+      expect(payload).not_to have_key(:error)
+    end
+
     it "orders rows by count descending, then by name" do
       write_file("spec/models/user_spec.rb")
       write_file("spec/models/post_spec.rb")

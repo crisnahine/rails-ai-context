@@ -95,6 +95,15 @@ module RailsAiContext
         end
       end
 
+      # "What config/locales holds" and "what the app enables" are different
+      # questions with the same name, and only the second one is
+      # available_locales. Say which one this answer is.
+      def available_locales_label(i18n_data)
+        return "Available locales" unless i18n_data[:available_locales_source] == "locale_files"
+
+        "Available locales (from locale files)"
+      end
+
       # Introspector failures, so a half-failed run cannot read as a clean
       # one in any generated file.
       def warnings(ctx)

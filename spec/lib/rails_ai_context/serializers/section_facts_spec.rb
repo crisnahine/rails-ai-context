@@ -128,4 +128,20 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
       expect(described_class.rescue_handler_lines({})).to eq([])
     end
   end
+
+  describe ".available_locales_label" do
+    it "qualifies a list read off the locale files" do
+      expect(described_class.available_locales_label(available_locales_source: "locale_files"))
+        .to eq("Available locales (from locale files)")
+    end
+
+    it "leaves a configured list unqualified" do
+      expect(described_class.available_locales_label(available_locales_source: "config"))
+        .to eq("Available locales")
+    end
+
+    it "leaves a payload that records no source unqualified" do
+      expect(described_class.available_locales_label({})).to eq("Available locales")
+    end
+  end
 end

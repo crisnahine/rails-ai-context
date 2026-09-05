@@ -134,6 +134,54 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       expect(text).to include("Affected Models")
     end
 
+    context "with a model whose table is not the camelized table name" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { tables: { "admin_action_logs" => { columns: [ { name: "note", type: "string" } ] } } },
+          models: {
+            "Admin::ActionLog" => {
+              table_name: "admin_action_logs",
+              associations: [ { macro: :belongs_to, name: :account, class_name: "Account" } ]
+            },
+            "Account" => {
+              table_name: "accounts",
+              associations: [ { macro: :has_many, name: :action_logs, class_name: "Admin::ActionLog" } ]
+            }
+          }
+        })
+      end
+
+      it "names the model that records the table" do
+        response = described_class.call(action: "add_column", table: "Admin::ActionLog", column: "note2", type: "string")
+
+        expect(response.content.first[:text])
+          .to include("- **Admin::ActionLog** - directly affected (table: admin_action_logs)")
+      end
+
+      it "names the association that points at that model" do
+        response = described_class.call(action: "add_column", table: "Admin::ActionLog", column: "note2", type: "string")
+
+        expect(response.content.first[:text]).to include("- **Account** - has_many :action_logs")
+      end
+
+      it "points remove_column's ignored_columns step at the model's own file" do
+        allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+        response = described_class.call(action: "remove_column", table: "Admin::ActionLog", column: "note")
+
+        expect(response.content.first[:text]).to include("app/models/admin/action_log.rb")
+      end
+    end
+
+    it "omits the Affected Models heading when no model uses the table" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: { "flipper_gates" => { columns: [] } } }, models: {}
+      })
+
+      response = described_class.call(action: "add_column", table: "flipper_gates", column: "note", type: "string")
+
+      expect(response.content.first[:text]).not_to include("Affected Models")
+    end
+
     it "generates rename_column with new_name parameter" do
       response = described_class.call(action: "rename_column", table: "users", column: "name", new_name: "full_name")
       text = response.content.first[:text]
@@ -322,8 +370,10 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       end
 
       it "falls back to the loaded Rails rather than emitting the marker" do
+        loaded = Rails::VERSION::STRING.split(".").first(2).join(".")
+
         expect(text_for(action: "add_index", table: "accounts", column: "domain"))
-          .to match(/ActiveRecord::Migration\[\d+\.\d+\]/)
+          .to include("ActiveRecord::Migration[#{loaded}]")
       end
     end
 
