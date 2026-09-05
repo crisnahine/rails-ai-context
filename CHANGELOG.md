@@ -668,6 +668,11 @@ to #181), and the sibling defects behind them.
   docs/TOOLS.md and docs/GUIDE.md now say "grouped by type, in Rails event
   order", and docs/COMPATIBILITY.md names the limit: order within a type is
   declaration order, order across types is Rails' event order.
+- **The `rails://gems` payload renames `ruby_version` to
+  `declared_ruby_version`.** A client reading the old key off that resource
+  gets nothing back. The two keys were the same word for two different facts,
+  the interpreter that is running and the version the lockfile declares, and
+  the context's own `ruby_version` is the first of those.
 
 ## [5.25.0] - 2026-09-03
 
