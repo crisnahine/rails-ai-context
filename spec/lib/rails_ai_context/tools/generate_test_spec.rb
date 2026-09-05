@@ -319,26 +319,27 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     end
 
     it "skips sign_in for a controller whose ancestry authorizes with Doorkeeper" do
-      path = File.join(Rails.root, "app/controllers/doorkeeper_base_stub_controller.rb")
-      FileUtils.mkdir_p(File.dirname(path))
-      File.write(path, <<~RUBY)
-        class DoorkeeperBaseStubController < ActionController::API
-          before_action -> { doorkeeper_authorize! :read }
-        end
-      RUBY
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "api_base_controller.rb"), <<~RUBY)
+          class ApiBaseController < ActionController::API
+            before_action -> { doorkeeper_authorize! :read }
+          end
+        RUBY
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(dir))
 
-      text = generated(devise_context(
-        framework: "rspec",
-        tests: { factories: { location: "spec/factories", count: 1 }, factory_names: { "users.rb" => [ :user ] } },
-        controllers: {
-          "PostsController" => { parent_class: "DoorkeeperBaseStubController", file: "app/controllers/posts_controller.rb" },
-          "DoorkeeperBaseStubController" => { file: "app/controllers/doorkeeper_base_stub_controller.rb" }
-        }
-      ))
-      expect(text).not_to include("sign_in")
-      expect(text).to include("Doorkeeper")
-    ensure
-      FileUtils.rm_f(path)
+        text = generated(devise_context(
+          framework: "rspec",
+          tests: { factories: { location: "spec/factories", count: 1 }, factory_names: { "users.rb" => [ :user ] } },
+          controllers: {
+            "PostsController" => { parent_class: "ApiBaseController", file: "app/controllers/posts_controller.rb" },
+            "ApiBaseController" => { file: "app/controllers/api_base_controller.rb" }
+          }
+        ))
+
+        expect(text).not_to include("sign_in")
+        expect(text).to include("Doorkeeper")
+      end
     end
   end
 end
