@@ -153,13 +153,12 @@ module RailsAiContext
 
         # One row past the cap, so a cut list is knowable rather than silent.
         fetch_limit = max_results_cap + 1
-        all_results = if ripgrep_available?
+        fetched = if ripgrep_available?
           search_with_ripgrep(search_pattern, search_path, file_type, fetch_limit, root, context_lines, exclude_tests: exclude_tests)
         else
           search_with_ruby(search_pattern, search_path, file_type, fetch_limit, root, exclude_tests: exclude_tests)
         end
-        truncated = all_results.size > max_results_cap
-        all_results = all_results.first(max_results_cap) if truncated
+        all_results, truncated, scanned = cap_results(fetched)
 
         # Filter out definitions for match_type:"call"
         all_results.reject! { |r| r[:content].match?(/\A\s*def\s/) } if match_type == "call"
@@ -196,7 +195,6 @@ module RailsAiContext
         # '>' and context with a space so they stay distinguishable. Pure-match
         # output (context_lines: 0, Ruby fallback) keeps the plain format.
         mixed = paginated.any? { |r| !match_row?(r) }
-        scanned = truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
         with_context = mixed ? " (#{count_phrase(paginated.size, 'line')} with context)" : ""
         header = "# Search: `#{original_pattern}`\n" \
           "**#{count_phrase(match_total, 'match')}#{scanned}**#{" in #{path}" if path}, " \
@@ -349,6 +347,16 @@ module RailsAiContext
 
 
       # Rows are matches plus context lines; only the flagged ones are matches.
+      # Rows are fetched one past the cap so a cut list is knowable. Returns
+      # the capped rows, whether they were cut, and the label the header
+      # prints when they were.
+      private_class_method def self.cap_results(rows)
+        truncated = rows.size > max_results_cap
+        rows = rows.first(max_results_cap) if truncated
+        scanned = truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
+        [ rows, truncated, scanned ]
+      end
+
       private_class_method def self.match_row?(row)
         row[:match] != false
       end
@@ -450,10 +458,7 @@ module RailsAiContext
 
         # 2. Find all callers (everywhere the method is referenced, excluding the def line)
         call_pattern = exact_pattern(cleaned)
-        call_results = quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests)
-        call_truncated = call_results.size > max_results_cap
-        call_results = call_results.first(max_results_cap) if call_truncated
-        scanned = call_truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
+        call_results, _call_truncated, scanned = cap_results(quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests))
         callers = call_results.reject { |r| r[:content].match?(/\A\s*def\s/) }
 
         # Exclude the definition file+line to avoid self-reference
