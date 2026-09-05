@@ -111,6 +111,20 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
 
         expect(missing).to contain_exactly(a_hash_including(model: "Tagging", association: "tokens"))
       end
+
+      # The listener names the class node alone, so a model written inside a
+      # module body was looked up as "Invoice" while its declaration reads
+      # "Billing::Invoice", and its assigned table went unread.
+      it "reads the assigned table of a model nested in a module body" do
+        missing = counter_cache_for(
+          File.join("billing", "invoice.rb"),
+          "module Billing\n  class Invoice < ApplicationRecord\n    self.table_name = 'legacy_bills'\n" \
+          "    has_many :tokens\n  end\nend\n",
+          "create_table \"legacy_bills\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(a_hash_including(association: "tokens"))
+      end
     end
 
     it "detects Model.all in controllers" do

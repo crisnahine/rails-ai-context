@@ -80,6 +80,45 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
     end
   end
 
+  # The three declarations are one question about one class body, and asking
+  # them one at a time parsed and descended the same file three times.
+  describe ".declarations" do
+    it "reads all three out of one body" do
+      source = <<~RUBY
+        module Legacy
+          def self.table_name_prefix
+            "legacy_"
+          end
+
+          def self.table_name_suffix
+            "_v1"
+          end
+
+          self.table_name = "ledger"
+        end
+      RUBY
+
+      expect(described_class.declarations(source, "Legacy")).to eq(
+        table_name: "ledger", table_name_prefix: "legacy_", table_name_suffix: "_v1"
+      )
+    end
+
+    it "answers all three as nil when the file declares no such scope" do
+      expect(described_class.declarations("class Widget\nend\n", "Other")).to eq(
+        table_name: nil, table_name_prefix: nil, table_name_suffix: nil
+      )
+    end
+
+    it "descends the file once for the three" do
+      source = "class Widget < ApplicationRecord\n  self.table_name = 'gizmos'\nend\n"
+      allow(RailsAiContext::AstCache).to receive(:parse_string).and_call_original
+
+      described_class.declarations(source, "Widget")
+
+      expect(RailsAiContext::AstCache).to have_received(:parse_string).once
+    end
+  end
+
   describe ".stem" do
     # Rails derives the table through the app's own inflector, and the file's
     # name already carries that inflection.

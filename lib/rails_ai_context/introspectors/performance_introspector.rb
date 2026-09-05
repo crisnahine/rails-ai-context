@@ -51,6 +51,10 @@ module RailsAiContext
         classes.find { |c| c[:superclass] == "ApplicationRecord" }&.fetch(:name)
       end
 
+      def declared_name(record)
+        DeclaredConstant.resolve(record.source, record.path_name)
+      end
+
       def load_model_data
         SourceScan.each(root, kind: "app/models").filter_map do |record|
           ast = SourceIntrospector.walk_source(record.source, {
@@ -79,8 +83,10 @@ module RailsAiContext
             file: record.file,
             # This walk keeps no view of the other model files, so a
             # table_name_prefix declared by an enclosing module is out of
-            # reach here and the stem stands alone.
-            table_name: TableName.explicit(record.source, class_name) || TableName.stem(record.path),
+            # reach here and the stem stands alone. The declaration is looked
+            # up by the qualified name the file writes, which is what a model
+            # nested inside a module body is called.
+            table_name: TableName.explicit(record.source, declared_name(record)) || TableName.stem(record.path),
             has_many: has_many,
             belongs_to: belongs_to,
             includes_calls: includes_calls

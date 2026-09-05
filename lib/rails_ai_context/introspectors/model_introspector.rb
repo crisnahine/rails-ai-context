@@ -105,18 +105,15 @@ module RailsAiContext
             next if found.key?(class_name)
             next if config.excluded_models.include?(class_name)
 
+            # A module file declares no class and is kept for the prefix and
+            # the suffix alone: they belong to the namespace, not to any one
+            # model.
             found[class_name] = {
               path: record.path,
               file: record.file,
               superclass: declarations.find { |d| d.name == class_name }&.superclass,
-              abstract: abstract_class?(source),
-              # A module file declares no class and is kept for the prefix and
-              # the suffix alone: they belong to the namespace, not to any one
-              # model.
-              table_name: TableName.explicit(source, class_name),
-              table_name_prefix: TableName.prefix(source, class_name),
-              table_name_suffix: TableName.suffix(source, class_name)
-            }
+              abstract: abstract_class?(source)
+            }.merge(TableName.declarations(source, class_name))
           rescue => e
             found[record.path_name] = { error: e.message }
           end
