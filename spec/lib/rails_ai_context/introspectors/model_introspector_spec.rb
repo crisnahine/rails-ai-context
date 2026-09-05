@@ -1390,4 +1390,37 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
+
+  describe "STI on the static tier" do
+    # The booted tier reports the hierarchy under :sti and the graph tool
+    # renders it from there. The static tier resolves the same chain to share
+    # the base's table and its macros, so it can answer the same question.
+    it "reports the base, the parent and the children" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            has_many :comments
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "article.rb"), "class Article < Post\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Post"][:sti]).to eq(sti_base: true, sti_children: [ "Article" ])
+        expect(models["Article"][:sti]).to eq(sti_base: false, sti_parent: "Post")
+      end
+    end
+
+    it "leaves a model with no STI chain without the key" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(models["Post"]).not_to have_key(:sti)
+      end
+    end
+  end
 end
