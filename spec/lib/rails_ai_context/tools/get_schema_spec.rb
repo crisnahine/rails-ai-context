@@ -120,6 +120,49 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  # Rails builds no model for a has_and_belongs_to_many join table, so one is
+  # not a table whose model went missing, and the reader was being pointed at
+  # a table the app uses on every request.
+  describe "tables no model file declares" do
+    let(:join_tables) do
+      tables.merge(
+        "posts_tags" => { columns: [ { name: "post_id", type: "integer" } ], indexes: [], foreign_keys: [] },
+        "legacy_audits" => { columns: [ { name: "id", type: "integer" } ], indexes: [], foreign_keys: [] }
+      )
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: join_tables, total_tables: 5 },
+        models: {
+          "Post" => {
+            table_name: "posts",
+            associations: [ { name: "tags", type: "has_and_belongs_to_many", options: {} } ]
+          }
+        }
+      })
+    end
+
+    def warning_line
+      described_class.call.content.first[:text].lines.find { |l| l.start_with?("⚠") }.to_s
+    end
+
+    it "leaves a habtm join table out" do
+      expect(warning_line).not_to include("posts_tags")
+    end
+
+    it "still names a table nothing declares" do
+      expect(warning_line).to include("legacy_audits")
+    end
+
+    it "does not claim the table has no model anywhere" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("no ActiveRecord model")
+      expect(text).to include("no model file in this app")
+    end
+  end
+
   describe ".call with specific table" do
     it "returns full detail for a specific table" do
       result = described_class.call(table: "users")

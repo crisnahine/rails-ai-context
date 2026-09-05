@@ -73,6 +73,12 @@ module RailsAiContext
             next
           end
 
+          if candidate[:unreadable]
+            result[class_name] = { error: candidate[:unreadable], file: candidate[:file],
+                                   table_name: resolve_table_name(class_name, candidates) }.compact
+            next
+          end
+
           # An abstract base is dropped from the result but not from the walk:
           # a per-connection base like Analytics::Record is how its models
           # reach ApplicationRecord.
@@ -137,10 +143,13 @@ module RailsAiContext
           next if record.path_name == "ApplicationRecord"
 
           begin
-            next if File.size(record.path) > RailsAiContext.configuration.max_file_size
+            source = model_source(record.path) if File.size(record.path) <= RailsAiContext.configuration.max_file_size
+            if source.nil?
+              found[record.path_name] ||= unread_candidate(record) unless skip_unread?(record)
+              next
+            end
 
-            source = model_source(record.path)
-            next if source.nil? || mixin_path?(record.path_name.underscore, source)
+            next if mixin_path?(record.path_name.underscore, source)
 
             declarations = DeclaredConstant.declarations(source)
             class_name = declarations.map(&:name).find { |name| name.casecmp?(record.path_name) } || record.path_name
@@ -162,11 +171,41 @@ module RailsAiContext
         end
       end
 
+      # A file the walk could not read stays a candidate, because its children
+      # reach ApplicationRecord through it and nothing else names their base.
+      # It carries no superclass, so the entry says what happened instead of
+      # answering the declarations it could not read.
+      def unread_candidate(record)
+        size = begin
+          File.size(record.path)
+        rescue SystemCallError
+          nil
+        end
+        reason = if size && size > RailsAiContext.configuration.max_file_size
+          "file is too large to read (#{size} bytes)"
+        else
+          "file is unreadable"
+        end
+
+        { path: record.path, file: record.file, unreadable: reason }
+      end
+
+      # Nothing distinguishes an unreadable concern from an unreadable model,
+      # and a concern is not a model, so it stays out.
+      def skip_unread?(record)
+        record.path_name.underscore.split("/").include?("concerns") ||
+          config.excluded_models.include?(record.path_name)
+      end
+
       # A model is a class whose superclass chain reaches a model base. A form
       # object, a filter or a namespaced calculator under app/models has no
       # superclass, or one the chain never resolves, so it is not a model.
       def model_class?(class_name, candidates, seen = [])
         return false if seen.include?(class_name)
+        # A base under app/models that nobody can read is taken at its word:
+        # refusing it would drop every child that reaches a model base only
+        # through it.
+        return true if candidates.dig(class_name, :unreadable)
 
         parent = candidates.dig(class_name, :superclass)
         return false unless parent

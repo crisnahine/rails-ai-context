@@ -87,7 +87,7 @@ module RailsAiContext
             lines << "- Eager load candidates: #{filter_items(all_sections[:eager_load], model).size}"
           else
             if category == "all" || category == "n_plus_one"
-              lines.concat(render_n_plus_one_section(data[:n_plus_one_risks], model, detail))
+              lines.concat(render_n_plus_one_section(data[:n_plus_one_risks], model))
             end
             if category == "all" || category == "counter_cache"
               lines.concat(render_section("Missing counter_cache", data[:missing_counter_cache], model, detail))
@@ -145,7 +145,7 @@ module RailsAiContext
         RISK_ORDER = { "high" => 0, "medium" => 1, "low" => 2 }.freeze
         RISK_BADGES = { "high" => "[HIGH]", "medium" => "[MEDIUM]", "low" => "[low]" }.freeze
 
-        def render_n_plus_one_section(items, model_filter, detail)
+        def render_n_plus_one_section(items, model_filter)
           return [] unless items&.any?
 
           filtered = filter_items(items, model_filter)
@@ -158,16 +158,22 @@ module RailsAiContext
 
           sorted.each do |item|
             badge = RISK_BADGES[item[:risk].to_s] || ""
-            lines << "- #{badge} **#{item[:model] || "Unknown"}**.#{item[:association]}"
+            lines << "- #{badge} **#{item[:model] || "Unknown"}**.#{item[:association]}#{call_site(item)}"
             lines << "  #{item[:suggestion]}" if item[:suggestion]
-            if RailsAiContext::DetailLevel.full?(detail)
-              lines << "  Controller: #{item[:controller]}" if item[:controller]
-              lines << "  Action: #{item[:action]}" if item[:action]
-            end
             lines << ""
           end
 
           lines
+        end
+
+        # One association can be at risk in several actions, and those are
+        # different findings. Without the call site on the row they read as
+        # one line printed twice, and the section count stops adding up.
+        def call_site(item)
+          return "" unless item[:controller]
+
+          action = item[:action] ? "##{item[:action]}" : ""
+          " (#{item[:controller]}#{action})"
         end
 
         def render_section(title, items, model_filter, detail)

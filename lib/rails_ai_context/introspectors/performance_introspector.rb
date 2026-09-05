@@ -71,13 +71,11 @@ module RailsAiContext
           class_name = declared_name(record)
 
           has_many = ast[:associations].select { |a| a[:type] == "has_many" }.map do |a|
-            opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
-            { name: a[:name].to_s, options: opts.empty? ? nil : opts }
+            { name: a[:name].to_s, options: a[:options] || {} }
           end
 
           belongs_to = ast[:associations].select { |a| a[:type] == "belongs_to" }.map do |a|
-            opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
-            { name: a[:name].to_s, options: opts.empty? ? nil : opts }
+            { name: a[:name].to_s, options: a[:options] || {} }
           end
 
           includes_calls = ast[:includes].map { |h| h[:args].map(&:to_s).join(", ") }
@@ -151,7 +149,7 @@ module RailsAiContext
             all_assocs.each do |assoc|
               assoc_name = assoc[:name]
               # Skip polymorphic belongs_to - can't preload generically
-              next if assoc[:options]&.match?(/polymorphic/)
+              next if assoc[:options].key?(:polymorphic)
               next unless association_accessed?(ivar, assoc_name, action_body, view_contents)
 
               risk = classify_n_plus_one_risk(full_chain, action_body, assoc_name)
@@ -294,35 +292,47 @@ module RailsAiContext
 
         model_data.each do |model|
           model[:has_many].each do |assoc|
+            options = assoc[:options]
+            # A :through association reads its records over another one, so
+            # there is no belongs_to on the far side to carry the counter.
+            next if options.key?(:through)
+
             assoc_name = assoc[:name]
-            # Check if a counter_cache column exists but counter_cache isn't declared
             count_col = "#{assoc_name}_count"
 
             table = schema_data[model[:table_name]]
             next unless table
+            next unless table[:columns].any? { |c| c[:name] == count_col }
+            next if options.key?(:counter_cache)
 
-            has_count_column = table[:columns].any? { |c| c[:name] == count_col }
-            has_counter_cache = assoc[:options]&.include?("counter_cache")
-            belongs_to_model = model_data.find { |m| m[:name].demodulize == assoc_name.classify }
-            belongs_to_has_counter = belongs_to_model&.dig(:belongs_to)&.any? { |b|
-              b[:options]&.include?("counter_cache")
+            belongs_to_model = association_model(model_data, assoc)
+            next unless belongs_to_model
+            next if belongs_to_model[:belongs_to].any? { |b| b[:options].key?(:counter_cache) }
+
+            inverse_name = options[:as] || model[:name].demodulize.underscore
+
+            missing << {
+              model: model[:name],
+              association: assoc_name,
+              column: count_col,
+              suggestion: "Add counter_cache: true to belongs_to " \
+                          ":#{inverse_name} in #{belongs_to_model[:name]}"
             }
-
-            # Flag: count column exists but counter_cache not declared on belongs_to side
-            if has_count_column && !has_counter_cache && !belongs_to_has_counter
-              missing << {
-                model: model[:name],
-                association: assoc_name,
-                column: count_col,
-                suggestion: "Add counter_cache: true to belongs_to " \
-                            ":#{model[:name].demodulize.underscore} in " \
-                            "#{belongs_to_model&.dig(:name) || assoc_name.classify}"
-              }
-            end
           end
         end
 
         missing
+      end
+
+      # The class an association declares is the one the app has;
+      # `has_many :remarks, class_name: "Comment"` is answered by Comment, and
+      # never by the Remark the name implies. When no model in the app answers
+      # either, the row would name a file the reader cannot open, so it is not
+      # written at all.
+      def association_model(model_data, assoc)
+        wanted = (assoc[:options][:class_name] || assoc[:name].classify).to_s
+        model_data.find { |m| m[:name] == wanted } ||
+          model_data.find { |m| m[:name].demodulize == wanted.demodulize }
       end
 
       def detect_missing_fk_indexes(schema_data)

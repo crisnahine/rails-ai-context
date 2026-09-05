@@ -665,7 +665,40 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         allow(File).to receive(:size).with(a_string_ending_with("huge.rb")).and_return(10_000_000)
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
-        expect(result.keys).to contain_exactly("Good")
+        expect(result.keys).to contain_exactly("Good", "Huge")
+        expect(result["Huge"][:error]).to include("too large")
+        expect(result["Good"]).to have_key(:associations)
+      end
+    end
+
+    # A base nobody can read is the only route its children have to
+    # ApplicationRecord, so dropping it drops them, and an app whose every
+    # model descends from one answers that it has no models at all.
+    context "when an STI base cannot be read" do
+      def sti_app(dir)
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "vehicle.rb"),
+                   "class Vehicle < ApplicationRecord\n  validates :name, presence: true\nend\n")
+        File.write(File.join(dir, "app", "models", "car.rb"), "class Car < Vehicle\nend\n")
+        File.write(File.join(dir, "app", "models", "truck.rb"), "class Truck < Vehicle\nend\n")
+        allow(RailsAiContext::SafeFile).to receive(:read).and_call_original
+        allow(RailsAiContext::SafeFile).to receive(:read)
+          .with(a_string_ending_with("vehicle.rb"), any_args).and_return(nil)
+        described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      end
+
+      it "keeps the children of the base it cannot read" do
+        Dir.mktmpdir { |dir| expect(sti_app(dir).keys).to include("Car", "Truck") }
+      end
+
+      it "names the base with the reason its declarations are missing" do
+        Dir.mktmpdir do |dir|
+          expect(sti_app(dir)["Vehicle"][:error]).to include("unreadable")
+        end
+      end
+
+      it "still reads the children's table off the base's file name" do
+        Dir.mktmpdir { |dir| expect(sti_app(dir)["Car"][:table_name]).to eq("vehicles") }
       end
     end
 
