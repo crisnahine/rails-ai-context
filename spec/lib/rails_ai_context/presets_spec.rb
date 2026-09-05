@@ -63,6 +63,34 @@ RSpec.describe RailsAiContext::Presets do
       described_class.run("migration", out: StringIO.new, err: err)
       expect(err.string).to include("[error] runtime_info: boom")
     end
+
+    it "answers false when every tool raised, so the preset produced nothing" do
+      allow(RailsAiContext::CLI::ToolRunner).to receive(:new).and_raise("boom")
+      err = StringIO.new
+
+      expect(described_class.run("migration", out: StringIO.new, err: err)).to be false
+      expect(err.string.scan(/\[error\]/).size).to eq(3)
+    end
+  end
+
+  # The exit status both surfaces answer with is one rule; each spelling its
+  # own list is how they drift.
+  describe ".ok?" do
+    it "answers whether an outcome is a success" do
+      expect(described_class.ok?(:listed)).to be true
+      expect(described_class.ok?(:ran)).to be true
+      expect(described_class.ok?(:unknown)).to be false
+      expect(described_class.ok?(:failed)).to be false
+    end
+
+    it "is what the CLI and the rake task read, rather than a list of their own" do
+      root = File.expand_path("../../..", __dir__)
+      [ "exe/rails-ai-context", "lib/rails_ai_context/tasks/rails_ai_context.rake" ].each do |relative|
+        source = File.read(File.join(root, relative))
+        expect(source).to include("Presets.ok?(outcome)"), relative
+        expect(source).not_to include("%i[listed ran]"), relative
+      end
+    end
   end
 
   describe ".resolve" do
@@ -109,8 +137,8 @@ RSpec.describe RailsAiContext::Presets do
       expect(described_class).to have_received(:run).with("migration", out: out, err: err)
     end
 
-    it "answers :failed when the run answers false" do
-      allow(described_class).to receive(:run).and_return(false)
+    it "answers :failed when every tool in the preset raised" do
+      allow(RailsAiContext::CLI::ToolRunner).to receive(:new).and_raise("boom")
 
       expect(described_class.dispatch("migration", invocation: invocation, out: StringIO.new, err: StringIO.new))
         .to eq(:failed)

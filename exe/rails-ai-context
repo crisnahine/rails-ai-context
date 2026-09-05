@@ -266,7 +266,7 @@ class RailsAiContextCLI < Thor
       outcome = ::RailsAiContext::Presets.dispatch(name, invocation: ->(k) { "rails-ai-context preset #{k}" }) do
         boot_rails!(command: "preset", allow_static: true)
       end
-      exit 1 unless %i[listed ran].include?(outcome)
+      exit 1 unless ::RailsAiContext::Presets.ok?(outcome)
     rescue SystemExit
       raise
     rescue StandardError, ScriptError => e
