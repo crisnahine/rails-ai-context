@@ -103,14 +103,15 @@ module RailsAiContext
       load_config_file!(dir)
     end
 
-    # Only an obvious near miss - a singular/plural slip or a truncation. A
-    # guess further off than that reads as noise.
+    # Only an obvious near miss - a singular/plural slip, or a truncation that
+    # still covers half the key. A short prefix like `max` matches several
+    # unrelated keys, so it earns no guess.
     def self.nearest_yaml_key(key)
       name = key.to_s.downcase
       return nil if name.length < 3
 
       YAML_KEYS.find { |k| k.to_s == "#{name}s" || "#{k}s" == name } ||
-        YAML_KEYS.find { |k| k.to_s.start_with?(name) }
+        YAML_KEYS.find { |k| k.to_s.start_with?(name) && name.length * 2 >= k.to_s.length }
     end
     private_class_method :nearest_yaml_key
 

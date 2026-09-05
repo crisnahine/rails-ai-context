@@ -314,8 +314,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
   describe "excluded_filters on the booted source fallback" do
     it "does not hand back the names reflection already dropped" do
       allow(RailsAiContext.configuration).to receive(:excluded_filters).and_return(%w[set_post])
-      callback = double("callback", filter: :set_post, kind: :before)
-      ctrl = double("controller", _process_action_callbacks: [ callback ])
+      ctrl = Class.new(ActionController::Base) do
+        def self.name = "PostsController"
+
+        before_action :set_post
+      end
       source = <<~RUBY
         class PostsController < ApplicationController
           before_action :set_post
@@ -325,6 +328,24 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       RUBY
 
       expect(introspector.send(:extract_filters, ctrl, source)).to eq([])
+    end
+  end
+
+  # Folding skip_before_action into a plain "before" kind lost the skip, and
+  # the listing then printed the filter as one the action runs.
+  describe "a skipped filter in source" do
+    it "keeps the skip on the record" do
+      source = <<~RUBY
+        class InboxesController < ApplicationController
+          skip_before_action :authenticate_user!
+          before_action :require_actor_signature!
+        end
+      RUBY
+
+      filters = introspector.send(:extract_filters_from_source, source)
+
+      expect(filters).to include(a_hash_including(name: "authenticate_user!", kind: "before", skipped: true))
+      expect(filters.find { |f| f[:name] == "require_actor_signature!" }).not_to have_key(:skipped)
     end
   end
 

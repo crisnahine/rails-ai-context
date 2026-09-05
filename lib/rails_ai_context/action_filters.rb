@@ -39,8 +39,11 @@ module RailsAiContext
       info = Payload.controllers(ctx)[controller_name.to_s]
       return { own: [], inherited: [], skipped: [] } unless info.is_a?(Hash)
 
-      skipped = skipped_names(ctx, controller_name, action, root: root, source: source)
-      declared = Array(info[:filters]).grep(Hash)
+      skipped = (skipped_names(ctx, controller_name, action, root: root, source: source) +
+        skip_flag_names(info)).uniq
+      # A record the walk marked as a skip states what does not run, so it is
+      # never a filter, on the class that declared it or on a child.
+      declared = Array(info[:filters]).grep(Hash).reject { |f| f[:skipped] }
       applicable = declared.select { |f| applies?(f, action) }
         .reject { |f| skipped.include?(f[:name].to_s) }
 
@@ -91,7 +94,9 @@ module RailsAiContext
         info = controllers[name]
         break unless info.is_a?(Hash)
 
+        dropped.merge(skip_flag_names(info))
         Array(info[:filters]).grep(Hash)
+          .reject { |f| f[:skipped] }
           .select { |f| applies?(f, action) }
           .reject { |f| dropped.include?(f[:name].to_s) }
           .each { |f| found[f[:name].to_s] ||= f.merge(from: name) }
@@ -101,6 +106,12 @@ module RailsAiContext
       end
 
       found.values
+    end
+
+    # The static walk marks a skip macro on the record, so a payload that
+    # carries no readable file still knows what the class skipped.
+    def skip_flag_names(info)
+      Array(info[:filters]).grep(Hash).select { |f| f[:skipped] }.map { |f| f[:name].to_s }
     end
 
     # Skips live only in the class body, so they are read from the file the
@@ -140,6 +151,6 @@ module RailsAiContext
     end
 
     private_class_method :default_root, :split, :applies?, :parent_filters, :skipped_names, :carried_source,
-                         :skip_calls
+                         :skip_calls, :skip_flag_names
   end
 end

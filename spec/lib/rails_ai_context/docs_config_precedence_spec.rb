@@ -4,18 +4,18 @@ require "spec_helper"
 require "tmpdir"
 require "yaml"
 
+pages = %w[STANDALONE.md TROUBLESHOOTING.md FAQ.md GUIDE.md].freeze
+
 # Four pages told a reader the initializer outranks .rails-ai-context.yml and
 # that the file is skipped whenever one runs. v5.25.0 made it a key-by-key
 # merge and only docs/CONFIGURATION.md was updated, so the doc set answered
 # the same question two ways. Pin the claim to the code, not to itself.
 RSpec.describe "config precedence in the docs" do
-  PAGES = %w[STANDALONE.md TROUBLESHOOTING.md FAQ.md GUIDE.md].freeze
-
   def flat(page)
     File.read(File.expand_path("../../../docs/#{page}", __dir__)).gsub(/\s+/, " ")
   end
 
-  PAGES.each do |page|
+  pages.each do |page|
     describe page do
       let(:text) { flat(page) }
 

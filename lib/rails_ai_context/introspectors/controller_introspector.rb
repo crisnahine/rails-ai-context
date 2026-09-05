@@ -265,8 +265,12 @@ module RailsAiContext
           next unless name_sym
           next if excluded_filters.include?(name_sym.to_s)
 
-          kind = entry[:macro].to_s.sub(/_action\z/, "").sub(/\A(?:prepend|append|skip)_/, "")
+          macro = entry[:macro].to_s
+          kind = macro.sub(/_action\z/, "").sub(/\A(?:prepend|append|skip)_/, "")
           filter = { name: name_sym.to_s, kind: kind }
+          # A skip states the opposite of what the plain kind says, so it has
+          # to survive the fold into `before`/`after`/`around`.
+          filter[:skipped] = true if macro.start_with?("skip_")
 
           opts = entry[:options] || {}
           only = normalize_constraint(opts[:only])

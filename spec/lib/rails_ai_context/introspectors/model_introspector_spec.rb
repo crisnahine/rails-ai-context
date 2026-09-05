@@ -916,13 +916,16 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    # The two tiers must answer the same table for the same file.
-    it "matches the booted tier on the fixture app's explicit assignment" do
+    # The two tiers must answer the same table for the same file. The static
+    # fixture's tagging.rb and the booted dummy app's are the same source.
+    it "matches the booted tier on the same model's explicit assignment" do
       root = File.expand_path("../../../fixtures/static_app", __dir__)
 
-      result = described_class.new(RailsAiContext::StaticApp.new(root)).static_call
+      static = described_class.new(RailsAiContext::StaticApp.new(root)).static_call
+      booted = described_class.new(Rails.application).call
 
-      expect(result["Tagging"][:table_name]).to eq("comments")
+      expect(static["Tagging"][:table_name]).to eq("comments")
+      expect(static["Tagging"][:table_name]).to eq(booted["Tagging"][:table_name])
     end
   end
 

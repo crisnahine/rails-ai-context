@@ -200,15 +200,7 @@ class RailsAiContextCLI < Thor
       result = ::RailsAiContext::Doctor.new.run
       # The report is the command's product - it belongs on stdout so
       # `doctor > report.txt` captures it. stderr stays for errors only.
-      result[:checks].each do |check|
-        icon = case check.status
-        when :pass then "PASS"
-        when :warn then "WARN"
-        when :fail then "FAIL"
-        end
-        puts "  [#{icon}] #{check.name}: #{check.message}"
-        puts "         Fix: #{check.fix}" if check.fix
-      end
+      puts ::RailsAiContext::Doctor.report_lines(result)
       puts ""
       puts "AI Readiness Score: #{result[:score]}/100"
 

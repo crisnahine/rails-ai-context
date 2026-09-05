@@ -414,15 +414,7 @@ namespace :ai do
 
     result = RailsAiContext::Doctor.new.run
 
-    result[:checks].each do |check|
-      icon = case check.status
-      when :pass then "✅"
-      when :warn then "⚠️ "
-      when :fail then "❌"
-      end
-      puts "  #{icon} #{check.name}: #{check.message}"
-      puts "     Fix: #{check.fix}" if check.fix
-    end
+    puts RailsAiContext::Doctor.report_lines(result, icons: RailsAiContext::Doctor::EMOJI_ICONS)
 
     puts ""
     puts "AI Readiness Score: #{result[:score]}/100"

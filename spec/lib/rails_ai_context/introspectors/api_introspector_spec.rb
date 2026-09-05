@@ -202,46 +202,48 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
     end
   end
 
-  describe "controllers in a pack" do
-    let(:pack_controllers) { File.join(Rails.root, "packs", "billing", "app", "controllers") }
-
-    before do
-      FileUtils.mkdir_p(File.join(pack_controllers, "api", "v2"))
-      File.write(File.join(pack_controllers, "api", "v2", "invoices_controller.rb"), <<~RUBY)
-        class Api::V2::InvoicesController < ApplicationController
-          rate_limit to: 10, within: 1.minute
-        end
-      RUBY
+  # Everything a pack contributes is read off disk, so a tmpdir app answers
+  # these the way the booted one does, without writing into the dummy app.
+  describe "a pack" do
+    def in_app_with_pack
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/controllers/api/v1"))
+        File.write(File.join(root, "app/controllers/api/v1/posts_controller.rb"),
+          "class Api::V1::PostsController < ApplicationController\nend\n")
+        yield root
+      end
     end
-
-    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
 
     it "sees a pack's API version and its rate limiting" do
-      result = described_class.new(Rails.application).call
-      expect(result[:api_versioning]).to include("v1", "v2")
-      expect(result[:rate_limiting]).to eq({ rails_rate_limiting: true })
+      in_app_with_pack do |root|
+        pack = File.join(root, "packs/billing/app/controllers/api/v2")
+        FileUtils.mkdir_p(pack)
+        File.write(File.join(pack, "invoices_controller.rb"), <<~RUBY)
+          class Api::V2::InvoicesController < ApplicationController
+            rate_limit to: 10, within: 1.minute
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).static_call
+
+        expect(result[:api_versioning]).to include("v1", "v2")
+        expect(result[:rate_limiting]).to eq({ rails_rate_limiting: true })
+      end
     end
-  end
-
-  describe "serializers and jbuilder views in a pack" do
-    let(:pack) { File.join(Rails.root, "packs", "billing", "app") }
-
-    before do
-      FileUtils.mkdir_p(File.join(pack, "serializers"))
-      FileUtils.mkdir_p(File.join(pack, "views", "invoices"))
-      File.write(File.join(pack, "serializers", "invoice_serializer.rb"), <<~RUBY)
-        class InvoiceSerializer
-        end
-      RUBY
-      File.write(File.join(pack, "views", "invoices", "show.json.jbuilder"), "json.id @invoice.id\n")
-    end
-
-    after { FileUtils.rm_rf(File.join(Rails.root, "packs")) }
 
     it "counts a pack's serializers and jbuilder templates" do
-      result = described_class.new(Rails.application).call
-      expect(result[:serializers][:serializer_classes]).to include("InvoiceSerializer")
-      expect(result[:serializers][:jbuilder]).to eq(1)
+      in_app_with_pack do |root|
+        pack = File.join(root, "packs/billing/app")
+        FileUtils.mkdir_p(File.join(pack, "serializers"))
+        FileUtils.mkdir_p(File.join(pack, "views/invoices"))
+        File.write(File.join(pack, "serializers/invoice_serializer.rb"), "class InvoiceSerializer\nend\n")
+        File.write(File.join(pack, "views/invoices/show.json.jbuilder"), "json.id @invoice.id\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(root)).static_call
+
+        expect(result[:serializers][:serializer_classes]).to include("InvoiceSerializer")
+        expect(result[:serializers][:jbuilder]).to eq(1)
+      end
     end
   end
 

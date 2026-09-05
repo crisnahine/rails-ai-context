@@ -65,6 +65,22 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe ".report_lines" do
+    # The struct check below is not what a user reads. The printed report is.
+    it "prints the introspector's own error under its check" do
+      allow(RailsAiContext.configuration).to receive(:introspectors).and_return([ :database_stats ])
+      allow(ActiveRecord::Base).to receive(:connection)
+        .and_raise(StandardError, "Database not found: no_such_db. Run bin/rails db:create")
+
+      lines = described_class.report_lines(doctor.run)
+      index = lines.index { |line| line.include?("Introspector health") }
+
+      expect(lines[index]).to include("[WARN] Introspector health:")
+      expect(lines[index + 1]).to include("Fix: database_stats: Database not found: no_such_db")
+      expect(lines[index + 1]).not_to include("stimulus")
+    end
+  end
+
   describe "#check_introspector_health" do
     subject(:check) { doctor.send(:check_introspector_health) }
 

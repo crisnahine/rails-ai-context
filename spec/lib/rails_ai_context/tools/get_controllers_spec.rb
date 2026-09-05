@@ -245,6 +245,27 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("- Strong params: filter_params")
     end
 
+    # The booted tier renders a skipped filter struck through. The listing
+    # printed it as one the action runs, so the two tiers said the opposite.
+    it "strikes through a filter the controller skips" do
+      stub_controllers({
+        "ActivityPub::InboxesController" => {
+          actions: %w[create],
+          filters: [
+            { kind: "before", name: "authenticate_user!", skipped: true },
+            { kind: "before", name: "require_actor_signature!" }
+          ],
+          strong_params: [],
+          parent_class: "ActivityPub::BaseController"
+        }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- Filters: ~~authenticate_user!~~ (skipped), before require_actor_signature!")
+      expect(text).not_to include("before authenticate_user!")
+    end
+
     it "pairs each rescued exception with its handler" do
       stub_controllers({
         "MediaProxyController" => {

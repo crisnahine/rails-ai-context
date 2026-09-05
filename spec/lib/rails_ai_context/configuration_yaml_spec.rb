@@ -183,6 +183,30 @@ RSpec.describe RailsAiContext::Configuration, "YAML loading" do
       end
     end
 
+    it "stays silent when the unknown key is only a short prefix of a known one" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({ "max" => 10, "out" => "tmp" }))
+
+        stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
+
+        expect(stderr).to include("unknown key `max`")
+        expect(stderr).to include("unknown key `out`")
+        expect(stderr).not_to include("did you mean")
+      end
+    end
+
+    it "names the known key when the unknown one is a near-complete truncation" do
+      Dir.mktmpdir do |dir|
+        yaml_path = File.join(dir, ".rails-ai-context.yml")
+        File.write(yaml_path, YAML.dump({ "output_di" => "tmp" }))
+
+        stderr = capture_stderr { RailsAiContext::Configuration.load_from_yaml(yaml_path) }
+
+        expect(stderr).to include("did you mean `output_dir`?")
+      end
+    end
+
     it "keeps the rest of the file when it carries a hand-added date" do
       Dir.mktmpdir do |dir|
         yaml_path = File.join(dir, ".rails-ai-context.yml")
