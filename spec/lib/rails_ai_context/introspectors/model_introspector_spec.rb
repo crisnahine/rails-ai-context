@@ -541,6 +541,88 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # An STI child inherits its base's macros the way it inherits its table,
+    # so a child that declares nothing answered "0 assoc, 0 val" in the schema
+    # heading while the booted tier read its parent's.
+    it "gives an STI child the macros its base declares" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            has_many :comments
+            validates :title, presence: true
+            scope :published, -> { where(published: true) }
+            before_save :normalize_title
+            encrypts :secret
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "article.rb"), "class Article < Post\nend\n")
+
+        article = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Article"]
+
+        expect(article[:table_name]).to eq("posts")
+        expect(article[:associations].map { |a| a[:name] }).to contain_exactly(:comments)
+        expect(article[:validations].map { |v| v[:kind] }).to contain_exactly(:presence)
+        expect(article[:scopes].map { |s| s[:name] }).to contain_exactly("published")
+        expect(article[:callbacks]).to include("before_save")
+        expect(article[:encrypts]).to contain_exactly("secret")
+      end
+    end
+
+    it "keeps a class's own declaration when its STI base declares the same one" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            has_many :comments, dependent: :destroy
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "article.rb"), <<~RUBY)
+          class Article < Post
+            has_many :comments, dependent: :nullify
+          end
+        RUBY
+
+        article = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Article"]
+
+        comments = article[:associations].select { |a| a[:name] == :comments }
+        expect(comments.size).to eq(1)
+        expect(comments.first[:options][:dependent]).to eq(:nullify)
+      end
+    end
+
+    # An error entry carries no path, and File.basename("", ".rb").pluralize
+    # is "", which is truthy and so was accepted as the child's table. No
+    # walk reaches this today, because model_class? already rejects a child
+    # whose chain hits an error entry, so the resolution is pinned directly.
+    it "does not resolve a table through a candidate that carries no path" do
+      Dir.mktmpdir do |dir|
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        candidates = {
+          "Post" => { error: "boom" },
+          "Draft" => { path: File.join(dir, "app", "models", "draft.rb"), superclass: "Post" }
+        }
+
+        expect(introspector.send(:resolve_table_name, "Draft", candidates)).to eq("drafts")
+      end
+    end
+
+    it "reports a custom validate once, under custom_validates" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            validate :body_is_sane
+          end
+        RUBY
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post[:custom_validates]).to contain_exactly("body_is_sane")
+        expect(post[:validations].map { |v| v[:kind] }).not_to include(:custom)
+      end
+    end
+
     it "reports the modules a model includes or prepends, and not what it extends" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
