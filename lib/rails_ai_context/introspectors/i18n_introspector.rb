@@ -101,26 +101,28 @@ module RailsAiContext
       # Rails' own default is :en, so "en" is the right answer when the app
       # never says otherwise - not a guess.
       def default_locale_from_config
+        found = nil
+
         config_candidate_files.each do |path|
           content = RailsAiContext::SafeFile.read(path)
-          match = content&.match(DEFAULT_LOCALE_ASSIGNMENT)
-          return match[1] if match
+          # The last assignment, here and across the files, for the same
+          # reason configured_available_locales keeps the last one.
+          match = content&.scan(DEFAULT_LOCALE_ASSIGNMENT)&.last
+          found = match.first if match
         end
-        "en"
+        found || "en"
       end
 
       # The config files Rails runs, in the order it runs them: application.rb,
-      # then the environment file, then the initializers.
+      # then the environment file, then the initializers. Both readers walk
+      # this list and keep the last assignment they find.
       def config_candidate_files
-        # config/environments/*.rb arrive in glob order, so whichever file
-        # carried an assignment first won whatever environment it belonged to -
-        # and development.rb sorts ahead of production.rb.
+        # Only the running environment's file runs, so another environment's
+        # assignment says nothing about this one.
         env = ENV["RAILS_ENV"] || "development"
-        environments = Dir.glob(File.join(root, "config", "environments", "*.rb"))
-          .partition { |path| File.basename(path, ".rb") == env }.flatten
+        environment = File.join(root, "config", "environments", "#{env}.rb")
 
-        ([ File.join(root, "config", "application.rb") ] +
-          environments +
+        ([ File.join(root, "config", "application.rb"), environment ] +
           Dir.glob(File.join(root, "config", "initializers", "*.rb")).sort).select { |path| File.exist?(path) }
       end
 

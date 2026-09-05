@@ -310,10 +310,20 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:default_locale]).to eq("de")
     end
 
-    # config/environments/*.rb arrive in glob order, so the first file to
-    # carry an assignment won whatever environment it belonged to - and
-    # development.rb sorts ahead of production.rb.
-    it "prefers the running environment's file over the other environments" do
+    # Rails hands app.config.i18n to I18n once, after every initializer has
+    # run, so the last assignment executed is the one that lands.
+    it "takes the initializer's default locale over application.rb's" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n", "de.yml" => "de:\n  hello: Hallo\n") do |dir|
+        File.write(File.join(dir, "config", "application.rb"), "config.i18n.default_locale = :en\n")
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "locale.rb"), "I18n.default_locale = :de\n")
+      end
+      expect(result[:default_locale]).to eq("de")
+    end
+
+    # Only the running environment's file runs, so another environment's
+    # assignment says nothing about this one.
+    it "reads only the running environment's file" do
       original = ENV["RAILS_ENV"]
       ENV["RAILS_ENV"] = "production"
       result = static_result("en.yml" => "en:\n  hello: Hello\n", "ja.yml" => "ja:\n  hello: Konnichiwa\n") do |dir|
@@ -432,6 +442,24 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
         })
 
         expect(result[:available_locales]).to eq(%w[zz])
+      end
+
+      # The same candidate files, read the same way: another environment's
+      # file never runs, so its list is not the one the app enables.
+      it "ignores an available_locales set by another environment" do
+        original = ENV["RAILS_ENV"]
+        ENV["RAILS_ENV"] = "production"
+        result = with_config({}) do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config", "environments"))
+          File.write(File.join(dir, "config", "environments", "production.rb"),
+                     "config.i18n.available_locales = [:en, :es]\n")
+          File.write(File.join(dir, "config", "environments", "development.rb"),
+                     "config.i18n.available_locales = [:tlh]\n")
+        end
+
+        expect(result[:available_locales]).to eq(%w[en es])
+      ensure
+        ENV["RAILS_ENV"] = original
       end
 
       it "skips a file it cannot read" do
