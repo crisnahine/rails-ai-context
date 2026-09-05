@@ -59,7 +59,10 @@ module RailsAiContext
         # Serializer classes (Alba, Blueprinter, JSONAPI, etc.). Named by the
         # class each file declares: camelizing the path asks the global
         # inflector, which the static tier never loaded the app's acronyms into.
-        names = SourceScan.classes(root, kind: "app/serializers").map { |name, _record| name }.sort
+        # A file that declares no class (a mixin, or one that did not parse) is
+        # still a serializer file, so it keeps the name its path spells.
+        names = SourceScan.each(root, kind: "app/serializers")
+          .map { |record| DeclaredConstant.resolve(record.source, record.path_name) }.sort
         result[:serializer_classes] = names if names.any?
 
         result
