@@ -5,6 +5,243 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+Defects found by a ninth QA round of v5.25.0 against Mastodon (issues #160
+to #181), and the sibling defects behind them.
+
+- **`excluded_association_names` was ignored everywhere except the booted
+  ActiveRecord path.** The key had one call site, inside the reflection-only
+  association extractor, so a `--no-boot` answer and every Mongoid answer
+  listed the associations the config asked to hide, with nothing saying the
+  key had been skipped. One predicate now reads the key for all three
+  builders, comparing the name as text because the listener names an
+  association with a Symbol and reflection with a String.
+- **The static model builder dropped every attribute macro it parsed.**
+  `static_model_details` assembled its hash by hand and passed the listener's
+  raw records straight through, so `encrypts`, `normalizes`, `serialize`,
+  `store`, attachments and delegations vanished from `get_env`, `get_schema`,
+  `onboard` and `get_model_details` with no marker, and the `enums` key
+  carried records where consumers destructure an attribute-to-values Hash. It
+  merges the same two mappers the booted builder merges, builds enums in the
+  booted shape with String keys on both levels, and derives
+  `custom_validates`. The encryption and normalizes renderers read keys the
+  builder never emitted and printed `- **** ...`; they read `field` and
+  `transformation` now, and a transformation the parser could not resolve is
+  marked rather than named.
+- **Callbacks were named after the wrong thing, and `around` callbacks
+  disappeared.** The concern section re-parsed the file with a line regex
+  whose colon was optional, so `after_create do` printed as `after_create :do`
+  and `around_create Some::CallbackObject` as `around_create :Some`. The
+  listener kept only symbol arguments, so a callback whose target is a class
+  object was dropped in both tiers. The booted branch asked Rails for
+  `_before_save_callbacks`, which does not exist, so it raised on its first
+  iteration and every model silently fell through to the AST. Callbacks now
+  print the declared macro, a lambda reports as a block, `after_touch`,
+  `after_initialize` and `after_find` join the execution order, and the booted
+  branch reads the event chain and takes the kind off the entry, which is
+  where `around` lives.
+- **The static tier answered `0 assoc` for a model whose associations all live
+  in concerns.** It walked the model file alone, so Mastodon's `Account`
+  reported no associations where 68 are declared across the 21 concerns it
+  includes, and nothing marked the gap. Both tiers now walk the included
+  concern files with the same listeners and merge what they declare, tagged
+  with the concern that declared it, following a concern that includes another
+  and deduping on the model's own declaration. A concern whose file cannot be
+  found is named under Concerns as not read, and `find_file` prefers the
+  owner's concerns directory and walks the enclosing namespaces outward so a
+  namespace-relative `include` resolves the way Ruby resolves it.
+- **Rails' anonymous join class for a `has_and_belongs_to_many` was reported
+  as one of the app's models.** Rails names it through a singleton `name=`, so
+  it answered `HABTM_Tags` while living at `Account::HABTM_Tags`, and the
+  booted walk kept it: an invented `app/models/habtm_tags.rb`, a `belongs_to`
+  to a class named nowhere, and a `[VERIFIED]` block for a model that does not
+  exist. Two owners of the same association name also collapsed onto one
+  entry. A class whose name is not the constant it lives at is no longer a
+  model, so Mastodon's model count drops from 117 to 114.
+- **The static tier derived every table from the file name alone.** An
+  explicit `self.table_name =`, a `table_name_prefix` declared by the
+  enclosing module and an STI child's parent table were all ignored, so
+  Mastodon's `Admin::ActionLog` answered `action_logs` and rendered no
+  columns, and `admin_action_logs` had no model in the schema listing.
+  `TableName` reads those declarations out of source and the model walk
+  composes them in Rails' own order. The readers that turned a model name into
+  a table go through the same module now, so `rails_get_schema(table:
+  "Admin::ActionLog")` finds the table and `rails_migration_advisor` stops
+  rejecting `admin/action_logs` as an invalid name.
+- **Routing concerns dropped their routes, and `with_options` and `module:`
+  named controllers that do not exist.** A `concern :x do ... end` body was
+  stored nowhere, so the controllers declared only inside it had no static
+  routes and no marker either. The body is kept now and re-walked at each
+  `concerns:` site with the scope as it stands there, the way Rails re-runs it
+  on the mapper. `with_options` is an OptionMerger, not a routing method, so
+  it became a frame of default options that every call inside merges under its
+  own - which is what stops six of Mastodon's account routes being filed under
+  a controller named `@:username`, and stops `with_options only: [:index]`
+  expanding a resource into all eight RESTful rows. `module:` on a resource
+  moves the controller and never the path, so `admin/distributions` is
+  `admin/announcements/distributions` and
+  `admin/terms_of_service/distributions` again. `as:` and `param:` on a
+  resource are read too, so the new rows carry the helper name and the member
+  segment the app actually has (`/users/:account_username`, not
+  `/users/:account_id`).
+- **`controllers` with `detail:"full"` crashed on an app whose controller had
+  two strong-params methods under a parent other than
+  `ApplicationController`.** The grouping fingerprint sorted the hashes the
+  introspector records for each params method, which raised `ArgumentError:
+  comparison of Hash with Hash failed`. `SectionFacts` now holds one reader
+  for those method names and one for rescue handlers, and the four sites that
+  rendered them call it. A `rescue_from` reads as `ActiveRecord::RecordInvalid
+  -> not_found` instead of a hash dump, in the listing, the single-controller
+  answer and the generated Markdown context file.
+- **A controller that inherits its actions listed none in the static tier.** A
+  subclass with an empty body, or one defining only private helpers, reported
+  no actions at all, so `action:` answered "not found" for an action its
+  parent defines and the routes reach. Both tiers now fill an empty action
+  list from the nearest app ancestor the listing already holds, walked by the
+  parent name each entry carries. The walk stops at the app base, so a base
+  class's shared helpers still do not read as actions.
+- **`excluded_filters` was honoured only where reflection ran.** The key was
+  read in one place, inside the reflection branch, so a `--no-boot` run and
+  any booted controller reflection did not load kept listing the names an app
+  had asked to hide. The source parser applies it too. A filter the controller
+  explicitly skips is still shown as a struck-through `~~name~~ _(skipped)_`
+  line, which is a fact about the class rather than a filter that runs.
+- **Static `get_api` named serializers by camelizing the file path, so an app
+  acronym came out miscased.** `ActivityPub::AcceptFollowSerializer` was
+  reported as `Activitypub::AcceptFollowSerializer` and
+  `REST::AccountSerializer` as `Rest::AccountSerializer`; 137 of Mastodon's
+  144 names were wrong. `camelize` reads the global inflector, and the static
+  tier never loads the app's `acronym` registrations. The list now comes from
+  `SourceScan.classes`, which reads the class each file declares, so it needs
+  no inflector, covers packs and in-repo engines, and stops walking
+  `app/serializers/concerns` (Mastodon goes from 144 names to 143).
+  `MarkdownSerializer#api` writes this list into the generated context file,
+  so the wrong names were committed into apps' context, not only printed. The
+  jbuilder count in the same method now goes through `PathResolver.view_dirs`
+  and sees pack and engine templates.
+- **Generated migrations were stamped with the gem's Rails version, not the
+  app's.** `rails_migration_advisor` read `Rails.version` from its own
+  process, so a standalone `--no-boot` run had no such constant and every
+  migration came out as `ActiveRecord::Migration[7.1]`, while a run inside a
+  bundle reported whichever Rails the gem had loaded. Mastodon is on 8.1.3.1
+  and got 7.1, and that bracket is not cosmetic: it selects a migration
+  compatibility mode. The version now comes from the app's context, the same
+  hash the tool already reads for the database adapter, so both tiers stamp
+  the app's own major.minor. When neither the context nor a loaded Rails names
+  a version, the tool stamps its supported floor and says so in a Note line
+  above the code.
+- **`generate_test` and `get_test_info` wrote test data the app does not
+  have.** A Devise app with no factory_bot got `let(:user) { create(:user) }`,
+  a Devise app with no fixtures got `@user = users(:one)`, and the "follow
+  this pattern for new tests" template handed out `create(:model_name)`
+  regardless. All three now go through the same factory and fixture lookups
+  the rest of the generator uses, and emit a TODO naming what is missing when
+  there is nothing to build. Request specs also skip the `sign_in` block when
+  the controller, or one of its parents, calls `doorkeeper_authorize!`,
+  because `sign_in` cannot authenticate a token endpoint.
+- **`get_test_info` counted only the spec directories a hardcoded list
+  named.** Mastodon reported 675 of its 1090 spec files and 6 of its 22 spec
+  directories; `spec/lib`, `spec/workers`, `spec/serializers` and nine others
+  had no row at all. Categories are now read from whatever the app keeps under
+  `spec/` and `test/`: one row per top-level directory holding test files, a
+  row for files loose at the root, joined locations when a category lives
+  under both, sorted by count. The "Test Files" section also stops counting
+  support Ruby that sits beside the specs, so it agrees with the counts above
+  it.
+- **`search_code --exact-match` treated the pattern as a regex, so `def
+  reblog?` also matched `def reblog`.** The pattern is now escaped and matched
+  literally. Boundaries are added only on the side whose pattern edge is a
+  word character, which also fixes `--exact-match` on `@user`, `match_type:
+  "definition"` and `"class"` on predicate and bang names, trace mode listing
+  `presave!` as a call site of `save!`, and method source lookup for `[]`,
+  `foo=` and `<=>`. Against Mastodon, `def reblog?` now reports the 3 lines
+  ripgrep finds instead of 6.
+- **`search_code` counted emitted lines as matches and printed the 200 cap as
+  if it were the total.** The header now counts only match lines, so it no
+  longer moves with `context_lines`, and it says `first 200 lines scanned`
+  when the cap was reached instead of passing the cap off as a total. The page
+  size is sized in matches, the pagination hint and the per-file group
+  headings carry the same two facts, and trace mode marks a caller list that
+  stopped at the cap. Against Mastodon, `def reblog?` with `--context-lines 5`
+  reports 3 matches rather than 30, and `def call` reports its 103 matches.
+- **Static `get_i18n` reported the locale files as the app's available
+  locales.** Rails builds `available_locales` from `config/locales` only while
+  the app leaves the setting alone; once it assigns
+  `config.i18n.available_locales`, that list is the answer. Mastodon ships
+  files for 106 locales and enables 97, so nine disabled locales were listed
+  as available, seven got their own coverage row, and asking for one of them
+  by name answered with a full locale report. The static answer now reads the
+  assignment from `config/application.rb`, the environment file and the
+  initializers, takes the last one Rails would apply, and falls back to the
+  files for an app that never sets it or whose value is computed, saying so in
+  the field name. Fallbacks left the static answer with it: `I18n.fallbacks`
+  belongs to whichever process asks, and no app booted in this one.
+- **`excluded_concerns` in `.rails-ai-context.yml` did nothing, and a mistyped
+  key did nothing quietly.** The key was missing from the YAML allowlist, so a
+  standalone user who set it kept the framework defaults and the concern
+  stayed in `concern`, `active_support` and `model_details`. It is a YAML key
+  now: strings are compiled to patterns once at load, and an invalid one warns
+  against the file that named it instead of raising inside an introspector. A
+  key the gem does not know warns on stderr naming the file, the key and the
+  nearest known key, and the rest of the file still applies. A YAML list
+  replaces the framework defaults rather than adding to them, which the
+  Filtering table now says. The config loader and the installer's record also
+  disagreed on what YAML classes to permit, so one hand-added `generated_at:`
+  line voided every key in the file; both read one constant.
+- **Four doc pages described a config precedence the gem stopped having in
+  5.25.0.** `docs/STANDALONE.md`, `TROUBLESHOOTING.md`, `FAQ.md` and
+  `GUIDE.md` all said the initializer outranks `.rails-ai-context.yml` and
+  that the file is skipped whenever one runs, while `docs/CONFIGURATION.md`
+  described the merge. The standalone page now says what is true there, that
+  the YAML file is the only config source because the gem is not loaded while
+  `config/initializers` runs, and the other three point at the page that
+  states the merge; a spec pins each page against the loader. An app that
+  calls `RailsAiContext.configure` without bundling the gem used to get a
+  `NoMethodError` and a pointer to `doctor`, which died the same way; both
+  boot-failure surfaces now name the cause and the two ways out, and `doctor`
+  warns on an initializer with no guard at all, not only on the bare
+  `defined?` form.
+- **Doctor answered every introspector failure with the same stimulus
+  sentence.** The fix line on the introspector health check was one fixed
+  string with nothing interpolated, so an app whose database was unreachable
+  was told to look for `app/javascript/controllers/`. The check now quotes the
+  first line of each failing introspector's own error, up to three of them
+  plus a count of the rest, and keeps the message line to introspector names.
+  A raised error's text no longer gets truncated into that name list.
+- **One broken app file could kill the whole doctor report.** The health check
+  and `Doctor#run` rescued `StandardError` only, so a `LoadError` or
+  `SyntaxError` raised while running an introspector or any other check ended
+  the command with a backtrace and no diagnosis. Both now also catch
+  `ScriptError`, the way `Introspector#call` already did: a broken file costs
+  one check, not the report.
+- **`rails 'ai:preset[bogus]'` printed the preset list and exited 0.** The
+  rake task resolved and ran a preset in one branch, so a name no preset
+  carries fell through to the same listing a bare invocation prints, and a
+  script could not tell a typo from a successful run. An unknown name now goes
+  to stderr as `Unknown preset: <what you typed>` with the list of valid ones
+  beside it, and the task exits 1. A resolved preset whose run answers false
+  exits 1 too, matching `rails-ai-context preset`. Bare `rails ai:preset`
+  still lists on stdout and exits 0.
+- **`rails-ai-context preset` with no name wrote its listing to stderr.**
+  Redirecting it to a file left the file empty, while every other listing path
+  in the gem uses stdout. A listing the user asked for now goes to stdout;
+  stderr keeps the error framing and the listing that follows a rejected name.
+- **A context file an app had nothing to put in was skipped without a word.**
+  An app with no models, controllers or schema dump got 11 of the 20 files and
+  nothing named the other 9, so a deliberate omission and a failed run looked
+  the same. Every unwritten file now comes back with the reason it does not
+  apply, and the CLI, the `ai:context` rake task, the watcher and the install
+  generator all print it as `Not applicable: <file> (no models)`. Root files
+  switched off with `generate_root_files = false`, and the OpenCode
+  `AGENTS.md` files whose directory does not exist, are reported the same way
+  instead of vanishing.
+- **docs/GUIDE.md counted 29 generated files and listed 18.** The real maximum
+  is 20. The per-tool tables were missing `.claude/rules/rails-components.md`
+  and `.cursorrules`, and two section headers undercounted by one.
+
 ## [5.25.0] - 2026-09-03
 
 ### Added
