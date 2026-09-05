@@ -32,6 +32,36 @@ RSpec.describe "path refusal contract" do
     end
   end
 
+  # An absolute path is the same refusal as a traversal, and every tool that
+  # resolves a file says so. search_code resolves a directory by joining the
+  # argument onto the root, which turns an absolute path into a subpath that
+  # is merely absent - so it answered "not found" and listed the app's own
+  # directories, as though the caller had mistyped a relative one.
+  absolute_refusals = {
+    RailsAiContext::Tools::GetView => -> { call(path: "/etc/passwd") },
+    RailsAiContext::Tools::GetEditContext => -> { call(file: "/etc/passwd", near: "root") },
+    RailsAiContext::Tools::GetPartialInterface => -> { call(partial: "/etc/passwd") },
+    RailsAiContext::Tools::SearchCode => -> { call(pattern: "root", path: "/etc") }
+  }
+
+  absolute_refusals.each do |tool, refuse|
+    it "#{tool.tool_name} answers an absolute path as a refusal, not a miss" do
+      tool.reset_cache!
+      response = tool.instance_exec(&refuse)
+
+      expect(text_of(response)).to match(/not allowed|denied|sensitive/)
+      expect(response.error?).to be(true)
+    end
+  end
+
+  it "keeps a directory that is simply not there an ordinary empty answer" do
+    RailsAiContext::Tools::SearchCode.reset_cache!
+    response = RailsAiContext::Tools::SearchCode.call(pattern: "root", path: "nope")
+
+    expect(text_of(response)).to include("Path not found")
+    expect(response.error?).to be(false)
+  end
+
   it "keeps a file that is simply not there an ordinary empty answer" do
     RailsAiContext::Tools::GetEditContext.reset_cache!
     response = RailsAiContext::Tools::GetEditContext.call(file: "app/models/nope.rb", near: "x")

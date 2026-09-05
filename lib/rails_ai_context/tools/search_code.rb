@@ -135,9 +135,14 @@ module RailsAiContext
         context_lines = [ [ context_lines.to_i, 0 ].max, 5 ].min
         offset = [ offset.to_i, 0 ].max
 
+        # Before the join, which would turn an absolute path into a subpath of
+        # the root and leave it looking merely absent.
+        return error_response("Path not allowed: #{path}") if path && RailsAiContext::SafePath.traversal?(path)
+
         search_path = path ? File.join(root, path) : root
 
-        # Path traversal protection
+        # A symlink under the root can still resolve outside it; that check is
+        # on the realpath below.
         unless Dir.exist?(search_path)
           top_dirs = Dir.glob(File.join(root, "*")).select { |f| File.directory?(f) }.map { |f| File.basename(f) }.sort
           return text_response("Path not found: #{path}. Top-level directories: #{top_dirs.first(15).join(', ')}")
