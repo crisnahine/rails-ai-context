@@ -39,13 +39,17 @@ module RailsAiContext
     ICONS = { pass: "[PASS]", warn: "[WARN]", fail: "[FAIL]" }.freeze
     EMOJI_ICONS = { pass: "✅", warn: "⚠️ ", fail: "❌" }.freeze
 
+    # An icon's character count is not its display width ("✅" is one
+    # character and two columns), so the Fix line is indented by a constant
+    # rather than by the icon above it.
+    FIX_INDENT = " " * 9
+
     # The report the CLI and the rake task print, so the two say the same
     # thing about the same result.
     def self.report_lines(result, icons: ICONS)
       result[:checks].flat_map do |check|
-        icon = icons[check.status]
-        lines = [ "  #{icon} #{check.name}: #{check.message}" ]
-        lines << "  #{' ' * icon.length} Fix: #{check.fix}" if check.fix
+        lines = [ "  #{icons[check.status]} #{check.name}: #{check.message}" ]
+        lines << "#{FIX_INDENT}Fix: #{check.fix}" if check.fix
         lines
       end
     end
