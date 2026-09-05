@@ -87,6 +87,27 @@ RSpec.describe RailsAiContext::BootManager do
       expect(result).not_to be_booted
       expect(result.failure_summary).to eq("RuntimeError: missing REDIS_URL")
     end
+
+    it "passes an initializer's exit through with its status" do
+      errors = StringIO.new
+      original = $stderr
+      $stderr = errors
+
+      raised = nil
+      begin
+        described_class.guard { abort "Mastodon now requires that these variables are set:" }
+      rescue SystemExit => e
+        raised = e
+      ensure
+        $stderr = original
+      end
+
+      expect(raised).to be_a(SystemExit)
+      expect(raised.status).to eq(1)
+      expect(errors.string).to include("Mastodon now requires that these variables are set:")
+      expect(errors.string).to include("[rails-ai-context] App exited during boot (status 1)")
+      expect(errors.string).to include("--no-boot")
+    end
   end
 
   describe ".env_timeout" do
