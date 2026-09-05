@@ -51,6 +51,31 @@ RSpec.describe "The static-tier notice in generated files" do
         expect(File.read(overview)).to include(RailsAiContext::Confidence::STATIC)
       end
     end
+
+    # Only the overview file carried the notice. The models, controllers,
+    # schema and component files state counts that move between tiers, and a
+    # reader holding one of them could not tell which tier wrote it.
+    it "#{klass.name.split('::').last} marks every file whose counts move between tiers" do
+      Dir.mktmpdir do |dir|
+        result = klass.new(static_context).call(dir)
+        app_files = result[:written].reject { |path| path.include?("mcp-tools") }
+
+        expect(app_files.size).to be > 1
+        app_files.each do |path|
+          expect(File.read(path)).to include(RailsAiContext::Confidence::STATIC), "#{path} has no static notice"
+        end
+      end
+    end
+
+    it "#{klass.name.split('::').last} marks none of them when the app booted" do
+      Dir.mktmpdir do |dir|
+        result = klass.new(booted_context).call(dir)
+
+        result[:written].each do |path|
+          expect(File.read(path)).not_to include(RailsAiContext::Confidence::STATIC), "#{path} claims to be static"
+        end
+      end
+    end
   end
 
   it "OpencodeRulesSerializer marks the split AGENTS.md files" do

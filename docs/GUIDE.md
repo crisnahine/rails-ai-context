@@ -210,10 +210,11 @@ Commit **all files except `.ai-context.json`** (which is gitignored). This gives
 ### Telling a static file from a booted one
 
 A run that could not boot the app, or was given `--no-boot`, reads source files
-instead of a running Rails. The counts differ, so every generated file says so:
-a `[STATIC]` line under the header, and a `"tier": "static"` key in
-`.ai-context.json`. A booted run says nothing extra, so an unmarked file was
-generated with the app running.
+instead of a running Rails. The counts differ, so every generated file that
+states them says so: a `[STATIC]` line under the header, and a
+`"tier": "static"` key in `.ai-context.json`. The MCP tool references carry no
+app counts, so they carry no line. A booted run says nothing extra, so an
+unmarked file was generated with the app running.
 
 ---
 

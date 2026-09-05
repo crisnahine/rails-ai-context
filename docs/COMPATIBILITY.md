@@ -131,9 +131,10 @@ marks a section with no static path, or (in either tier) a data source that
 genuinely doesn't exist for this app.
 
 A generated context file says the same thing. A run that did not boot writes a
-`[STATIC]` line under the header of every file that has one (CLAUDE.md,
-AGENTS.md, the Copilot instructions, the per-tool overview rules file and the
-split AGENTS.md pair), and `.ai-context.json` carries the tier as a `tier` key
+`[STATIC]` line under the header of every file that states app counts
+(CLAUDE.md, AGENTS.md, the Copilot instructions, the split AGENTS.md pair and
+every per-tool rules file except the MCP tool reference, which lists the gem's
+own tools in either tier), and `.ai-context.json` carries the tier as a `tier` key
 reading `static` or `booted`. A booted run adds nothing: an unmarked file is a
 booted one.
 

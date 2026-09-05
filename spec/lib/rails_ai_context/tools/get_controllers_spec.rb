@@ -269,8 +269,58 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
       text = described_class.call(detail: "full").content.first[:text]
 
-      expect(text).to include("## Admin::* (One, Three, Two)")
+      expect(text).to include("## Admin::* (3 controllers)")
+      expect(text).to include("- Members: Admin::OneController, Admin::ThreeController, Admin::TwoController")
       expect(text).to include("- Strong params: filter_params")
+    end
+
+    # The heading was built from the first member's own class name, so five
+    # top-level controllers were filed under a namespace no controller is in.
+    it "heads a group of top-level controllers with no namespace" do
+      entry = { actions: %w[show], filters: [], strong_params: [], parent_class: "ActionController::Base" }
+      stub_controllers({
+        "CustomCssController" => entry.dup,
+        "HealthController" => entry.dup,
+        "ManifestsController" => entry.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).not_to include("CustomCssController::*")
+      expect(text).to include("## 3 controllers")
+      expect(text).to include("- Members: CustomCssController, HealthController, ManifestsController")
+    end
+
+    # A group heads under the namespace every member is really in, not the
+    # first segment of the first member's name.
+    it "heads a group with the namespace all its members share" do
+      entry = { actions: %w[show], filters: [], strong_params: [], parent_class: "Admin::BaseController" }
+      stub_controllers({
+        "Admin::EmailSubscriptions::FooterTextsController" => entry.dup,
+        "Admin::Settings::AboutController" => entry.dup,
+        "Admin::Settings::AppearanceController" => entry.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Admin::* (3 controllers)")
+      expect(text).to include(
+        "- Members: Admin::EmailSubscriptions::FooterTextsController, " \
+          "Admin::Settings::AboutController, Admin::Settings::AppearanceController"
+      )
+    end
+
+    # Every controller the plain listing names has to be findable in the full
+    # answer by the constant it really has.
+    it "names every controller by its real constant in the full listing" do
+      entry = { actions: %w[show], filters: [], strong_params: [], parent_class: "Api::BaseController" }
+      names = [ "Api::SearchController", "Api::AsyncRefreshesController", "OAuth::UserinfoController" ]
+      stub_controllers(names.to_h { |n| [ n, entry.dup ] })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      names.each { |name| expect(text).to include(name) }
+      expect(text).not_to include("Api::* ")
     end
 
     # The booted tier renders a skipped filter struck through. The listing
