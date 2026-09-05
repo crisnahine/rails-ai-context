@@ -322,8 +322,14 @@ module RailsAiContext
 
       def missing_value_message(key, prop)
         flag = "--#{key.to_s.tr('_', '-')}"
-        expected = prop[:enum] ? "one of #{prop[:enum].join(', ')}" : "a #{prop[:type]} value"
+        expected = prop[:enum] ? "one of #{prop[:enum].join(', ')}" : "#{article(prop[:type])} #{prop[:type]} value"
         "Missing value:\n  '#{flag}' takes #{expected}\n#{valid_params_line}"
+      end
+
+      # The JSON Schema type names are a closed set, and array, integer and
+      # object are the vowel-initial three.
+      def article(type)
+        type.to_s.start_with?("a", "e", "i", "o", "u") ? "an" : "a"
       end
 
       # Tokens belonging to an array flag: everything up to the next flag,

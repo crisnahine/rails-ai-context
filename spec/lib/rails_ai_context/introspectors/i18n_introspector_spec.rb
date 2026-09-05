@@ -335,15 +335,57 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:default_locale]).to eq("de")
     end
 
-    # Rails hands app.config.i18n to I18n once, after every initializer has
-    # run, so the last assignment executed is the one that lands.
-    it "takes the initializer's default locale over application.rb's" do
+    # I18n::Railtie applies app.config.i18n from after_initialize, which runs
+    # once every initializer has, so config.i18n overwrites a bare
+    # I18n.default_locale set in an initializer rather than losing to it.
+    it "takes application.rb's config.i18n default locale over an initializer's bare I18n one" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n", "de.yml" => "de:\n  hello: Hallo\n") do |dir|
         File.write(File.join(dir, "config", "application.rb"), "config.i18n.default_locale = :en\n")
         FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
         File.write(File.join(dir, "config", "initializers", "locale.rb"), "I18n.default_locale = :de\n")
       end
+      expect(result[:default_locale]).to eq("en")
+    end
+
+    # Two initializers, one spelling: the later file is the one that lands.
+    it "takes the last bare I18n.default_locale when nothing buffers one" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n", "de.yml" => "de:\n  hello: Hallo\n") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "a_locale.rb"), "I18n.default_locale = :en\n")
+        File.write(File.join(dir, "config", "initializers", "z_locale.rb"), "I18n.default_locale = :de\n")
+      end
       expect(result[:default_locale]).to eq("de")
+    end
+
+    # With the running environment's file absent every environment is read,
+    # and they are alternatives rather than a sequence: letting the last one
+    # by filename win makes test.rb beat production.rb for no reason.
+    it "lets no environment decide when the fallback read several that disagree" do
+      original = ENV["RAILS_ENV"]
+      ENV["RAILS_ENV"] = "staging"
+      result = static_result("en.yml" => "en:\n  hello: Hello\n", "ja.yml" => "ja:\n  hello: Konnichiwa\n") do |dir|
+        File.write(File.join(dir, "config", "application.rb"), "config.i18n.default_locale = :ja\n")
+        FileUtils.mkdir_p(File.join(dir, "config", "environments"))
+        File.write(File.join(dir, "config", "environments", "production.rb"), "config.i18n.default_locale = :en\n")
+        File.write(File.join(dir, "config", "environments", "test.rb"), "config.i18n.default_locale = :de\n")
+      end
+      expect(result[:default_locale]).to eq("ja")
+    ensure
+      ENV["RAILS_ENV"] = original
+    end
+
+    # Agreeing on a value is not a guess, so the fallback still answers.
+    it "keeps a fallback environment value every environment agrees on" do
+      original = ENV["RAILS_ENV"]
+      ENV["RAILS_ENV"] = "staging"
+      result = static_result("en.yml" => "en:\n  hello: Hello\n", "de.yml" => "de:\n  hello: Hallo\n") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "environments"))
+        File.write(File.join(dir, "config", "environments", "production.rb"), "config.i18n.default_locale = :de\n")
+        File.write(File.join(dir, "config", "environments", "test.rb"), "config.i18n.default_locale = :de\n")
+      end
+      expect(result[:default_locale]).to eq("de")
+    ensure
+      ENV["RAILS_ENV"] = original
     end
 
     # Only the running environment's file runs, so another environment's
@@ -396,6 +438,17 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       it "reads the bare I18n spelling" do
         result = with_config({ "i18n.rb" => "I18n.available_locales = %i[en es]\n" })
         expect(result[:available_locales]).to eq(%w[en es])
+      end
+
+      # config.i18n is buffered and applied from after_initialize, so it lands
+      # on top of a bare I18n assignment an initializer already made.
+      it "takes the buffered config.i18n list over a bare I18n one" do
+        result = with_config(
+          { "i18n.rb" => "I18n.available_locales = %i[en es tlh]\n" },
+          application: "module Dummy\n  class Application < Rails::Application\n    config.i18n.available_locales = [:en]\n  end\nend\n"
+        )
+
+        expect(result[:available_locales]).to eq(%w[en])
       end
 
       # The listener strips whichever root matched, so a bare

@@ -65,6 +65,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         app_name: "TestApp",
         rails_version: "8.0",
         ruby_version: "3.4",
+        gems: { declared_ruby_version: "3.4" },
         tier: "static"
       })
 
@@ -72,6 +73,24 @@ RSpec.describe RailsAiContext::Tools::Onboard do
 
       expect(text).to include("declaring Ruby 3.4")
       expect(text).not_to include("running Ruby")
+    end
+
+    # With no RUBY VERSION in the lockfile and no ruby line in the Gemfile the
+    # context falls back to the interpreter running the CLI, which the app
+    # declared nowhere.
+    it "claims no declared ruby version when nothing declares one" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: RUBY_VERSION,
+        gems: { declared_ruby_version: nil },
+        tier: "static"
+      })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("TestApp is a Rails 8.0 application on")
+      expect(text).not_to include("Ruby #{RUBY_VERSION}")
     end
 
     it "says a booted run is running that ruby" do

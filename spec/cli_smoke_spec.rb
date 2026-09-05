@@ -211,6 +211,10 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
   it "watches a source-only tree with --no-boot" do
     exe = File.expand_path("../exe/rails-ai-context", __dir__)
     lib = File.expand_path("../lib", __dir__)
+    # The child inherits this environment, so it reaches the same `listen`
+    # this does. Which of the two outcomes to demand follows from that,
+    # rather than from a pattern both of them match.
+    listen_reachable = system(RbConfig.ruby, "-e", "require 'listen'", out: File::NULL, err: File::NULL)
 
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "app", "models"))
@@ -220,15 +224,16 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       # child is bounded rather than read to EOF.
       io = IO.popen([ "ruby", "-I", lib, exe, "watch", "--no-boot", "--app-path", dir ], err: %i[child out])
       out = +""
+      timed_out = false
       begin
         Timeout.timeout(30) do
           while (line = io.gets)
             out << line
-            break if out.match?(/listen|Watching for changes/)
+            break if out.include?("Watching for changes")
           end
         end
       rescue Timeout::Error
-        out << "watch printed nothing within 30s"
+        timed_out = true
       ensure
         begin
           Process.kill("KILL", io.pid)
@@ -238,8 +243,15 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
         io.close
       end
 
+      expect(timed_out).to be(false), "watch printed nothing for 30s. Output so far:\n#{out}"
       expect(out).not_to include("uninitialized constant")
-      expect(out).to match(/listen|Watching for changes/)
+      if listen_reachable
+        # Printed only once the listener is running, so it names a watch that
+        # actually started.
+        expect(out).to include("Watching for changes")
+      else
+        expect(out).to include("Error: The `listen` gem is required for watch mode.")
+      end
     end
   end
 

@@ -280,7 +280,7 @@ module RailsAiContext
           dirs = concern_dirs.map { |d| d.sub("#{root}/", "") }.join(", ")
           if excluded_count > 0
             return text_response("No concerns to list in #{dirs}: " \
-              "#{count_phrase(excluded_count, "concern")} excluded by `excluded_concerns`.")
+              "#{count_phrase(excluded_count, "concern")} hidden by `excluded_concerns`.")
           end
 
           return text_response("No concerns found in #{dirs}.")

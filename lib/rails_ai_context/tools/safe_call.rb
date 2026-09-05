@@ -88,7 +88,15 @@ module RailsAiContext
         path, rest = frame.split(":", 2)
         return frame if path.to_s.empty?
 
-        root = rails_app.root.to_s rescue ""
+        # No app, or one with no root: relativize still strips the gem prefix,
+        # so an empty root is an answer. Anything else raised here is a fault,
+        # not a missing root, and hiding it behind a path that merely looks
+        # right is worse than the raise.
+        root = begin
+          rails_app.root.to_s
+        rescue NameError
+          ""
+        end
         [ RailsAiContext::PortablePath.relativize(path, root), rest ].compact.join(":")
       end
 

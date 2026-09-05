@@ -261,6 +261,22 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
       end
     end
 
+    # The scan reads every serializer root, so a class a pack has taken over
+    # from the app is two files answering one name. The list is of classes,
+    # not of files.
+    it "names a class two serializer roots both hold once" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/serializers"))
+        FileUtils.mkdir_p(File.join(root, "packs/billing/app/serializers"))
+        File.write(File.join(root, "app/serializers/invoice_serializer.rb"), "class InvoiceSerializer\nend\n")
+        File.write(File.join(root, "packs/billing/app/serializers/invoice_serializer.rb"),
+                   "class InvoiceSerializer\nend\n")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(root)).static_call
+        expect(static[:serializers][:serializer_classes]).to eq([ "InvoiceSerializer" ])
+      end
+    end
+
     it "keeps a serializer file that declares no class, under the name its path spells" do
       Dir.mktmpdir do |root|
         FileUtils.mkdir_p(File.join(root, "app/serializers"))

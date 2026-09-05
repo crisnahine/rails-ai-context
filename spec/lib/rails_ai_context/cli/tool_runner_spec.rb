@@ -407,6 +407,30 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
         .to raise_error(described_class::InvalidArgumentError, /--table/)
     end
 
+    # The type name is written into the sentence, so a vowel-initial one read
+    # "takes a integer value".
+    it "articles the type name it names" do
+      expect { described_class.new("schema", [ "--limit" ]).run }
+        .to raise_error(described_class::InvalidArgumentError, /takes an integer value/)
+      expect { described_class.new("schema", [ "--table" ]).run }
+        .to raise_error(described_class::InvalidArgumentError, /takes a string value/)
+    end
+
+    it "articles every type a tool schema can carry" do
+      articled = %w[string integer number boolean array object].map do |type|
+        described_class.new("schema", []).send(:missing_value_message, :thing, { type: type }).lines[1].strip
+      end
+
+      expect(articled).to eq([
+        "'--thing' takes a string value",
+        "'--thing' takes an integer value",
+        "'--thing' takes a number value",
+        "'--thing' takes a boolean value",
+        "'--thing' takes an array value",
+        "'--thing' takes an object value"
+      ])
+    end
+
     it "still reads a bare boolean flag as true" do
       expect(described_class.new("routes", [ "--app-only" ]).send(:build_kwargs))
         .to include(app_only: true)

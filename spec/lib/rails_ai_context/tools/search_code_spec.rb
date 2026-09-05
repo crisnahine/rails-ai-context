@@ -376,7 +376,6 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
     end
   end
 
-
   # The line cap and its label are printed off the row list either backend
   # produced, so these run without ripgrep.
   describe "the line cap in the header" do

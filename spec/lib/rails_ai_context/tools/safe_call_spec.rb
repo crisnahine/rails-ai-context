@@ -353,6 +353,40 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
       expect(text).to match(%r{At: \S*lib/rails_ai_context/tools/base_tool\.rb:\d+})
       expect(text).not_to include(gem_root)
     end
+
+    # An app object with no root is the only way resolving it fails, and it
+    # still has to name the frame.
+    it "names the frame when the app has no root to relativize against" do
+      tool = build_tool do
+        input_schema(properties: {})
+        def self.rails_app
+          nil
+        end
+
+        def self.call(server_context: nil)
+          RailsAiContext::Tools::BaseTool.find_closest_match(nil, nil)
+        end
+      end
+
+      expect(tool.call.content.first[:text]).to match(%r{At: \S*base_tool\.rb:\d+})
+    end
+
+    # Swallowing every StandardError there hid a real fault behind a path that
+    # merely looked right.
+    it "does not swallow a fault that is not a missing root" do
+      tool = build_tool do
+        input_schema(properties: {})
+        def self.rails_app
+          raise ArgumentError, "resolver bug"
+        end
+
+        def self.call(server_context: nil)
+          RailsAiContext::Tools::BaseTool.find_closest_match(nil, nil)
+        end
+      end
+
+      expect { tool.call }.to raise_error(ArgumentError, "resolver bug")
+    end
   end
 
   # An unknown parameter reached the tool as an unknown keyword, so the answer

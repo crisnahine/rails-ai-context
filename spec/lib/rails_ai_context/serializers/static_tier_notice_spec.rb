@@ -61,6 +61,9 @@ RSpec.describe "The static-tier notice in generated files" do
         lines = File.read(overview).lines.map(&:chomp)
         at = lines.index { |line| line.include?(RailsAiContext::Confidence::STATIC) }
 
+        # A notice on the first line would make lines[at - 1] the last line of
+        # the file, and the guard would pass on the arrangement it rejects.
+        expect(at).to be > 0
         expect(lines[at - 1]).to eq("")
         expect(lines[at + 1]).to eq("")
       end
