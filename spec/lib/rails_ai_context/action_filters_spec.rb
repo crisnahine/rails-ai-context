@@ -83,6 +83,56 @@ RSpec.describe RailsAiContext::ActionFilters do
       end
     end
 
+    # A filter the class's own body declares is its own, whatever an ancestor
+    # declares as well. The static list is the class's own declarations, so a
+    # name in it that an ancestor also declares used to move to `inherited`
+    # and the answer said the class declares nothing.
+    it "keeps a filter the child declares itself in its own list" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            before_action :authenticate_user!
+            def index; end
+          end
+        RUBY
+        ctx = static_context(dir)
+
+        chain = described_class.for_controller(ctx, "PostsController", root: dir)
+
+        expect(chain[:own].map { |f| f[:name] }).to eq([ "authenticate_user!" ])
+        expect(chain[:inherited].map { |f| f[:name] }).to eq(%w[set_locale set_tenant])
+      end
+    end
+
+    # A name is not a filter: `after_action :audit` and `before_action :audit`
+    # are two entries in the chain, and Rails runs both. Keyed by name alone,
+    # the child's `before` hid the base's `after` and took its attribution.
+    it "keeps two filters that share a name and differ in kind" do
+      Dir.mktmpdir do |dir|
+        app_with_base(dir)
+        File.write(File.join(dir, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            before_action :authenticate_user!
+            after_action :audit
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "widgets_controller.rb"), <<~RUBY)
+          class WidgetsController < ApplicationController
+            before_action :audit
+            def index; end
+          end
+        RUBY
+        ctx = static_context(dir)
+
+        chain = described_class.for_controller(ctx, "WidgetsController", root: dir)
+
+        expect(chain[:own].map { |f| [ f[:kind], f[:name] ] }).to eq([ [ "before", "audit" ] ])
+        expect(chain[:inherited].map { |f| [ f[:kind], f[:name] ] })
+          .to contain_exactly([ "before", "authenticate_user!" ], [ "after", "audit" ])
+      end
+    end
+
     it "applies its per-action constraints the way any other ancestor's are applied" do
       Dir.mktmpdir do |dir|
         app_with_base(dir)
@@ -110,6 +160,9 @@ RSpec.describe RailsAiContext::ActionFilters do
         chain = described_class.for_controller(ctx, "PagesController", root: dir)
         unconditional = chain[:inherited].reject { |f| f[:only] || f[:except] || f[:if] || f[:unless] }
 
+        # Named, not only equal: both surfaces answering nothing is the shape
+        # this example exists to catch.
+        expect(helper.detect_before_actions(dir)).to eq(%w[authenticate_user! set_locale])
         expect(helper.detect_before_actions(dir)).to eq(unconditional.map { |f| f[:name] })
       end
     end

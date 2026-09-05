@@ -192,6 +192,13 @@ module RailsAiContext
         end
         # For models, also try singular form (posts → post)
         snake_singular = snake.singularize
+        # A model or controller name is never a path. Without this the name is
+        # interpolated into a spec path, which cannot escape the root but
+        # answers "No test file found for /etc/passwd" at exit 0 where every
+        # other tool refuses.
+        refused = refuse_unsafe_paths([ name ])
+        return refused if refused
+
         candidates = case type
         when :model
           base = [

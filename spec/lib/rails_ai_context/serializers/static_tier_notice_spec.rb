@@ -109,15 +109,18 @@ RSpec.describe "The static-tier notice in generated files" do
     end
   end
 
-  # The two lists above are derived from the generator's own tables; this is
-  # the guard that they still name every serializer it runs.
-  it "covers every serializer the generator dispatches to" do
-    dispatched = (RailsAiContext::Serializers::ContextFileSerializer::ROOT_SERIALIZERS.values +
-      RailsAiContext::Serializers::ContextFileSerializer::RULES_SERIALIZERS.values).uniq
-    covered = root_serializers + rules_serializers +
-      [ RailsAiContext::Serializers::JsonSerializer, RailsAiContext::Serializers::OpencodeRulesSerializer ]
+  # The lists above are read off the tables, so a guard comparing them to the
+  # tables can only ever pass. The one dispatch target no table names is the
+  # fallback, and it is in the list above as a literal: this is what says so.
+  it "renders the format that reaches no table through MarkdownSerializer" do
+    expect(RailsAiContext::Serializers::ContextFileSerializer::ROOT_SERIALIZERS)
+      .not_to have_key(:markdown)
+    expect(root_serializers).to include(RailsAiContext::Serializers::MarkdownSerializer)
 
-    expect(dispatched - covered).to be_empty
+    output = RailsAiContext::Serializers::ContextFileSerializer.new(static_context, format: :markdown)
+                                                               .send(:serialize, :markdown)
+
+    expect(output).to include(RailsAiContext::Confidence::STATIC)
   end
 
   it "the JSON dump carries the tier as a key" do

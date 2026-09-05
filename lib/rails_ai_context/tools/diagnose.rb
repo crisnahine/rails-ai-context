@@ -112,9 +112,6 @@ module RailsAiContext
       def self.call(error:, file: nil, line: nil, action: nil, server_context: nil)
         return text_response("The `error` parameter is required.") if error.nil? || error.strip.empty?
 
-        refused = refuse_unsafe_paths([ file ])
-        return refused if refused
-
         parsed = parse_error(error)
         classification = classify_error(parsed)
 

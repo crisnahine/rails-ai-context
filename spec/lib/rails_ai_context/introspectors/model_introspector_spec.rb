@@ -749,6 +749,22 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     # entry says what it knows (the file, and why it is empty) and claims no
     # table. A base something inherits from is different: the inheritance is
     # what says it is a model, and its children share the table.
+    # Every error branch names the file it is about: a consumer with none
+    # derives app/models/<name>.rb, which is a path a pack model does not have.
+    it "names the file on the branch a failing scan produces" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+        allow(File).to receive(:size).and_call_original
+        allow(File).to receive(:size).with(a_string_ending_with("post.rb")).and_raise(Errno::ENOENT, "post.rb")
+
+        entry = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(entry[:error]).to include("No such file")
+        expect(entry[:file]).to eq("app/models/post.rb")
+      end
+    end
+
     it "claims no table for an unreadable file nothing inherits from" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
@@ -1595,6 +1611,38 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(car[:concerns]).to be_empty
       ensure
         RailsAiContext.configuration.excluded_concerns = original
+      end
+    end
+  end
+
+  # The booted listing globs app/models for files reflection has not loaded and
+  # names each by camelizing its path. An app inflection only changes case, so
+  # `app/models/activitypub/activity.rb` was offered as `Activitypub::Activity`,
+  # which constantizes to nothing: the app got a second model entry saying its
+  # own file would not load.
+  describe "the booted listing over a namespace the app inflected" do
+    it "names the file by what it declares, so one file is one model" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "activitypub"))
+        File.write(File.join(dir, "app", "models", "activitypub", "activity.rb"), <<~RUBY)
+          module ActivityPub
+            class Activity < ApplicationRecord
+            end
+          end
+        RUBY
+
+        stub_const("ActivityPub", Module.new)
+        activity = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "ActivityPub::Activity"
+        end
+        stub_const("ActivityPub::Activity", activity)
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(ActiveRecord::Base).to receive(:descendants).and_return([ activity ])
+
+        names = introspector.call.keys
+
+        expect(names).to eq([ "ActivityPub::Activity" ])
       end
     end
   end

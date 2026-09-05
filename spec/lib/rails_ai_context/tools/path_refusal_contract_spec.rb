@@ -23,8 +23,16 @@ RSpec.describe "path refusal contract" do
     RailsAiContext::Tools::GetTestInfo => -> { call(model: "../../etc/passwd") },
     RailsAiContext::Tools::SecurityScan => -> { call(files: [ "../../etc/passwd" ]) },
     RailsAiContext::Tools::ReviewChanges => -> { call(files: [ "../../etc/passwd" ]) },
-    RailsAiContext::Tools::GenerateTest => -> { call(file: "../../etc/passwd") },
-    RailsAiContext::Tools::Diagnose => -> { call(error: "NoMethodError", file: "../../etc/passwd") }
+    RailsAiContext::Tools::GenerateTest => -> { call(file: "../../etc/passwd") }
+  }
+
+  # One tool takes a path that is not the question. `rails_diagnose` answers
+  # `error:`, and `file:` only points at code to quote, so a refused path costs
+  # that section and not the diagnosis. The refusal is still said out loud.
+  composed = {
+    RailsAiContext::Tools::Diagnose => lambda {
+      call(error: "NoMethodError: undefined method `x` for nil", file: "../../etc/passwd", line: 1)
+    }
   }
 
   refusals.each do |tool, refuse|
@@ -48,10 +56,15 @@ RSpec.describe "path refusal contract" do
     RailsAiContext::Tools::GetPartialInterface => -> { call(partial: "/etc/passwd") },
     RailsAiContext::Tools::SearchCode => -> { call(pattern: "root", path: "/etc") },
     RailsAiContext::Tools::GenerateTest => -> { call(file: "/etc/passwd") },
-    RailsAiContext::Tools::Diagnose => -> { call(error: "NoMethodError", file: "/etc/passwd") },
-    RailsAiContext::Tools::ReviewChanges => -> { call(files: [ "/etc/passwd" ]) },
-    RailsAiContext::Tools::SecurityScan => -> { call(files: [ "/etc/passwd" ]) }
+    RailsAiContext::Tools::GetTestInfo => -> { call(model: "/etc/passwd") },
+    RailsAiContext::Tools::GetConcern => -> { call(name: "/etc/passwd") },
+    RailsAiContext::Tools::ReviewChanges => -> { call(files: [ "/etc/passwd" ]) }
   }
+
+  # `rails_security_scan` is not in the list above on purpose: a leading slash
+  # has always meant "from the Rails root" there, and the filter strips it, so
+  # `/etc/passwd` is the app's own `etc/passwd` and simply is not there. A
+  # traversal out of the root is still refused, in the list above this one.
 
   absolute_refusals.each do |tool, refuse|
     it "#{tool.tool_name} answers an absolute path as a refusal, not a miss" do
@@ -63,9 +76,22 @@ RSpec.describe "path refusal contract" do
     end
   end
 
-  # The list above is what someone remembered to type. This is what the
-  # registry says the list has to hold, so a new tool taking a path from the
-  # caller cannot quietly skip the contract.
+  composed.each do |tool, refuse|
+    it "#{tool.tool_name} says the path was refused and still answers" do
+      tool.reset_cache!
+      response = tool.instance_exec(&refuse)
+
+      expect(text_of(response)).to match(/not allowed|denied|sensitive/)
+      expect(text_of(response)).to include("Error Diagnosis")
+      expect(response.error?).to be(false)
+    end
+  end
+
+  # The lists above are what someone remembered to type. These two are what the
+  # code says they have to hold, and they catch different halves: the schema
+  # names the parameters that are paths, and the guard call sites name the
+  # tools that already know they take one - including the two whose parameter
+  # is a name the tool turns into a path, which no parameter name reveals.
   it "covers every tool that takes a path-shaped parameter" do
     path_params = %w[path file files partial]
     takers = RailsAiContext::Server.builtin_tools.select do |tool|
@@ -73,7 +99,18 @@ RSpec.describe "path refusal contract" do
       properties.keys.map(&:to_s).any? { |name| path_params.include?(name) }
     end
 
-    expect(takers - (refusals.keys + absolute_refusals.keys)).to be_empty
+    expect(takers - (refusals.keys + absolute_refusals.keys + composed.keys)).to be_empty
+  end
+
+  it "covers every tool that guards a caller path" do
+    tools_dir = File.expand_path("../../../../lib/rails_ai_context/tools", __dir__)
+    guarding = RailsAiContext::Server.builtin_tools.select do |tool|
+      file = File.join(tools_dir, "#{tool.tool_name.sub(/\Arails_/, '')}.rb")
+      File.exist?(file) && File.read(file).include?("refuse_unsafe_paths")
+    end
+
+    expect(guarding).not_to be_empty
+    expect(guarding - (refusals.keys + absolute_refusals.keys + composed.keys)).to be_empty
   end
 
   it "keeps a directory that is simply not there an ordinary empty answer" do

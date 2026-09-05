@@ -104,8 +104,12 @@ module RailsAiContext
       end
 
       def collect_modules(node, scope, found)
-        if node.is_a?(Prism::ModuleNode)
+        case node
+        when Prism::ModuleNode
           found << qualify(scope, node)
+          scope += [ segment(node) ]
+        when Prism::ClassNode
+          # Not recorded, but it is part of the name of anything inside it.
           scope += [ segment(node) ]
         end
         node.child_nodes.compact.each { |child| collect_modules(child, scope, found) }
@@ -128,7 +132,7 @@ module RailsAiContext
         node.slice.delete_prefix("::")
       end
 
-      private_class_method :collect, :descend, :qualify, :segment, :superclass_name
+      private_class_method :collect, :collect_modules, :descend, :qualify, :segment, :superclass_name
     end
   end
 end

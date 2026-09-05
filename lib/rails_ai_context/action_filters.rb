@@ -53,18 +53,25 @@ module RailsAiContext
       applicable = declared.select { |f| applies?(f, action) }
         .reject { |f| skipped.include?(f[:name].to_s) }
         .reject { |f| inherited_skips.include?(f[:name].to_s) && !f[:declared] }
-      declared_on = parent.to_h { |f| [ f[:name].to_s, f[:from] ] }
-      declared_names = declared.map { |f| f[:name].to_s }.to_set
+      # Keyed by kind and name: `after_action :audit` and `before_action :audit`
+      # are two entries in the chain and Rails runs both.
+      declared_on = parent.to_h { |f| [ entry_key(f), f[:from] ] }
+      declared_names = declared.map { |f| entry_key(f) }.to_set
 
-      own = mark_conditional_skips(applicable.reject { |f| declared_on.key?(f[:name].to_s) }, conditions, action)
+      # A filter this body declares is its own, whatever an ancestor declares
+      # as well. The runtime tier's list also carries names it only inherits,
+      # and those are the ones that move: they carry no `declared` mark.
+      inherited_here = ->(f) { declared_on.key?(entry_key(f)) && !f[:declared] }
+      own = mark_conditional_skips(applicable.reject(&inherited_here), conditions, action)
       inherited = mark_conditional_skips(
-        parent.reject { |f| declared_names.include?(f[:name].to_s) } +
-          applicable.select { |f| declared_on.key?(f[:name].to_s) }
-            .map { |f| f.merge(from: declared_on[f[:name].to_s]) }, conditions, action
+        parent.reject { |f| declared_names.include?(entry_key(f)) } +
+          applicable.select(&inherited_here)
+            .map { |f| f.merge(from: declared_on[entry_key(f)]) }, conditions, action
       )
 
       { own: own,
-        inherited: inherited + unplaced_conditional_skips(own + inherited, conditions, action, declares | declared_names),
+        inherited: inherited + unplaced_conditional_skips(own + inherited, conditions, action,
+                                                          declares | declared.map { |f| f[:name].to_s }.to_set),
         skipped: skipped }
     end
 
@@ -208,13 +215,20 @@ module RailsAiContext
     # booted ancestor carries names it only inherits, so `from:` moves on to
     # the first ancestor whose own body declared it.
     def record_attribution(found, attributed, filter, ancestor)
-      key = filter[:name].to_s
+      key = entry_key(filter)
       if found.key?(key)
         found[key] = found[key].merge(from: ancestor) if filter[:declared] && !attributed.include?(key)
       else
         found[key] = filter.merge(from: ancestor)
       end
       attributed << key if filter[:declared]
+    end
+
+    # One entry in the chain. A skip names a filter by name, and a chain entry
+    # is a kind and a name: a class can declare both `before_action :audit` and
+    # `after_action :audit`, and both run.
+    def entry_key(filter)
+      [ filter[:kind].to_s, filter[:name].to_s ]
     end
 
     # What one class's own body takes out of the chain for this action: the
@@ -333,6 +347,7 @@ module RailsAiContext
     end
 
     private_class_method :default_root, :split, :applies?, :parent_filters, :skip_source_records, :carried_source,
+                         :entry_key,
 
                          :skip_calls, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,

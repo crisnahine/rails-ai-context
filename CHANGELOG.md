@@ -1037,6 +1037,36 @@ Changed.
   already use, through one helper on the base class. The contract's spec no
   longer trusts a hand-typed list either: it asks the tool registry which tools
   declare a path-shaped parameter and fails when one of them is not covered.
+- **A filter a controller declares itself was reported as inherited.** The
+  chain moved any filter whose name an ancestor also declares into `inherited`,
+  which is right for the booted tier - its list carries names it only inherits -
+  and wrong for the static one, whose list is the class's own body. Reaching
+  `ApplicationController` made it visible on every controller in every app: a
+  controller declaring `before_action :authenticate` beside a base that
+  declares it too answered `own: []`. A record the body declared stays in
+  `own`; only a record with no declaration of its own moves.
+- **Two filters that share a name and differ in kind were one filter.** The
+  chain keyed entries by name alone, so a base's `after_action :audit` vanished
+  when a child declared `before_action :audit`, and the child's own
+  declaration was credited to the base. Rails runs both; the chain keys on the
+  kind and the name now.
+- **`rails_diagnose` refused the whole diagnosis for a path it was only asked
+  to quote.** `error:` is the question and `file:` points at code to show, so a
+  refused path costs that section and not the answer. The refusal is still said
+  out loud, inside the section it belongs to.
+- **`rails_get_test_info` answered an absolute name at exit 0.** A model name is
+  never a path, and the name was interpolated into `spec/models/<name>_spec.rb`,
+  which cannot escape the root but answered "No test file found for
+  /etc/passwd" where every other tool refuses.
+- **`rails_security_scan` refused the leading slash it has always accepted.**
+  `/app/models/user.rb` means "from the Rails root" there and the filter strips
+  it; the new guard read it as absolute. It normalizes before guarding now.
+- **The booted model listing invented a second model from a camelized path.**
+  `app/models/activitypub/activity.rb` was offered as `Activitypub::Activity`,
+  which constantizes to nothing, so an app that inflects a namespace got an
+  extra entry saying its own file would not load. The listing names a file by
+  what it declares, and reads it only where the camelized name is not already
+  loaded.
 - **`ApplicationController`'s filters reached the generated files and no tool.**
   The listing leaves that class out - it would sit in every row - and the chain
   walk looks each ancestor up in the listing, so the walk ended on the first

@@ -70,7 +70,7 @@ module RailsAiContext
         bases = declared_bases(candidates)
         candidates.each_with_object({}) do |(class_name, candidate), result|
           if candidate[:error]
-            result[class_name] = { error: candidate[:error] }
+            result[class_name] = { error: candidate[:error], file: candidate[:file] }.compact
             next
           end
 
@@ -90,8 +90,12 @@ module RailsAiContext
           next if candidate[:abstract]
           next unless model_class?(class_name, candidates)
 
+          # Resolved before the details, so the rescue below states it rather
+          # than calling again: a second raise from the same call would escape
+          # the rescue meant to contain the first.
+          table = resolve_table_name(class_name, candidates)
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
-                                                    table_name: resolve_table_name(class_name, candidates),
+                                                    table_name: table,
                                                     inherited_from: sti_bases(class_name, candidates),
                                                     sti: static_sti_info(class_name, sti_parents))
         rescue => e
@@ -100,8 +104,7 @@ module RailsAiContext
           # facts the unreadable branch keeps, because a consumer with no file
           # derives app/models/<name>.rb, which is a path a pack model does
           # not have.
-          result[class_name] = { error: e.message, file: candidate[:file],
-                                 table_name: resolve_table_name(class_name, candidates) }.compact
+          result[class_name] = { error: e.message, file: candidate[:file], table_name: table }.compact
         end
       end
 
@@ -179,7 +182,9 @@ module RailsAiContext
               abstract: abstract_class?(source)
             }.merge(TableName.declarations(source, class_name))
           rescue => e
-            found[record.path_name] = { error: e.message }
+            # The file is known here whatever failed, and a consumer with none
+            # derives app/models/<name>.rb, which a pack model does not have.
+            found[record.path_name] = { error: e.message, file: record.file }.compact
           end
         end
       end
@@ -383,8 +388,16 @@ module RailsAiContext
         # so its files declare no `Concerns::` prefix and that path name never
         # constantizes.
         SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each do |record|
-          class_name = record.path_name
-          next if class_name.start_with?("Concerns::")
+          next if record.path_name.start_with?("Concerns::")
+          next if known.include?(record.path_name)
+          next if config.excluded_models.include?(record.path_name)
+
+          # The path does not name the class: an app inflection only changes
+          # case, so activitypub/activity.rb camelizes to a constant the app
+          # does not have and the file was listed as a model that will not
+          # load. Read only where the camelized name is not already loaded, so
+          # a booted run does not parse every model file to learn nothing.
+          class_name = declared_model_name(model_source(record.path).to_s, record.path_name)
           next if known.include?(class_name)
           next if config.excluded_models.include?(class_name)
 

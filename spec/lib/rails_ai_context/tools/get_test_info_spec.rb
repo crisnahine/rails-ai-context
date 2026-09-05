@@ -215,24 +215,29 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
         File.write(File.join(parent, "outside_marker.txt"), "x\n")
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
 
-        text = described_class.call(model: "../../outside", detail: "full").content.first[:text]
+        response = described_class.call(model: "../../outside", detail: "full")
+        text = response.content.first[:text]
 
-        expect(text).to include("No test file found")
+        expect(response.error?).to be(true)
+        expect(text).to include("Path not allowed")
         expect(text).not_to include("outside_marker.txt")
         expect(text).not_to include("Files in test directory")
       end
     end
 
-    # Listing paths that were refused reads as if they were searched.
-    it "says the name was refused rather than listing paths it never read" do
+    # Listing paths that were refused reads as if they were searched, and a
+    # refusal is an error result, so a script can tell it from an answer.
+    it "refuses the name rather than listing paths it never read" do
       Dir.mktmpdir do |parent|
         root = File.join(parent, "app")
         FileUtils.mkdir_p(File.join(root, "spec", "models"))
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
 
-        text = described_class.call(model: "../../etc", detail: "full").content.first[:text]
+        response = described_class.call(model: "../../etc", detail: "full")
+        text = response.content.first[:text]
 
-        expect(text).to include("refused")
+        expect(response.error?).to be(true)
+        expect(text).to include("Path not allowed")
         expect(text).not_to include("Searched:")
         expect(text).not_to include("../../etc_spec.rb")
       end

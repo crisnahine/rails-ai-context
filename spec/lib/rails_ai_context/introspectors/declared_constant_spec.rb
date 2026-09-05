@@ -19,6 +19,14 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
       expect(described_class.resolve(source, "SharedFields")).to eq("SharedFields")
     end
 
+    # A class is part of the name of anything inside it, the same way a module
+    # is, so a module nested in one is not a top-level constant.
+    it "keeps the class in the name of a module declared inside it" do
+      source = "class Outer\n  module Inner\n  end\nend\n"
+
+      expect(described_class.declared_module_names(source)).to eq([ "Outer::Inner" ])
+    end
+
     it "prefers a declared class over a declared module" do
       source = "module Wrapper\nend\nclass Widget\nend\n"
 
