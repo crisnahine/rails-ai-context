@@ -1532,6 +1532,50 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "#extract_model_details over a file the tier cannot read" do
+    def details_for(model_source, max_file_size: nil, unreadable: false)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        path = File.join(dir, "app", "models", "post.rb")
+        File.write(path, model_source)
+        File.chmod(0o000, path) if unreadable
+
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Post"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:model_source_path).and_return(path)
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(max_file_size) if max_file_size
+
+        begin
+          introspector.send(:extract_model_details, model)
+        ensure
+          File.chmod(0o644, path)
+        end
+      end
+    end
+
+    # The constants walk parses the file a second time, on its own, so a file
+    # the source walk already declared unreadable still reached it - and the
+    # raise took the model's whole entry with it.
+    it "still answers for a model whose own file cannot be read" do
+      details = details_for("class Post < ApplicationRecord\n  ROLES = %w[a b]\nend\n", unreadable: true)
+
+      expect(details[:table_name]).to eq("posts")
+      expect(details).not_to have_key(:constants)
+    end
+
+    it "does not read constants out of a file it declared over the size cap" do
+      source = "class Post < ApplicationRecord\n  ROLES = %w[a b]\n  # #{"x" * 400}\nend\n"
+      details = details_for(source, max_file_size: 200)
+
+      expect(details[:table_name]).to eq("posts")
+      expect(details).not_to have_key(:constants)
+    end
+  end
+
   describe "confidence on a static entry" do
     # The entry says [STATIC] while its own records claimed [VERIFIED], so one
     # answer contradicted itself: the renderer prints the scope tag next to the

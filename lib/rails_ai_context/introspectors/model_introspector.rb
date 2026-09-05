@@ -17,9 +17,10 @@ module RailsAiContext
       def initialize(app)
         @app    = app
         @config = RailsAiContext.configuration
-        # One introspection per instance, so a concern shared by 100 models is
-        # walked once. Anything longer-lived would outlast the files it read.
-        @concern_cache = {}
+        # One introspection per file per instance, so a concern or an STI base
+        # shared by 100 models is walked once. Anything longer-lived would
+        # outlast the files it read.
+        @source_cache = {}
       end
 
       # @return [Hash] model metadata keyed by model name
@@ -624,12 +625,14 @@ module RailsAiContext
       # Finds ConstantWriteNode where the value is an ArrayNode
       # (covers %w[], %i[], and literal array forms).
       def extract_constants_from_source(source_path)
-        return nil unless source_path && File.exist?(source_path)
+        return nil unless readable_source?(source_path)
 
         parse_result = AstCache.parse(source_path)
         constants = []
         find_constant_arrays(parse_result.value, constants)
         constants.empty? ? nil : constants
+      rescue StandardError
+        nil
       end
 
       def find_constant_arrays(node, constants)
@@ -843,7 +846,7 @@ module RailsAiContext
         collected, unread = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
           keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name,
-          cache: @concern_cache
+          cache: @source_cache
         )
         return [ own, unread ] if collected.empty?
 
@@ -875,12 +878,22 @@ module RailsAiContext
       # check in front of it: max_file_size can be configured above
       # AstCache::MAX_PARSE_SIZE, and the parse raises on its own limit.
       def sti_base_source(path)
-        return nil unless path && File.exist?(path)
-        return nil if File.size(path) > RailsAiContext.configuration.max_file_size
+        return nil unless readable_source?(path)
 
-        @concern_cache[path] ||= SourceIntrospector.call(path)
+        @source_cache[path] ||= SourceIntrospector.call(path)
       rescue StandardError
         nil
+      end
+
+      # The size the whole introspector agrees a file is worth reading. Both
+      # tiers ask this before the first walk, so a second walk over the same
+      # file has to ask it too or the two disagree.
+      def readable_source?(path)
+        return false unless path && File.exist?(path)
+
+        File.size(path) <= RailsAiContext.configuration.max_file_size
+      rescue SystemCallError
+        false
       end
 
       def merge_inherited(mine, inherited)
