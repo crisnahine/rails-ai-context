@@ -987,6 +987,13 @@ Changed.
   paragraph, so the notice read as part of the generator credit. It goes
   through the same helper the other renders use and keeps its own blank lines.
 
+- **A table prefix the model declares itself was ignored.** `full_table_name_prefix`
+  reads the innermost namespace that declares one and falls back to the class,
+  so `class Article < ApplicationRecord; def self.table_name_prefix = "blog_"`
+  is `blog_articles` at runtime. The walk read the namespaces and stopped, so
+  the static answer said `articles` where the booted one said `blog_articles`.
+  The namespace still wins where both declare one, which is the order Rails
+  resolves them in.
 - **The same typo exited 1 from the binary and 3 from the rake task.**
   docs/CLI.md states one rule - a usage error exits 1 - and the binary has
   always kept it. `rails 'ai:tool[schema]' bogus=1` exited 3, and anything else

@@ -1599,6 +1599,52 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Rails reads the prefix off the innermost namespace that declares one and
+  # falls back to the class itself, so a model declaring its own is the case
+  # `full_table_name_prefix` ends on. The walk read the namespaces only.
+  describe "a table prefix the model declares itself" do
+    it "prefixes the table the way Rails does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "article.rb"), <<~RUBY)
+          class Article < ApplicationRecord
+            def self.table_name_prefix = "blog_"
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Article"][:table_name]).to eq("blog_articles")
+        expect(result["Widget"][:table_name]).to eq("widgets")
+      end
+    end
+
+    # The namespace wins where both declare one, which is the order
+    # `module_parents.detect { ... } || self` gives.
+    it "lets the enclosing namespace's prefix win over the model's own" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "blog"))
+        File.write(File.join(dir, "app", "models", "blog.rb"), <<~RUBY)
+          module Blog
+            def self.table_name_prefix = "blog_"
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "blog", "article.rb"), <<~RUBY)
+          module Blog
+            class Article < ApplicationRecord
+              def self.table_name_prefix = "own_"
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Blog::Article"][:table_name]).to eq("blog_articles")
+      end
+    end
+  end
+
   # The static shaper writes the value the model declared; the booted one used
   # to write the key only when it was truthy, so one model read two ways
   # carried two different key sets into .ai-context.json.

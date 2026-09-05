@@ -328,6 +328,9 @@ module RailsAiContext
 
       # Rails takes the first of these its module parents answers, walking
       # innermost outward, so an inner namespace overrides an outer one.
+      # Rails takes the affix off the innermost namespace that declares one and
+      # falls back to the class itself: `module_parents.detect { |p|
+      # p.respond_to?(:table_name_prefix) } || self`.
       def namespace_affix(class_name, candidates, key)
         scope = class_name.split("::")[0..-2]
         while scope.any?
@@ -336,7 +339,7 @@ module RailsAiContext
 
           scope.pop
         end
-        ""
+        candidates.dig(class_name, key) || ""
       end
 
       # Zeitwerk resolves a path through the app's own inflector, which the
