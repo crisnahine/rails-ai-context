@@ -151,6 +151,31 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:default_locale]).to eq("es")
     end
 
+    # Rails applies config.i18n after every initializer has run, so both keys
+    # take the last assignment, not the first file that carries one.
+    it "takes the default locale an initializer sets over application.rb's" do
+      result = static_result("en.yml" => "en:\n  hello: Hello\n", "es.yml" => "es:\n  hello: Hola\n") do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "application.rb"), <<~RUBY)
+          module Dummy
+            class Application < Rails::Application
+              config.i18n.default_locale = :en
+              config.i18n.available_locales = [:en]
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "config", "initializers", "i18n.rb"), <<~RUBY)
+          Rails.application.configure do
+            config.i18n.default_locale = :es
+            config.i18n.available_locales = [:en, :es]
+          end
+        RUBY
+      end
+
+      expect(result[:default_locale]).to eq("es")
+      expect(result[:available_locales]).to eq(%w[en es])
+    end
+
     it "falls back to en when nothing overrides it" do
       result = static_result("en.yml" => "en:\n  hello: Hello\n")
       expect(result[:default_locale]).to eq("en")

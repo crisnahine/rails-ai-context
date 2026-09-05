@@ -428,6 +428,17 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       expect { runner.run }
         .to raise_error(described_class::InvalidArgumentError, /--pattern/)
     end
+
+    it "ends an unknown-param refusal with the same valid-params sentence the other refusals use" do
+      runner = described_class.new("schema", [ "--tabl", "users" ])
+      expect { runner.run }
+        .to raise_error(described_class::InvalidArgumentError) { |e|
+          expect(e.message).to eq(
+            "Unknown param:\n  'tabl' - did you mean 'table='?\n" \
+            "Valid params: table, detail, limit, offset, format"
+          )
+        }
+    end
   end
 
   describe "JSON mode" do

@@ -287,6 +287,10 @@ module RailsAiContext
         end
 
         lines = [ "# Concerns (#{all_concerns.size})", "" ]
+        if excluded_count > 0
+          lines << "_#{count_phrase(excluded_count, "concern")} hidden by `excluded_concerns`._"
+          lines << ""
+        end
 
         # Grouped by whatever types the app actually has. Rendering a fixed
         # pair of sections meant a concern outside them counted toward the

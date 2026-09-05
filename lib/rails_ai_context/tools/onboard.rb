@@ -139,7 +139,10 @@ module RailsAiContext
           else
             db = "unknown"
           end
-          lines << "#{ctx[:app_name]} is a Rails #{ctx[:rails_version]} application running Ruby #{ctx[:ruby_version]} on #{db}."
+          # Statically the Ruby version is the one the app declares, not one
+          # anything is running.
+          runs = ctx[:tier].to_s == "static" ? "declaring" : "running"
+          lines << "#{ctx[:app_name]} is a Rails #{ctx[:rails_version]} application #{runs} Ruby #{ctx[:ruby_version]} on #{db}."
 
           notable = Payload.notable_gems(ctx)
           if notable.any?

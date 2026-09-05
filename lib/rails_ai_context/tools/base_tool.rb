@@ -302,7 +302,7 @@ module RailsAiContext
           sliced = items.drop(offset).first(limit)
 
           counted = noun ? count_phrase(total, noun) : total.to_s
-          counted = counted.sub(/\A\d+/) { |n| "#{n}+" } if truncated
+          counted = floor_phrase(counted) if truncated
 
           hint = if sliced.empty? && total > 0
             "_No items at offset #{offset}. Total: #{counted}._"
@@ -598,8 +598,12 @@ module RailsAiContext
           return nil unless File.exist?(fixture_file)
 
           content = RailsAiContext::SafeFile.read(fixture_file)
-          # YAML fixture files have top-level keys as fixture names
-          content&.scan(/^([a-z_]\w*):/i)&.first&.first
+          # A fixture file's top-level keys are fixture names, except the
+          # shared-attribute anchor the fixtures guide writes as DEFAULTS and
+          # Rails' own _fixture key.
+          content&.scan(/^([a-z_]\w*):/i)
+                 &.flatten
+                 &.find { |key| key != "DEFAULTS" && !key.start_with?("_") }
         end
 
         # A callback target is a method name, an inline block, or a callback

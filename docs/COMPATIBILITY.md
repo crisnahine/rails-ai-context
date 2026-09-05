@@ -135,8 +135,14 @@ A generated context file says the same thing. A run that did not boot writes a
 (CLAUDE.md, AGENTS.md, the Copilot instructions, the split AGENTS.md pair and
 every per-tool rules file except the MCP tool reference, which lists the gem's
 own tools in either tier), and `.ai-context.json` carries the tier as a `tier` key
-reading `static` or `booted`. A booted run adds nothing: an unmarked file is a
-booted one.
+reading `static` or `booted`. A booted run writes no notice into the markdown
+files, so a file that states app counts and carries none came from a booted
+run; `.ai-context.json` names its tier either way.
+
+A model's `file` in `.ai-context.json` is app-relative, except for a model a
+gem owns: that value begins `gem:` and the rest of it is relative to the gem's
+install directory, not to the app root, so a consumer must not join it to the
+app root.
 
 ## Shape matrix
 
@@ -260,9 +266,9 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   controller listing leaves it out. A filter it declares is therefore missing
   from a static-tier chain entirely; a booted run still lists the filter,
   because reflection carries it on the class itself, but the `from:` tag names
-  the nearest ancestor the listing holds. That tag names the nearest ancestor
-  whose entry carries the filter, which in a booted run is every class below
-  the one that declared it, not only the declaring class.
+  the nearest ancestor the listing holds. In a booted run every class below the
+  declaring one carries the filter, so the tag names the closest of them rather
+  than the class that declared it.
 - **Some route macros surface as a dynamic tally, not resolved entries.**
   `RouteIntrospector#static_call` counts routes behind `devise_for`, `match`,
   `direct`, `resolve`, a `draw` it cannot read, and a route whose `to:` is a

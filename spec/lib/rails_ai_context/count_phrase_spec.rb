@@ -8,6 +8,8 @@ RSpec.describe RailsAiContext::CountPhrase do
       include RailsAiContext::CountPhrase
 
       def render(count, noun, plural: nil) = count_phrase(count, noun, plural: plural)
+
+      def floor(phrase) = floor_phrase(phrase)
     end.new
   end
 
@@ -41,5 +43,18 @@ RSpec.describe RailsAiContext::CountPhrase do
 
   it "is private, so it stays an internal rendering detail" do
     expect(includer).not_to respond_to(:count_phrase)
+    expect(includer).not_to respond_to(:floor_phrase)
+  end
+
+  # A cut list makes its count a floor, and the two lines of one answer have
+  # to mark it the same way.
+  describe "a floored count" do
+    it "marks the leading number" do
+      expect(includer.floor("10 matches")).to eq("10+ matches")
+    end
+
+    it "leaves a phrase with no leading number alone" do
+      expect(includer.floor("no matches")).to eq("no matches")
+    end
   end
 end

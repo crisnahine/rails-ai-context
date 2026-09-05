@@ -52,6 +52,20 @@ RSpec.describe "The static-tier notice in generated files" do
       end
     end
 
+    # Two adjacent non-blank lines are one paragraph, so a notice written
+    # under the version line renders as part of it.
+    it "#{klass.name.split('::').last} keeps the notice in its own paragraph" do
+      Dir.mktmpdir do |dir|
+        result = klass.new(static_context).call(dir)
+        overview = result[:written].find { |path| File.read(path).include?("Rails 8.0") }
+        lines = File.read(overview).lines.map(&:chomp)
+        at = lines.index { |line| line.include?(RailsAiContext::Confidence::STATIC) }
+
+        expect(lines[at - 1]).to eq("")
+        expect(lines[at + 1]).to eq("")
+      end
+    end
+
     # Only the overview file carried the notice. The models, controllers,
     # schema and component files state counts that move between tiers, and a
     # reader holding one of them could not tell which tier wrote it.

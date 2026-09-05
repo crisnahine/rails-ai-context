@@ -75,7 +75,13 @@ RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
     end
   end
 
+  # The model and controller walks both drop a class whose name is not its
+  # constant path, and they ask the same question here.
   describe ".renamed?" do
+    it "is false for a class that lives at its own name" do
+      expect(described_class.renamed?(String)).to be(false)
+    end
+
     # Rails names the anonymous join class it builds for a
     # has_and_belongs_to_many through a singleton `name=`, so it answers
     # "HABTM_Tags" while it lives at "Account::HABTM_Tags".

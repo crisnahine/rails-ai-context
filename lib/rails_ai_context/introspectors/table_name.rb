@@ -22,8 +22,7 @@ module RailsAiContext
 
       NONE = { table_name: nil, table_name_prefix: nil, table_name_suffix: nil }.freeze
 
-      # All three declarations of one class body, read in one walk. A caller
-      # that wants only one asks through the readers below.
+      # All three declarations of one class body, read in one walk.
       #
       # @param source [String] the file's source
       # @param name [String] the qualified name of the class or module
@@ -42,16 +41,6 @@ module RailsAiContext
       #   assigns none or computes one
       def explicit(source, class_name)
         declarations(source, class_name)[:table_name]
-      end
-
-      # @return [String, nil] the prefix the module declares, either form
-      def prefix(source, module_name)
-        declarations(source, module_name)[:table_name_prefix]
-      end
-
-      # @return [String, nil] the suffix the module declares, either form
-      def suffix(source, module_name)
-        declarations(source, module_name)[:table_name_suffix]
       end
 
       # Rails derives the table through the app's own inflector, and the file's

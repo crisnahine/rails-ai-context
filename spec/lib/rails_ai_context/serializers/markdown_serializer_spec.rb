@@ -40,6 +40,40 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
 
       expect(output).to include("- Strong params: post_params")
     end
+
+    # The Filters line is resolved through the chain now, so the generated
+    # file carries an inherited filter and marks the child's skip.
+    it "writes the resolved chain, inherited filters included" do
+      context = {
+        controllers: {
+          controllers: {
+            "AdminController" => {
+              actions: %w[index],
+              filters: [ { kind: "before", name: "authenticate" } ],
+              strong_params: [],
+              parent_class: "ApplicationController"
+            },
+            "ReportsController" => {
+              actions: %w[index],
+              filters: [],
+              strong_params: [],
+              parent_class: "AdminController"
+            },
+            "AuditsController" => {
+              actions: %w[index],
+              filters: [ { kind: "before", name: "authenticate", skipped: true } ],
+              strong_params: [],
+              parent_class: "AdminController"
+            }
+          }
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("### ReportsController\n- Parent: `AdminController`\n- Actions: index\n- Filters: before authenticate")
+      expect(output).to include("### AuditsController\n- Parent: `AdminController`\n- Actions: index\n- Filters: ~~authenticate~~ _(skipped)_")
+    end
   end
 
   describe "the Views section" do

@@ -381,8 +381,7 @@ module RailsAiContext
             suggestion = Tools::BaseTool.find_closest_match(k, known_keys)
             suggestion ? "  '#{k}' - did you mean '#{suggestion}='?" : "  '#{k}'"
           end
-          valid_str = known_keys.any? ? "Valid params: #{known_keys.join(', ')}" : "This tool takes no params."
-          raise InvalidArgumentError, "Unknown param#{unknown.size > 1 ? 's' : ''}:\n#{msgs.join("\n")}\n#{valid_str}"
+          raise InvalidArgumentError, "Unknown param#{unknown.size > 1 ? 's' : ''}:\n#{msgs.join("\n")}\n#{valid_params_line}"
         end
 
         # A value the schema's type cannot hold is dropped with a warning, the

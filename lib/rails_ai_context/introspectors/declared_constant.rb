@@ -49,6 +49,16 @@ module RailsAiContext
         declared_names(source).any?
       end
 
+      # The same question from the booted side: a live class whose name is not
+      # its constant path - Rails builds one for a has_and_belongs_to_many -
+      # belongs to no file, and keyed by that name it overwrites the entry of
+      # the class that does.
+      # @param klass [Class]
+      # @return [Boolean]
+      def renamed?(klass)
+        klass.name != klass.to_s
+      end
+
       # Fully qualified name of every class the source declares, module
       # nesting included. Empty when nothing parses.
       def declared_names(source)

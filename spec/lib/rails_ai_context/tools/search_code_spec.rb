@@ -298,19 +298,20 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       skip "requires ripgrep" unless described_class.send(:ripgrep_available?)
     end
 
-    it "keeps the matches and says some files could not be read" do
+    it "keeps the matches and says the search hit an error" do
       with_search_app(
         "Gemfile" => %(gem "devise"\n),
         "app/models/status.rb" => "class Status\n  # devise lives here\nend\n",
         "app/models/locked.rb" => "# devise\n"
       ) do |dir|
         File.chmod(0o000, File.join(dir, "app", "models", "locked.rb"))
+        skip "cannot make a file unreadable as this user" if File.readable?(File.join(dir, "app", "models", "locked.rb"))
 
         text = described_class.call(pattern: "devise").content.first[:text]
 
         expect(text).to include("Gemfile:1")
         expect(text).to include("app/models/status.rb:2")
-        expect(text).to include("Some files could not be read")
+        expect(text).to include("The search reported an error and may have skipped files")
       ensure
         File.chmod(0o644, File.join(dir, "app", "models", "locked.rb"))
       end
@@ -374,6 +375,7 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
       end
     end
   end
+
 
   # The line cap and its label are printed off the row list either backend
   # produced, so these run without ripgrep.

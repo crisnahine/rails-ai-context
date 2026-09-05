@@ -99,7 +99,9 @@ module RailsAiContext
       end
 
       # Rails' own default is :en, so "en" is the right answer when the app
-      # never says otherwise - not a guess.
+      # never says otherwise - not a guess. Rails hands app.config.i18n to
+      # I18n once, after every initializer has run, so the last assignment
+      # executed is the one that lands.
       def default_locale_from_config
         found = nil
 
@@ -117,12 +119,15 @@ module RailsAiContext
       # then the environment file, then the initializers. Both readers walk
       # this list and keep the last assignment they find.
       def config_candidate_files
-        # Only the running environment's file runs, so another environment's
-        # assignment says nothing about this one.
+        # Rails runs one environment file, so another environment's assignment
+        # says nothing about this one. The rest are read only when the running
+        # one is absent, where reading nothing would be the worse answer.
         env = ENV["RAILS_ENV"] || "development"
-        environment = File.join(root, "config", "environments", "#{env}.rb")
+        all_environments = Dir.glob(File.join(root, "config", "environments", "*.rb")).sort
+        running = all_environments.select { |path| File.basename(path, ".rb") == env }
+        environments = running.any? ? running : all_environments
 
-        ([ File.join(root, "config", "application.rb"), environment ] +
+        ([ File.join(root, "config", "application.rb") ] + environments +
           Dir.glob(File.join(root, "config", "initializers", "*.rb")).sort).select { |path| File.exist?(path) }
       end
 

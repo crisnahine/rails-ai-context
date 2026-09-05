@@ -128,6 +128,22 @@ RSpec.describe RailsAiContext::GemLock do
     end
   end
 
+  # A gem depending on a gem named ruby writes "      ruby (>= 2.0)" under
+  # specs:, six spaces in, which the spec-line grammar does not catch.
+  it "does not read a dependency on a gem named ruby as the ruby version" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            some_gem (1.0.0)
+              ruby (>= 2.0)
+      LOCK
+
+      expect(described_class.for(dir).ruby_version).to be_nil
+    end
+  end
+
   it "falls back to the Gemfile's ruby line when the lockfile names no version" do
     Dir.mktmpdir do |dir|
       File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.0.0)\n")

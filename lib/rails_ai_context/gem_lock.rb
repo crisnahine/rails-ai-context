@@ -97,7 +97,7 @@ module RailsAiContext
           # per platform. The text before the first hyphen is the version; a
           # prerelease tag ("1.70.0-beta1") is dropped along with the platform.
           versions[match[1]] ||= match[2].split("-", 2).first
-        elsif (match = line.match(RUBY_LINE))
+        elsif (match = line.match(RUBY_LINE)) && match[1].match?(PLAIN_VERSION)
           ruby_version = match[1]
         end
       end

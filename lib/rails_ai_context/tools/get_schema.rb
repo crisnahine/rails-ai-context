@@ -87,10 +87,11 @@ module RailsAiContext
           when "summary"
             page = paginate(tables.keys.sort, offset: offset, limit: limit, default_limit: 50)
             paginated = page[:items]
+            return json_page_response(schema, tables, paginated) if format == "json"
+
             if paginated.empty? && total > 0
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
-            return json_page_response(schema, tables, paginated) if format == "json"
 
             lines = [ "# Schema Summary (#{count_phrase(total, "table")})", "" ]
             lines << "**Adapter:** #{adapter_label(schema)}" if schema[:adapter]
@@ -113,10 +114,11 @@ module RailsAiContext
             sorted = tables.keys.sort_by { |name| -(tables[name][:columns]&.size || 0) }
             page = paginate(sorted, offset: offset, limit: limit, default_limit: 25)
             paginated = page[:items]
+            return json_page_response(schema, tables, paginated) if format == "json"
+
             if paginated.empty?
               return text_response("No tables at offset #{page[:offset]}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
             end
-            return json_page_response(schema, tables, paginated) if format == "json"
 
             lines = [ "# Schema (#{count_phrase(total, "table")}, showing #{paginated.size})", "" ]
             lines.concat(static_source_lines(schema))
@@ -192,10 +194,11 @@ module RailsAiContext
           when "full"
             page = paginate(tables.keys.sort, offset: offset, limit: limit, default_limit: 10)
             paginated = page[:items]
+            return json_page_response(schema, tables, paginated) if format == "json"
+
             if paginated.empty? && total > 0
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
-            return json_page_response(schema, tables, paginated) if format == "json"
 
             lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
             paginated.each do |name|

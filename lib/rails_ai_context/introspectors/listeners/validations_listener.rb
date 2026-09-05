@@ -14,6 +14,12 @@ module RailsAiContext
           validates_acceptance_of validates_associated
         ].to_set.freeze
 
+        # Every key `validates` does not treat as a validator of its own:
+        # Rails' own default keys, plus `message`, which Rails rejects at this
+        # level and apps still write. What is left names a validator, which is
+        # why an app's own validator can be written as an option key at all.
+        SHARED_OPTIONS = %i[if unless on allow_nil allow_blank strict message].to_set.freeze
+
         def on_call_node_enter(node)
           return unless node.receiver.nil?
 
@@ -23,12 +29,6 @@ module RailsAiContext
             extract_custom_validate(node)
           end
         end
-
-        # Every key `validates` does not treat as a validator of its own.
-        # Rails decides the same way: what is left after these names a
-        # validator, which is why an app's own validator can be written as an
-        # option key at all.
-        SHARED_OPTIONS = %i[if unless on allow_nil allow_blank strict message].to_set.freeze
 
         private
 

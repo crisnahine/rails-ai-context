@@ -62,7 +62,7 @@ module RailsAiContext
         # A file that declares no class (a mixin, or one that did not parse) is
         # still a serializer file, so it keeps the name its path spells.
         names = SourceScan.each(root, kind: "app/serializers")
-          .map { |record| DeclaredConstant.resolve(record.source, record.path_name) }.sort
+          .map { |record| DeclaredConstant.resolve(record.source, record.path_name) }.uniq.sort
         result[:serializer_classes] = names if names.any?
 
         result

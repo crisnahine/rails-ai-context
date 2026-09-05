@@ -153,7 +153,7 @@ module RailsAiContext
 
         # One row past the cap, so a cut list is knowable rather than silent.
         fetch_limit = max_results_cap + 1
-        fetched, unreadable = if ripgrep_available?
+        fetched, search_error = if ripgrep_available?
           search_with_ripgrep(search_pattern, search_path, file_type, fetch_limit, root, context_lines, exclude_tests: exclude_tests)
         else
           search_with_ruby(search_pattern, search_path, file_type, fetch_limit, root, exclude_tests: exclude_tests)
@@ -208,7 +208,7 @@ module RailsAiContext
           "**#{capped_match_phrase(match_total, truncated)}#{scanned_note(truncated)}**#{" in #{path}" if path}, " \
           "showing #{shown}#{with_context}\n"
         header += "`>` = match line\n" if mixed
-        header += "_Some files could not be read and were skipped._\n" if unreadable
+        header += "_The search reported an error and may have skipped files._\n" if search_error
 
         if group_by_file
           text_response(header + "\n" + format_grouped(paginated, mixed, all_results) + pagination)
@@ -315,7 +315,7 @@ module RailsAiContext
         # recovered from - an unreadable file in the tree - and it still
         # prints every match it found. An rg too old for a flag prints
         # nothing, so an empty result from a failed run is the one worth
-        # rerunning; a full one is kept and the skipped files are named.
+        # rerunning; a full one is kept and the answer says an error was hit.
         failed = !(status.success? || status.exitstatus == 1)
         if failed && output.empty?
           return search_with_ruby(pattern, search_path, file_type, max_results, root, exclude_tests: exclude_tests)
@@ -331,7 +331,7 @@ module RailsAiContext
 
       private_class_method def self.search_with_ruby(pattern, search_path, file_type, max_results, root, exclude_tests: false)
         results = []
-        unreadable = false
+        search_error = false
         begin
           regex = build_regexp(pattern, Regexp::IGNORECASE, timeout: 2)
         rescue RegexpError => e
@@ -357,15 +357,15 @@ module RailsAiContext
           (RailsAiContext::SafeFile.read(file) || "").lines.each_with_index do |line, idx|
             if line.match?(regex)
               results << { file: relative, line_number: idx + 1, content: line, match: true }
-              return [ results, unreadable ] if results.size >= max_results
+              return [ results, search_error ] if results.size >= max_results
             end
           end
         rescue => _e
-          unreadable = true
-          next # Skip binary/unreadable files
+          search_error = true
+          next # Skip a file this process cannot read or scan
         end
 
-        [ results, unreadable ]
+        [ results, search_error ]
       end
 
 
@@ -382,11 +382,9 @@ module RailsAiContext
         truncated ? " - first #{count_phrase(max_results_cap, 'line')} scanned" : ""
       end
 
-      # A cut list makes the match count a floor. paginate marks its own
-      # total the same way, so the two lines of one answer agree.
       private_class_method def self.capped_match_phrase(total, truncated)
         phrase = count_phrase(total, "match")
-        truncated ? phrase.sub(/\A\d+/) { |n| "#{n}+" } : phrase
+        truncated ? floor_phrase(phrase) : phrase
       end
 
       private_class_method def self.match_row?(row)

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "timeout"
 
 # Runtime smoke test: every registered tool must execute via ToolRunner
 # against the combustion fixture without raising. Tools are allowed to
@@ -215,12 +216,30 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       FileUtils.mkdir_p(File.join(dir, "app", "models"))
       File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
 
-      # `listen` is not in this bundle, so the watcher reaches its own refusal
-      # for the missing gem rather than running forever.
-      out = `ruby -I #{lib} #{exe} watch --no-boot --app-path #{dir} 2>&1`
+      # With `listen` reachable the watcher runs until it is killed, so the
+      # child is bounded rather than read to EOF.
+      io = IO.popen([ "ruby", "-I", lib, exe, "watch", "--no-boot", "--app-path", dir ], err: %i[child out])
+      out = +""
+      begin
+        Timeout.timeout(30) do
+          while (line = io.gets)
+            out << line
+            break if out.match?(/listen|Watching for changes/)
+          end
+        end
+      rescue Timeout::Error
+        out << "watch printed nothing within 30s"
+      ensure
+        begin
+          Process.kill("KILL", io.pid)
+        rescue Errno::ESRCH
+          nil
+        end
+        io.close
+      end
 
       expect(out).not_to include("uninitialized constant")
-      expect(out).to include("listen")
+      expect(out).to match(/listen|Watching for changes/)
     end
   end
 
