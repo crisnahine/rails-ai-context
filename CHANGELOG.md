@@ -50,6 +50,12 @@ to #181), and the sibling defects behind them.
   `after_create do`, because that is what the file says, and `generate_test`
   names one "runs its inline block" rather than writing the marker into an
   example name.
+- **One commit event's two spellings were printed apart, with the second below
+  `after_rollback`.** `after_create_commit :x` and `after_commit :y, on:
+  :create` run at the same point, and the gem keeps each declaration as the
+  file wrote it, but the synthesized key was missing from the execution order
+  so it sorted to the end. Mastodon's `Status` printed the second half of
+  three events after the rollback callbacks.
 - **Callbacks were named after the wrong thing, and `around` callbacks
   disappeared.** The concern section re-parsed the file with a line regex
   whose colon was optional, so `after_create do` printed as `after_create :do`
@@ -125,6 +131,25 @@ to #181), and the sibling defects behind them.
   unreadable or oversize file raised past the source walk and the entry became
   one error line. Both reads ask the same question about what the introspector
   will open, and a file declined once is not opened again.
+- **A booted model was read out of whichever file Ruby happened to record the
+  constant in.** Letting a gem's model keep the gem's own path also believed a
+  location that is neither the app nor a gem: where Zeitwerk sets the constant
+  rather than letting the file define it, Ruby records Zeitwerk's own
+  `cref.rb`, and the walk read that. This repository's own dummy model
+  answered no callbacks, no scopes and no enums, reported Zeitwerk's internal
+  module as an unread concern, and wrote a path into a gem as the model's
+  file. A location inside the app is the model's own file; one outside it is
+  believed only when the app has no file of its own, which is what a gem's
+  model looks like.
+- **A model or controller the walk could not read was written into the
+  generated files as an entry with nothing in it.** The Claude rules said "0
+  assocs, 0 validations", the Cursor and Copilot rules said "(0 actions)", the
+  four root files printed a bare name, and the markdown format dropped the
+  entry under a heading that still counted it, while the tool answering the
+  same question already said the file could not be read. Every listing names
+  the entry with its reason now, the count still includes it because the app
+  has it, and the wording lives once so the generated files and the tool
+  listings give the same answer.
 - **An unreadable model file took its STI children down with it, in silence.**
   The file was dropped from the walk, so its children lost the only route they
   had to `ApplicationRecord`, and an app whose models all descend from one
@@ -767,6 +792,11 @@ to #181), and the sibling defects behind them.
   and reached the client as a bare internal error, which the module's own
   contract says must never happen. The frame comes back unshortened now and
   the client still gets the error result.
+- **The frame in a failure answer named the machine it ran on when the root
+  could not be resolved.** The backstop that keeps that fault inside the
+  safety net handed the frame back untouched, so a failure carried an absolute
+  install path where a healthy answer carries a gem-relative one. It strips
+  the same prefix the no-app branch beside it already strips.
 - **The release gate ran a smaller suite than CI.** The `search_code` count
   examples skip without ripgrep, and only the CI workflow installed it, so the
   workflow that publishes ran fewer examples than the one that guards a pull
@@ -791,6 +821,10 @@ to #181), and the sibling defects behind them.
   it made the host app print "fatal: not a git repository". The command runs
   with its stderr discarded. The packaged gem carries the same file list as
   before.
+- **The trace's route hint never rendered, for any app.** The controller name
+  it looked the routes up by was read from a capture group that
+  `String#match?` does not set, so it was always nil. A trace over a
+  controller call site names the routes that reach it again.
 - **`ai:inspect` and the generated context files stated the route count
   differently.** The rake summary printed the raw total where `CLAUDE.md`
   prints the app share and names the rest as framework, so the same number
@@ -858,6 +892,13 @@ to #181), and the sibling defects behind them.
   It answers `[UNAVAILABLE: app declares none]` now, the way the Rails version
   beside it already refuses, and `onboard`'s quick depth says the same as its
   standard depth rather than interpolating the value raw.
+- **An app that declares a Ruby version and has no lockfile was reported as
+  declaring none.** The reader skipped the Gemfile's `ruby` line whenever
+  `Gemfile.lock` was absent, so adding an empty lockfile made the same line
+  appear. Which gems resolved and which Ruby the app declares are two facts
+  and the second does not wait on the first. The sentence that prints it was
+  keyed on the gems section rather than on the value, which refuses for a
+  second reason, and it reads the value now.
 - **The onboarding brief dropped an app's whole Sidekiq layer without saying
   so.** On an app that runs its background work through workers in
   `app/workers`, the async section counted the mailers and said nothing else,
