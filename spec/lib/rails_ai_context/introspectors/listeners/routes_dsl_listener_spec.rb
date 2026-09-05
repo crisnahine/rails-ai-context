@@ -257,6 +257,21 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     )
   end
 
+  it "lets a with_options module: default override the namespace it wraps" do
+    records = route_records('with_options module: :api do
+      namespace :v1 do
+        resources :posts, only: [:index]
+      end
+      scope :beta do
+        resources :widgets, only: [:index]
+      end
+    end')
+    expect(records.map { |r| [ r[:path], r[:controller] ] }).to contain_exactly(
+      [ "/v1/posts", "api/api/posts" ],
+      [ "/beta/widgets", "api/api/widgets" ]
+    )
+  end
+
   it "keeps an unreadable with_options target from inventing a controller" do
     results = routes_for('with_options to: redirect("/elsewhere") do
       get "/admin/settings"

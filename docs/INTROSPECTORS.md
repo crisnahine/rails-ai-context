@@ -201,7 +201,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | MiddlewareConfigListener | `config.middleware.use` / `insert_before` / `insert_after` |
 | SchemaDslListener | `schema.rb`: `create_table`, `t.string`, `t.index`, `add_foreign_key`, `create_enum` |
 | MigrationDslListener | Migration DSL: `create_table`, `add_column`, `add_index`, `add_reference`, and friends |
-| RoutesDslListener | `config/routes.rb`, resolving namespace/scope/resources nesting into flat routes |
+| RoutesDslListener | `config/routes.rb`, resolving namespace/scope/resources nesting into flat routes; routing concerns (`concern` definitions replayed at each `concerns:` site), `with_options` defaults merged under each inner call, and the `as:`, `param:`, `module:`, `path:` and `only:`/`except:` options |
 | MountListener | `mount Sidekiq::Web, at: "/sidekiq"` and the hash form |
 | GemfileDslListener | `gem "name", "version"` and `group :development do ... end` |
 | RakeTaskDslListener | `namespace`, `desc`, `task` in `.rake` files |
