@@ -1532,6 +1532,45 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "confidence on a static entry" do
+    # The entry says [STATIC] while its own records claimed [VERIFIED], so one
+    # answer contradicted itself: the renderer prints the scope tag next to the
+    # header tag, and --format json hands every one of these keys through.
+    it "does not let a record claim more than the tier that carries it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            belongs_to :user
+            validates :title, presence: true
+            scope :published, -> { all }
+            def summary = title
+          end
+        RUBY
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post[:confidence]).to eq(RailsAiContext::Confidence::STATIC)
+        %i[associations validations scopes methods].each do |key|
+          expect(post[key].map { |r| r[:confidence] })
+            .to all(eq(RailsAiContext::Confidence::STATIC)), "#{key} still claims more than the entry"
+        end
+      end
+    end
+
+    it "keeps a record the parser could not resolve at its own lower mark" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"),
+                   "class Post < ApplicationRecord\n  scope :recent, SOME_LAMBDA\nend\n")
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post[:scopes].map { |s| s[:confidence] }).to eq([ RailsAiContext::Confidence::INFERRED ])
+      end
+    end
+  end
+
   describe "STI on the static tier" do
     # The booted tier reports the hierarchy under :sti and the graph tool
     # renders it from there. The static tier resolves the same chain to share

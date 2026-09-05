@@ -813,7 +813,7 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(own[:mixins]),
-          concern_callbacks: concern_callbacks(data[:callbacks], confidence: Confidence::STATIC),
+          concern_callbacks: concern_callbacks(data[:callbacks]),
           concerns_unread: (unread if unread.any?),
           macros: data[:macros],
           methods: ActionResolver.own_methods(own[:methods], class_name),
@@ -822,7 +822,7 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
-        details.compact
+        downgrade_records(details.compact)
       end
 
       # Both tiers collect all six. The booted tier reads five of them off the
@@ -896,12 +896,22 @@ module RailsAiContext
         Array(entries).uniq { |entry| entry.is_a?(Hash) ? yield(entry) : entry }
       end
 
-      # A record cannot claim more than the tier that carries it, so the
-      # static payload downgrades what the listener verified in the file.
-      def concern_callbacks(callbacks, confidence: nil)
+      def concern_callbacks(callbacks)
         found = Array(callbacks).select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
-        found = found.map { |cb| cb[:confidence] == Confidence::VERIFIED ? cb.merge(confidence: confidence) : cb } if confidence
         found if found.any?
+      end
+
+      # A record cannot claim more than the tier that carries it: nothing in a
+      # static entry is runtime-confirmed, whatever the listener read off the
+      # file. A record the parser could not resolve keeps its own lower mark.
+      def downgrade_records(details)
+        details.transform_values do |value|
+          next value unless value.is_a?(Array)
+
+          value.map do |entry|
+            entry.is_a?(Hash) && entry[:confidence] == Confidence::VERIFIED ? entry.merge(confidence: Confidence::STATIC) : entry
+          end
+        end
       end
 
       # `defined_enums` keys both levels with Strings; the listener uses
@@ -1004,7 +1014,7 @@ module RailsAiContext
         }
         collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
         details[:collection] = collection if collection
-        details
+        downgrade_records(details)
       end
     end
   end
