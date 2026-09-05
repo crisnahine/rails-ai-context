@@ -367,7 +367,7 @@ RSpec.describe RailsAiContext::Doctor do
 
       it "warns that it breaks where the gem is not loaded" do
         expect(check.status).to eq(:warn)
-        expect(check.message).to include("no guard")
+        expect(check.message).to include("no recognised guard")
         expect(check.fix).to include("defined?(RailsAiContext)")
       end
     end
@@ -385,6 +385,57 @@ RSpec.describe RailsAiContext::Doctor do
 
       it "returns nil" do
         expect(check).to be_nil
+      end
+    end
+
+    # The two generated spellings are not the only working guards, and a
+    # readiness score must not be docked for a file that is already safe.
+    context "when the initializer guards on respond_to? alone" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          if RailsAiContext.respond_to?(:configure)
+            RailsAiContext.configure do |config|
+            end
+          end
+        RUBY
+      end
+
+      it "returns nil" do
+        expect(check).to be_nil
+      end
+    end
+
+    context "when the initializer returns early unless the gem is defined" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          return unless defined?(RailsAiContext::Configuration)
+
+          RailsAiContext.configure do |config|
+          end
+        RUBY
+      end
+
+      it "returns nil" do
+        expect(check).to be_nil
+      end
+    end
+
+    context "when the only mention of a guard comes after the configure call" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          RailsAiContext.configure do |config|
+          end
+
+          # TODO: wrap this in defined?(RailsAiContext)
+        RUBY
+      end
+
+      it "still warns" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("no recognised guard")
       end
     end
   end
