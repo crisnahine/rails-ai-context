@@ -14,6 +14,12 @@ module RailsAiContext
     # the failure.
     module SafeCall
       def call(**kwargs)
+        # An MCP client sends whatever keys it likes. Reaching the tool with
+        # one it does not declare answers with an unknown-keyword ArgumentError
+        # and a backtrace, where the CLI names the params the tool takes.
+        unknown = unknown_params(kwargs)
+        return unknown_param_response(unknown) if unknown.any?
+
         # Held as a local, not a thread-local: the wrapper sees both the value
         # it discarded and the response that came back, so the note needs no
         # state outliving the call. It also lands on every way out of a tool,
@@ -45,14 +51,45 @@ module RailsAiContext
 
       private
 
+      # The declared params are the contract, so a tool whose method takes
+      # **kwargs refuses the same keys as one that names them.
+      def unknown_params(kwargs)
+        properties = (respond_to?(:input_schema) ? input_schema&.to_h : nil)&.dig(:properties)
+        return [] unless properties
+
+        RailsAiContext::Tools::BaseTool.unknown_param_names(kwargs.keys, properties)
+      end
+
+      def unknown_param_response(unknown)
+        known = (input_schema.to_h[:properties] || {}).keys.map(&:to_s)
+        lines = unknown.map do |name|
+          suggestion = RailsAiContext::Tools::BaseTool.find_closest_match(name, known)
+          suggestion ? "'#{name}' - did you mean '#{suggestion}'?" : "'#{name}'"
+        end
+        valid = known.any? ? "Valid params: #{known.join(', ')}" : "This tool takes no params."
+        text = "Unknown param#{"s" if unknown.size > 1}: #{lines.join(', ')}\n#{valid}"
+        MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
+      end
+
       def failure_response(error)
         label = respond_to?(:tool_name) ? tool_name : name
-        origin = Array(error.backtrace).first.to_s
+        origin = portable_origin(Array(error.backtrace).first.to_s)
         text = +"Tool #{label} failed: #{error.class}: #{error.message.to_s.lines.first&.strip}\n"
         text << "At: #{origin}\n" unless origin.empty?
         text << "Recovery: retry with a narrower query (a single table, model, or " \
                 "controller), or run `rails-ai-context doctor` to check app health."
         MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
+      end
+
+      # A backtrace frame is an absolute path, and on an installed gem that is
+      # the machine's GEM_HOME. The answer leaves the machine, so the frame is
+      # spelled the way every other path this gem reports is.
+      def portable_origin(frame)
+        path, rest = frame.split(":", 2)
+        return frame if path.to_s.empty?
+
+        root = rails_app.root.to_s rescue ""
+        [ RailsAiContext::PortablePath.relativize(path, root), rest ].compact.join(":")
       end
 
       # The value the caller sent, when this tool takes a DetailLevel detail

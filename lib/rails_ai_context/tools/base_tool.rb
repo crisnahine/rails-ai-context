@@ -476,6 +476,13 @@ module RailsAiContext
           )
         end
 
+        # The params a caller sent that this tool does not declare. The CLI and
+        # the MCP wrapper both refuse them, in their own words, off this one
+        # answer. server_context is the SDK's, not the caller's.
+        def unknown_param_names(keys, properties)
+          keys.map(&:to_s) - (properties || {}).keys.map(&:to_s) - [ "server_context" ]
+        end
+
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
         def find_closest_match(input, available)
           return nil if available.empty?
