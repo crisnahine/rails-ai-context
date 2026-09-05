@@ -79,12 +79,25 @@ to #181), and the sibling defects behind them.
   schema heading named it with zero counts beside its base. It now merges each
   STI base's declarations the way it merges a concern's, the nearer
   declaration winning over the further one.
+- **`dependency_graph --show-sti` was a silent no-op without a booted app.**
+  The static model walk resolves the inheritance chain to share an STI base's
+  table and macros, and never reported it, so the flag added a section booted
+  and changed nothing static. Static model entries carry the same `sti` hash
+  the booted tier reports.
 - **A second `validates` on the same attribute and kind was dropped.**
   `rails_get_model_details` collapsed validations on kind and attribute alone,
   so a model that validates one attribute twice under different conditions
   lost the second rule; Mastodon's `Account` lost its local-username length
   limit and its `uri` exclusion. The options are part of the key now, and only
   a byte-identical repeat is collapsed.
+- **`rails_get_model_details` printed `validates` as the kind of a
+  validation.** A rule written `validates :followers_url, absence: true` names
+  its kind in the option, and the reader saw the macro name instead;
+  `validates :uri, absence: true, exclusion: { in: [''] }` lost its absence
+  rule into the exclusion row. The kind list was a closed allow-list with no
+  `absence` in it. Rails treats every key that is not `if`, `unless`, `on`,
+  `allow_nil`, `allow_blank`, `strict` or `message` as naming a validator, so
+  the walk does too, which also gives an app's own validator its real name.
 - **Rails' anonymous join class for a `has_and_belongs_to_many` was reported
   as one of the app's models.** Rails names it through a singleton `name=`, so
   it answered `HABTM_Tags` while living at `Account::HABTM_Tags`, and the
@@ -100,6 +113,10 @@ to #181), and the sibling defects behind them.
   the install prefix dropped, so the entry reads
   `doorkeeper-5.8.2/app/models/doorkeeper/access_grant.rb`; a class Ruby knows
   no source for carries no file at all.
+- **A gem-owned model's file could not be told from an app file.** It was
+  written as a gem-relative path into a field every other model fills
+  app-relative, and resolved against the app root it names a file that is not
+  there. A gem path in that field carries a `gem:` prefix now.
 - **A model file the app cannot load was answered as no such model, with its
   table listed as orphaned.** Zeitwerk never loads a file with a syntax error,
   so reflection never saw the class and the booted walk dropped it. The name
@@ -176,6 +193,14 @@ to #181), and the sibling defects behind them.
   public actions)`, and the summary listing as `0 actions`, while asking for
   that one controller answered that it could not be read. Every listing states
   the error now, from the one phrase the serializers share.
+- **A compressed controller group was headed by a namespace no controller is
+  in.** `rails_get_controllers(detail: "full")` built the heading from the
+  first segment of the first member's name, so five top-level controllers were
+  filed under `CustomCssController::*` and `OAuth::UserinfoController` under
+  `Api::*`; 38 of Mastodon's 309 controllers appeared only inside such a
+  heading and their real constant was nowhere in the answer. The heading now
+  names the longest namespace every member shares, or just the count when they
+  share none, and the group lists every member by its full constant.
 - **`excluded_filters` was honoured only where reflection ran.** The key was
   read in one place, inside the reflection branch, so a `--no-boot` run and
   any booted controller reflection did not load kept listing the names an app
@@ -221,6 +246,20 @@ to #181), and the sibling defects behind them.
   now names the first ancestor whose own body declared it.
   `ApplicationController` is not in the listing, so a filter it declares still
   cannot be attributed to it; docs/COMPATIBILITY.md states that.
+- **`rails_get_controllers` gave two answers to one question about the same
+  controller.** `skip_before_action :require_functional!, unless:
+  :limited_federation_mode?` was read as an unconditional skip, so the
+  single-controller answer struck the filter through while the grouped listing
+  said it runs. A skip carrying `if:` or `unless:` takes the filter out on
+  some requests and leaves it on others, so it no longer removes the filter
+  from the chain: the filter keeps its place and the line names the condition,
+  the way an active filter's `only:`/`except:` tail is rendered, with a lambda
+  spelled `[INFERRED]`. The condition is carried down from the ancestor that
+  declared the skip. The listings, the routes hint, `rails_analyze_feature`
+  and the generated context files resolve their filter line through the same
+  reader the single-controller answer uses. The controller walk was also
+  missing `skip_around_action` from its macro list, so a conditional skip on
+  an around filter had no record at all.
 - **Static `get_api` named serializers by camelizing the file path, so an app
   acronym came out miscased.** `ActivityPub::AcceptFollowSerializer` was
   reported as `Activitypub::AcceptFollowSerializer` and
@@ -275,6 +314,17 @@ to #181), and the sibling defects behind them.
   `Account.create!` were not columns. The record is built from the permitted
   names that are columns, a TODO names the ones left out, and the request
   params still carry every permitted name.
+- **`rails_generate_test` rendered an empty `describe "associations" do end`
+  in the static tier.** The rspec branch matched the macro against
+  `"belongs_to"` and its siblings while the static walk reported it as a
+  Symbol, so every row was dropped; the minitest branch interpolates, which is
+  why the minitest fixture never saw it. The same mismatch silenced the
+  validation matchers, the `fk:` and `[optional]` markers and the
+  implicit-presence label in `rails_get_model_details`, and the eager-loading
+  candidates in the performance check. Both listeners spell the macro and the
+  validation kind the way the booted tier does, and a static association
+  record carries `through`, `dependent`, `class_name`, `foreign_key`,
+  `polymorphic` and `optional` where every renderer already looks for them.
 - **The generated minitest scaffolding named test data the app does not own.**
   `get_test_info`'s template emitted `sign_in users(:one)` whenever it saw a
   `sign_in` anywhere in the app's tests, and a fixture call in an app with no
@@ -301,6 +351,14 @@ to #181), and the sibling defects behind them.
   `presave!` as a call site of `save!`, and method source lookup for `[]`,
   `foo=` and `<=>`. Against Mastodon, `def reblog?` now reports the 3 lines
   ripgrep finds instead of 6.
+- **`format: "json"` on `rails_get_schema` returned markdown.** The parameter
+  is declared, schema-validated and accepted without a warning, but only a
+  single table and `detail:"full"` ever produced JSON; every listing returned
+  the same bytes as `format:"markdown"`, on the CLI and over MCP. All three
+  detail levels return the paginated tables as JSON now. A JSON body also
+  stopped carrying the markdown static-tier banner, which made it unparseable:
+  the tier note rides inside the document under `_static_tier`, and the
+  response cap drops whole elements instead of slicing the text.
 - **`search_code` counted emitted lines as matches and printed the 200 cap as
   if it were the total.** The header now counts only match lines, so it no
   longer moves with `context_lines`, and it says `first 200 lines scanned`
@@ -430,6 +488,10 @@ to #181), and the sibling defects behind them.
   `inspect` and `watch` let the `chdir` error escape. The directory is checked
   before the move, and those three print the one-line refusal the other
   commands already printed.
+- **An initializer calling `abort` ended the run with no line from this gem.**
+  The exit still passes through with the app's own message and its status, and
+  one stderr line now says the boot was cut short and that `--no-boot` answers
+  the same call.
 - **A value-taking flag with no value crashed inside the tool.** `tool schema
   --table` became the Boolean `true` and reached the tool as a type it never
   accepts, raising a `NoMethodError` that named an internal frame. It is
@@ -472,6 +534,12 @@ to #181), and the sibling defects behind them.
   plain version literal in the Gemfile when the lockfile has no such section.
   A Gemfile requirement naming a range is left unanswered rather than reported
   as a version.
+- **One run reported two different Ruby versions with nothing to separate
+  them.** `.ai-context.json` named the interpreter that ran while the
+  `rails://gems` resource named the lockfile's `RUBY VERSION`. The context's
+  `ruby_version` falls back to the app's declared Ruby in the static tier, the
+  way `rails_version` already does, and the gems section reports it as
+  `declared_ruby_version`.
 - **A `Gemfile.lock` that is not a lockfile read as an app with no gems.** No
   gem entries answered as an empty bundle, so every gem-dependent answer said
   the app does not use the gem. A file with no `specs:` section is unknown
@@ -496,6 +564,14 @@ to #181), and the sibling defects behind them.
   tier it was answered in, every generated file with a header carries one
   `[STATIC]` line under it, and the JSON carries a `tier` key. A booted run
   adds nothing, so an unmarked file is a booted one.
+- **Only the overview file said it was generated without booting.** The
+  `[STATIC]` notice reached each serializer's overview render alone, so
+  `.claude/rules/rails-models.md` said 111 models and
+  `.cursor/rules/rails-controllers.mdc` said 309 controllers where a booted
+  run says 114 and 321, with nothing in either file naming the tier. Every
+  generated file whose numbers come from the app now carries the notice under
+  its heading. The MCP tool references list the gem's own tools in either
+  tier, so they carry none.
 
 ### Changed
 
