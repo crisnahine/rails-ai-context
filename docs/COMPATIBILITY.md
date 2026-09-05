@@ -125,10 +125,16 @@ Source: `lib/rails_ai_context/confidence.rb`.
 
 `[VERIFIED]`/`[INFERRED]` are per-value tags applied inside the schema, model,
 route, controller, and mailbox-routing introspectors as they walk the AST
-(`Confidence.for_node`). `[STATIC]`/`[UNAVAILABLE]` are whole-response tags:
-`[STATIC]` marks any answer that came from the static tier; `[UNAVAILABLE]`
-marks a section with no static path, or (in either tier) a data source that
-genuinely doesn't exist for this app.
+(`Confidence.for_node`). `[UNAVAILABLE]` is a whole-response tag, marking a
+section with no static path, or (in either tier) a data source that genuinely
+doesn't exist for this app.
+
+`[STATIC]` marks the whole response of any answer that came from the static
+tier, and it also caps the records inside it: no record can claim more than the
+tier carrying it, so a static model entry's associations, validations, scopes
+and methods read `[STATIC]` rather than the `[VERIFIED]` the AST walk would
+give them on its own. A record the parser could not resolve keeps its lower
+`[INFERRED]`. The same cap decides the header of a hydrated Schema Hints block.
 
 A generated context file says the same thing. A run that did not boot writes a
 `[STATIC]` line under the header of every file that states app counts
