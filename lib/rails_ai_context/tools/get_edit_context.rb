@@ -47,8 +47,8 @@ module RailsAiContext
 
         located = RailsAiContext::SafePath.locate(file, under: rails_app.root.to_s)
         case located.refusal
-        when :traversal, :outside then return text_response("Path not allowed: #{file}")
-        when :sensitive then return text_response("Access denied: #{file} is a sensitive file (secrets/keys/credentials).")
+        when :traversal, :outside then return error_response("Path not allowed: #{file}")
+        when :sensitive then return error_response("Access denied: #{file} is a sensitive file (secrets/keys/credentials).")
         when :too_large then return text_response("File too large: #{file}")
         when :missing
           basename = File.basename(file)

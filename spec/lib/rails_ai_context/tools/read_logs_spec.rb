@@ -139,11 +139,14 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
       FileUtils.mkdir_p(log_dir)
     end
 
-    it "blocks path traversal via file parameter" do
+    # The name is reduced to its basename, so this used to be reported as the
+    # log of that basename not being there, which is not what happened.
+    it "blocks path traversal via file parameter and says so" do
       result = described_class.call(file: "../../../etc/passwd")
       text = result.content.first[:text]
-      expect(text).to include("not found")
+      expect(text).to include("Path not allowed")
       expect(text).not_to include("root:")
+      expect(result.error?).to be(true)
     end
 
     it "detects JSON/Lograge format" do

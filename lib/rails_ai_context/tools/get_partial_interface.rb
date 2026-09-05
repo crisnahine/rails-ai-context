@@ -45,8 +45,8 @@ module RailsAiContext
         # decides whether the partial exists.
         guard = RailsAiContext::SafePath.locate(partial, under: views_dir, root: root)
         case guard.refusal
-        when :traversal then return text_response("Path not allowed: #{partial}")
-        when :sensitive then return text_response("Path not allowed: #{partial} (sensitive file)")
+        when :traversal then return error_response("Path not allowed: #{partial}")
+        when :sensitive then return error_response("Path not allowed: #{partial} (sensitive file)")
         end
 
         unless Dir.exist?(views_dir)
