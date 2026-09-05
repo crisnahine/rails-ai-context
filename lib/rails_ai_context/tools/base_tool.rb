@@ -568,6 +568,23 @@ module RailsAiContext
           extract_method_source_from_string(source, method_name)
         end
 
+        # First fixture key for a table (reading the fixture file when the
+        # cached fixture names miss it), or nil when no fixture exists. Every
+        # surface that writes a fixture call asks here, so none of them can
+        # invent a key the app does not have.
+        def fixture_key_for(table, tests_data)
+          fixture_names = tests_data[:fixture_names] || {}
+          keys = fixture_names[table] || fixture_names[table.to_sym]
+          return keys.first.to_s if keys.is_a?(Array) && keys.any?
+
+          fixture_file = File.join(rails_app.root, "test", "fixtures", "#{table}.yml")
+          return nil unless File.exist?(fixture_file)
+
+          content = RailsAiContext::SafeFile.read(fixture_file)
+          # YAML fixture files have top-level keys as fixture names
+          content&.scan(/^([a-z_]\w*):/i)&.first&.first
+        end
+
         # A callback target is a method name, an inline block, or a callback
         # object. Only the first is a symbol, so only the first takes a colon.
         def callback_target(method)
