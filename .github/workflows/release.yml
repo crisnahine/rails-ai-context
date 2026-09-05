@@ -57,6 +57,11 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
 
+      # The search_code count examples skip without it, so the runner image
+      # shipping it is stated here rather than assumed.
+      - name: Ensure ripgrep
+        run: command -v rg || sudo apt-get install -y ripgrep
+
       # A publish must not depend on which order RSpec happened to pick. CI
       # runs a random seed to keep discovering order bugs; the release gate
       # runs fixed ones so the same commit always gets the same verdict.
