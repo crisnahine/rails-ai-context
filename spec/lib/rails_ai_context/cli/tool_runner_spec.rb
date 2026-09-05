@@ -304,10 +304,11 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
           .to include(app_only: true, detail: "summary")
       end
 
-      it "does not swallow a following non-boolean word" do
-        parsed = described_class.new("search_code", [ "--exclude-tests", "pattern-ish" ])
-                                .send(:build_kwargs)
-        expect(parsed).to include(exclude_tests: true)
+      # The word is not the flag's value, and it is not usable either - it
+      # used to be dropped without a word about it.
+      it "refuses a following non-boolean word instead of swallowing it" do
+        expect { described_class.new("search_code", [ "--exclude-tests", "pattern-ish" ]).send(:build_kwargs) }
+          .to raise_error(described_class::InvalidArgumentError, /pattern-ish/)
       end
     end
 
@@ -345,6 +346,87 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
       output = runner.run
       expect(output).to be_a(String)
       expect(output).not_to be_empty
+    end
+
+    # The text says the parameter is required, so a script wrapping the CLI
+    # has to be able to see that from the exit status.
+    it "reports a missing required param as a failed call" do
+      runner = described_class.new("search_code", [])
+      runner.run
+      expect(runner.error).to eq(true)
+    end
+
+    it "leaves a call that supplied its required params successful" do
+      runner = described_class.new("search_code", [ "--pattern", "def" ])
+      runner.run
+      expect(runner.error).to eq(false)
+    end
+
+    # A tool that answers with a listing when it has nothing to work on is
+    # giving guidance, not failing.
+    it "leaves a tool with no required params successful when called bare" do
+      runner = described_class.new("model_details", [])
+      runner.run
+      expect(runner.error).to eq(false)
+    end
+
+    # `--limit abc` silently became 0, so the tool answered a question nobody
+    # asked. An out-of-type value is warned about like an invalid enum.
+    it "warns about a non-numeric integer value and falls back to the default" do
+      runner = described_class.new("search_code", [ "--pattern", "def", "--limit", "abc" ])
+      expect { runner.run }
+        .to output(/not a valid value for limit.*integer/i).to_stderr
+    end
+
+    it "drops the non-numeric integer rather than coercing it to zero" do
+      runner = described_class.new("search_code", [ "--pattern", "def", "--limit", "abc" ])
+      allow($stderr).to receive(:puts)
+      kwargs = runner.send(:build_kwargs)
+      runner.send(:validate_kwargs!, kwargs, runner.send(:tool_schema))
+      expect(kwargs).not_to have_key(:limit)
+    end
+
+    it "keeps a numeric integer value" do
+      runner = described_class.new("search_code", [ "--pattern", "def", "--limit", "5" ])
+      expect(runner.send(:build_kwargs)).to include(limit: 5)
+    end
+  end
+
+  describe "usage errors" do
+    # `--table` with nothing after it reached the tool as the Boolean true and
+    # crashed inside it with a raw NoMethodError.
+    it "refuses a value-taking flag with no value" do
+      runner = described_class.new("schema", [ "--table" ])
+      expect { runner.run }
+        .to raise_error(described_class::InvalidArgumentError, /--table/)
+    end
+
+    it "refuses a value-taking flag followed by another flag" do
+      runner = described_class.new("schema", [ "--table", "--detail", "full" ])
+      expect { runner.run }
+        .to raise_error(described_class::InvalidArgumentError, /--table/)
+    end
+
+    it "still reads a bare boolean flag as true" do
+      expect(described_class.new("routes", [ "--app-only" ]).send(:build_kwargs))
+        .to include(app_only: true)
+    end
+
+    # `tool schema posts` is a plausible mistype of `--table posts`; the token
+    # used to be dropped and a full listing came back.
+    it "refuses a positional argument after the tool name" do
+      runner = described_class.new("schema", [ "posts" ])
+      expect { runner.run }
+        .to raise_error(described_class::InvalidArgumentError) { |e|
+          expect(e.message).to include("posts")
+          expect(e.message).to include("--table")
+        }
+    end
+
+    it "names the tool's own params in the refusal" do
+      runner = described_class.new("search_code", [ "widget" ])
+      expect { runner.run }
+        .to raise_error(described_class::InvalidArgumentError, /--pattern/)
     end
   end
 
