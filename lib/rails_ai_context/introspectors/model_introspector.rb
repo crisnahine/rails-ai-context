@@ -25,6 +25,7 @@ module RailsAiContext
       # @return [Hash] model metadata keyed by model name
       def call
         EagerLoad.dir(app.root, kind: "app/models")
+        @unloadable = {}
         models = discover_models
 
         result = models.each_with_object({}) do |model, hash|
@@ -46,6 +47,8 @@ module RailsAiContext
             result[class_name] = details
           end
         end
+
+        unloadable_models.each { |class_name, details| result[class_name] ||= details }
 
         result
       end
@@ -81,6 +84,25 @@ module RailsAiContext
       end
 
       private
+
+      # A model file the app cannot load leaves its class out of reflection,
+      # and leaving it out here answers that the model does not exist and that
+      # its table has no model at all. The file is a fact the source walk
+      # already holds, so the name is kept with the load error and with the
+      # table the static tier reads off that same file.
+      def unloadable_models
+        return {} if @unloadable.nil? || @unloadable.empty?
+
+        candidates = static_candidates
+        @unloadable.each_with_object({}) do |(class_name, error), entries|
+          candidate = candidates[class_name]
+          entries[class_name] = {
+            error: error,
+            file: candidate&.dig(:file),
+            table_name: candidate && resolve_table_name(class_name, candidates)
+          }.compact
+        end
+      end
 
       # Every class file under the model directories, by declared name, with
       # the superclass it names. Modelhood is decided over the whole walk
@@ -279,9 +301,11 @@ module RailsAiContext
             next unless klass < ActiveRecord::Base && !klass.abstract_class?
             models << klass
             known << class_name
-          rescue NameError, LoadError, ScriptError
-            # Not a valid (or currently loadable) model class - a
-            # syntax-broken file costs itself, not the whole listing.
+          rescue NameError, LoadError, ScriptError => e
+            # A syntax-broken file costs itself, not the whole listing, but
+            # its name is recorded: a file that exists for a class reflection
+            # lacks is not the same answer as no such model.
+            @unloadable[class_name] = e.message.to_s.lines.first.to_s.strip
           end
         end
 
