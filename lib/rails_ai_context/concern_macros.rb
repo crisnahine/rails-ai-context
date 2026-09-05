@@ -14,7 +14,7 @@ module RailsAiContext
     # fixed for the run and `seen`, `collected` and `unresolved` accumulate
     # across it, so they belong to the run rather than to every call.
     class Run
-      attr_reader :unresolved
+      attr_reader :unresolved, :hidden
 
       # The default block belongs to the walk. Once the entries leave it, a
       # caller reading a key the walk never produced would grow one.
@@ -30,15 +30,27 @@ module RailsAiContext
         @seen = Set.new
         @collected = Hash.new { |hash, key| hash[key] = [] }
         @unresolved = []
+        @hidden = []
       end
 
+      # Raw mixin names in, so the exclusion happens here: this is the only
+      # place that sees every name at every depth, with the namespace and the
+      # directories the lookup needs.
       def walk(names, within, depth)
         return if depth.negative?
 
         names.each do |name|
           next unless @seen.add?(name)
+          next unless ConcernMembership.candidate?(name)
 
           path = ConcernPaths.find_file(@root, name, within: within, dirs: @dirs)
+          if ConcernMembership.excluded?(name)
+            # Hiding a concern hides what it declared. Only one whose file is
+            # here would have been read, so only that one is worth counting.
+            @hidden << name if path
+            next
+          end
+
           data = path && introspect(path)
           if data.nil?
             @unresolved << name
@@ -49,7 +61,7 @@ module RailsAiContext
             Array(data[key]).each { |entry| @collected[key] << tagged(entry, name) }
           end
 
-          walk(ConcernMembership.from_mixins(data[:mixins]), name, depth - 1)
+          walk(ConcernMembership.mixin_names(data[:mixins]), name, depth - 1)
         end
       end
 
@@ -72,7 +84,11 @@ module RailsAiContext
         return nil if File.size(path) > RailsAiContext.configuration.max_file_size
 
         Introspectors::SourceIntrospector.call(path)
-      rescue StandardError
+      rescue StandardError => e
+        # A permission bit, a directory in place of a file and a bug in a
+        # listener all land in `unresolved` alike, so the cause is worth
+        # saying where the booted walk already says it.
+        $stderr.puts "[rails-ai-context] concern introspection failed for #{path}: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
@@ -94,11 +110,12 @@ module RailsAiContext
     #   one run walks a file once however many classes include it. The caller
     #   owns its lifetime: a process-wide store would go stale, because the
     #   configured paths and the files themselves change in-process.
-    # @return [Array(Hash, Array<String>)] the collected entries per key, and
-    #   the names whose file could not be read
+    # @return [Array(Hash, Array<String>, Array<String>)] the collected entries
+    #   per key, the names whose file could not be read, and the names
+    #   `excluded_concerns` hid that the walk would otherwise have read
     def collect(root, mixins, keys:, prefer: nil, within: nil, cache: nil)
-      names = ConcernMembership.from_mixins(mixins)
-      return [ {}, [] ] if names.empty?
+      names = ConcernMembership.mixin_names(mixins)
+      return [ {}, [], [] ] if names.empty?
 
       # Resolved once per call and held by the run: the configured paths
       # change in-process, so a cache keyed on root goes stale with no reset
@@ -106,7 +123,7 @@ module RailsAiContext
       run = Run.new(root.to_s, ConcernPaths.ordered_dirs(root.to_s, prefer), keys, cache)
       run.walk(names, within, MAX_DEPTH)
 
-      [ run.collected, run.unresolved ]
+      [ run.collected, run.unresolved, run.hidden ]
     end
   end
 end

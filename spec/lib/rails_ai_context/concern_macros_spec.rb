@@ -138,6 +138,83 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(collected[:associations].map { |a| a[:name] }).to eq([ :revisions ])
   end
 
+  # The exclusion is applied inside the walk, so the walk is the only place
+  # that knows which concerns it skipped for that reason, at any depth.
+  describe "a concern excluded_concerns hides" do
+    around do |example|
+      original = RailsAiContext.configuration.excluded_concerns
+      RailsAiContext.configuration.excluded_concerns = [ /\AAuditable\z/ ]
+      example.run
+      RailsAiContext.configuration.excluded_concerns = original
+    end
+
+    it "is named apart from the ones it could not read" do
+      File.write(File.join(concern_dir, "auditable.rb"), "module Auditable\n  has_many :audits\nend\n")
+
+      collected, unresolved, hidden = described_class.collect(tmpdir, mixin("Auditable"), keys: %i[associations])
+
+      expect(hidden).to eq([ "Auditable" ])
+      expect(unresolved).to be_empty
+      expect(collected).to eq({})
+    end
+
+    it "is not named when the app has no file for it" do
+      _collected, _unresolved, hidden = described_class.collect(tmpdir, mixin("Auditable"), keys: %i[associations])
+
+      expect(hidden).to be_empty
+    end
+
+    it "is named when it is nested inside a concern the walk reads" do
+      File.write(File.join(concern_dir, "outer.rb"), "module Outer\n  include Auditable\n  has_many :things\nend\n")
+      File.write(File.join(concern_dir, "auditable.rb"), "module Auditable\n  has_many :audits\nend\n")
+
+      collected, _unresolved, hidden = described_class.collect(tmpdir, mixin("Outer"), keys: %i[associations])
+
+      expect(hidden).to eq([ "Auditable" ])
+      expect(collected[:associations].map { |a| a[:name] }).to eq([ :things ])
+    end
+
+    # The walk resolves a namespace-relative include against the enclosing
+    # constant; a count derived from the bare name would miss the file.
+    it "is named through the namespace the include sits in" do
+      FileUtils.mkdir_p(File.join(concern_dir, "billing"))
+      File.write(File.join(concern_dir, "billing", "auditable.rb"), "module Billing\n  module Auditable\n  end\nend\n")
+      RailsAiContext.configuration.excluded_concerns = [ /Auditable\z/ ]
+
+      _collected, _unresolved, hidden = described_class.collect(
+        tmpdir, mixin("Auditable"), keys: %i[associations], within: "Billing"
+      )
+
+      expect(hidden).to eq([ "Auditable" ])
+    end
+  end
+
+  # Three causes look the same in `unresolved`: a permission bit, a directory
+  # in place of a file, and a bug in a listener. The booted walk names the
+  # cause under DEBUG for that reason.
+  it "names why it could not read a concern, under DEBUG" do
+    path = File.join(concern_dir, "publishable.rb")
+    File.write(path, "module Publishable\nend\n")
+    allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:call)
+      .with(path).and_raise(NoMethodError, "undefined method 'name' for nil")
+
+    errors = StringIO.new
+    original = $stderr
+    $stderr = errors
+    original_debug = ENV["DEBUG"]
+    ENV["DEBUG"] = "1"
+    begin
+      _collected, unresolved = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations])
+    ensure
+      $stderr = original
+      original_debug.nil? ? ENV.delete("DEBUG") : ENV["DEBUG"] = original_debug
+    end
+
+    expect(unresolved).to eq([ "Publishable" ])
+    expect(errors.string).to include("undefined method")
+    expect(errors.string).to include(path)
+  end
+
   it "exposes collect alone" do
     expect(described_class.singleton_methods(false)).to eq([ :collect ])
   end

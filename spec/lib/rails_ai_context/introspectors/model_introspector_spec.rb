@@ -472,6 +472,11 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result["Post"][:error]).to include("Permission denied")
+        # What the unreadable branch keeps: both are known here too, and
+        # without them a consumer derives app/models/<name>.rb, which the
+        # walk stopped doing two commits ago.
+        expect(result["Post"][:file]).to eq("app/models/post.rb")
+        expect(result["Post"][:table_name]).to eq("posts")
         expect(result["Tag"][:confidence]).to eq(RailsAiContext::Confidence::STATIC)
       end
     end
@@ -1552,6 +1557,47 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
 
         expect(post).not_to have_key(:concerns_hidden)
+      end
+    end
+
+    # The walk reads the model's own file and its STI bases, and stops at an
+    # abstract one. A count derived from the runtime ancestor chain instead
+    # counted a concern nothing had merged, so the two tiers answered 1 and
+    # nothing for the same app.
+    it "counts nothing on either tier for a concern the walk never reaches" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "concerns", "auditable.rb"), "module Auditable\nend\n")
+
+        stub_const("Auditable", Module.new)
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          include Auditable
+          def self.name = "Post"
+        end
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        static = introspector.static_call["Post"]
+        booted = introspector.send(:extract_model_details, model)
+
+        expect(booted[:concerns_hidden]).to eq(static[:concerns_hidden])
+        expect(booted).not_to have_key(:concerns_hidden)
+      end
+    end
+
+    it "counts a hidden concern the walk reaches through another concern" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\n  include Outer\nend\n")
+        File.write(File.join(dir, "app", "models", "concerns", "outer.rb"),
+                   "module Outer\n  include Auditable\n  has_many :things\nend\n")
+        File.write(File.join(dir, "app", "models", "concerns", "auditable.rb"), "module Auditable\nend\n")
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post[:concerns_hidden]).to eq(1)
+        expect(post[:associations].map { |a| a[:name] }).to eq([ "things" ])
       end
     end
 

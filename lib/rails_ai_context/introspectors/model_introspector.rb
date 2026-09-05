@@ -91,8 +91,12 @@ module RailsAiContext
                                                     sti: static_sti_info(class_name, sti_parents))
         rescue => e
           # What the booted tier does with a model that raises: the entry says
-          # so and the rest of the section still answers.
-          result[class_name] = { error: e.message }
+          # so and the rest of the section still answers. It keeps the two
+          # facts the unreadable branch keeps, because a consumer with no file
+          # derives app/models/<name>.rb, which is a path a pack model does
+          # not have.
+          result[class_name] = { error: e.message, file: candidate[:file],
+                                 table_name: resolve_table_name(class_name, candidates) }.compact
         end
       end
 
@@ -390,8 +394,9 @@ module RailsAiContext
         # macros and custom validates are read off the file - so the concerns
         # and the STI bases are merged here too, or the static tier
         # out-answers this one.
-        source_data, unread = merge_concern_macros(own_source, model.name)
-        source_data, unread, bases_unread = merge_sti_macros(source_data, unread, booted_sti_bases(model))
+        source_data, unread, hidden = merge_concern_macros(own_source, model.name)
+        source_data, unread, bases_unread, hidden =
+          merge_sti_macros(source_data, unread, hidden, booted_sti_bases(model))
 
         details = {
           table_name:       model.table_name,
@@ -404,7 +409,7 @@ module RailsAiContext
           # hold no block callbacks, so both tiers read the model's source.
           callbacks:        extract_callbacks_from_ast(source_data),
           concerns:         extract_concerns(model),
-          concerns_hidden:  hidden_concern_count(ConcernMembership.ancestor_names(model)),
+          concerns_hidden:  (hidden.size if hidden.any?),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
           concerns_unread:  (unread if unread.any?),
           bases_unread:     (bases_unread if bases_unread.any?),
@@ -847,8 +852,8 @@ module RailsAiContext
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
                                sti: nil)
         own = SourceIntrospector.call(path)
-        data, unread = merge_concern_macros(own, class_name)
-        data, unread, bases_unread = merge_sti_macros(data, unread, inherited_from)
+        data, unread, hidden = merge_concern_macros(own, class_name)
+        data, unread, bases_unread, hidden = merge_sti_macros(data, unread, hidden, inherited_from)
         details = {
           confidence: Confidence::STATIC,
           table_name: table_name || TableName.stem(path),
@@ -870,7 +875,7 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(own[:mixins]),
-          concerns_hidden: hidden_concern_count(ConcernMembership.mixin_names(own[:mixins])),
+          concerns_hidden: (hidden.size if hidden.any?),
           concern_callbacks: concern_callbacks(data[:callbacks]),
           concerns_unread: (unread if unread.any?),
           bases_unread: (bases_unread if bases_unread.any?),
@@ -899,14 +904,14 @@ module RailsAiContext
       # and mixins stay the model's own: those are its interface, not the
       # sum of what it included.
       def merge_concern_macros(own, class_name)
-        collected, unread = ConcernMacros.collect(
+        collected, unread, hidden = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
           keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name,
           cache: @source_cache
         )
-        return [ own, unread ] if collected.empty?
+        return [ own, unread, hidden ] if collected.empty?
 
-        [ merge_inherited(own, collected), unread ]
+        [ merge_inherited(own, collected), unread, hidden ]
       end
 
       # An STI child inherits its base's macros along with its table.
@@ -917,7 +922,7 @@ module RailsAiContext
       # A base the walk could not read is answered apart from the unread
       # concerns: it is a class, not a concern, and a child with no concerns
       # never reaches the line that names them.
-      def merge_sti_macros(data, unread, bases)
+      def merge_sti_macros(data, unread, hidden, bases)
         bases_unread = []
         Array(bases).each do |name, path|
           own = sti_base_source(path)
@@ -926,11 +931,12 @@ module RailsAiContext
             next
           end
 
-          base, base_unread = merge_concern_macros(own, name)
+          base, base_unread, base_hidden = merge_concern_macros(own, name)
           data = merge_inherited(data, base.slice(*MERGED_CONCERN_KEYS))
           unread |= base_unread
+          hidden |= base_hidden
         end
-        [ data, unread, bases_unread ]
+        [ data, unread, bases_unread, hidden ]
       end
 
       # A base too big or unreadable costs its own declarations, not the
@@ -1012,14 +1018,6 @@ module RailsAiContext
       # its superclass and its concerns pulled in.
       def static_concerns(mixins)
         ConcernMembership.from_mixins(mixins)
-      end
-
-      # Hiding a concern hides what it declared, so the record says how many
-      # concerns went with their declarations. The count and not the names:
-      # naming them would undo the hiding the key was asked for.
-      def hidden_concern_count(names)
-        count = ConcernMembership.hidden(names, app.root.to_s).size
-        count if count.positive?
       end
 
       # Mongoid documents are invisible to ActiveRecord reflection, so both

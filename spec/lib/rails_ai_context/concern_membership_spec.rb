@@ -71,7 +71,9 @@ RSpec.describe RailsAiContext::ConcernMembership do
     end
   end
 
-  describe ".hidden" do
+  # The walk asks the two halves of the payload rule apart: a name the key hid
+  # is worth counting, and framework plumbing never was.
+  describe ".candidate?" do
     around do |example|
       original = RailsAiContext.configuration.excluded_concerns
       RailsAiContext.configuration.excluded_concerns = [ /\AAudit/ ]
@@ -79,16 +81,15 @@ RSpec.describe RailsAiContext::ConcernMembership do
       RailsAiContext.configuration.excluded_concerns = original
     end
 
-    # The key hides the concern's declarations along with its name, so a
-    # record has to be able to say how many went with it.
-    it "names the hidden concerns the app has a file for" do
-      Dir.mktmpdir do |root|
-        FileUtils.mkdir_p(File.join(root, "app", "models", "concerns"))
-        File.write(File.join(root, "app", "models", "concerns", "auditable.rb"), "module Auditable\nend\n")
+    it "keeps a name the configured key hides" do
+      expect(described_class.candidate?("Auditable")).to be true
+      expect(described_class.payload?("Auditable")).to be false
+    end
 
-        names = %w[Auditable AuditGem::Tracked Searchable]
-        expect(described_class.hidden(names, root)).to eq(%w[Auditable])
-      end
+    it "drops framework plumbing, the stdlib and the generated modules" do
+      expect(described_class.candidate?("ActiveRecord::Core")).to be false
+      expect(described_class.candidate?("Kernel")).to be false
+      expect(described_class.candidate?("Post::GeneratedAttributeMethods")).to be false
     end
   end
 end
