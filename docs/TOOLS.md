@@ -81,11 +81,11 @@ Search your codebase with regex, ripgrep acceleration, and sensitive file blocki
 | `exact_match` | boolean | `false` | Literal, whole-word match. `def reblog?` does not match `def reblog` |
 | `exclude_tests` | boolean | `false` | Skip test/spec directories |
 | `group_by_file` | boolean | `false` | Group results by file with counts |
-| `context_lines` | integer | `2` | Lines of context around each match, max 5 |
+| `context_lines` | integer | `2` | Lines of context around each match, max 5. Needs ripgrep; without it the search returns match lines only |
 | `offset` | integer | `0` | Skip this many emitted lines |
 | `limit` | integer | auto | Max lines to return; the default is sized in matches |
 
-The header counts matches, not emitted lines, so it does not move with `context_lines`. When the search hits `max_search_results` (a cap on emitted lines) the header says `first N lines scanned` instead of passing the cap off as the total. `offset` and `limit` count lines, so a search with context returns more lines than matches.
+The header counts matches, not emitted lines, so below the cap it does not move with `context_lines`. When the search hits `max_search_results` (a cap on emitted lines) the header says `first N lines scanned` and marks the count `N+`: it is then the matches among the lines that were scanned, a floor rather than the total, so it falls as `context_lines` grows. `offset` and `limit` count lines, so a search with context returns more lines than matches; without ripgrep there are no context lines, so lines and matches are the same thing.
 
 > **Trace mode** returns definition + source code + every caller grouped by type + tests - replaces 4-5 sequential file reads.
 

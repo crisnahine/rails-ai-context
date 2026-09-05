@@ -256,22 +256,13 @@ module RailsAiContext
         Array(data[:concern_callbacks])
           .select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
           .group_by { |cb| cb[:from_concern] }
-          .transform_values { |entries| entries.map { |cb| concern_callback_entry(cb) } }
+          # One declaration resolves to one record per `on:` event, so the
+          # declarations are deduped back down to the lines the file holds.
+          .transform_values { |entries| entries.map { |cb| concern_callback_entry(cb) }.uniq }
       end
 
       private_class_method def self.concern_callback_entry(callback)
-        # The declared macro, not the resolved type: `after_commit_on_create`
-        # is a key this gem synthesizes, not something the file says.
-        declaration = "#{callback[:name] || callback[:type]} #{callback_target(callback[:method].to_s)}"
-        { declaration: declaration + options_tail(callback[:options]) }
-      end
-
-      # Without the tail, four `after_commit` lines that differ only in `on:`
-      # read as the same declaration four times.
-      private_class_method def self.options_tail(options)
-        return "" unless options.is_a?(Hash) && options.any?
-
-        ", " + options.map { |key, value| "#{key}: #{value.inspect}" }.join(", ")
+        { declaration: callback_declaration(callback) }
       end
     end
   end

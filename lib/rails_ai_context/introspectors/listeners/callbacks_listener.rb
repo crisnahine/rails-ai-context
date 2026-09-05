@@ -41,11 +41,14 @@ module RailsAiContext
         # and was dropped entirely; a lambda names nothing and its source
         # slice spans lines, so it reports as a block like `after_create do`.
         def emit_without_symbol_args(node, callback_types, options)
-          targets = extract_arg_values(node).map(&:to_s).grep(NAME_SHAPED)
+          positional = extract_arg_values(node).map(&:to_s)
+          targets = positional.grep(NAME_SHAPED)
 
           if targets.any?
             emit(node, callback_types, targets, options, confidence_for(node))
-          elsif node.block || node.arguments
+          elsif node.block || positional.any?
+            # Keyword options are not a target: `after_commit on: :create`
+            # declares no block, so there is none to report.
             emit(node, callback_types, [ INLINE_BLOCK ], options, RailsAiContext::Confidence::INFERRED)
           end
         end
