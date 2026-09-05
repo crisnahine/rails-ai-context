@@ -225,9 +225,15 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
 
     it "honours limit and offset in the JSON listing" do
-      result = described_class.call(detail: "summary", format: "json", limit: 1)
+      first = described_class.call(detail: "summary", format: "json", limit: 1)
+      second = described_class.call(detail: "summary", format: "json", limit: 1, offset: 1)
 
-      expect(JSON.parse(result.content.first[:text])["tables"].size).to eq(1)
+      first_tables = JSON.parse(first.content.first[:text])["tables"]
+      second_tables = JSON.parse(second.content.first[:text])["tables"]
+
+      expect(first_tables.size).to eq(1)
+      expect(second_tables.size).to eq(1)
+      expect(second_tables.keys).not_to eq(first_tables.keys)
     end
 
     # The markdown banner rides on every static-tier response; appended to a

@@ -619,7 +619,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
 
         expect(post[:custom_validates]).to contain_exactly("body_is_sane")
-        expect(post[:validations].map { |v| v[:kind] }).not_to include(:custom)
+        expect(post[:validations].map { |v| v[:kind] }).not_to include("custom")
       end
     end
 

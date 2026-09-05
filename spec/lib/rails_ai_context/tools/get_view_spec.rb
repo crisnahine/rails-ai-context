@@ -24,6 +24,7 @@ RSpec.describe RailsAiContext::Tools::GetView do
     it "leaves layouts out of the heading when the listing is one controller" do
       text = described_class.call(controller: "posts", detail: "summary").content.first[:text]
 
+      expect(text).to match(/# Views \(\d+ templates?, \d+ partials?\)/)
       expect(text).not_to include("layout)")
     end
 

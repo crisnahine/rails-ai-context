@@ -334,9 +334,7 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
     end
 
     it "spells the static refusal the same way" do
-      expect(described_class.unavailable_text).to eq(
-        described_class.unavailable_note(unavailable: RailsAiContext::Introspectors::StaticTier.unavailable_reason)
-      )
+      expect(described_class.unavailable_text).to eq("[UNAVAILABLE: requires a booted Rails app]")
     end
   end
 

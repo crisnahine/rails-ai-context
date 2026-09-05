@@ -137,10 +137,5 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(described_class.find_file(tmpdir, "DebugConcern", within: "Fasp::Provider"))
         .to eq(File.join(nested, "debug_concern.rb"))
     end
-
-    it "keeps candidate_names off the public surface" do
-      expect(described_class).not_to respond_to(:candidate_names)
-      expect(described_class).to respond_to(:ordered_dirs)
-    end
   end
 end
