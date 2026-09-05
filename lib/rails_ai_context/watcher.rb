@@ -36,11 +36,13 @@ module RailsAiContext
         warn_only: true
       )
 
-      $stderr.puts "[rails-ai-context] Watching for changes..."
-      $stderr.puts "[rails-ai-context] Directories: #{dirs.map { |d| d.sub("#{root}/", '') }.join(', ')}"
-
       listener = @watch.start { |_paths, _reloaded| regenerate }
       return unless listener
+
+      # After the listener, not before: printed first the line announced a
+      # watch that a missing `listen` or an empty watch list never started.
+      $stderr.puts "[rails-ai-context] Watching for changes..."
+      $stderr.puts "[rails-ai-context] Directories: #{dirs.map { |d| d.sub("#{root}/", '') }.join(', ')}"
 
       # Keep the process alive
       loop do
