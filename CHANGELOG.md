@@ -843,8 +843,9 @@ Changed.
   commands already printed.
 - **An initializer calling `abort` ended the run with no line from this gem.**
   The exit still passes through with the app's own message and its status, and
-  one stderr line now says the boot was cut short and that `--no-boot` answers
-  the same call.
+  one stderr line now names this gem as the caller: `App called exit(N) during
+  boot.` It states what the app did and nothing about what follows, because the
+  binary guards the same way and answers from the static tier underneath it.
 - **A value-taking flag with no value crashed inside the tool.** `tool schema
   --table` became the Boolean `true` and reached the tool as a type it never
   accepts, raising a `NoMethodError` that named an internal frame. It is

@@ -105,7 +105,26 @@ RSpec.describe RailsAiContext::BootManager do
       expect(raised).to be_a(SystemExit)
       expect(raised.status).to eq(1)
       expect(errors.string).to include("Mastodon now requires that these variables are set:")
-      expect(errors.string).to include("[rails-ai-context] App exited during boot (status 1)")
+      expect(errors.string).to include("[rails-ai-context] App called exit(1) during boot.")
+    end
+
+    # `boot!` guards too and answers from the static tier afterwards, so a
+    # notice that named the consequence would contradict the answer under it.
+    # Both surfaces state the same fact instead.
+    it "states what the app did, in the words the boot failure uses" do
+      errors = StringIO.new
+      original = $stderr
+      $stderr = errors
+
+      begin
+        described_class.guard { exit 3 }
+      rescue SystemExit # rubocop:disable Lint/SuppressedException
+      ensure
+        $stderr = original
+      end
+
+      expect(errors.string).to include(described_class::BootExitError.new("App called exit(3) during boot").message)
+      expect(errors.string).not_to include("exited")
     end
   end
 

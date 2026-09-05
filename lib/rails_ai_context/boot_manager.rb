@@ -93,8 +93,9 @@ module RailsAiContext
       # The exit stands for callers booting inside the app's own process (the
       # rake tasks), where it is an explicit process-level decision. Its own
       # message is already on stderr; without this line nothing says the call
-      # came from here.
-      $stderr.puts "[rails-ai-context] App exited during boot (status #{e.status})."
+      # came from here. It states what the app did and nothing about what
+      # follows: `boot!` guards too, and answers from the static tier.
+      $stderr.puts "[rails-ai-context] App called exit(#{e.status}) during boot."
       raise
     rescue Timeout::Error
       # Timeout::Error's own message ("execution expired") names neither the
