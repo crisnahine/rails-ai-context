@@ -51,7 +51,7 @@ RSpec.describe "the ai:inspect route count" do
         static_context = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
         allow(RailsAiContext).to receive(:introspect).and_return(static_context)
 
-        output = invoke_rake_inspect
+        output = invoke_rake_task("ai:inspect")
 
         expect(output).to include("Ruby [UNAVAILABLE: app declares none]")
         expect(output).not_to include("Ruby #{RUBY_VERSION}")
