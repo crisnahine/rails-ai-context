@@ -56,9 +56,13 @@ module RailsAiContext
           # The inferred purpose is this sentence's noun ("a news aggregation
           # app with ..."), so the head supplies one only when there is none.
           version = named_ruby_version(ctx)
-          head = "**#{app}** is a Rails #{ctx[:rails_version]}"
-          head += " / Ruby #{version}" if version
+          rails = named_rails_version(ctx)
+          head = "**#{app}** is a Rails#{" #{rails}" if rails}"
+          # The slash pairs two versions; with no Rails version to pair, the
+          # Ruby one follows the noun instead of sitting in front of it.
+          head += " / Ruby #{version}" if version && rails
           parts = [ head, purpose || "app" ]
+          parts << "running Ruby #{version}" if version && !rails
 
           # Stats: tables, models, jobs
           stats = []
@@ -143,7 +147,8 @@ module RailsAiContext
           else
             db = "unknown"
           end
-          lines << "#{ctx[:app_name]} is a Rails #{ctx[:rails_version]} application#{ruby_clause(ctx)} on #{db}."
+          rails = named_rails_version(ctx)
+          lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} on #{db}."
 
           notable = Payload.notable_gems(ctx)
           if notable.any?
@@ -607,7 +612,17 @@ module RailsAiContext
         # section: an app with a Gemfile and no lockfile declares a Ruby
         # version that the gems section cannot answer for.
         def named_ruby_version(ctx)
-          version = ctx[:ruby_version].to_s
+          named_version(ctx[:ruby_version])
+        end
+
+        # Same rule for the Rails version: a lockfile naming no rails answers
+        # a marker, and these sentences go into files the user commits.
+        def named_rails_version(ctx)
+          named_version(ctx[:rails_version])
+        end
+
+        def named_version(value)
+          version = value.to_s
           return nil if version.empty? || version.start_with?("[UNAVAILABLE")
 
           version

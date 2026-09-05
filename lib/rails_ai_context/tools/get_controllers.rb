@@ -207,11 +207,16 @@ module RailsAiContext
       end
 
       # A compressed group is headed by the namespace every member is really
-      # in, and never by one taken from a single member's own class name.
+      # in, and never by one taken from a single member's own class name. With
+      # no namespace to name - a group of top-level controllers has none - the
+      # heading names a member, because a count alone identifies nothing and
+      # two such groups in one document would carry the same heading.
       private_class_method def self.group_heading(names)
         shared = shared_namespace(names)
         count = count_phrase(names.size, "controller")
-        shared.empty? ? count : "#{shared.join('::')}::* (#{count})"
+        return "#{shared.join('::')}::* (#{count})" unless shared.empty?
+
+        "#{names.first} and #{count_phrase(names.size - 1, "like it", plural: "like it")} (#{count})"
       end
 
       private_class_method def self.shared_namespace(names)

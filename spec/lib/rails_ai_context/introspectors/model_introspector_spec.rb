@@ -744,6 +744,28 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # app/models holds POROs too - a form object, a service, a generated data
+    # class. A file the walk could not read might be one of those, so the
+    # entry says what it knows (the file, and why it is empty) and claims no
+    # table. A base something inherits from is different: the inheritance is
+    # what says it is a model, and its children share the table.
+    it "claims no table for an unreadable file nothing inherits from" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "good.rb"), "class Good < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "big_report.rb"), "class BigReport\nend\n")
+        allow(File).to receive(:size).and_call_original
+        allow(File).to receive(:size).with(a_string_ending_with("big_report.rb")).and_return(10_000_000)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["BigReport"][:error]).to include("too large")
+        expect(result["BigReport"][:file]).to eq("app/models/big_report.rb")
+        expect(result["BigReport"]).not_to have_key(:table_name)
+        expect(result["Good"][:table_name]).to eq("goods")
+      end
+    end
+
     # A base nobody can read is the only route its children have to
     # ApplicationRecord, so dropping it drops them, and an app whose every
     # model descends from one answers that it has no models at all.
@@ -1573,6 +1595,36 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(car[:concerns]).to be_empty
       ensure
         RailsAiContext.configuration.excluded_concerns = original
+      end
+    end
+  end
+
+  # The static shaper writes the value the model declared; the booted one used
+  # to write the key only when it was truthy, so one model read two ways
+  # carried two different key sets into .ai-context.json.
+  describe "an association option declared false" do
+    it "carries the same keys on both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "comment.rb"), <<~RUBY)
+          class Comment < ApplicationRecord
+            belongs_to :subject, polymorphic: false, optional: false
+          end
+        RUBY
+
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "comments"
+          belongs_to :subject, polymorphic: false, optional: false, class_name: "Post"
+          def self.name = "Comment"
+        end
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        static = introspector.static_call["Comment"][:associations].first
+        booted = introspector.send(:extract_model_details, model)[:associations].first
+
+        expect(booted[:polymorphic]).to eq(static[:polymorphic])
+        expect(booted[:optional]).to eq(static[:optional])
+        expect(booted[:polymorphic]).to be(false)
       end
     end
   end

@@ -67,6 +67,7 @@ module RailsAiContext
 
         candidates = static_candidates
         sti_parents = candidates.keys.to_h { |name| [ name, sti_parent(name, candidates, []) ] }
+        bases = declared_bases(candidates)
         candidates.each_with_object({}) do |(class_name, candidate), result|
           if candidate[:error]
             result[class_name] = { error: candidate[:error] }
@@ -74,8 +75,12 @@ module RailsAiContext
           end
 
           if candidate[:unreadable]
+            # app/models holds POROs too, and a file the walk could not read
+            # might be one. The entry says what it knows and claims a table
+            # only where a child's inheritance says it is a model.
+            table = resolve_table_name(class_name, candidates) if bases.include?(class_name)
             result[class_name] = { error: candidate[:unreadable], file: candidate[:file],
-                                   table_name: resolve_table_name(class_name, candidates) }.compact
+                                   table_name: table }.compact
             next
           end
 
@@ -208,6 +213,18 @@ module RailsAiContext
       # A model is a class whose superclass chain reaches a model base. A form
       # object, a filter or a namespaced calculator under app/models has no
       # superclass, or one the chain never resolves, so it is not a model.
+      # Every candidate another candidate inherits from, by the name the walk
+      # resolves the superclass to.
+      def declared_bases(candidates)
+        candidates.each_with_object(Set.new) do |(name, candidate), found|
+          parent = candidate[:superclass]
+          next unless parent
+
+          resolved = resolve_superclass(parent, name, candidates)
+          found << resolved if resolved
+        end
+      end
+
       def model_class?(class_name, candidates, seen = [])
         return false if seen.include?(class_name)
         # A base under app/models that nobody can read is taken at its word:
@@ -469,7 +486,10 @@ module RailsAiContext
             foreign_key: assoc.foreign_key.to_s
           }
           detail[:through]    = assoc.options[:through].to_s if assoc.options[:through]
-          detail[:polymorphic] = true if assoc.options[:polymorphic]
+          # Read like `:optional` below: the static tier writes the value the
+          # model declared, so writing only a truthy one here would give the
+          # two tiers different keys for `polymorphic: false`.
+          detail[:polymorphic] = assoc.options[:polymorphic] if assoc.options.key?(:polymorphic)
           detail[:dependent]  = assoc.options[:dependent].to_s if assoc.options[:dependent]
           detail[:optional]   = assoc.options[:optional] if assoc.options.key?(:optional)
           detail.compact

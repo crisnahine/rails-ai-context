@@ -27,7 +27,9 @@ module RailsAiContext
       # @param path_name [String] the name the file's path camelizes to
       # @return [String] the constant to call this file's class
       def resolve(source, path_name)
-        declared_names(source).find { |name| name.casecmp?(path_name) } || path_name
+        declared_names(source).find { |name| name.casecmp?(path_name) } ||
+          declared_module_names(source).find { |name| name.casecmp?(path_name) } ||
+          path_name
       end
 
       # A loaded class that answers a name no constant carries belongs to no
@@ -53,6 +55,21 @@ module RailsAiContext
       # nesting included. Empty when nothing parses.
       def declared_names(source)
         declarations(source).map(&:name)
+      end
+
+      # The same for modules, for a file that declares no class: a mixin is
+      # named by an inflection the same way a class is, and the camelized path
+      # is wrong for it in the same way.
+      def declared_module_names(source)
+        return [] unless source
+
+        root = AstCache.parse_string(source)&.value
+        return [] unless root
+
+        [].tap { |found| collect_modules(root, [], found) }
+      rescue StandardError, ScriptError => e
+        $stderr.puts "[rails-ai-context] DeclaredConstant failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
       # Every class the source declares, with the superclass it names -
@@ -84,6 +101,14 @@ module RailsAiContext
 
       def descend(node, scope, found)
         node.child_nodes.compact.each { |child| collect(child, scope, found) }
+      end
+
+      def collect_modules(node, scope, found)
+        if node.is_a?(Prism::ModuleNode)
+          found << qualify(scope, node)
+          scope += [ segment(node) ]
+        end
+        node.child_nodes.compact.each { |child| collect_modules(child, scope, found) }
       end
 
       def qualify(scope, node)

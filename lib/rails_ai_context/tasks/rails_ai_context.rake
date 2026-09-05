@@ -31,7 +31,7 @@ def abort_boot_failure(result, timeout)
   end
   result.configure_hint.each { |line| $stderr.puts "  #{line}" }
   exit 1
-end
+end unless defined?(abort_boot_failure)
 
 def apply_context_mode_override
   if ENV["CONTEXT_MODE"]

@@ -110,6 +110,27 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).not_to include("UNAVAILABLE")
     end
 
+    # The Ruby half degrades by dropping its clause; the Rails half was
+    # interpolated raw, so a lockfile naming no rails wrote
+    # "is a Rails [UNAVAILABLE: app not booted] application on sqlite"
+    # into a file the user commits.
+    it "names no Rails version rather than writing the marker mid-sentence" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: RailsAiContext::Confidence.unavailable("app not booted"),
+        ruby_version: "3.4",
+        gems: { declared_ruby_version: "3.4" },
+        tier: "static"
+      })
+
+      standard = described_class.call(detail: "standard").content.first[:text]
+      quick = described_class.call(detail: "quick").content.first[:text]
+
+      expect(standard).to include("TestApp is a Rails application declaring Ruby 3.4 on")
+      expect(quick).to include("**TestApp** is a Rails app")
+      [ standard, quick ].each { |text| expect(text.lines.first(4).join).not_to include("UNAVAILABLE") }
+    end
+
     # The quick sentence lets the inferred purpose be its noun, so a version
     # clause carrying its own noun gave the sentence two of them: "is a Rails
     # 8.1 app declaring Ruby 4.0.6 news aggregation app with ...".

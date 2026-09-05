@@ -5,6 +5,30 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetControllers do
+  # A group of top-level controllers shares no namespace, so the heading was
+  # the bare count - and two such groups in one document carried the same
+  # heading, naming nothing and repeating.
+  describe "a compressed group with no namespace of its own" do
+    before { described_class.reset_cache! }
+
+    it "heads the group with a member, not with a count alone" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: {
+          "PostsController" => { parent_class: "AdminController", actions: %w[index] },
+          "PagesController" => { parent_class: "AdminController", actions: %w[index] },
+          "SitesController" => { parent_class: "AdminController", actions: %w[index] },
+          "AdminController" => { parent_class: "ApplicationController", actions: [] }
+        } }
+      )
+
+      text = described_class.call(detail: "full").content.first[:text]
+      headings = text.lines.select { |line| line.start_with?("## ") }.map(&:strip)
+
+      expect(headings).to include("## PagesController and 2 like it (3 controllers)")
+      expect(headings.uniq.size).to eq(headings.size)
+    end
+  end
+
   before { described_class.reset_cache! }
 
   let(:controllers) do
@@ -276,7 +300,9 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
     # The heading was built from the first member's own class name, so five
     # top-level controllers were filed under a namespace no controller is in.
-    it "heads a group of top-level controllers with no namespace" do
+    # A bare count is not the answer either: it names nothing, and a second
+    # such group in the same document repeats it.
+    it "heads a group of top-level controllers with a member and a count" do
       entry = { actions: %w[show], filters: [], strong_params: [], parent_class: "ActionController::Base" }
       stub_controllers({
         "CustomCssController" => entry.dup,
@@ -287,7 +313,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       text = described_class.call(detail: "full").content.first[:text]
 
       expect(text).not_to include("CustomCssController::*")
-      expect(text).to include("## 3 controllers")
+      expect(text).to include("## CustomCssController and 2 like it (3 controllers)")
       expect(text).to include("- Members: CustomCssController, HealthController, ManifestsController")
     end
 

@@ -3,6 +3,29 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::DeclaredConstant do
+  # A file that declares only a module names a constant too, and the path
+  # camelization is wrong for it in exactly the way it is wrong for a class:
+  # an app inflection only changes case.
+  describe ".resolve over a file declaring only a module" do
+    it "answers the module the file declares, not the camelized path" do
+      source = "module ActivityPub\n  module ActorFields\n  end\nend\n"
+
+      expect(described_class.resolve(source, "Activitypub::ActorFields")).to eq("ActivityPub::ActorFields")
+    end
+
+    it "keeps the path when the module it declares is a different constant" do
+      source = "module Serializers::Shared\nend\n"
+
+      expect(described_class.resolve(source, "SharedFields")).to eq("SharedFields")
+    end
+
+    it "prefers a declared class over a declared module" do
+      source = "module Wrapper\nend\nclass Widget\nend\n"
+
+      expect(described_class.resolve(source, "Widget")).to eq("Widget")
+    end
+  end
+
   describe ".resolve" do
     it "prefers the constant the source declares over the path" do
       source = "class ActivityPub::CollectionsController < ApplicationController\nend\n"
