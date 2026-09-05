@@ -390,6 +390,13 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         expect(text).to include("ActiveRecord::Migration[7.0]")
         expect(text).to include("Could not determine this app's Rails version")
       end
+
+      # The version is unknown for three reasons; here it is the unavailable
+      # marker, not a lockfile with no rails in it.
+      it "states what it observed, not a cause it never checked" do
+        text = text_for(action: "add_index", table: "accounts", column: "domain")
+        expect(text).not_to include("Gemfile.lock")
+      end
     end
 
     context "rendered against the static fixture app" do
