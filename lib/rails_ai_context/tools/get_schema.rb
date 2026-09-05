@@ -53,6 +53,11 @@ module RailsAiContext
         fetch_section(:schema, subject: "Schema introspection") do |schema|
           tables = schema[:tables] || {}
 
+          # Every read of the shared cache deep-copies the whole payload, so
+          # the listing reads it once and hands the copy down.
+          ctx = cached_context
+          models_data = Payload.models(ctx)
+
           total = tables.size
           offset = [ offset.to_i, 0 ].max
           limit = [ limit.to_i, 0 ].max if limit && limit.to_i < 0
@@ -63,7 +68,7 @@ module RailsAiContext
             table_down = table.downcase
             # "Post" and "Admin::ActionLog" are model names here, and the model
             # tier knows the table each of them reads.
-            table_as_table = RailsAiContext::Introspectors::TableName.for_model_name(table, Payload.models(cached_context))
+            table_as_table = RailsAiContext::Introspectors::TableName.for_model_name(table, models_data)
             table_key = tables.keys.find { |k|
               k.downcase == table_down || k == table_as_table || k == table.underscore
             } || table
@@ -74,9 +79,9 @@ module RailsAiContext
             end
             return json_response(table_data) if format == "json"
 
-            output = format_table_markdown(table_key, table_data)
+            output = format_table_markdown(table_key, table_data, models_data)
             # Cross-reference hint for AI: suggest next tool call
-            model_refs = models_for_table(table_key)
+            model_refs = models_for_table(table_key, models_data)
             if model_refs.any?
               output += "\n\n_Next: `rails_get_model_details(model:\"#{model_refs.first}\")` for associations, validations, scopes._"
             end
@@ -94,7 +99,7 @@ module RailsAiContext
             end
 
             lines = [ "# Schema Summary (#{count_phrase(total, "table")})", "" ]
-            lines << "**Adapter:** #{adapter_label(schema)}" if schema[:adapter]
+            lines << "**Adapter:** #{adapter_label(ctx)}" if schema[:adapter]
             lines.concat(static_source_lines(schema))
             paginated.each do |name|
               data = tables[name]
@@ -137,8 +142,7 @@ module RailsAiContext
 
               # Detect encrypted columns from model data
               encrypted_cols = Set.new
-              model_refs = models_for_table(name)
-              models_data = Payload.models(cached_context)
+              model_refs = models_for_table(name, models_data)
               model_refs.each do |model_name|
                 (models_data.dig(model_name, :encrypts) || []).each { |f| encrypted_cols.add(f) }
               end
@@ -180,7 +184,7 @@ module RailsAiContext
               lines << ""
             end
 
-            unclaimed = paginated.select { |name| models_for_table(name).empty? } - habtm_join_tables.to_a
+            unclaimed = paginated.select { |name| models_for_table(name, models_data).empty? } - habtm_join_tables(models_data).to_a
             if unclaimed.any?
               lines << "\u26A0 **Tables with no model file in this app**: #{unclaimed.join(', ')}"
               lines << "A gem that owns a table declares its model in the gem, so check the Gemfile before " \
@@ -203,7 +207,7 @@ module RailsAiContext
 
             lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
             paginated.each do |name|
-              lines << format_table_markdown(name, tables[name])
+              lines << format_table_markdown(name, tables[name], models_data)
               lines << ""
             end
             lines.concat(secondary_databases_lines(schema))
@@ -214,7 +218,7 @@ module RailsAiContext
             text_response(lines.join("\n"))
           else
             # Fallback to full dump (backward compat)
-            text_response(format_schema_markdown(schema))
+            text_response(format_schema_markdown(schema, ctx))
           end
         end
       end
@@ -222,15 +226,15 @@ module RailsAiContext
       # The same seam the generated context files use. Answering this question
       # locally is how one app came to be told it runs on PostgreSQL by
       # CLAUDE.md and on "unknown" by this tool, in the same session.
-      private_class_method def self.adapter_label(_schema = nil)
-        RailsAiContext::SchemaAdapter.label(cached_context)
+      private_class_method def self.adapter_label(ctx)
+        RailsAiContext::SchemaAdapter.label(ctx)
       end
 
       # Rails builds no model for a has_and_belongs_to_many join table, so one
       # is not a table whose model is missing. The name is the two tables
       # sorted, unless the association writes :join_table itself.
-      private_class_method def self.habtm_join_tables
-        Payload.models(cached_context).each_with_object(Set.new) do |(_name, data), found|
+      private_class_method def self.habtm_join_tables(models)
+        models.each_with_object(Set.new) do |(_name, data), found|
           next unless data.is_a?(Hash)
 
           Array(data[:associations]).each do |assoc|
@@ -252,8 +256,8 @@ module RailsAiContext
         Set.new
       end
 
-      private_class_method def self.models_for_table(table_name)
-        Payload.models(cached_context).select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
+      private_class_method def self.models_for_table(table_name, models)
+        models.select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
       rescue => e
         $stderr.puts "[rails-ai-context] models_for_table failed: #{e.message}" if ENV["DEBUG"]
         []
@@ -303,12 +307,12 @@ module RailsAiContext
         json_response(schema.merge(tables: page))
       end
 
-      private_class_method def self.format_table_markdown(name, data)
+      private_class_method def self.format_table_markdown(name, data, models)
         columns = data[:columns] || []
         # Always show Nullable and Default - agents need these for migrations and validations
         has_defaults = columns.any? { |c| c.key?(:default) && !c[:default].nil? }
 
-        model_refs = models_for_table(name)
+        model_refs = models_for_table(name, models)
         lines = [ "## Table: #{name}", "" ]
         lines << "**Models:** #{model_refs.join(', ')}" if model_refs.any?
 
@@ -377,11 +381,11 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      private_class_method def self.format_schema_markdown(schema)
+      private_class_method def self.format_schema_markdown(schema, ctx)
         lines = [
           "# Database Schema",
           "",
-          "- Adapter: #{adapter_label(schema)}",
+          "- Adapter: #{adapter_label(ctx)}",
           "- Tables: #{schema[:total_tables]}",
           ""
         ]

@@ -429,4 +429,32 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).not_to include("1 tables")
     end
   end
+
+  # Every read of the shared cache is a deep copy of the whole payload, so a
+  # listing that reads it once per table pays for the app several times over.
+  describe "shared context reads in the table listing" do
+    def context_with(count)
+      entries = (1..count).to_h do |i|
+        [ "table#{i}", { columns: [ { name: "id", type: "integer", null: false } ], indexes: [], foreign_keys: [] } ]
+      end
+      models = (1..count).to_h { |i| [ "Model#{i}", { table_name: "table#{i}", associations: [], validations: [] } ] }
+      { schema: { adapter: "sqlite3", tables: entries, total_tables: count }, models: models }
+    end
+
+    def reads_for(count)
+      described_class.reset_cache!
+      reads = 0
+      ctx = context_with(count)
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(detail: "standard", limit: 200)
+      reads
+    end
+
+    it "reads the shared context the same number of times for 3 tables as for 40" do
+      expect(reads_for(40)).to eq(reads_for(3))
+    end
+  end
 end
