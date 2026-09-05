@@ -413,11 +413,25 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
 
       # One unreadable initializer used to raise out of the walk and through
       # static_call's rescue, and the whole I18n answer became an error.
-      it "skips a file it cannot read" do
+      it "reads the last initializer in name order, so the guard below has teeth" do
         result = with_config({
-          "aaa_broken.rb" => "config.i18n.available_locales = [:zz]\n",
-          "i18n.rb"       => "Rails.application.configure do\n  config.i18n.available_locales = [:en, :es]\nend\n"
-        }) { |dir| File.chmod(0o000, File.join(dir, "config", "initializers", "aaa_broken.rb")) }
+          "i18n.rb"       => "Rails.application.configure do\n  config.i18n.available_locales = [:en, :es]\nend\n",
+          "zzz_broken.rb" => "Rails.application.configure do\n  config.i18n.available_locales = [:zz]\nend\n"
+        })
+
+        expect(result[:available_locales]).to eq(%w[zz])
+      end
+
+      it "skips a file it cannot read" do
+        broken = nil
+        result = with_config({
+          "i18n.rb"       => "Rails.application.configure do\n  config.i18n.available_locales = [:en, :es]\nend\n",
+          "zzz_broken.rb" => "Rails.application.configure do\n  config.i18n.available_locales = [:zz]\nend\n"
+        }) do |dir|
+          broken = File.join(dir, "config", "initializers", "zzz_broken.rb")
+          File.chmod(0o000, broken)
+          skip "cannot make a file unreadable as this user" if File.readable?(broken)
+        end
 
         expect(result[:error]).to be_nil
         expect(result[:available_locales]).to eq(%w[en es])
