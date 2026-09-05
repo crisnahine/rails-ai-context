@@ -184,7 +184,8 @@ module RailsAiContext
           if info[:filters]&.any?
             lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
           end
-          lines << "- Strong params: #{info[:strong_params].join(', ')}" if info[:strong_params]&.any?
+          param_names = SectionFacts.strong_param_names(info)
+          lines << "- Strong params: #{param_names.join(', ')}" if param_names.any?
         end
         lines.join("\n")
       end

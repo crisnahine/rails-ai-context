@@ -124,7 +124,7 @@ module RailsAiContext
               if parent && parent != "ApplicationController"
                 actions_sig = info[:actions]&.sort&.join(",")
                 filters_sig = info[:filters]&.map { |f| "#{f[:kind]}:#{f[:name]}" }&.sort&.join(",")
-                params_sig = info[:strong_params]&.sort&.join(",")
+                params_sig = Serializers::SectionFacts.strong_param_names(info).sort.join(",")
                 "#{parent}|#{actions_sig}|#{filters_sig}|#{params_sig}"
               else
                 name # unique key = no grouping
@@ -143,7 +143,8 @@ module RailsAiContext
                 if info[:filters]&.any?
                   lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
                 end
-                lines << "- Strong params: #{info[:strong_params].join(', ')}" if info[:strong_params]&.any?
+                param_names = Serializers::SectionFacts.strong_param_names(info)
+                lines << "- Strong params: #{param_names.join(', ')}" if param_names.any?
                 lines << ""
               else
                 names.each do |name|
@@ -153,8 +154,10 @@ module RailsAiContext
                   if info[:filters]&.any?
                     lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
                   end
-                  lines << "- Strong params: #{info[:strong_params].join(', ')}" if info[:strong_params]&.any?
-                  lines << "- Rescue from: #{info[:rescue_from].join(', ')}" if info[:rescue_from]&.any?
+                  param_names = Serializers::SectionFacts.strong_param_names(info)
+                  lines << "- Strong params: #{param_names.join(', ')}" if param_names.any?
+                  rescue_lines = Serializers::SectionFacts.rescue_handler_lines(info)
+                  lines << "- Rescue from: #{rescue_lines.join(', ')}" if rescue_lines.any?
                   lines << "- Rate limit: #{info[:rate_limit]}" if info[:rate_limit]
                   lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
                   lines << ""
@@ -403,7 +406,7 @@ module RailsAiContext
         # Rescue handlers
         if info[:rescue_from]&.any?
           lines << "" << "## Rescue Handlers"
-          info[:rescue_from].each { |r| lines << "- `rescue_from` #{r}" }
+          Serializers::SectionFacts.rescue_handler_lines(info).each { |r| lines << "- `rescue_from` #{r}" }
         end
 
         # Rate limiting

@@ -15,7 +15,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
           { kind: "before_action", name: "set_post", only: %w[show edit update destroy] },
           { kind: "before_action", name: "authenticate_user!" }
         ],
-        strong_params: %w[post_params],
+        strong_params: [ { name: "post_params", permits: %w[title body] } ],
         parent_class: "ApplicationController"
       },
       "UsersController" => {
@@ -27,7 +27,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       "CommentsController" => {
         actions: %w[create destroy],
         filters: [],
-        strong_params: %w[comment_params],
+        strong_params: [ { name: "comment_params", permits: %w[body] } ],
         parent_class: "ApplicationController"
       }
     }
@@ -170,13 +170,13 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
         "UsersController" => {
           actions: %w[index show create],
           filters: [ { kind: "before_action", name: "authenticate_user!" } ],
-          strong_params: %w[name email],
+          strong_params: [ { name: "user_params", permits: %w[name email] } ],
           parent_class: "ApplicationController"
         },
         "PostsController" => {
           actions: %w[index show],
           filters: [],
-          strong_params: %w[title body]
+          strong_params: [ { name: "post_params", permits: %w[title body] } ]
         }
       }
       allow(described_class).to receive(:cached_context).and_return({
@@ -197,6 +197,87 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("## UsersController")
       expect(text).to include("Filters:")
       expect(text).to include("authenticate_user!")
+    end
+  end
+
+  describe "detail:full over the shape the introspector really records" do
+    def stub_controllers(controllers)
+      allow(described_class).to receive(:cached_context).and_return({
+        controllers: { controllers: controllers }
+      })
+    end
+
+    it "names both strong params methods of a controller under an app parent" do
+      stub_controllers({
+        "Admin::AccountsController" => {
+          actions: %w[index show],
+          filters: [ { kind: "before_action", name: "set_account" } ],
+          strong_params: [
+            { name: "filter_params", permits: %w[origin status] },
+            { name: "form_account_batch_params", requires: "form_account_batch", permits: %w[action account_ids] }
+          ],
+          parent_class: "Admin::BaseController"
+        }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Admin::AccountsController")
+      expect(text).to include("- Strong params: filter_params, form_account_batch_params")
+    end
+
+    it "names them on a compressed sibling group too" do
+      entry = {
+        actions: %w[index],
+        filters: [],
+        strong_params: [ { name: "filter_params", permits: %w[origin] } ],
+        parent_class: "Admin::BaseController"
+      }
+      stub_controllers({
+        "Admin::OneController" => entry.dup,
+        "Admin::TwoController" => entry.dup,
+        "Admin::ThreeController" => entry.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Admin::* (One, Three, Two)")
+      expect(text).to include("- Strong params: filter_params")
+    end
+
+    it "pairs each rescued exception with its handler" do
+      stub_controllers({
+        "MediaProxyController" => {
+          actions: %w[show],
+          filters: [],
+          strong_params: [],
+          rescue_from: [
+            { exception: "ActiveRecord::RecordInvalid", handler: "not_found" },
+            { exception: "Mastodon::NotPermittedError" }
+          ],
+          parent_class: "ApplicationController"
+        }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- Rescue from: ActiveRecord::RecordInvalid -> not_found, Mastodon::NotPermittedError")
+    end
+
+    it "pairs them on the single-controller answer as well" do
+      stub_controllers({
+        "MediaProxyController" => {
+          actions: %w[show],
+          filters: [],
+          strong_params: [],
+          rescue_from: [ { exception: "ActiveRecord::RecordInvalid", handler: "not_found" } ],
+          parent_class: "ApplicationController"
+        }
+      })
+
+      text = described_class.call(controller: "MediaProxyController").content.first[:text]
+
+      expect(text).to include("- `rescue_from` ActiveRecord::RecordInvalid -> not_found")
     end
   end
 

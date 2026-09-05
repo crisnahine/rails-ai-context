@@ -286,7 +286,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
     it "includes skip_before_action in source-based filter extraction" do
       source = <<~RUBY
         class SkipController < ApplicationController
-          skip_before_action :verify_authenticity_token, only: [:api_create]
+          skip_before_action :authenticate_user!, only: [:api_create]
           before_action :set_thing
 
           def index
@@ -306,7 +306,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
       filters = introspector.send(:extract_filters_from_source, source)
       names = filters.map { |f| f[:name] }
-      expect(names).to include("verify_authenticity_token")
+      expect(names).to include("authenticate_user!")
       expect(names).to include("set_thing")
     end
   end
