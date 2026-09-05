@@ -91,7 +91,7 @@ from the booted path:
 | `routes` | `config/routes.rb` parsed with a dedicated Prism listener |
 | `controllers` | `app/controllers/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
 | `jobs` | `app/jobs`, `app/mailers` and `app/channels` parsed for classes and their public methods |
-| `i18n` | `config.i18n.available_locales` read from `config/`, or every top-level key across `config/locales` when the app never assigns it; the default locale read from `config/`. The backend and the fallbacks are left out, being facts about the running process |
+| `i18n` | `config.i18n.available_locales` read from `config/`, or every top-level key across `config/locales` when the app never assigns it; the default locale read from `config/`. The backend and the fallbacks stay in the answer and are declared unanswered, being facts about the running process |
 | `api` | every detection but the mode is a file read and runs unchanged; `config.api_only` comes from the assignment in `config/application.rb` |
 | `engines` | `config/routes.rb` mounts, plus the Gemfile |
 | `active_support` | concern and core-extension use read from source |
@@ -248,9 +248,10 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   `direct`, `resolve`, a `draw` it cannot read, and a route whose `to:` is a
   lambda or a `redirect(...)` into a `dynamic_routes` count rather than
   fabricating per-route controller/action pairs it can't actually determine
-  from source. Routing concerns and `with_options` blocks are expanded, so
-  they are not in that count; a `concerns:` naming a concern defined in
-  another drawn file still is. `constraints do...end` does not hide its
+  from source. Routing concerns and a `with_options` block that takes no block
+  parameter are expanded, so they are not in that count. A `with_options` that
+  yields a mapper is in it, and so is a `concerns:` naming a concern defined in
+  another drawn file. `constraints do...end` does not hide its
   children: they are read and resolved, the constraint itself is ignored.
 
 <br>
