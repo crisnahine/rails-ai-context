@@ -230,11 +230,34 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
         path = File.join(root, ".claude", "rules", "rails-context.md")
 
         first = helper.write_rule_files({ path => "content" })
-        expect(first).to eq(written: [ path ], skipped: [])
+        expect(first).to eq(written: [ path ], skipped: [], not_applicable: {})
         expect(File.read(path)).to eq("content")
 
         second = helper.write_rule_files({ path => "content" })
-        expect(second).to eq(written: [], skipped: [ path ])
+        expect(second).to eq(written: [], skipped: [ path ], not_applicable: {})
+      end
+    end
+
+    it "reports a nil render with its reason instead of dropping it" do
+      Dir.mktmpdir do |root|
+        helper = test_class.new({})
+        path = File.join(root, ".claude", "rules", "rails-models.md")
+
+        result = helper.write_rule_files({ path => nil }, reasons: { path => "no models" })
+
+        expect(result).to eq(written: [], skipped: [], not_applicable: { path => "no models" })
+        expect(Dir.exist?(File.join(root, ".claude"))).to be false
+      end
+    end
+
+    it "falls back to a generic reason when the table has none" do
+      Dir.mktmpdir do |root|
+        helper = test_class.new({})
+        path = File.join(root, "rails-models.md")
+
+        result = helper.write_rule_files({ path => nil })
+
+        expect(result[:not_applicable]).to eq(path => "nothing to document")
       end
     end
   end

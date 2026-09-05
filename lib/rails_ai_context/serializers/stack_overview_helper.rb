@@ -130,15 +130,40 @@ module RailsAiContext
         RailsAiContext::Tools::GetConventions::PATTERN_LABELS rescue {}
       end
 
+      # Render and write a serializer's whole rule-file table.
+      # @param dir [String] directory the table's relative names hang off
+      # @param table [Hash<String, Array(Symbol, String)>] name => [renderer, reason]
+      def write_rule_table(dir, table)
+        files = {}
+        reasons = {}
+
+        table.each do |name, (renderer, reason)|
+          filepath = File.join(dir, name)
+          files[filepath] = send(renderer)
+          reasons[filepath] = reason
+        end
+
+        write_rule_files(files, reasons: reasons)
+      end
+
       # Write split-rule files with diff-check and atomic writes.
+      # A nil render means the app has nothing to put in that file. It is
+      # reported rather than dropped, so a deliberate omission never looks
+      # like a failed generation.
       # @param files [Hash<String, String|nil>] filepath => content mapping
-      # @return [Hash] { written: [paths], skipped: [paths] }
-      def write_rule_files(files)
+      # @param reasons [Hash<String, String>] filepath => why it is not applicable
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
+      def write_rule_files(files, reasons: {})
         written = []
         skipped = []
+        not_applicable = {}
 
         files.each do |filepath, content|
-          next unless content
+          if content.nil?
+            not_applicable[filepath] = reasons[filepath] || "nothing to document"
+            next
+          end
+
           if File.exist?(filepath) && File.read(filepath) == content
             skipped << filepath
           else
@@ -147,7 +172,7 @@ module RailsAiContext
           end
         end
 
-        { written: written, skipped: skipped }
+        { written: written, skipped: skipped, not_applicable: not_applicable }
       end
 
       # Shared utility: resolve the project root directory.

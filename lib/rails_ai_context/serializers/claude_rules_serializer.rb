@@ -14,20 +14,18 @@ module RailsAiContext
         @context = context
       end
 
+      RULE_FILES = {
+        "rails-context.md" => [ :render_context_overview, "nothing to document" ],
+        "rails-schema.md" => [ :render_schema_reference, "no schema dump" ],
+        "rails-models.md" => [ :render_models_reference, "no models" ],
+        "rails-mcp-tools.md" => [ :render_mcp_tools_reference, "nothing to document" ],
+        "rails-components.md" => [ :render_components_reference, "no view components" ]
+      }.freeze
+
       # @param output_dir [String] Rails root path
-      # @return [Hash] { written: [paths], skipped: [paths] }
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
-        rules_dir = File.join(output_dir, Install::AiTool.find(:claude).rules_dir)
-
-        files = {
-          File.join(rules_dir, "rails-context.md") => render_context_overview,
-          File.join(rules_dir, "rails-schema.md") => render_schema_reference,
-          File.join(rules_dir, "rails-models.md") => render_models_reference,
-          File.join(rules_dir, "rails-mcp-tools.md") => render_mcp_tools_reference,
-          File.join(rules_dir, "rails-components.md") => render_components_reference
-        }
-
-        write_rule_files(files)
+        write_rule_table(File.join(output_dir, Install::AiTool.find(:claude).rules_dir), RULE_FILES)
       end
 
       private

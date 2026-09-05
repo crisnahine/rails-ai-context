@@ -63,6 +63,7 @@ module RailsAiContext
       result = RailsAiContext.generate_context(format: :all)
       result[:written].each { |f| $stderr.puts "  Updated: #{f}" }
       result[:skipped].each { |f| $stderr.puts "  Unchanged: #{f}" }
+      (result[:not_applicable] || {}).each { |f, why| $stderr.puts "  Not applicable: #{f} (#{why})" }
     rescue => e
       $stderr.puts "[rails-ai-context] Error regenerating: #{e.message}"
     end

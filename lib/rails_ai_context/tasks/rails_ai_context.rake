@@ -22,6 +22,7 @@ end unless defined?(ASSISTANT_TABLE)
 def print_result(result)
   result[:written].each { |f| puts "  ✅ #{f}" }
   result[:skipped].each { |f| puts "  ⏭️  #{f} (unchanged)" }
+  (result[:not_applicable] || {}).each { |f, why| puts "  ➖  #{f} (#{why})" }
 end unless defined?(print_result)
 
 def abort_boot_failure(result, timeout)

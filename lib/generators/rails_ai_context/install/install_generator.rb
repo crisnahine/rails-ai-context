@@ -524,6 +524,7 @@ module RailsAiContext
           result = RailsAiContext.generate_context(format: @selected_formats)
           (result[:written] || []).each { |f| say "  ✅ #{f}", :green }
           (result[:skipped] || []).each { |f| say "  ⏭️  #{f} (unchanged)", :yellow }
+          (result[:not_applicable] || {}).each { |f, why| say "  ➖  #{f} (#{why})", :yellow }
         rescue => e
           say "  ❌ #{@selected_formats.join(', ')}: #{e.message}", :red
         end
