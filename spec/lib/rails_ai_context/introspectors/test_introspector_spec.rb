@@ -194,7 +194,10 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     it "counts a directory no naming convention would predict" do
       write_file("spec/models/user_spec.rb")
       write_file("spec/quacking_ducks/duck_spec.rb")
-      expect(payload[:test_count_by_category]).to eq("models" => 1, "quacking_ducks" => 1)
+      expect(payload[:test_files]).to eq(
+        "models" => { location: "spec/models", count: 1 },
+        "quacking_ducks" => { location: "spec/quacking_ducks", count: 1 }
+      )
     end
 
     it "keeps files loose at the root of spec out of a spec/other row" do
@@ -253,7 +256,7 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       write_file("spec/models/post_spec.rb")
       write_file("spec/policies/user_policy_spec.rb")
       write_file("spec/lib/importer_spec.rb")
-      expect(payload[:test_count_by_category].keys).to eq(%w[models lib policies])
+      expect(payload[:test_files].keys).to eq(%w[models lib policies])
     end
   end
 

@@ -279,6 +279,9 @@ module RailsAiContext
         nil
       end
 
+      # Kept for the .ai-context.json dump, whose keys are read back by
+      # tooling outside this gem. No tool renders it; the Test Files section
+      # states the same counts with their locations.
       def detect_test_count_by_category
         test_categories.transform_values { |row| row[:count] }
       end
