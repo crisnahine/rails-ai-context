@@ -716,7 +716,7 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(own[:mixins]),
-          concern_callbacks: concern_callbacks(data[:callbacks]),
+          concern_callbacks: concern_callbacks(data[:callbacks], confidence: Confidence::STATIC),
           concerns_unread: (unread if unread.any?),
           macros: data[:macros],
           methods: ActionResolver.own_methods(own[:methods], class_name),
@@ -752,8 +752,11 @@ module RailsAiContext
         Array(entries).uniq { |entry| entry.is_a?(Hash) ? yield(entry) : entry }
       end
 
-      def concern_callbacks(callbacks)
+      # A record cannot claim more than the tier that carries it, so the
+      # static payload downgrades what the listener verified in the file.
+      def concern_callbacks(callbacks, confidence: nil)
         found = Array(callbacks).select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
+        found = found.map { |cb| cb[:confidence] == Confidence::VERIFIED ? cb.merge(confidence: confidence) : cb } if confidence
         found if found.any?
       end
 

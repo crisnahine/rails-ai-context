@@ -1124,6 +1124,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(post[:associations].find { |a| a[:name] == :revisions }[:from_concern]).to eq("Publishable")
         expect(post[:associations].find { |a| a[:name] == :author }).not_to have_key(:from_concern)
         expect(post).not_to have_key(:concerns_unread)
+        expect(post[:concern_callbacks].map { |cb| cb[:confidence] }).to eq([ RailsAiContext::Confidence::STATIC ])
       end
     end
 
