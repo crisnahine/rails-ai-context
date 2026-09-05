@@ -165,25 +165,29 @@ module RailsAiContext
           end
 
           # Associations
-          assocs = data[:associations] || []
-          if assocs.any?
+          # An association type with no matcher renders nothing, so the block
+          # opens on the rows rather than on the association count.
+          rows = (data[:associations] || []).filter_map do |a|
+            case a[:type]
+            when "belongs_to"
+              "    it { is_expected.to belong_to(:#{a[:name]}) }"
+            when "has_many"
+              if a[:through]
+                "    it { is_expected.to have_many(:#{a[:name]}).through(:#{a[:through]}) }"
+              else
+                dep = a[:dependent] ? ".dependent(:#{a[:dependent]})" : ""
+                "    it { is_expected.to have_many(:#{a[:name]})#{dep} }"
+              end
+            when "has_one"
+              "    it { is_expected.to have_one(:#{a[:name]}) }"
+            when "has_and_belongs_to_many"
+              "    it { is_expected.to have_and_belong_to_many(:#{a[:name]}) }"
+            end
+          end
+          if rows.any?
             lines << ""
             lines << "  describe \"associations\" do"
-            assocs.each do |a|
-              case a[:type]
-              when "belongs_to"
-                lines << "    it { is_expected.to belong_to(:#{a[:name]}) }"
-              when "has_many"
-                if a[:through]
-                  lines << "    it { is_expected.to have_many(:#{a[:name]}).through(:#{a[:through]}) }"
-                else
-                  dep = a[:dependent] ? ".dependent(:#{a[:dependent]})" : ""
-                  lines << "    it { is_expected.to have_many(:#{a[:name]})#{dep} }"
-                end
-              when "has_one"
-                lines << "    it { is_expected.to have_one(:#{a[:name]}) }"
-              end
-            end
+            lines.concat(rows)
             lines << "  end"
           end
 
