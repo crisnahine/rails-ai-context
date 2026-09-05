@@ -3,6 +3,7 @@
 require "spec_helper"
 require "rails/generators"
 require "generators/rails_ai_context/install/install_generator"
+require "rake"
 
 # A file the app has nothing to put in is written by nobody and named by
 # every surface. Dropping it silently made a deliberate omission look like
@@ -10,6 +11,32 @@ require "generators/rails_ai_context/install/install_generator"
 RSpec.describe "not-applicable context files on every surface" do
   def repo_root
     File.expand_path("../../..", __dir__)
+  end
+
+  def capture_stderr
+    previous = $stderr
+    $stderr = StringIO.new
+    yield
+    $stderr.string
+  ensure
+    $stderr = previous
+  end
+
+  # Drives the shipped rakefile the way `bin/rails ai:context` does.
+  def invoke_rake_context
+    previous_application = Rake.application
+    previous_stdout = $stdout
+    Rake.application = Rake::Application.new
+    Rake.application.rake_require(
+      "rails_ai_context", [ File.join(repo_root, "lib", "rails_ai_context", "tasks") ], []
+    )
+    Rake::Task.define_task(:environment)
+    $stdout = StringIO.new
+    Rake.application["ai:context"].invoke
+    $stdout.string
+  ensure
+    $stdout = previous_stdout
+    Rake.application = previous_application
   end
 
   it "names them in the install generator output" do
@@ -45,9 +72,37 @@ RSpec.describe "not-applicable context files on every surface" do
     end
   end
 
-  # The rake task builds its own printer rather than calling the CLI's, so
-  # only a parity check keeps the two surfaces from drifting apart again.
-  it "names them on every surface that prints the other two buckets" do
+  it "names them in the watcher output" do
+    watcher = RailsAiContext::Watcher.new(RailsAiContext::StaticApp.new(Dir.pwd))
+    allow(RailsAiContext).to receive(:generate_context).and_return(
+      written: [], skipped: [], not_applicable: { "/app/.claude/rules/rails-models.md" => "no models" }
+    )
+
+    err = capture_stderr { watcher.send(:regenerate) }
+
+    expect(err).to include("  Not applicable: /app/.claude/rules/rails-models.md (no models)")
+  end
+
+  it "names them on the rake surface" do
+    Dir.mktmpdir do |tmp|
+      root = Pathname.new(File.realpath(tmp))
+      File.write(root.join(".rails-ai-context.yml"), "ai_tools:\n  - claude\ntool_mode: mcp\n")
+      allow(Rails).to receive(:root).and_return(root)
+      allow(RailsAiContext).to receive(:generate_context).and_return(
+        written: [], skipped: [], not_applicable: { "/app/.claude/rules/rails-models.md" => "no models" }
+      )
+      allow(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
+
+      out = invoke_rake_context
+
+      expect(out).to include("  \u2796  /app/.claude/rules/rails-models.md (no models)")
+    end
+  end
+
+  # Each surface words the three buckets its own way, but the walk over them
+  # belongs to one printer, or a fourth bucket reaches only the surfaces
+  # someone remembered to edit.
+  it "routes every surface through the one report printer" do
     surfaces = [
       File.join(repo_root, "exe", "rails-ai-context"),
       File.join(repo_root, "lib", "rails_ai_context", "tasks", "rails_ai_context.rake"),
@@ -55,7 +110,7 @@ RSpec.describe "not-applicable context files on every surface" do
       File.join(repo_root, "lib", "generators", "rails_ai_context", "install", "install_generator.rb")
     ]
 
-    silent = surfaces.reject { |path| File.read(path).include?("result[:not_applicable]") }
+    silent = surfaces.reject { |path| File.read(path).include?("ContextFileReport") }
 
     expect(silent).to be_empty
   end

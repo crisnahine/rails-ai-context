@@ -69,7 +69,7 @@ RSpec.describe "ai:preset rake task" do
 
     status, = invoke("Migration")
 
-    expect(RailsAiContext::Presets).to have_received(:run).with("migration")
+    expect(RailsAiContext::Presets).to have_received(:run).with("migration", out: anything, err: anything)
     expect(status).to eq(0)
   end
 

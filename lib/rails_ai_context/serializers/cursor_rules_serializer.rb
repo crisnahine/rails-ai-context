@@ -29,10 +29,10 @@ module RailsAiContext
       # as-is with no markers (the gem manages every file in that
       # directory).
       RULE_FILES = {
-        "rails-project.mdc" => [ :render_project_rule, "nothing to document" ],
-        "rails-models.mdc" => [ :render_models_rule, "no models" ],
-        "rails-controllers.mdc" => [ :render_controllers_rule, "no controllers" ],
-        "rails-mcp-tools.mdc" => [ :render_mcp_tools_rule, "nothing to document" ]
+        "rails-project.mdc" => { renderer: :render_project_rule, reason: "nothing to document" },
+        "rails-models.mdc" => { renderer: :render_models_rule, reason: "no models" },
+        "rails-controllers.mdc" => { renderer: :render_controllers_rule, reason: "no controllers" },
+        "rails-mcp-tools.mdc" => { renderer: :render_mcp_tools_rule, reason: "nothing to document" }
       }.freeze
 
       # @param output_dir [String] Rails root path

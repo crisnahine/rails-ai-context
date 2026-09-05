@@ -271,22 +271,10 @@ class RailsAiContextCLI < Thor
     def preset(name = nil)
       require_relative "../lib/rails_ai_context/presets"
 
-      unless name && ::RailsAiContext::Presets.resolve(name)
-        listing = ::RailsAiContext::Presets.listing(invocation: ->(k) { "rails-ai-context preset #{k}" })
-        # Bare `preset` is a listing request: stdout, exit 0. A name that
-        # matches no preset is an input error, so its framing and its copy of
-        # the listing go to stderr and scripts get a non-zero exit.
-        unless name
-          puts listing
-          return
-        end
-        $stderr.puts "Unknown preset: #{name}\n\n"
-        $stderr.print listing
-        exit 1
+      outcome = ::RailsAiContext::Presets.dispatch(name, invocation: ->(k) { "rails-ai-context preset #{k}" }) do
+        boot_rails!(command: "preset", allow_static: true)
       end
-
-      boot_rails!(command: "preset", allow_static: true)
-      exit 1 unless ::RailsAiContext::Presets.run(name)
+      exit 1 unless %i[listed ran].include?(outcome)
     rescue SystemExit
       raise
     rescue StandardError, ScriptError => e
@@ -408,10 +396,16 @@ class RailsAiContextCLI < Thor
       ::RailsAiContext::Server.builtin_tools.size
     end
 
+    CONTEXT_RESULT_LINES = {
+      written: "Written: %s",
+      skipped: "Skipped: %s (unchanged)",
+      not_applicable: "Not applicable: %s (%s)"
+    }.freeze
+
     def print_context_result(result)
-      (result[:written] || []).each { |f| $stderr.puts "  Written: #{f}" }
-      (result[:skipped] || []).each { |f| $stderr.puts "  Skipped: #{f} (unchanged)" }
-      (result[:not_applicable] || {}).each { |f, why| $stderr.puts "  Not applicable: #{f} (#{why})" }
+      ::RailsAiContext::ContextFileReport.each_line(result, CONTEXT_RESULT_LINES) do |_bucket, text|
+        $stderr.puts "  #{text}"
+      end
     end
 
     # The tool list only needs tool names/descriptions/schemas - none of that

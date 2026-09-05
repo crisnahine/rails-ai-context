@@ -7,6 +7,12 @@ module RailsAiContext
   # by nature, so it also gets the one-time legacy-files prompt the
   # server-side reload deliberately skips.
   class Watcher
+    RESULT_LINES = {
+      written: "Updated: %s",
+      skipped: "Unchanged: %s",
+      not_applicable: "Not applicable: %s (%s)"
+    }.freeze
+
     attr_reader :app
 
     def initialize(app = nil)
@@ -61,9 +67,7 @@ module RailsAiContext
     def regenerate
       $stderr.puts "[rails-ai-context] Changes detected, regenerating context files..."
       result = RailsAiContext.generate_context(format: :all)
-      result[:written].each { |f| $stderr.puts "  Updated: #{f}" }
-      result[:skipped].each { |f| $stderr.puts "  Unchanged: #{f}" }
-      (result[:not_applicable] || {}).each { |f, why| $stderr.puts "  Not applicable: #{f} (#{why})" }
+      ContextFileReport.each_line(result, RESULT_LINES) { |_bucket, text| $stderr.puts "  #{text}" }
     rescue => e
       $stderr.puts "[rails-ai-context] Error regenerating: #{e.message}"
     end

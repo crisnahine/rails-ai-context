@@ -7,6 +7,11 @@ module RailsAiContext
     module StackOverviewHelper
       include CountPhrase
 
+      # One rule file on its way to disk. The reason travels with the path it
+      # explains; when it lived in a second hash keyed by the same path, an
+      # entry missing from that hash lost its reason silently.
+      RuleFile = Struct.new(:path, :content, :reason)
+
       # Returns an array of summary lines for full-preset introspectors.
       # Each line is only added if the introspector returned meaningful data.
       def full_preset_stack_lines(ctx = context)
@@ -132,43 +137,37 @@ module RailsAiContext
 
       # Render and write a serializer's whole rule-file table.
       # @param dir [String] directory the table's relative names hang off
-      # @param table [Hash<String, Array(Symbol, String)>] name => [renderer, reason]
+      # @param table [Hash<String, Hash>] name => { renderer:, reason: }
       def write_rule_table(dir, table)
-        files = {}
-        reasons = {}
-
-        table.each do |name, (renderer, reason)|
-          filepath = File.join(dir, name)
-          files[filepath] = send(renderer)
-          reasons[filepath] = reason
-        end
-
-        write_rule_files(files, reasons: reasons)
+        write_rule_files(
+          table.map do |name, rule|
+            RuleFile.new(File.join(dir, name), send(rule[:renderer]), rule[:reason])
+          end
+        )
       end
 
       # Write split-rule files with diff-check and atomic writes.
       # A nil render means the app has nothing to put in that file. It is
       # reported rather than dropped, so a deliberate omission never looks
       # like a failed generation.
-      # @param files [Hash<String, String|nil>] filepath => content mapping
-      # @param reasons [Hash<String, String>] filepath => why it is not applicable
+      # @param entries [Array<RuleFile>]
       # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
-      def write_rule_files(files, reasons: {})
+      def write_rule_files(entries)
         written = []
         skipped = []
         not_applicable = {}
 
-        files.each do |filepath, content|
-          if content.nil?
-            not_applicable[filepath] = reasons[filepath] || "nothing to document"
+        entries.each do |entry|
+          if entry.content.nil?
+            not_applicable[entry.path] = entry.reason || "nothing to document"
             next
           end
 
-          if File.exist?(filepath) && File.read(filepath) == content
-            skipped << filepath
+          if File.exist?(entry.path) && File.read(entry.path) == entry.content
+            skipped << entry.path
           else
-            SafeFile.atomic_write(filepath, content)
-            written << filepath
+            SafeFile.atomic_write(entry.path, entry.content)
+            written << entry.path
           end
         end
 

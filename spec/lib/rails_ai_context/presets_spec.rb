@@ -77,6 +77,65 @@ RSpec.describe RailsAiContext::Presets do
     end
   end
 
+  describe ".dispatch" do
+    let(:invocation) { ->(key) { "rails-ai-context preset #{key}" } }
+
+    it "puts the listing on out and answers :listed for a bare invocation" do
+      out = StringIO.new
+      err = StringIO.new
+
+      expect(described_class.dispatch(nil, invocation: invocation, out: out, err: err)).to eq(:listed)
+      expect(out.string).to include("Available presets:")
+      expect(out.string).to include("rails-ai-context preset architecture")
+      expect(err.string).to be_empty
+    end
+
+    it "frames a rejected name and its listing on err, echoing what was typed" do
+      out = StringIO.new
+      err = StringIO.new
+
+      expect(described_class.dispatch("BOGUS", invocation: invocation, out: out, err: err)).to eq(:unknown)
+      expect(err.string).to start_with("Unknown preset: BOGUS\n\n")
+      expect(err.string).to include("Available presets:")
+      expect(out.string).to be_empty
+    end
+
+    it "runs the preset under the normalized key and answers :ran" do
+      allow(described_class).to receive(:run).and_return(true)
+      out = StringIO.new
+      err = StringIO.new
+
+      expect(described_class.dispatch("Migration ", invocation: invocation, out: out, err: err)).to eq(:ran)
+      expect(described_class).to have_received(:run).with("migration", out: out, err: err)
+    end
+
+    it "answers :failed when the run answers false" do
+      allow(described_class).to receive(:run).and_return(false)
+
+      expect(described_class.dispatch("migration", invocation: invocation, out: StringIO.new, err: StringIO.new))
+        .to eq(:failed)
+    end
+
+    it "yields the resolved key before running, so a caller can boot first" do
+      allow(described_class).to receive(:run).and_return(true)
+      booted = []
+
+      described_class.dispatch("migration", invocation: invocation, out: StringIO.new, err: StringIO.new) do |key|
+        booted << key
+      end
+
+      expect(booted).to eq([ "migration" ])
+    end
+
+    it "does not yield for a name no preset carries" do
+      yielded = false
+
+      described_class.dispatch("nope", invocation: invocation, out: StringIO.new, err: StringIO.new) { yielded = true }
+
+      expect(yielded).to be false
+    end
+  end
+
   describe ".listing" do
     it "renders one line per preset in the caller's invocation form" do
       text = described_class.listing(invocation: ->(key) { "rails-ai-context preset #{key}" })
