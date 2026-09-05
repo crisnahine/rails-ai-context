@@ -206,6 +206,19 @@ RSpec.describe RailsAiContext::LiveReload do
 
       expect($stderr).to have_received(:puts).with(a_string_matching(/Live reload enabled/))
     end
+
+    # Server#maybe_start_live_reload catches the LoadError and prints
+    # "Live reload unavailable", so a banner printed before the listener
+    # announces a watch that never started.
+    it "announces nothing when the listen gem is missing" do
+      allow(live_reload.instance_variable_get(:@watch)).to receive(:require)
+        .with("listen").and_raise(LoadError)
+
+      expect { live_reload.start }.to raise_error(LoadError)
+
+      expect($stderr).not_to have_received(:puts).with(a_string_matching(/Live reload enabled/))
+      expect($stderr).not_to have_received(:puts).with(a_string_matching(/Watching:/))
+    end
   end
 
   describe "#stop" do
