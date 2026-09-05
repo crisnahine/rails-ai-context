@@ -96,9 +96,9 @@ module RailsAiContext
           ordered.each do |type, methods|
             lines << "## #{type}"
             methods.each do |method_name|
-              source = extract_callback_source(name, method_name)
+              source = extract_callback_source(name, method_name, data)
               if source
-                lines << "### #{callback_target(method_name)} (lines #{source[:start_line]}-#{source[:end_line]})"
+                lines << "### #{callback_target(method_name)} (#{source_location(source)})"
                 lines << "```ruby"
                 lines << source[:code]
                 lines << "```"
@@ -175,9 +175,9 @@ module RailsAiContext
             lines << "## #{name}"
             ordered.each do |type, methods|
               methods.each do |method_name|
-                source = extract_callback_source(name, method_name)
+                source = extract_callback_source(name, method_name, data)
                 if source
-                  lines << "### #{type} #{callback_target(method_name)} (lines #{source[:start_line]}-#{source[:end_line]})"
+                  lines << "### #{type} #{callback_target(method_name)} (#{source_location(source)})"
                   lines << "```ruby" << source[:code] << "```" << ""
                 else
                   lines << "- **#{type}** → `#{callback_target(method_name)}`"
@@ -211,11 +211,35 @@ module RailsAiContext
         ordered
       end
 
-      private_class_method def self.extract_callback_source(model_name, method_name)
+      private_class_method def self.extract_callback_source(model_name, method_name, data = nil)
         return nil unless method_name?(method_name)
 
         path = rails_app.root.join(RailsAiContext::Payload.model_file(cached_context, model_name))
-        extract_method_source_from_file(path, method_name)
+        extract_method_source_from_file(path, method_name) ||
+          concern_callback_source(data, method_name, model_name)
+      end
+
+      # A concern-declared callback has no `def` in the model file: the
+      # concern that declared it is the file that defines it. Resolved the way
+      # the introspector resolved it, so both find the same file.
+      private_class_method def self.concern_callback_source(data, method_name, model_name)
+        concern = Array(data && data[:concern_callbacks])
+          .find { |cb| cb.is_a?(Hash) && cb[:method].to_s == method_name.to_s }
+          &.dig(:from_concern)
+        return nil unless concern
+
+        path = RailsAiContext::ConcernPaths.find_file(
+          rails_app.root.to_s, concern, prefer: "model", within: model_name
+        )
+        source = path && extract_method_source_from_file(path, method_name)
+        source&.merge(from_concern: concern)
+      end
+
+      # Line numbers are the declaring file's, so the heading names it when
+      # that is not the model file.
+      private_class_method def self.source_location(source)
+        prefix = source[:from_concern] ? "#{source[:from_concern]} " : ""
+        "#{prefix}lines #{source[:start_line]}-#{source[:end_line]}"
       end
 
       private_class_method def self.format_targets(methods)
