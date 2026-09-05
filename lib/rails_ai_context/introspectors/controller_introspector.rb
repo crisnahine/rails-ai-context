@@ -287,7 +287,7 @@ module RailsAiContext
         filter_macros = %i[
           before_action after_action around_action
           prepend_before_action append_before_action
-          skip_before_action skip_after_action append_after_action
+          skip_before_action skip_after_action skip_around_action append_after_action
         ]
         ast_result = SourceIntrospector.walk_source(source, {
           filters: -> { Listeners::GenericMacroListener.new(*filter_macros) }
