@@ -65,6 +65,61 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe "#check_introspector_health" do
+    subject(:check) { doctor.send(:check_introspector_health) }
+
+    def only_introspectors(*names)
+      allow(RailsAiContext.configuration).to receive(:introspectors).and_return(names)
+    end
+
+    it "quotes the error the introspector returned" do
+      only_introspectors(:database_stats)
+      allow(ActiveRecord::Base).to receive(:connection)
+        .and_raise(StandardError, "Database not found: no_such_db. Run bin/rails db:create")
+
+      expect(check.status).to eq(:warn)
+      expect(check.message).to include("database_stats")
+      expect(check.fix).to include("database_stats: Database not found: no_such_db")
+      expect(check.fix).not_to include("stimulus")
+    end
+
+    it "keeps the message line to names when an introspector raises" do
+      only_introspectors(:gems)
+      allow_any_instance_of(RailsAiContext::Introspectors::GemIntrospector)
+        .to receive(:call).and_raise(StandardError, "no Gemfile.lock here")
+
+      expect(check.message).to eq("1 introspector returned errors: gems")
+      expect(check.fix).to include("no Gemfile.lock here")
+    end
+
+    it "reports an introspector that raises a ScriptError" do
+      only_introspectors(:gems)
+      allow_any_instance_of(RailsAiContext::Introspectors::GemIntrospector)
+        .to receive(:call).and_raise(SyntaxError, "app/models/user.rb:3: syntax error")
+
+      expect(check.status).to eq(:warn)
+      expect(check.fix).to include("app/models/user.rb:3: syntax error")
+    end
+
+    it "shows the first three errors and counts the rest" do
+      only_introspectors(:gems, :routes, :schema, :controllers, :views)
+      failing = instance_double(RailsAiContext::Introspectors::GemIntrospector, call: { error: "boom" })
+      allow_any_instance_of(RailsAiContext::Introspector)
+        .to receive(:resolve_introspector).and_return(failing)
+
+      expect(check.fix.scan("boom").size).to eq(3)
+      expect(check.fix).to include("and 2 more introspectors")
+    end
+
+    it "keeps the rest of the report when a check raises a ScriptError" do
+      allow(doctor).to receive(:check_introspector_health).and_raise(SyntaxError, "broken")
+      result = nil
+
+      expect { result = doctor.run }.to output(/check_introspector_health failed/).to_stderr
+      expect(result[:checks].map(&:name)).to include("Schema")
+    end
+  end
+
   describe "#check_codex_env_staleness" do
     subject(:check) { doctor.send(:check_codex_env_staleness) }
 
