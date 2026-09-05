@@ -263,12 +263,15 @@ module RailsAiContext
       end
 
       # Ruby resolves a bare superclass from the enclosing namespace outward,
-      # so `class Settings::ProfileController < BaseController` keys the
-      # listing under Settings::BaseController. A name nothing resolves is
-      # handed back as written, so the app-base check still sees it.
+      # so `module Settings; class ProfileController < BaseController` keys the
+      # listing under Settings::BaseController even when a top-level
+      # BaseController exists too. A name already spelled with a namespace is
+      # taken as written, or it would be re-prefixed onto the child's own
+      # namespace, and a name nothing resolves is handed back as written, so
+      # the app-base check still sees it.
       def resolve_entry_name(entries, name, within)
         name = name&.to_s
-        return name if name.nil? || within.nil? || entries.key?(name)
+        return name if name.nil? || within.nil? || name.include?("::")
 
         scope = within.to_s.split("::")[0..-2]
         while scope.any?
