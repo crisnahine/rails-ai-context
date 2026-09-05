@@ -19,9 +19,13 @@ module RailsAiContext
     #   resolves to this one's concerns directory
     # @param within [String, nil] the enclosing constant of the class, for a
     #   namespace-relative `include`
+    # @param cache [Hash, nil] a caller-owned store keyed by concern file, so
+    #   one run walks a file once however many classes include it. The caller
+    #   owns its lifetime: a process-wide store would go stale, because the
+    #   configured paths and the files themselves change in-process.
     # @return [Array(Hash, Array<String>)] the collected entries per key, and
     #   the names whose file could not be read
-    def collect(root, mixins, keys:, prefer: nil, within: nil, depth: MAX_DEPTH)
+    def collect(root, mixins, keys:, prefer: nil, within: nil, depth: MAX_DEPTH, cache: nil)
       names = ConcernMembership.from_mixins(mixins)
       return [ {}, [] ] if names.empty?
 
@@ -32,12 +36,12 @@ module RailsAiContext
       collected = Hash.new { |hash, key| hash[key] = [] }
       unresolved = []
 
-      walk(names, root.to_s, dirs, keys, within, depth, Set.new, collected, unresolved)
+      walk(names, root.to_s, dirs, keys, within, depth, Set.new, collected, unresolved, cache)
 
       [ collected, unresolved ]
     end
 
-    def walk(names, root, dirs, keys, within, depth, seen, collected, unresolved)
+    def walk(names, root, dirs, keys, within, depth, seen, collected, unresolved, cache)
       return if depth.negative?
 
       names.each do |name|
@@ -49,17 +53,25 @@ module RailsAiContext
           next
         end
 
-        data = Introspectors::SourceIntrospector.call(path)
+        data = introspect(path, cache)
         keys.each do |key|
           Array(data[key]).each { |entry| collected[key] << tagged(entry, name) }
         end
 
-        walk(ConcernMembership.from_mixins(data[:mixins]), root, dirs, keys, name, depth - 1, seen, collected, unresolved)
+        walk(ConcernMembership.from_mixins(data[:mixins]), root, dirs, keys, name, depth - 1, seen, collected, unresolved, cache)
       end
+    end
+
+    def introspect(path, cache)
+      return Introspectors::SourceIntrospector.call(path) if cache.nil?
+
+      cache[path] ||= Introspectors::SourceIntrospector.call(path)
     end
 
     def tagged(entry, concern_name)
       entry.is_a?(Hash) ? entry.merge(from_concern: concern_name) : entry
     end
+
+    private_class_method :walk, :introspect, :tagged
   end
 end

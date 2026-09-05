@@ -17,6 +17,9 @@ module RailsAiContext
       def initialize(app)
         @app    = app
         @config = RailsAiContext.configuration
+        # One introspection per instance, so a concern shared by 100 models is
+        # walked once. Anything longer-lived would outlast the files it read.
+        @concern_cache = {}
       end
 
       # @return [Hash] model metadata keyed by model name
@@ -736,7 +739,8 @@ module RailsAiContext
       def merge_concern_macros(own, class_name)
         collected, unread = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
-          keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name
+          keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name,
+          cache: @concern_cache
         )
         return [ own, unread ] if collected.empty?
 
