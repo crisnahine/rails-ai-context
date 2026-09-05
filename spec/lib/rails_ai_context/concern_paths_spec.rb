@@ -125,5 +125,22 @@ RSpec.describe RailsAiContext::ConcernPaths do
         .to eq(File.join(dir, "debug_concern.rb"))
       expect(described_class.find_file(tmpdir, "DebugConcern")).to be_nil
     end
+
+    # Ruby reaches the top level last, so the nested file is the one the
+    # reference binds to when both spellings exist.
+    it "prefers the innermost namespace over a top-level file of the same name" do
+      nested = File.join(tmpdir, "app", "models", "concerns", "fasp", "provider")
+      FileUtils.mkdir_p(nested)
+      File.write(File.join(nested, "debug_concern.rb"), "module DebugConcern\nend\n")
+      File.write(File.join(tmpdir, "app", "models", "concerns", "debug_concern.rb"), "module DebugConcern\nend\n")
+
+      expect(described_class.find_file(tmpdir, "DebugConcern", within: "Fasp::Provider"))
+        .to eq(File.join(nested, "debug_concern.rb"))
+    end
+
+    it "keeps candidate_names off the public surface" do
+      expect(described_class).not_to respond_to(:candidate_names)
+      expect(described_class).to respond_to(:ordered_dirs)
+    end
   end
 end
