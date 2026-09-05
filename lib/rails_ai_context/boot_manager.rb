@@ -76,7 +76,7 @@ module RailsAiContext
         )
       end
 
-      guard(timeout: timeout) { require environment_rb }
+      guard(timeout: timeout, announce_exit: false) { require environment_rb }
     rescue SystemExit => e
       Result.new(status: :failed, error: BootExitError.new("App called exit(#{e.status}) during boot"))
     end
@@ -84,7 +84,7 @@ module RailsAiContext
     # The same three protections for callers that boot through their own
     # mechanism - the rake tasks go through Rake's environment task so app
     # hooks on it still run.
-    def self.guard(timeout: DEFAULT_TIMEOUT)
+    def self.guard(timeout: DEFAULT_TIMEOUT, announce_exit: true)
       OutputGuard.quarantine_stdout do
         Timeout.timeout(timeout) { yield }
       end
@@ -93,9 +93,10 @@ module RailsAiContext
       # The exit stands for callers booting inside the app's own process (the
       # rake tasks), where it is an explicit process-level decision. Its own
       # message is already on stderr; without this line nothing says the call
-      # came from here. It states what the app did and nothing about what
-      # follows: `boot!` guards too, and answers from the static tier.
-      $stderr.puts "[rails-ai-context] App called exit(#{e.status}) during boot."
+      # came from here. `boot!` turns the exit into a boot failure and prints
+      # that instead, so it asks for no notice rather than the same sentence
+      # twice.
+      $stderr.puts "[rails-ai-context] App called exit(#{e.status}) during boot." if announce_exit
       raise
     rescue Timeout::Error
       # Timeout::Error's own message ("execution expired") names neither the

@@ -108,9 +108,8 @@ RSpec.describe RailsAiContext::BootManager do
       expect(errors.string).to include("[rails-ai-context] App called exit(1) during boot.")
     end
 
-    # `boot!` guards too and answers from the static tier afterwards, so a
-    # notice that named the consequence would contradict the answer under it.
-    # Both surfaces state the same fact instead.
+    # The notice and the boot failure are one sentence, so the caller that
+    # prints both would say it twice.
     it "states what the app did, in the words the boot failure uses" do
       errors = StringIO.new
       original = $stderr
@@ -146,6 +145,27 @@ RSpec.describe RailsAiContext::BootManager do
         expect(result).not_to be_booted
         expect(result.error).to be_a(described_class::BootExitError)
         expect(result.failure_summary).to include("App called exit(1) during boot")
+      end
+    end
+
+    # The binary prints the failure summary and then answers from the static
+    # tier, so the guard's own notice would be the same sentence twice.
+    it "leaves the notice to the caller that lets the exit stand" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "environment.rb"), %(abort "no RAILS_ENV"\n))
+
+        errors = StringIO.new
+        original = $stderr
+        $stderr = errors
+        begin
+          described_class.boot!(app_root: dir)
+        ensure
+          $stderr = original
+        end
+
+        expect(errors.string).to include("no RAILS_ENV")
+        expect(errors.string).not_to include("[rails-ai-context] App called exit")
       end
     end
   end

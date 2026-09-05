@@ -844,10 +844,10 @@ Changed.
   before the move, and those three print the one-line refusal the other
   commands already printed.
 - **An initializer calling `abort` ended the run with no line from this gem.**
-  The exit still passes through with the app's own message and its status, and
-  one stderr line now names this gem as the caller: `App called exit(N) during
-  boot.` It states what the app did and nothing about what follows, because the
-  binary guards the same way and answers from the static tier underneath it.
+  On the rake path the exit still passes through with the app's own message and
+  its status, and one stderr line now names this gem as the caller: `App called
+  exit(N) during boot.` The binary prints no such line: there the exit is a boot
+  failure like any other and the failure summary above the answer says so.
 - **A value-taking flag with no value crashed inside the tool.** `tool schema
   --table` became the Boolean `true` and reached the tool as a type it never
   accepts, raising a `NoMethodError` that named an internal frame. It is
@@ -1012,9 +1012,10 @@ Changed.
 - **The boot exit notice read as the run stopping, on the path where it does
   not.** An app whose `config/environment.rb` calls `abort` printed "App
   exited during boot", then "Serving static analysis", then a full answer at
-  exit 0. The line says "App called exit(N) during boot." now, which is the
-  sentence the boot failure itself carries, so it states what the app did and
-  leaves the consequence to the line under it.
+  exit 0. The notice belongs to the caller that lets the exit stand, which is
+  the rake tasks; the binary turns the exit into a boot failure and prints
+  that, so it asks for no notice. Both surfaces spell the fact the same way:
+  "App called exit(N) during boot."
 
 ### Changed
 
