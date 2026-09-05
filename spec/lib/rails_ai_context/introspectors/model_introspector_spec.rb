@@ -591,6 +591,31 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # `dependent: nil` is a real declaration, and lifting it as "" rendered
+    # `.dependent(:)` into the scaffold the user is told to paste.
+    it "does not lift an association option that is written as nil" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "status.rb"), <<~RUBY)
+          class Status < ApplicationRecord
+            has_many :replies, class_name: "Status", foreign_key: "in_reply_to_id", dependent: nil
+            has_many :favourites, dependent: :destroy
+            belongs_to :account, optional: false
+            belongs_to :subject, polymorphic: false
+          end
+        RUBY
+
+        associations = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Status"][:associations]
+        by_name = associations.to_h { |a| [ a[:name], a ] }
+
+        expect(by_name["replies"]).not_to have_key(:dependent)
+        expect(by_name["replies"][:class_name]).to eq("Status")
+        expect(by_name["favourites"][:dependent]).to eq("destroy")
+        expect(by_name["account"][:optional]).to be(false)
+        expect(by_name["subject"][:polymorphic]).to be(false)
+      end
+    end
+
     # An error entry carries no path, and File.basename("", ".rb").pluralize
     # is "", which is truthy and so was accepted as the child's table. No
     # walk reaches this today, because model_class? already rejects a child

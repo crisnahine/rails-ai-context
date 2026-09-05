@@ -820,6 +820,10 @@ module RailsAiContext
           next unless options.key?(key) && !acc.key?(key)
 
           value = options[key]
+          # `dependent: nil` is a declaration of nothing, and the booted tier
+          # drops it; lifting it as "" renders `.dependent(:)`.
+          next if value.nil?
+
           acc[key] = BOOLEAN_ASSOCIATION_OPTIONS.include?(key) ? value : value.to_s
         end
       end
