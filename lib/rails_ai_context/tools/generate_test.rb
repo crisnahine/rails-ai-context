@@ -444,8 +444,15 @@ module RailsAiContext
           info = ((cached_context[:controllers] || {})[:controllers] || {})[ctrl_class] || {}
           strong_params = Array(info[:strong_params])
           sp = strong_params.find { |p| p[:name] == "#{singular}_params" } || strong_params.first
+          columns = schema_content_columns(table)
           attrs = Array(sp && sp[:permits]).map(&:to_s)
-          attrs = schema_content_columns(table) if attrs.empty?
+          attrs = columns if attrs.empty?
+
+          # A permitted param need not be a column: nested attributes, virtual
+          # writers, a password a model stores as a digest. create! raises
+          # UnknownAttributeError on one, so the record is built from columns
+          # only while the request params keep every permitted name.
+          non_columns = columns.any? ? attrs - columns : []
 
           # Uniqueness constraints come from two places: model validations and
           # unique database indexes. A column with only a unique index (no
@@ -462,6 +469,8 @@ module RailsAiContext
             fixture_key: fixture_key_for(table, tests_data),
             param_key: (sp && sp[:requires]) || singular,
             attrs: attrs.sort,
+            record_attrs: (attrs - non_columns).sort,
+            non_column_attrs: non_columns.sort,
             json_api: info[:api_controller] == true || info[:respond_to_formats] == [ "json" ],
             unique_attrs: unique_attrs
           }
@@ -472,9 +481,10 @@ module RailsAiContext
           lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
           lines << "class #{ctrl_class}Test < ActionDispatch::IntegrationTest"
 
-          lines.concat(minitest_auth_lines(tests_data))
+          doorkeeper = doorkeeper_controller?(ctrl_class)
+          lines.concat(minitest_auth_lines(ctrl_class, tests_data, doorkeeper))
 
-          setup = minitest_setup_lines(res, tests_data)
+          setup = minitest_setup_lines(res, tests_data, doorkeeper)
           if setup.any?
             lines << "  setup do"
             setup.each { |l| lines << "    #{l}" }
@@ -499,8 +509,12 @@ module RailsAiContext
         end
 
         # The Devise include is a fact about the app; the sign_in is only
-        # emitted when the app owns a users fixture to sign in.
-        def minitest_auth_lines(tests_data)
+        # emitted when the app owns a users fixture to sign in. A Doorkeeper
+        # endpoint is not signed in at all, the same as the request-spec side.
+        def minitest_auth_lines(ctrl_class, tests_data, doorkeeper)
+          if doorkeeper
+            return [ "  # TODO: these tests run unauthenticated; #{ctrl_class} authorizes with Doorkeeper, so pass a bearer token" ]
+          end
           return [] unless devise_app?(tests_data)
 
           lines = [ "  include Devise::Test::IntegrationHelpers" ]
@@ -510,9 +524,9 @@ module RailsAiContext
           lines
         end
 
-        def minitest_setup_lines(res, tests_data)
+        def minitest_setup_lines(res, tests_data, doorkeeper)
           lines = []
-          if devise_app?(tests_data) && (user_key = fixture_key_for("users", tests_data))
+          if !doorkeeper && devise_app?(tests_data) && (user_key = fixture_key_for("users", tests_data))
             lines << "@user = users(:#{user_key})"
             lines << "sign_in @user"
           end
@@ -735,9 +749,13 @@ module RailsAiContext
             lines << "  let(:#{res[:name]}) { create(:#{factory}) }"
             return res[:name]
           end
-          return nil unless res[:model] && res[:attrs].any?
+          return nil unless res[:model] && res[:record_attrs].any?
 
-          placeholder = placeholder_attrs_literal(res)
+          placeholder = placeholder_attrs_literal(res, res[:record_attrs])
+          if res[:non_column_attrs].any?
+            lines << "  # TODO: #{res[:non_column_attrs].join(', ')} are permitted params but not columns of " \
+              "#{res[:table]}; set them the way the model expects"
+          end
           lines << "  # TODO: adjust these attributes if validations reject the placeholder values"
           lines << "  let(:#{res[:name]}) { #{res[:model]}.create!(#{placeholder}) }"
           res[:name]
@@ -953,8 +971,8 @@ module RailsAiContext
           todos
         end
 
-        def placeholder_attrs_literal(res)
-          pairs = res[:attrs].map do |attr|
+        def placeholder_attrs_literal(res, attrs = res[:attrs])
+          pairs = attrs.map do |attr|
             "#{attr}: #{attr_value_expr(res, attr, :placeholder)}"
           end
           "{ #{pairs.join(', ')} }"
@@ -1042,21 +1060,6 @@ module RailsAiContext
         end
 
         # ── Helpers ──────────────────────────────────────────────────────
-
-        # First fixture key for a table (reading the fixture file when the
-        # cached fixture names miss it), or nil when no fixture exists.
-        def fixture_key_for(table, tests_data)
-          fixture_names = tests_data[:fixture_names] || {}
-          keys = fixture_names[table] || fixture_names[table.to_sym]
-          return keys.first.to_s if keys.is_a?(Array) && keys.any?
-
-          fixture_file = File.join(rails_app.root, "test", "fixtures", "#{table}.yml")
-          return nil unless File.exist?(fixture_file)
-
-          content = RailsAiContext::SafeFile.read(fixture_file)
-          # YAML fixture files have top-level keys as fixture names
-          content&.scan(/^([a-z_]\w*):/i)&.first&.first
-        end
 
         def find_factory_name(model_name, tests_data)
           factory_names = tests_data[:factory_names] || {}
