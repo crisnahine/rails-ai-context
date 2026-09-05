@@ -373,9 +373,10 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
     # A fault resolving the root ran inside the rescue that answers a tool
     # failure, so it left this net and reached the client as the -32603 the
-    # net exists to prevent. It degrades to the frame as it stands instead:
-    # nothing that was not relativized is presented as if it were.
-    it "answers with the unrelativized frame when resolving the root faults" do
+    # net exists to prevent. It degrades instead, and to the same shape the
+    # no-app branch four lines up already uses: an empty root still strips the
+    # prefix that names the machine, so the frame stays portable.
+    it "keeps the frame portable when resolving the root faults" do
       tool = build_tool do
         input_schema(properties: {})
         def self.rails_app
@@ -389,9 +390,11 @@ RSpec.describe RailsAiContext::Tools::SafeCall do
 
       response = tool.call
       text = response.content.first[:text]
+      gem_root = File.expand_path("../../../../..", __dir__)
 
       expect(response.error?).to be(true)
-      expect(text).to include("At: #{File.expand_path("../../../../lib/rails_ai_context/tools/base_tool.rb", __dir__)}:")
+      expect(text).to include("lib/rails_ai_context/tools/base_tool.rb:")
+      expect(text).not_to include("At: #{gem_root}")
     end
   end
 

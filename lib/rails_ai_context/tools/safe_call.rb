@@ -99,9 +99,13 @@ module RailsAiContext
       rescue StandardError
         # This runs inside the rescue that answers a tool failure, so a raise
         # here leaves the net entirely and the client gets a protocol error.
-        # The frame as it stands is honest: nothing unrelativized is presented
-        # as if it were.
-        frame
+        # An empty root is the same answer the no-app branch above gives, and
+        # it still strips the prefix that names the machine.
+        begin
+          [ RailsAiContext::PortablePath.relativize(path, ""), rest ].compact.join(":")
+        rescue StandardError
+          frame
+        end
       end
 
       # The value the caller sent, when this tool takes a DetailLevel detail
