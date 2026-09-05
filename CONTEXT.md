@@ -72,6 +72,8 @@ The mode where the app did not boot, or `--no-boot` was passed. What an introspe
 
 An undeclared introspector fails the suite, and every files-only declaration is proven against `spec/fixtures/static_app` with nothing booted. Declaring files-only while defining `static_call` (or the reverse) is also a spec failure.
 
+The tier also caps what the records inside an answer may claim: no record can claim more than the tier carrying it, so an association or a scope the AST resolved with certainty reads `[STATIC]` inside a static entry rather than the `[VERIFIED]` the walk would give it on its own. One that the parser could not resolve keeps its lower `[INFERRED]`. A booted entry carries no tier mark, so its records keep theirs.
+
 ## Concern
 
 Three senses inside the gem, and the payload one is wider than either everyday Rails reading.
@@ -85,6 +87,18 @@ Three senses inside the gem, and the payload one is wider than either everyday R
 ## Action
 
 The callable interface of a class as this gem reports it: the class's own public instance methods - a class nested in the same file is a separate owner, not part of the interface - minus framework-shaped `_` names, read source-first, with reflection minus the app-owned base as the honest fallback. `ActionResolver` is the one answer; controller and mailer are configurations of it, and a channel's "stream methods" are a narrower selection of the same reading.
+
+## Filter chain
+
+Which filters a controller runs, and which of them a given action runs. `ActionFilters` is the one answer, and every controller surface reads its filter line from there, so no two answers can disagree about what a class inherits or skips. `for_controller` answers about the class; `for` answers about one of its actions. Both return `own`, `inherited` and `skipped`.
+
+**A skip is not the absence of a filter.** `skipped` holds unconditional skips only, and those are the ones a surface strikes through. Everything else keeps its place in the chain and carries the reason on the record, because a filter a class skips on some requests is still a filter that runs on the others: `if:`/`unless:` become `skipped_if`/`skipped_unless`, and `only:`/`except:` become `skipped_on`/`skipped_except` in the whole-controller answer.
+
+**Ask about one action and the answer is absolute again.** On that action the filter either runs or is struck through, so a constraint that does not cover the action leaves no tail at all. That cuts both ways, and the second direction is the one that is easy to get wrong: a skip whose constraint leaves this action alone is the only evidence the chain runs that filter here at all, when the class that declared it is not in the payload. Such a record is marked as evidence, never as a skip, and a real condition on the same name always outranks it.
+
+**Order is the run order, and a class's own body wins.** The chain keeps the order reflection or the source gives it, so a `prepend_before_action` does not fall behind everything the class inherits. A filter the body declares survives an ancestor's skip of the same name, because Rails re-adds it. Attribution names the ancestor whose body declared the filter, not the nearest one that merely carries it inherited.
+
+**What it cannot see is stated rather than guessed.** A filter that only `ApplicationController` declares is missing from a static chain when nothing else in the payload mentions it; `docs/COMPATIBILITY.md` says so.
 
 ## Payload
 
