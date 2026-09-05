@@ -140,9 +140,10 @@ files, so a file that states app counts and carries none came from a booted
 run; `.ai-context.json` names its tier either way.
 
 A model's `file` in `.ai-context.json` is app-relative, except for a model a
-gem owns: that value begins `gem:` and the rest of it is relative to the gem's
-install directory, not to the app root, so a consumer must not join it to the
-app root.
+gem owns: that value begins `gem:` and the rest of it starts with the gem's own
+directory name, as in `gem:doorkeeper-5.9.5/app/models/access_grant.rb`. It is
+relative to the directory the gems are unpacked under, not to the app root, so
+a consumer must not join it to the app root.
 
 ## Shape matrix
 
