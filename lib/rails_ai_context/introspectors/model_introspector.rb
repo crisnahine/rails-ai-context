@@ -229,6 +229,23 @@ module RailsAiContext
           sti_bases(parent, candidates, seen + [ class_name ])
       end
 
+      # The same chain off the loaded class. An abstract base ends it: a child
+      # of one has a table of its own and inherits none of its macros through
+      # STI. A base whose file Ruby cannot place is skipped, not walked past,
+      # because its own base's macros do not reach the child any other way.
+      def booted_sti_bases(model)
+        return [] unless defined?(ActiveRecord::Base)
+
+        bases = []
+        parent = model.superclass
+        while parent.is_a?(Class) && parent < ActiveRecord::Base && !parent.abstract_class?
+          path = parent.name && model_source_path(parent)
+          bases << [ parent.name, path ] if path && File.exist?(path)
+          parent = parent.superclass
+        end
+        bases
+      end
+
       # The model this one inherits its table from. A model base ends the
       # chain, and so does an abstract base: a child of one has a table of
       # its own.
@@ -327,8 +344,10 @@ module RailsAiContext
         own_source = introspect_source(model)
         # Reflection covers associations, validations and enums, but scopes,
         # macros and custom validates are read off the file - so the concerns
-        # are merged here too, or the static tier out-answers this one.
+        # and the STI bases are merged here too, or the static tier
+        # out-answers this one.
         source_data, unread = merge_concern_macros(own_source, model.name)
+        source_data, unread = merge_sti_macros(source_data, unread, booted_sti_bases(model))
 
         details = {
           table_name:       model.table_name,
@@ -831,13 +850,15 @@ module RailsAiContext
         [ merge_inherited(own, collected), unread ]
       end
 
-      # An STI child inherits its base's macros along with its table, and the
-      # booted tier reads them off reflection, so the static tier walks the
-      # chain the same way it walks the concerns. Read nearest base first, so
-      # the closer declaration wins over the further one.
+      # An STI child inherits its base's macros along with its table.
+      # Reflection inherits three of the six keys - associations, validations
+      # and enums - and the other three are read off the file, so both tiers
+      # walk the chain the way they walk the concerns. Read nearest base
+      # first, so the closer declaration wins over the further one.
       def merge_sti_macros(data, unread, bases)
         Array(bases).each do |name, path|
-          base, base_unread = merge_concern_macros(SourceIntrospector.call(path), name)
+          own = (@concern_cache[path] ||= SourceIntrospector.call(path))
+          base, base_unread = merge_concern_macros(own, name)
           data = merge_inherited(data, base.slice(*MERGED_CONCERN_KEYS))
           unread |= base_unread
         end

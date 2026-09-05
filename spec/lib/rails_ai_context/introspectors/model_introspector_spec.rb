@@ -1401,6 +1401,75 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "#extract_model_details STI-inherited macros" do
+    # Reflection inherits associations, validations and enums, and nothing
+    # else: scopes, callbacks and the attribute macros are read off the file.
+    # A child that reads its own file alone answers empty for all three while
+    # the static tier answers the base's - and the child really does run them.
+    it "merges the STI base's source-read macros into the booted answer" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        base_path = File.join(dir, "app", "models", "post.rb")
+        child_path = File.join(dir, "app", "models", "article.rb")
+        File.write(base_path, <<~RUBY)
+          class Post < ApplicationRecord
+            scope :published, -> { where(published: true) }
+            encrypts :secret
+            before_save :touch_it
+          end
+        RUBY
+        File.write(child_path, "class Article < Post\nend\n")
+
+        base = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Post"
+        end
+        child = Class.new(base) do
+          def self.name = "Article"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        paths = { "Post" => base_path, "Article" => child_path }
+        allow(introspector).to receive(:model_source_path) { |model| paths[model.name] }
+
+        details = introspector.send(:extract_model_details, child)
+
+        expect(details[:scopes].map { |s| s[:name] }).to eq([ "published" ])
+        expect(details[:callbacks]).to eq("before_save" => [ "touch_it" ])
+        expect(details[:encrypts]).to eq([ "secret" ])
+      end
+    end
+
+    it "reads the shared base once for two children" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        base_path = File.join(dir, "app", "models", "post.rb")
+        File.write(base_path, "class Post < ApplicationRecord\n  scope :published, -> { all }\nend\n")
+        %w[article draft].each do |name|
+          File.write(File.join(dir, "app", "models", "#{name}.rb"), "class #{name.capitalize} < Post\nend\n")
+        end
+
+        base = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Post"
+        end
+        children = %w[Article Draft].map do |name|
+          Class.new(base) { define_singleton_method(:name) { name } }
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:model_source_path) do |model|
+          File.join(dir, "app", "models", "#{model.name.downcase}.rb")
+        end
+
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:call).and_call_original
+        expect(RailsAiContext::Introspectors::SourceIntrospector)
+          .to receive(:call).with(base_path).once.and_call_original
+        children.each { |child| introspector.send(:extract_model_details, child) }
+      end
+    end
+  end
+
   describe "STI on the static tier" do
     # The booted tier reports the hierarchy under :sti and the graph tool
     # renders it from there. The static tier resolves the same chain to share

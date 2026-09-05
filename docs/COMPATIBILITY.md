@@ -212,10 +212,10 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
 
 ## Known limits
 
-- **A non-STI parent's declarations, in the static tier.** The static model
-  answer walks the model file, the files of the concerns it includes, and the
-  files of the STI bases it inherits its table from, so a macro declared in a
-  concern or in an STI base is merged in; a concern's macro is tagged with the
+- **A non-STI parent's declarations.** The model answer walks the model file,
+  the files of the concerns it includes, and the files of the STI bases it
+  inherits its table from, in both tiers, so a macro declared in a concern or
+  in an STI base is merged in; a concern's macro is tagged with the
   concern that declared it. A parent that is not on the same table - an
   abstract base, or a plain Ruby superclass - is not walked. The validations
   Rails generates at boot (implicit `belongs_to` presence, attachment
@@ -223,7 +223,8 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   whose file cannot be found, a gem's module for example, is named under
   `Concerns` as not read.
 - **Callbacks are what the file declares.** In both tiers the callback list is
-  what the model file and the app concerns it includes declare. A callback a
+  what the model file, the app concerns it includes and its STI bases
+  declare. A callback a
   gem registers on include without an `include` line in the model file (Devise,
   counter caches, attachment purges) is not listed. Within one type the order
   is declaration order, the model file first and then its concerns, not the
