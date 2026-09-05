@@ -387,7 +387,7 @@ module RailsAiContext
         # and the STI bases are merged here too, or the static tier
         # out-answers this one.
         source_data, unread = merge_concern_macros(own_source, model.name)
-        source_data, unread = merge_sti_macros(source_data, unread, booted_sti_bases(model))
+        source_data, unread, bases_unread = merge_sti_macros(source_data, unread, booted_sti_bases(model))
 
         details = {
           table_name:       model.table_name,
@@ -402,6 +402,7 @@ module RailsAiContext
           concerns:         extract_concerns(model),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
           concerns_unread:  (unread if unread.any?),
+          bases_unread:     (bases_unread if bases_unread.any?),
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           scopes:           extract_scopes_from_ast(source_data),
@@ -820,6 +821,10 @@ module RailsAiContext
           next unless options.key?(key) && !acc.key?(key)
 
           value = options[key]
+          # `dependent: nil` is a declaration of nothing, and the booted tier
+          # drops it; lifting it as "" renders `.dependent(:)`.
+          next if value.nil?
+
           acc[key] = BOOLEAN_ASSOCIATION_OPTIONS.include?(key) ? value : value.to_s
         end
       end
@@ -833,7 +838,7 @@ module RailsAiContext
                                sti: nil)
         own = SourceIntrospector.call(path)
         data, unread = merge_concern_macros(own, class_name)
-        data, unread = merge_sti_macros(data, unread, inherited_from)
+        data, unread, bases_unread = merge_sti_macros(data, unread, inherited_from)
         details = {
           confidence: Confidence::STATIC,
           table_name: table_name || TableName.stem(path),
@@ -857,6 +862,7 @@ module RailsAiContext
           concerns: static_concerns(own[:mixins]),
           concern_callbacks: concern_callbacks(data[:callbacks]),
           concerns_unread: (unread if unread.any?),
+          bases_unread: (bases_unread if bases_unread.any?),
           macros: data[:macros],
           methods: ActionResolver.own_methods(own[:methods], class_name),
           file: file,
@@ -897,11 +903,15 @@ module RailsAiContext
       # and enums - and the other three are read off the file, so both tiers
       # walk the chain the way they walk the concerns. Read nearest base
       # first, so the closer declaration wins over the further one.
+      # A base the walk could not read is answered apart from the unread
+      # concerns: it is a class, not a concern, and a child with no concerns
+      # never reaches the line that names them.
       def merge_sti_macros(data, unread, bases)
+        bases_unread = []
         Array(bases).each do |name, path|
           own = sti_base_source(path)
           if own.nil?
-            unread |= [ name ]
+            bases_unread |= [ name ]
             next
           end
 
@@ -909,7 +919,7 @@ module RailsAiContext
           data = merge_inherited(data, base.slice(*MERGED_CONCERN_KEYS))
           unread |= base_unread
         end
-        [ data, unread ]
+        [ data, unread, bases_unread ]
       end
 
       # A base too big or unreadable costs its own declarations, not the
