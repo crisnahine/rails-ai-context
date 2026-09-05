@@ -8,6 +8,8 @@ module RailsAiContext
       extend StaticTier
       static_tier :files_only
 
+      TEST_FILE_GLOB = "*_{spec,test}.rb"
+
       attr_reader :app
 
       def initialize(app)
@@ -183,16 +185,7 @@ module RailsAiContext
       end
 
       def detect_test_files
-        categories = {}
-        %w[models models/concerns controllers requests system services integration features].each do |cat|
-          %w[spec test].each do |base|
-            dir = File.join(root, base, cat)
-            next unless Dir.exist?(dir)
-            count = Dir.glob(File.join(dir, "**/*.rb")).size
-            categories[cat] = { location: "#{base}/#{cat}", count: count } if count > 0
-          end
-        end
-        categories
+        test_categories
       end
 
       def detect_vcr
@@ -288,22 +281,43 @@ module RailsAiContext
         nil
       end
 
+      def detect_test_count_by_category
+        test_categories.transform_values { |row| row[:count] }
+      end
+
+      # One row per top-level directory under spec/ or test/ that holds test
+      # files, plus a row keyed by the base directory for files loose at its
+      # root. Naming the categories instead of reading them hid every
+      # directory a convention did not predict.
+      #
       # Only files named for a test framework are counted. Globbing every .rb
       # counted whatever a project keeps beside its specs - mailer previews,
       # shared contexts, page objects - under a heading that promises tests.
-      def detect_test_count_by_category
-        counts = {}
-        %w[models controllers requests system services integration features helpers views jobs mailers channels].each do |cat|
-          %w[spec test].each do |base|
-            dir = File.join(root, base, cat)
-            next unless Dir.exist?(dir)
-            count = Dir.glob(File.join(dir, "**/*_{spec,test}.rb")).size
-            counts[cat] = (counts[cat] || 0) + count if count > 0
+      def test_categories
+        rows = Hash.new { |h, k| h[k] = [] }
+
+        %w[spec test].each do |base|
+          base_dir = File.join(root, base)
+          next unless Dir.exist?(base_dir)
+
+          Dir.children(base_dir).sort.each do |entry|
+            dir = File.join(base_dir, entry)
+            next unless File.directory?(dir)
+
+            count = Dir.glob(File.join(dir, "**/#{TEST_FILE_GLOB}")).size
+            rows[entry] << [ "#{base}/#{entry}", count ] if count > 0
           end
+
+          loose = Dir.glob(File.join(base_dir, TEST_FILE_GLOB)).size
+          rows[base] << [ base, loose ] if loose > 0
         end
-        counts
-      rescue => e
-        $stderr.puts "[rails-ai-context] detect_test_count_by_category failed: #{e.message}" if ENV["DEBUG"]
+
+        rows
+          .transform_values { |pairs| { location: pairs.map(&:first).join(", "), count: pairs.sum(&:last) } }
+          .sort_by { |cat, row| [ -row[:count], cat ] }
+          .to_h
+      rescue SystemCallError => e
+        $stderr.puts "[rails-ai-context] test_categories failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
     end
