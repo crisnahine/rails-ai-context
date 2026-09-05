@@ -139,10 +139,7 @@ module RailsAiContext
           else
             db = "unknown"
           end
-          # Statically the Ruby version is the one the app declares, not one
-          # anything is running.
-          runs = ctx[:tier].to_s == "static" ? "declaring" : "running"
-          lines << "#{ctx[:app_name]} is a Rails #{ctx[:rails_version]} application #{runs} Ruby #{ctx[:ruby_version]} on #{db}."
+          lines << "#{ctx[:app_name]} is a Rails #{ctx[:rails_version]} application#{ruby_clause(ctx)} on #{db}."
 
           notable = Payload.notable_gems(ctx)
           if notable.any?
@@ -583,6 +580,17 @@ module RailsAiContext
         # generated files. One seam, one answer.
         def resolve_db_adapter(ctx, _schema = nil)
           RailsAiContext::SchemaAdapter.label(ctx)
+        end
+
+        # Statically the Ruby version is the one the app declares, not one
+        # anything is running - and with nothing declaring one, ruby_version
+        # is the interpreter running this tool, which says nothing about the
+        # app. Then the sentence names no Ruby at all.
+        def ruby_clause(ctx)
+          return " running Ruby #{ctx[:ruby_version]}" unless ctx[:tier].to_s == "static"
+          return "" unless Payload.section(ctx, :gems)&.dig(:declared_ruby_version)
+
+          " declaring Ruby #{ctx[:ruby_version]}"
         end
 
         def central_models(models, limit = 5)
