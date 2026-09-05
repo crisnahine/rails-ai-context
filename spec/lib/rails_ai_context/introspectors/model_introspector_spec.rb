@@ -1411,6 +1411,20 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(details_for(dir, "Doorkeeper::AccessToken", nil)).not_to have_key(:file)
       end
     end
+
+    # Every example above stubs const_source_location, and the real thing does
+    # not always name the file holding the `class` keyword: when Zeitwerk sets
+    # the constant rather than letting the file define it, Ruby records
+    # Zeitwerk's own cref.rb. Reading that file answers nothing the model
+    # declares, so this one asks the real question of the real dummy app.
+    it "reads the model's own file, not wherever Ruby happened to record the constant" do
+      details = described_class.new(Rails.application).call["UserWithAttrs"]
+
+      expect(details[:file]).to eq("app/models/user_with_attrs.rb")
+      expect(details[:callbacks]["after_commit_on_create"]).to include("sync_to_crm")
+      expect(details[:callbacks]["after_commit_on_destroy"]).to include("notify_admin")
+      expect(details[:concerns_unread]).to be_blank
+    end
   end
 
   describe "#extract_model_details concern-declared macros" do

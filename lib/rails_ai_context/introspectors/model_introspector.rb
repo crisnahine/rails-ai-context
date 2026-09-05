@@ -738,12 +738,21 @@ module RailsAiContext
       # keeps the gem's own path rather than an app/models file the app does
       # not have; the conventional path is a fallback only when it is a file
       # that is really there.
+      # Ruby does not always name the file holding the `class` keyword: where
+      # Zeitwerk sets the constant rather than letting the file define it, it
+      # records Zeitwerk's own cref.rb, and reading that answers nothing the
+      # model declares. A location inside the app is the model's own file; a
+      # location outside it is only believed when the app has no file of its
+      # own to read, which is what a gem's model looks like.
       def model_source_path(model)
+        root = File.expand_path(app.root.to_s)
         located = Object.const_source_location(model.name)&.first
-        return located if located
+        return located if located && File.expand_path(located).start_with?("#{root}/")
 
-        conventional = File.join(app.root.to_s, "app", "models", "#{model.name.underscore}.rb")
-        conventional if File.exist?(conventional)
+        conventional = File.join(root, "app", "models", "#{model.name.underscore}.rb")
+        return conventional if File.exist?(conventional)
+
+        located
       rescue NameError, TypeError
         nil
       end
