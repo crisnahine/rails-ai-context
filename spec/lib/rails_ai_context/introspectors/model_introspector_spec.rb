@@ -1033,43 +1033,55 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
-  # Rails registers a chain per event - `_save_callbacks` holds before, after
-  # and around together - so asking for `_before_save_callbacks` raised on the
-  # first iteration and every booted model quietly fell back to the AST.
-  describe "#extract_callbacks from reflection" do
-    before do
-      stub_const("SnowflakeCallbacks", Class.new)
+  # Both tiers read the callbacks off the model's own source. The booted tier
+  # used to answer off Rails' event chains, which carry the framework's own
+  # registrations and drop every block callback.
+  describe "callbacks in both tiers" do
+    def write_model(dir, class_name, source)
+      path = File.join(dir, "app", "models", "#{class_name.underscore}.rb")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, source)
+      path
     end
 
-    let(:model) do
-      Class.new(ApplicationRecord) do
-        self.table_name = "posts"
+    def booted_callbacks(dir, class_name)
+      model = Class.new(ApplicationRecord) { self.table_name = "posts" }
+      model.define_singleton_method(:name) { class_name }
+      described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)[:callbacks]
+    end
 
-        def self.name = "Snowflaked"
+    def static_callbacks(dir, class_name)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[class_name][:callbacks]
+    end
 
-        around_create SnowflakeCallbacks
-        before_save :normalize
-        after_touch :bust
-        after_initialize :prepare
+    it "reports a block callback booted, and names no framework filter" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Blocky", <<~RUBY)
+          class Blocky < ApplicationRecord
+            before_save do
+              self.title = title.to_s.strip
+            end
+          end
+        RUBY
+
+        expect(booted_callbacks(dir, "Blocky")).to eq("before_save" => [ "[inline_block]" ])
       end
     end
 
-    let(:source_data) { { associations: [], validations: [], scopes: [], enums: [], callbacks: [], macros: [], methods: [] } }
+    it "keys the commit family the same in both tiers" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Committer", <<~RUBY)
+          class Committer < ApplicationRecord
+            after_create_commit :refresh
+            after_commit :announce, on: :create
+            around_create Snowflake
+            after_touch :bust
+          end
+        RUBY
 
-    subject(:callbacks) { introspector.send(:extract_callbacks, model, source_data) }
-
-    it "reports around callbacks from the event chain" do
-      expect(callbacks["around_create"]).to be_an(Array)
-      expect(callbacks["around_create"]).to include("SnowflakeCallbacks")
-    end
-
-    it "reports before and after callbacks from the same chain" do
-      expect(callbacks["before_save"]).to include("normalize")
-    end
-
-    it "reports the touch and initialize chains" do
-      expect(callbacks["after_touch"]).to include("bust")
-      expect(callbacks["after_initialize"]).to include("prepare")
+        expect(booted_callbacks(dir, "Committer")).to eq(static_callbacks(dir, "Committer"))
+        expect(booted_callbacks(dir, "Committer")).to include("after_create_commit" => [ "refresh" ])
+      end
     end
   end
 
@@ -1112,6 +1124,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(post[:associations].find { |a| a[:name] == :revisions }[:from_concern]).to eq("Publishable")
         expect(post[:associations].find { |a| a[:name] == :author }).not_to have_key(:from_concern)
         expect(post).not_to have_key(:concerns_unread)
+        expect(post[:concern_callbacks].map { |cb| cb[:confidence] }).to eq([ RailsAiContext::Confidence::STATIC ])
       end
     end
 
@@ -1200,6 +1213,30 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(details[:scopes].map { |s| s[:name] }).to contain_exactly("own", "shared")
         expect(details[:encrypts]).to eq([ "secret" ])
         expect(details[:concern_callbacks].map { |c| c[:method] }).to eq([ "stamp" ])
+      end
+    end
+
+    it "marks a concern whose file it could not read" do
+      Dir.mktmpdir do |dir|
+        model_path = File.join(dir, "app", "models", "gadget.rb")
+        FileUtils.mkdir_p(File.dirname(model_path))
+        File.write(model_path, <<~RUBY)
+          class Gadget < ApplicationRecord
+            include Elsewhere
+          end
+        RUBY
+
+        stub_const("Elsewhere", Module.new)
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          include Elsewhere
+          def self.name = "Gadget"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:model_source_path).and_return(model_path)
+
+        expect(introspector.send(:extract_model_details, model)[:concerns_unread]).to eq([ "Elsewhere" ])
       end
     end
   end

@@ -75,6 +75,26 @@ RSpec.describe RailsAiContext::ConcernMacros do
     expect(unresolved).to eq([ "Discard::Model" ])
   end
 
+  # A model tier walks the same concern once per model that includes it, and
+  # AstCache caches the parse but not the listener dispatch.
+  it "walks a concern file once per run when a cache is passed" do
+    File.write(File.join(concern_dir, "publishable.rb"), "module Publishable\n  has_many :revisions\nend\n")
+    cache = {}
+    allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:call).and_call_original
+
+    2.times { described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations], cache: cache) }
+    collected, = described_class.collect(tmpdir, mixin("Publishable"), keys: %i[associations], cache: cache)
+
+    expect(RailsAiContext::Introspectors::SourceIntrospector).to have_received(:call).once
+    expect(collected[:associations].map { |a| a[:name] }).to eq([ :revisions ])
+  end
+
+  it "exposes collect alone" do
+    expect(described_class).to respond_to(:collect)
+    expect(described_class).not_to respond_to(:walk)
+    expect(described_class).not_to respond_to(:tagged)
+  end
+
   it "does not reach outside the owner kind's concerns directory" do
     FileUtils.mkdir_p(File.join(tmpdir, "app", "controllers", "concerns"))
     File.write(File.join(tmpdir, "app", "controllers", "concerns", "searchable.rb"),

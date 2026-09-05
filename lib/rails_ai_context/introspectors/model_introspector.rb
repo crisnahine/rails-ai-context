@@ -14,11 +14,12 @@ module RailsAiContext
 
       attr_reader :app, :config
 
-      EXCLUDED_CALLBACKS = %w[autosave_associated_records_for].freeze
-
       def initialize(app)
         @app    = app
         @config = RailsAiContext.configuration
+        # One introspection per instance, so a concern shared by 100 models is
+        # walked once. Anything longer-lived would outlast the files it read.
+        @concern_cache = {}
       end
 
       # @return [Hash] model metadata keyed by model name
@@ -281,7 +282,7 @@ module RailsAiContext
         # Reflection covers associations, validations and enums, but scopes,
         # macros and custom validates are read off the file - so the concerns
         # are merged here too, or the static tier out-answers this one.
-        source_data, = merge_concern_macros(own_source, model.name)
+        source_data, unread = merge_concern_macros(own_source, model.name)
 
         details = {
           table_name:       model.table_name,
@@ -290,9 +291,12 @@ module RailsAiContext
           associations:     extract_associations(model),
           validations:      extract_validations(model),
           enums:            extract_enums(model),
-          callbacks:        extract_callbacks(model, source_data),
+          # Rails' event chains carry the framework's own registrations and
+          # hold no block callbacks, so both tiers read the model's source.
+          callbacks:        extract_callbacks_from_ast(source_data),
           concerns:         extract_concerns(model),
           concern_callbacks: concern_callbacks(source_data[:callbacks]),
+          concerns_unread:  (unread if unread.any?),
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           scopes:           extract_scopes_from_ast(source_data),
@@ -409,31 +413,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] extract_sti_info failed: #{e.message}" if ENV["DEBUG"]
         nil
-      end
-
-      # Rails registers one chain per event, holding before, after and around
-      # together - there is no `_before_save_callbacks` and no separate around
-      # chain, so the kind comes off the entry rather than the chain name.
-      CALLBACK_EVENTS = %i[validation save create update destroy touch commit rollback initialize find].freeze
-
-      def extract_callbacks(model, source_data)
-        result = CALLBACK_EVENTS.each_with_object({}) do |event, hash|
-          chain = :"_#{event}_callbacks"
-          next unless model.respond_to?(chain, true)
-
-          model.send(chain).each do |cb|
-            next if cb.filter.nil? || cb.filter.to_s.start_with?(*EXCLUDED_CALLBACKS) || cb.filter.is_a?(Proc)
-
-            (hash["#{cb.kind}_#{event}"] ||= []) << cb.filter.to_s
-          end
-        end
-
-        # If reflection returned nothing, fall back to AST-based extraction
-        return result if result.any?
-        extract_callbacks_from_ast(source_data)
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_callbacks failed: #{e.message}" if ENV["DEBUG"]
-        extract_callbacks_from_ast(source_data)
       end
 
       # ── AST-based extraction (replaces all regex parsing) ──────────
@@ -740,7 +719,7 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(own[:mixins]),
-          concern_callbacks: concern_callbacks(data[:callbacks]),
+          concern_callbacks: concern_callbacks(data[:callbacks], confidence: Confidence::STATIC),
           concerns_unread: (unread if unread.any?),
           macros: data[:macros],
           methods: ActionResolver.own_methods(own[:methods], class_name),
@@ -760,7 +739,8 @@ module RailsAiContext
       def merge_concern_macros(own, class_name)
         collected, unread = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
-          keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name
+          keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name,
+          cache: @concern_cache
         )
         return [ own, unread ] if collected.empty?
 
@@ -776,8 +756,11 @@ module RailsAiContext
         Array(entries).uniq { |entry| entry.is_a?(Hash) ? yield(entry) : entry }
       end
 
-      def concern_callbacks(callbacks)
+      # A record cannot claim more than the tier that carries it, so the
+      # static payload downgrades what the listener verified in the file.
+      def concern_callbacks(callbacks, confidence: nil)
         found = Array(callbacks).select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
+        found = found.map { |cb| cb[:confidence] == Confidence::VERIFIED ? cb.merge(confidence: confidence) : cb } if confidence
         found if found.any?
       end
 
