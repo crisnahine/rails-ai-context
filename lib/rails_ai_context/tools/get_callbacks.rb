@@ -60,6 +60,10 @@ module RailsAiContext
 
       def self.call(model: nil, detail: "standard", server_context: nil)
         fetch_section(:models, subject: "Model introspection") do |models|
+          # Every read of the shared cache deep-copies the whole payload, so
+          # the listing reads it once and hands the copy down.
+          ctx = cached_context
+
           # Specific model - show callbacks by type
           if model
             key = fuzzy_find_key(models.keys, model) || model
@@ -70,15 +74,15 @@ module RailsAiContext
             end
             return text_response("Error inspecting #{key}: #{data[:error]}") if data[:error]
 
-            return text_response(format_model_callbacks(key, data, detail))
+            return text_response(format_model_callbacks(key, data, detail, ctx))
           end
 
           # List all models with callbacks
-          list_all_callbacks(models, detail)
+          list_all_callbacks(models, detail, ctx)
         end
       end
 
-      private_class_method def self.format_model_callbacks(name, data, detail)
+      private_class_method def self.format_model_callbacks(name, data, detail, ctx)
         callbacks = data[:callbacks] || {}
         if callbacks.empty?
           return "# #{name}\n\nNo callbacks defined.\n\n_Next: `rails_get_model_details(model:\"#{name}\")` for full model detail._"
@@ -97,7 +101,7 @@ module RailsAiContext
           ordered.each do |type, methods|
             lines << "## #{type}"
             methods.each do |method_name|
-              source = extract_callback_source(name, method_name, data)
+              source = extract_callback_source(name, method_name, data, ctx)
               if source
                 lines << "### #{callback_target(method_name)} (#{source_location(source)})"
                 lines << "```ruby"
@@ -140,7 +144,7 @@ module RailsAiContext
         lines.join("\n")
       end
 
-      private_class_method def self.list_all_callbacks(models, detail)
+      private_class_method def self.list_all_callbacks(models, detail, ctx)
         # Filter to models that have callbacks
         models_with_callbacks = models.select do |_name, data|
           data.is_a?(Hash) && !data[:error] && data[:callbacks].is_a?(Hash) && data[:callbacks].any?
@@ -178,7 +182,7 @@ module RailsAiContext
             lines << "## #{name}"
             ordered.each do |type, methods|
               methods.each do |method_name|
-                source = extract_callback_source(name, method_name, data)
+                source = extract_callback_source(name, method_name, data, ctx)
                 if source
                   lines << "### #{type} #{callback_target(method_name)} (#{source_location(source)})"
                   lines << "```ruby" << source[:code] << "```" << ""
@@ -214,10 +218,10 @@ module RailsAiContext
         ordered
       end
 
-      private_class_method def self.extract_callback_source(model_name, method_name, data = nil)
+      private_class_method def self.extract_callback_source(model_name, method_name, data, ctx)
         return nil unless method_name?(method_name)
 
-        path = rails_app.root.join(RailsAiContext::Payload.model_file(cached_context, model_name))
+        path = rails_app.root.join(RailsAiContext::Payload.model_file(ctx, model_name))
         extract_method_source_from_file(path, method_name) ||
           concern_callback_source(data, method_name, model_name)
       end

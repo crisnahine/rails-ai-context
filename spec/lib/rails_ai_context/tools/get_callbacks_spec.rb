@@ -389,4 +389,32 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(text).not_to include("## From Concerns")
     end
   end
+
+  # Every read of the shared cache is a deep copy of the whole payload, so a
+  # full listing that reads it once per callback pays for the app many times
+  # over.
+  describe "shared context reads in the full listing" do
+    def context_with(count)
+      entries = (1..count).to_h do |i|
+        [ "Model#{i}", { callbacks: { "before_save" => %w[touch_slug], "after_create" => %w[notify] }, concerns: [] } ]
+      end
+      { models: entries }
+    end
+
+    def reads_for(count)
+      described_class.reset_cache!
+      reads = 0
+      ctx = context_with(count)
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(detail: "full")
+      reads
+    end
+
+    it "reads the shared context the same number of times for 3 models as for 40" do
+      expect(reads_for(40)).to eq(reads_for(3))
+    end
+  end
 end
