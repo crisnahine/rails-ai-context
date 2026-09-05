@@ -1,0 +1,30 @@
+# frozen_string_literal: true
+
+module RailsAiContext
+  # The three buckets a generate_context run answers with, walked in one
+  # order for every entry point that reports a run. Each surface keeps its
+  # own wording and its own stream; only the walk is shared, so a new bucket
+  # is one edit here rather than one edit per surface.
+  module ContextFileReport
+    module_function
+
+    # @param result [Hash] { written:, skipped:, not_applicable: }
+    # @return [Array<Array(Symbol, String, String|nil)>] bucket, path, reason
+    def entries(result)
+      Array(result[:written]).map { |path| [ :written, path, nil ] } +
+        Array(result[:skipped]).map { |path| [ :skipped, path, nil ] } +
+        (result[:not_applicable] || {}).map { |path, reason| [ :not_applicable, path, reason ] }
+    end
+
+    # @param style [Hash] bucket => a format string taking the path and, for
+    #   :not_applicable, the reason. Fetched, so a surface with no wording
+    #   for a bucket raises instead of printing nothing.
+    # @yieldparam bucket [Symbol]
+    # @yieldparam text [String]
+    def each_line(result, style)
+      entries(result).each do |bucket, path, reason|
+        yield bucket, format(style.fetch(bucket), *[ path, reason ].compact)
+      end
+    end
+  end
+end

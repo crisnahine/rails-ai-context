@@ -35,6 +35,14 @@ module RailsAiContext
 
       desc "Install rails-ai-context: creates initializer, MCP config, and generates initial context files."
 
+      CONTEXT_RESULT_LINES = {
+        written: "✅ %s",
+        skipped: "⏭️  %s (unchanged)",
+        not_applicable: "➖  %s (%s)"
+      }.freeze
+
+      CONTEXT_RESULT_COLORS = { written: :green, skipped: :yellow, not_applicable: :yellow }.freeze
+
       class_option :defaults, type: :boolean, default: false,
         desc: "Skip all interactive prompts and use each prompt's documented default (for CI/non-interactive use)"
 
@@ -522,9 +530,9 @@ module RailsAiContext
 
         begin
           result = RailsAiContext.generate_context(format: @selected_formats)
-          (result[:written] || []).each { |f| say "  ✅ #{f}", :green }
-          (result[:skipped] || []).each { |f| say "  ⏭️  #{f} (unchanged)", :yellow }
-          (result[:not_applicable] || {}).each { |f, why| say "  ➖  #{f} (#{why})", :yellow }
+          RailsAiContext::ContextFileReport.each_line(result, CONTEXT_RESULT_LINES) do |bucket, text|
+            say "  #{text}", CONTEXT_RESULT_COLORS[bucket]
+          end
         rescue => e
           say "  ❌ #{@selected_formats.join(', ')}: #{e.message}", :red
         end

@@ -396,10 +396,16 @@ class RailsAiContextCLI < Thor
       ::RailsAiContext::Server.builtin_tools.size
     end
 
+    CONTEXT_RESULT_LINES = {
+      written: "Written: %s",
+      skipped: "Skipped: %s (unchanged)",
+      not_applicable: "Not applicable: %s (%s)"
+    }.freeze
+
     def print_context_result(result)
-      (result[:written] || []).each { |f| $stderr.puts "  Written: #{f}" }
-      (result[:skipped] || []).each { |f| $stderr.puts "  Skipped: #{f} (unchanged)" }
-      (result[:not_applicable] || {}).each { |f, why| $stderr.puts "  Not applicable: #{f} (#{why})" }
+      ::RailsAiContext::ContextFileReport.each_line(result, CONTEXT_RESULT_LINES) do |_bucket, text|
+        $stderr.puts "  #{text}"
+      end
     end
 
     # The tool list only needs tool names/descriptions/schemas - none of that

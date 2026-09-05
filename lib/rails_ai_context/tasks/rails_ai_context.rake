@@ -19,10 +19,14 @@ ASSISTANT_TABLE = begin
     .join("\n") + "\n"
 end unless defined?(ASSISTANT_TABLE)
 
+CONTEXT_RESULT_LINES = {
+  written: "✅ %s",
+  skipped: "⏭️  %s (unchanged)",
+  not_applicable: "➖  %s (%s)"
+}.freeze unless defined?(CONTEXT_RESULT_LINES)
+
 def print_result(result)
-  result[:written].each { |f| puts "  ✅ #{f}" }
-  result[:skipped].each { |f| puts "  ⏭️  #{f} (unchanged)" }
-  (result[:not_applicable] || {}).each { |f, why| puts "  ➖  #{f} (#{why})" }
+  RailsAiContext::ContextFileReport.each_line(result, CONTEXT_RESULT_LINES) { |_bucket, text| puts "  #{text}" }
 end unless defined?(print_result)
 
 def abort_boot_failure(result, timeout)
