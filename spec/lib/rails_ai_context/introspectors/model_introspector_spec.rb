@@ -1349,6 +1349,26 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(widget[:concerns_unread]).to eq([ "Discard::Model" ])
       end
     end
+
+    # A base is a class, not a concern, and a child with no concerns at all
+    # never reached the line that named it.
+    it "names an unreadable STI base apart from the unread concerns" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        base_path = File.join(dir, "app", "models", "post.rb")
+        File.write(base_path, "class Post < ApplicationRecord\n  scope :published, -> { all }\nend\n")
+        File.write(File.join(dir, "app", "models", "article.rb"),
+                   "class Article < Post\n  scope :recent, -> { all }\nend\n")
+        File.chmod(0o000, base_path)
+
+        article = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Article"]
+
+        expect(article[:bases_unread]).to eq([ "Post" ])
+        expect(article).not_to have_key(:concerns_unread)
+      ensure
+        File.chmod(0o644, base_path) if base_path && File.exist?(base_path)
+      end
+    end
   end
 
   # Reflection answers associations, validations and enums, but scopes,
@@ -1526,7 +1546,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         details = introspector.send(:extract_model_details, child)
 
         expect(details[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
-        expect(details[:concerns_unread]).to include("Post")
+        expect(details[:bases_unread]).to eq([ "Post" ])
+        expect(details).not_to have_key(:concerns_unread)
       end
     end
 
@@ -1554,7 +1575,8 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         details = introspector.send(:extract_model_details, child)
 
         expect(details[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
-        expect(details[:concerns_unread]).to include("Post")
+        expect(details[:bases_unread]).to eq([ "Post" ])
+        expect(details).not_to have_key(:concerns_unread)
       ensure
         File.chmod(0o644, base_path) if base_path && File.exist?(base_path)
       end
