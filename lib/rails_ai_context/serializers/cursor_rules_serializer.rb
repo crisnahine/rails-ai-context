@@ -71,9 +71,7 @@ module RailsAiContext
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
-        if (notice = SectionFacts.static_notice(context))
-          lines.insert(-2, notice)
-        end
+        lines.concat(SectionFacts.static_notice_lines(context))
 
         if (db_line = SectionFacts.database_line(context))
           lines << db_line

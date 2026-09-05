@@ -373,6 +373,29 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).to include("# TODO: these tests run unauthenticated")
     end
 
+    # The fixtures guide's shared-attribute idiom opens the file with
+    # "DEFAULTS: &DEFAULTS", and Rails' own "_fixture:" key can be first too.
+    # Neither is a fixture name.
+    it "does not read a shared-attribute anchor off the fixture file as a name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "test", "fixtures"))
+        File.write(File.join(dir, "test", "fixtures", "users.yml"), <<~YAML)
+          DEFAULTS: &DEFAULTS
+            confirmed_at: <%= Time.current %>
+
+          alice:
+            <<: *DEFAULTS
+            email: alice@example.com
+        YAML
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+        text = generated(devise_context(framework: "minitest", tests: { fixture_names: nil }))
+
+        expect(text).not_to include("users(:DEFAULTS)")
+        expect(text).to include("users(:alice)")
+      end
+    end
+
     it "keeps the fixture sign_in when a users fixture exists" do
       text = generated(devise_context(framework: "minitest", tests: { fixture_names: { "users" => [ "alice" ] } }))
       expect(text).to include("@user = users(:alice)")
