@@ -76,5 +76,18 @@ RSpec.describe RailsAiContext::Serializers::CopilotSerializer do
       expect(output).to be_a(String)
       expect(output).to include("Copilot Instructions")
     end
+
+    # The tier note sits on its own line and every sibling header follows it
+    # with the prose directly. Copilot's kept a blank line there too, so the
+    # rendered header carried two.
+    it "leaves one blank line between the header block and the prose" do
+      context = {
+        app_name: "App", rails_version: "8.0", ruby_version: "3.4",
+        generated_at: Time.now.iso8601
+      }
+      output = described_class.new(context).call
+
+      expect(output).to include("v#{RailsAiContext::VERSION}\n\nUse this context")
+    end
   end
 end

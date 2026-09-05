@@ -108,7 +108,8 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
 
         text = described_class.call.content.first[:text]
 
-        expect(text).to include("2 concerns excluded by `excluded_concerns`")
+        # The same fact as the listing's own line, so it is worded the same.
+        expect(text).to include("2 concerns hidden by `excluded_concerns`")
         expect(text).not_to include("No concerns found in")
       ensure
         RailsAiContext.configuration.excluded_concerns = original
