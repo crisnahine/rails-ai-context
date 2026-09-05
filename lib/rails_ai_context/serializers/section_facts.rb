@@ -57,6 +57,18 @@ module RailsAiContext
         Array(controller_data[:strong_params]).map { |sp| (sp.is_a?(Hash) ? sp[:name] : sp).to_s }
       end
 
+      # A skipped filter is not one the action runs, so the listings say so
+      # the way the per-action answer does.
+      def filters_line(controller_data)
+        filters = Array(controller_data[:filters]).grep(Hash)
+        return nil if filters.empty?
+
+        parts = filters.map do |f|
+          f[:skipped] ? "~~#{f[:name]}~~ (skipped)" : "#{f[:kind]} #{f[:name]}"
+        end
+        "- Filters: #{parts.join(', ')}"
+      end
+
       # A block-form rescue_from carries no handler, so the exception name
       # alone is the whole line.
       def rescue_handler_lines(controller_data)

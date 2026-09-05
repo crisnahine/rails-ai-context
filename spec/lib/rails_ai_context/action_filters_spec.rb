@@ -47,6 +47,26 @@ RSpec.describe RailsAiContext::ActionFilters do
     expect(result[:inherited].map { |f| f[:name] }).to eq(%w[authenticate])
   end
 
+  # An ancestor's own skip record joined the dropped set only after its own
+  # filters had been selected, so the skip was reported as a filter the child
+  # runs. Mastodon's Api::BaseController skips require_functional! and every
+  # Api::V1 controller listed it as inherited.
+  it "never reports an ancestor's skip as a filter the child runs" do
+    ctx = { controllers: { controllers: {
+      "ApplicationController" => { filters: [ { kind: "before", name: "require_functional!" } ] },
+      "Api::BaseController" => {
+        parent_class: "ApplicationController",
+        filters: [ { kind: "before", name: "require_functional!", skipped: true } ]
+      },
+      "Api::V1::AccountsController" => { parent_class: "Api::BaseController", filters: [] }
+    } } }
+
+    result = described_class.for_controller(ctx, "Api::V1::AccountsController")
+
+    expect(result[:inherited].map { |f| f[:name] }).to eq([])
+    expect(result[:own]).to eq([])
+  end
+
   it "answers empty lists for an unknown controller" do
     expect(described_class.for(context, "Nope", "show")).to eq({ own: [], inherited: [], skipped: [] })
   end

@@ -140,9 +140,8 @@ module RailsAiContext
                 lines << "## #{names.first.split('::').first}::* (#{short_names.join(', ')})"
                 lines << "- Inherits: #{parent}"
                 lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-                if info[:filters]&.any?
-                  lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
-                end
+                filters_line = Serializers::SectionFacts.filters_line(info)
+                lines << filters_line if filters_line
                 param_names = Serializers::SectionFacts.strong_param_names(info)
                 lines << "- Strong params: #{param_names.join(', ')}" if param_names.any?
                 lines << ""
@@ -151,9 +150,8 @@ module RailsAiContext
                   info = app_controllers[name]
                   lines << "## #{name}"
                   lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-                  if info[:filters]&.any?
-                    lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
-                  end
+                  filters_line = Serializers::SectionFacts.filters_line(info)
+                  lines << filters_line if filters_line
                   param_names = Serializers::SectionFacts.strong_param_names(info)
                   lines << "- Strong params: #{param_names.join(', ')}" if param_names.any?
                   rescue_lines = Serializers::SectionFacts.rescue_handler_lines(info)
