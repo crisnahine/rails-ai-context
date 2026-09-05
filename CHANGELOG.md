@@ -100,6 +100,11 @@ to #181), and the sibling defects behind them.
   the install prefix dropped, so the entry reads
   `doorkeeper-5.8.2/app/models/doorkeeper/access_grant.rb`; a class Ruby knows
   no source for carries no file at all.
+- **A model file the app cannot load was answered as no such model, with its
+  table listed as orphaned.** Zeitwerk never loads a file with a syntax error,
+  so reflection never saw the class and the booted walk dropped it. The name
+  is kept now, with the load error and with the table the static walk reads
+  off the same file.
 - **The static tier derived every table from the file name alone.** An
   explicit `self.table_name =`, a `table_name_prefix` declared by the
   enclosing module and an STI child's parent table were all ignored, so
@@ -166,6 +171,11 @@ to #181), and the sibling defects behind them.
 - **A controller with no public actions rendered as a name and a trailing
   dash.** The listing and `analyze_feature` now say `(no public actions)`; on
   Mastodon that covers six base controllers.
+- **A controller file the walk could not read was listed as a controller with
+  no actions.** The listings rendered an entry carrying an error as `(no
+  public actions)`, and the summary listing as `0 actions`, while asking for
+  that one controller answered that it could not be read. Every listing states
+  the error now, from the one phrase the serializers share.
 - **`excluded_filters` was honoured only where reflection ran.** The key was
   read in one place, inside the reflection branch, so a `--no-boot` run and
   any booted controller reflection did not load kept listing the names an app
@@ -182,6 +192,35 @@ to #181), and the sibling defects behind them.
   `require_functional!` that way. A skip that names `only:` or `except:`
   covers those actions only, so an action the skip does not name still lists
   the filter it runs.
+- **A skip of an inherited filter inverted the per-action answer.** The booted
+  payload read a `skip_before_action :authenticate!, only: [ :index ]` as a
+  constraint on the filter itself, so `authenticate!` was named on the one
+  action where it does not run and dropped from the two where it does. A skip
+  now only takes filters out, and the class's own body reaches the payload:
+  the skips it declares, and which of the reflected names it declares itself.
+- **A class that skips a filter still handed it to its children.** The class's
+  own skips joined the dropped set after its own filters had been collected,
+  so the skip applied to classes above it and not to itself or its children.
+  In a booted run its own list is the whole chain, so it contributed the very
+  filter it took out. Every class's skips now apply to its own list first,
+  minus whatever the same body re-declares after the skip.
+- **The static filter chain vanished when the parent was spelled relatively.**
+  `class ReportsController < BaseController` inside `module Admin` carries the
+  parent as written, and the chain walk looked that up verbatim and stopped on
+  the first hop, so a controller lost every inherited filter. A bare parent
+  name now resolves against the enclosing namespace, the way inherited actions
+  already do.
+- **The routes listing named filters the controller skips.** The
+  per-controller hint read the payload directly instead of the filter chain,
+  so it printed a skipped filter next to a detail view calling the same filter
+  skipped, and it cut the list at three with nothing said. It now reads the
+  chain and says how many it did not show.
+- **A filter was attributed to a class that only inherits it.** In a booted
+  run every ancestor carries every inherited name, so `from:` named the
+  nearest class holding the filter rather than the one that declared it. It
+  now names the first ancestor whose own body declared it.
+  `ApplicationController` is not in the listing, so a filter it declares still
+  cannot be attributed to it; docs/COMPATIBILITY.md states that.
 - **Static `get_api` named serializers by camelizing the file path, so an app
   acronym came out miscased.** `ActivityPub::AcceptFollowSerializer` was
   reported as `Activitypub::AcceptFollowSerializer` and
@@ -281,6 +320,23 @@ to #181), and the sibling defects behind them.
   read. A cut row list is marked `200+` as a floor, a trace prints one
   truncation note, and a page that lands wholly inside one match's context
   answers as an empty page instead of printing rows under "showing 0".
+- **An MCP call with a parameter the tool does not take answered with an
+  `ArgumentError` and the gem's install path.** The key reached the tool as an
+  unknown keyword, so the response carried the exception, a backtrace frame
+  and an absolute path under the machine's `GEM_HOME`, where the CLI refuses
+  the same mistake by naming the params the tool takes. The MCP path refuses
+  it the same way now, both sides read the unknown keys off one derivation,
+  and any frame a real failure names is spelled the way every other path this
+  gem reports is.
+- **A path refused on policy exited 0 everywhere except `validate`.** A
+  traversal, a path outside the app or a sensitive file was refused in the
+  text and reported as a successful call by `get_view`, `get_edit_context`,
+  `get_concern`, `get_partial_interface`, `search_code` and `read_logs`, so a
+  script could not tell a refusal from an answer. A policy refusal is an error
+  result on every tool that takes a path now, `isError` over MCP and exit 1
+  from the CLI, and a path that is simply not there stays an ordinary answer.
+  `read_logs` reduced the name it was given to a basename, so it reported a
+  refused path as a log file that is not there; it says which it did.
 - **Static `get_i18n` reported the locale files as the app's available
   locales.** Rails builds `available_locales` from `config/locales` only while
   the app leaves the setting alone; once it assigns
@@ -340,6 +396,10 @@ to #181), and the sibling defects behind them.
   the command with a backtrace and no diagnosis. Both now also catch
   `ScriptError`, the way `Introspector#call` already did: a broken file costs
   one check, not the report.
+- **`doctor` printed two different view counts in one report.** `Views` counts
+  every file under `app/views` and `View aggregation size` counts only the
+  erb, haml and slim templates, and both said "view file". Each line says what
+  it counted.
 - **`rails 'ai:preset[bogus]'` printed the preset list and exited 0.** The
   rake task resolved and ran a preset in one branch, so a name no preset
   carries fell through to the same listing a bare invocation prints, and a
@@ -356,6 +416,35 @@ to #181), and the sibling defects behind them.
   `rails-ai-context preset` reported success on an empty run. A preset that
   produced no output now fails, and the outcome-to-exit-code rule lives in one
   place instead of once per surface.
+- **A global option typed before the command name ran nothing and exited 0.**
+  Thor read the leading switch as "no command given" and fell back to `help`,
+  so `rails-ai-context --app-path /srv/app doctor` printed usage and exited 0
+  having checked nothing, and a job wrapping it went green. The binary now
+  moves every switch it declares behind the command name before dispatch.
+  `--help`, `--version` and an unknown leading switch keep their own answers.
+- **`watch --no-boot` died with an uninitialized-constant backtrace.**
+  docs/CLI.md listed `watch` among the commands that take the flag, but the
+  watcher defaulted to `Rails.application`, which the static tier does not
+  have. It takes the same app object every other command uses there.
+- **An `--app-path` that does not exist dumped nine frames.** `doctor`,
+  `inspect` and `watch` let the `chdir` error escape. The directory is checked
+  before the move, and those three print the one-line refusal the other
+  commands already printed.
+- **A value-taking flag with no value crashed inside the tool.** `tool schema
+  --table` became the Boolean `true` and reached the tool as a type it never
+  accepts, raising a `NoMethodError` that named an internal frame. It is
+  refused by name now, read from the tool's own schema.
+- **A bare word where a flag belongs was dropped without a word.** `tool
+  schema posts`, a mistype of `--table posts`, returned the full schema
+  listing as though nothing had been asked. It is refused, naming the flag it
+  was probably meant for.
+- **`--limit abc` became 0 and answered a different question.** A value an
+  integer parameter cannot hold is warned about on stderr and the tool's own
+  default applies, the way an out-of-enum value already behaved.
+- **A missing required parameter printed an error and exited 0.** The wording
+  is unchanged, but the call is marked failed so a script can act on it. A
+  tool that answers with a listing when it has nothing to work on is giving
+  guidance, not failing, and still exits 0.
 - **A context file an app had nothing to put in was skipped without a word.**
   An app with no models, controllers or schema dump got 11 of the 20 files and
   nothing named the other 9, so a deliberate omission and a failed run looked
@@ -383,6 +472,12 @@ to #181), and the sibling defects behind them.
   plain version literal in the Gemfile when the lockfile has no such section.
   A Gemfile requirement naming a range is left unanswered rather than reported
   as a version.
+- **A `Gemfile.lock` that is not a lockfile read as an app with no gems.** No
+  gem entries answered as an empty bundle, so every gem-dependent answer said
+  the app does not use the gem. A file with no `specs:` section is unknown
+  rather than empty, and the reason rides with it; an empty Gemfile still
+  locks to a file with a `specs:` section, so no gems stays a real answer
+  there.
 - **A concern listing emptied by `excluded_concerns` blamed the app.** An app
   whose only concerns were hidden by the setting got the same sentence as an
   app with none. The listing now counts what it skipped and says how many
