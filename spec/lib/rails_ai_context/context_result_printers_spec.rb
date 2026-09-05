@@ -131,4 +131,26 @@ RSpec.describe "not-applicable context files on every surface" do
 
     expect(said).to include("  MARKER /app/CLAUDE.md")
   end
+
+  # The colour is a fact about the bucket, not about the generator, so it
+  # travels with the wording. A surface holding its own copy keeps the old
+  # colour and prints nil for a bucket it never heard of.
+  it "colours the install surface's lines from the one shared table" do
+    stub_const(
+      "RailsAiContext::ContextFileReport::COLORS",
+      RailsAiContext::ContextFileReport::COLORS.merge(written: :magenta)
+    )
+    allow(RailsAiContext).to receive(:generate_context).and_return(
+      written: [ "/app/CLAUDE.md" ], skipped: [], not_applicable: {}
+    )
+    allow(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
+
+    generator = RailsAiContext::Generators::InstallGenerator.new
+    generator.instance_variable_set(:@selected_formats, [ :claude ])
+    colors = []
+    allow(generator).to receive(:say) { |_text, color = nil| colors << color }
+    generator.send(:generate_context_files)
+
+    expect(colors).to include(:magenta)
+  end
 end
