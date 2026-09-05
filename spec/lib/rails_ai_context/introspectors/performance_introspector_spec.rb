@@ -86,6 +86,7 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.dirname(File.join(dir, "app", "models", model_path)))
           File.write(File.join(dir, "app", "models", model_path), model_source)
+          File.write(File.join(dir, "app", "models", "token.rb"), "class Token < ApplicationRecord\nend\n")
           FileUtils.mkdir_p(File.join(dir, "db"))
           File.write(File.join(dir, "db", "schema.rb"), schema_source)
           described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
@@ -179,6 +180,71 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
 
           expect(missing).to be_empty
         end
+      end
+
+      # The association's own class_name is the answer; the name it is
+      # written under is only the fallback.
+      it "names the class the association declares" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          File.write(File.join(dir, "app", "models", "post.rb"),
+                     "class Post < ApplicationRecord\n  has_many :remarks, class_name: 'Comment'\nend\n")
+          File.write(File.join(dir, "app", "models", "comment.rb"),
+                     "class Comment < ApplicationRecord\n  belongs_to :post\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"),
+                     "create_table \"posts\" do |t|\n  t.integer \"remarks_count\"\nend\n")
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+
+          expect(missing).to contain_exactly(
+            a_hash_including(suggestion: "Add counter_cache: true to belongs_to :post in Comment")
+          )
+        end
+      end
+
+      it "leaves the row out when the declared class is not a model in the app" do
+        missing = counter_cache_for(
+          "post.rb",
+          "class Post < ApplicationRecord\n  has_many :remarks, class_name: 'Comment'\nend\n",
+          "create_table \"posts\" do |t|\n  t.integer \"remarks_count\"\nend\n"
+        )
+
+        expect(missing).to be_empty
+      end
+
+      it "leaves the row out when nothing in the app answers the association name" do
+        missing = counter_cache_for(
+          "post.rb",
+          "class Post < ApplicationRecord\n  has_many :remarks\nend\n",
+          "create_table \"posts\" do |t|\n  t.integer \"remarks_count\"\nend\n"
+        )
+
+        expect(missing).to be_empty
+      end
+
+      # A :through association reaches its records over another one, so there
+      # is no belongs_to on the far side to hold the counter.
+      it "skips a has_many :through" do
+        missing = counter_cache_for(
+          "post.rb",
+          "class Post < ApplicationRecord\n  has_many :tokens, through: :sessions\nend\n",
+          "create_table \"posts\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to be_empty
+      end
+
+      it "names the polymorphic belongs_to by the association's :as option" do
+        missing = counter_cache_for(
+          "post.rb",
+          "class Post < ApplicationRecord\n  has_many :tokens, as: :holder\nend\n",
+          "create_table \"posts\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(
+          a_hash_including(suggestion: "Add counter_cache: true to belongs_to :holder in Token")
+        )
       end
     end
 
