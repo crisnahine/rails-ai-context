@@ -102,8 +102,9 @@ to #181), and the sibling defects behind them.
 - **A static model entry said [STATIC] while the records inside it said
   [VERIFIED].** Associations, validations, scopes and methods carried the
   source listener's own mark, so `get_model_details` printed a scope as
-  verified directly under a static header and `--format json` handed the same
-  contradiction to any consumer. Every record in a static entry carries the
+  verified directly under a static header and every association row written
+  into `.ai-context.json` carried the same contradiction to whatever reads
+  that file. Every record in a static entry carries the
   entry's mark now. A scope whose body the parser could not resolve keeps its
   lower [INFERRED]. A hydrated Schema Hints block follows the same rule: it
   headed a static model [VERIFIED] because it keyed the tag on whether a
