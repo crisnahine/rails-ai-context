@@ -125,7 +125,9 @@ module RailsAiContext
         if concern_callbacks.any?
           lines << "" << "## From Concerns"
           concern_callbacks.each do |concern_name, entries|
-            lines << "- **#{concern_name}:** #{entries.map { |cb| cb[:declaration] }.join(', ')}"
+            # Semicolons, because a declaration can carry its own comma-joined
+            # options tail.
+            lines << "- **#{concern_name}:** #{entries.map { |cb| cb[:declaration] }.join('; ')}"
           end
         end
 
@@ -260,7 +262,15 @@ module RailsAiContext
         # The declared macro, not the resolved type: `after_commit_on_create`
         # is a key this gem synthesizes, not something the file says.
         declaration = "#{callback[:name] || callback[:type]} #{callback_target(callback[:method].to_s)}"
-        { declaration: declaration }
+        { declaration: declaration + options_tail(callback[:options]) }
+      end
+
+      # Without the tail, four `after_commit` lines that differ only in `on:`
+      # read as the same declaration four times.
+      private_class_method def self.options_tail(options)
+        return "" unless options.is_a?(Hash) && options.any?
+
+        ", " + options.map { |key, value| "#{key}: #{value.inspect}" }.join(", ")
       end
     end
   end

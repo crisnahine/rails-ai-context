@@ -290,6 +290,14 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(text).not_to include("after_commit_on_create")
     end
 
+    # Four after_commit lines that differ only in `on:` read as one
+    # declaration without the tail.
+    it "keeps the options tail the declaration was written with" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("after_commit :announce, on: :create")
+    end
+
     it "attaches no method source to a block callback at detail:full" do
       text = described_class.call(model: "Status", detail: "full").content.first[:text]
 
