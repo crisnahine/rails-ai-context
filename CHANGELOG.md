@@ -45,6 +45,13 @@ to #181), and the sibling defects behind them.
   `rails_get_callbacks` prints `do`; both render a block callback the same way
   now, and `generate_test` names one "runs its inline block" instead of
   writing the marker into an example name.
+- **A callback declared as an anonymous block was listed as a callback named
+  `do`.** The word the declaration line is composed from was reused wherever
+  the tools print a comma list of callback target names, so `after_create do
+  ... end` read as a method called `do` in the callbacks listing, in the model
+  details and in the feature analysis. A block is listed by the payload's own
+  `[inline_block]` marker now. The concern declaration lines still read
+  `after_create do`, because that is what the file says.
 - **Callbacks were named after the wrong thing, and `around` callbacks
   disappeared.** The concern section re-parsed the file with a line regex
   whose colon was optional, so `after_create do` printed as `after_create :do`
@@ -106,6 +113,13 @@ to #181), and the sibling defects behind them.
   unreadable or oversize file raised past the source walk and the entry became
   one error line. Both reads ask the same question about what the introspector
   will open, and a file declined once is not opened again.
+- **An unreadable model file took its STI children down with it, in silence.**
+  The file was dropped from the walk, so its children lost the only route they
+  had to `ApplicationRecord`, and an app whose models all descend from one
+  such base answered that it had no models at all. The file stays in the walk
+  with the reason it could not be read, the children resolve their base and
+  its table again, and the listing prints the entry with an `[UNAVAILABLE]`
+  marker.
 - **A static model entry said [STATIC] while the records inside it said
   [VERIFIED].** Associations, validations, scopes and methods carried the
   source listener's own mark, so `get_model_details` printed a scope as
@@ -199,6 +213,25 @@ to #181), and the sibling defects behind them.
   holds every model of that name and the controller file's own lexical scopes
   choose among them, outermost last. A name no scope resolves is left out
   rather than guessed.
+- **A counter_cache suggestion named a model that does not exist.** The row
+  derived the far side of a `has_many` from the association name, so `has_many
+  :remarks, class_name: "Comment"` sent the reader to a `Remark`, and
+  Mastodon's `Poll` named `Vote` and `Voter` for `PollVote`. It reads the
+  association's own `class_name` now, drops the row when no model in the app
+  answers it, skips a `has_many ... through:` because there is no `belongs_to`
+  on the far side to carry the counter, and names a polymorphic inverse by the
+  association's `:as` option.
+- **Two n+1 findings on one association printed as one line twice.** The
+  controller and the action appeared only at full detail, so the default
+  listing showed identical rows and the section count did not reconcile with
+  what a reader could see. Every row carries its call site now.
+- **"Orphaned tables" named tables that have a model.** On Mastodon the
+  warning listed seven tables of which one was real: four belong to Doorkeeper
+  and PgHero, whose models live in the gem, and two are
+  `has_and_belongs_to_many` join tables Rails builds no model for by design.
+  Join tables are recognised from the association records and left out, and
+  the line claims only what it can prove, that no model file in this app
+  declares the table.
 - **Routing concerns dropped their routes, and `with_options` and `module:`
   named controllers that do not exist.** A `concern :x do ... end` body was
   stored nowhere, so the controllers declared only inside it had no static
@@ -358,6 +391,13 @@ to #181), and the sibling defects behind them.
   line resolve the parent the way the chain walk does. A skip's constraints
   also join the group fingerprint, so a conditional skip no longer matches an
   outright one.
+- **The full controller listing copied the whole introspection payload once
+  per controller.** Resolving a parent reached for the shared cache inside the
+  loop, and every read of that cache deep-copies the entire context under a
+  mutex. On Mastodon's 309 controllers the `--detail full` listing made 608
+  copies and spent 8.2 of its 8.6 seconds in them. The listing reads the
+  payload once and passes it down. Rendered output is unchanged and the run
+  takes 4.3 seconds.
 - **The single-controller answer named a different parent than the listing did
   for the same controller.** It printed the superclass as the source spells it
   while the listing resolved it, so `Settings::Exports::BookmarksController`
@@ -650,6 +690,37 @@ to #181), and the sibling defects behind them.
   before the listener was wired up, so a run that then failed on a missing
   `listen` gem had already said it was watching. It prints after the listener
   is running.
+- **`serve` announced a live-reload watcher that never started.** The banner
+  and the watched directory list printed before the listener, so an app
+  without the `listen` gem read both lines and then "Live reload unavailable".
+  The watcher itself was fixed for this; this second copy, the one `serve`
+  uses, was not. The banner prints after the listener is running.
+- **An app that exits during boot answered nothing at all.** The binary set
+  `RAILS_ENV` only when `--environment` was passed, so the documented default
+  never reached apps that read the variable in `config/boot.rb`. Mastodon
+  aborts there, and an abort during boot was the one failure mode the static
+  tier did not cover, so the run ended with exit 1 and an empty stdout. The
+  binary fills in `development` when nothing else set it, and an initializer's
+  `exit` degrades to the static tier like every other boot failure. The rake
+  tasks, which boot inside the app's own process, still stop with it.
+- **A refusal on policy exited 0 in the SQL tool and 1 everywhere else.** A
+  blocked SQL statement came back as ordinary text, so a script could not tell
+  "no, that writes" from a result. It is an error result now. A file or a path
+  that is simply not there is still an ordinary answer and still exits 0.
+- **`search_code` said it could not find an absolute path instead of refusing
+  it.** `--path /etc` was joined onto the app root, so it looked merely
+  absent: the tool answered "Path not found" with the app's own top-level
+  directories listed back, and exited 0. Nothing escaped the root, but the
+  reason was wrong and it was the one refusal shape the other six path-taking
+  tools already exit 1 on. It refuses an absolute path or a traversal before
+  resolving, with the same message they use.
+- **Three tools accepted no arguments and exited 0.** `context`,
+  `generate_test` and `session_context` ask for "at least one of" several
+  parameters, so the runner's required-parameter check never fired and their
+  own guard answered with plain text. They exit 1 now, like the nine tools
+  whose required parameter the schema names.
+- **`context --format bogus` introspected the whole app before refusing.** The
+  format is checked as soon as the command starts.
 - **A value-taking flag given no value refused in broken English.** `--limit`
   with nothing after it said "takes a integer value". The article follows the
   type name now, for every type the schema can carry.
@@ -669,6 +740,21 @@ to #181), and the sibling defects behind them.
   backticks inside a code span, which markdown does not honour, so the span
   closed early; it is fenced the way the example three lines above it already
   was.
+- **`docs/CLI.md` documented `tool models`, which is not a tool.** The command
+  is `tool model_details`. The page also gained the `facts`, `preset` and
+  `tree` sections it was missing, and it now says which path refusals exit 1
+  and which absences exit 0.
+- **A `path:` install printed a git error on every bundler command.** The
+  gemspec built its file list with `git ls-files` and left git's stderr
+  attached to the caller, so a vendored or `path:` Gemfile entry re-evaluating
+  it made the host app print "fatal: not a git repository". The command runs
+  with its stderr discarded. The packaged gem carries the same file list as
+  before.
+- **`ai:inspect` and the generated context files stated the route count
+  differently.** The rake summary printed the raw total where `CLAUDE.md`
+  prints the app share and names the rest as framework, so the same number
+  read as two answers. Both surfaces use the same phrase now, off the same
+  route population.
 - **An `--app-path` that does not exist dumped nine frames.** `doctor`,
   `inspect` and `watch` let the `chdir` error escape. The directory is checked
   before the move, and those three print the one-line refusal the other
@@ -723,6 +809,17 @@ to #181), and the sibling defects behind them.
   no `RUBY VERSION` in the lockfile and no `ruby` line in the Gemfile, the
   version reported is the interpreter running the CLI. The static tier's stack
   sentence names no Ruby at all in that case.
+- **The onboarding brief dropped an app's whole Sidekiq layer without saying
+  so.** On an app that runs its background work through workers in
+  `app/workers`, the async section counted the mailers and said nothing else,
+  so a reader was told an app with 118 workers has almost no async work. The
+  section states the same limit the job listing states.
+- **An app with no `Gemfile.lock` was reported as a failed introspection.**
+  The gems tool answered "Gem introspection failed: No Gemfile.lock found"
+  where the schema tool answers the same absence with an `[UNAVAILABLE: ...]`
+  marker. A missing lockfile reads as unavailable in both. A lockfile that
+  could not be read, or one with no `specs:` section, is still reported as a
+  failure.
 - **A dependency line was read as the app's Ruby version.** `ruby (>= 2.0)`,
   six spaces into the lockfile's dependency list, answered `(>=`. The
   version-shape guard the Gemfile path already had now covers the lockfile
