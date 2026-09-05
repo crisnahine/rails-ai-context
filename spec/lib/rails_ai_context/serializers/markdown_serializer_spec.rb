@@ -42,6 +42,20 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
     end
   end
 
+  describe "the Internationalization section" do
+    def i18n_output(source)
+      described_class.new({ i18n: { default_locale: "en", available_locales: %w[en fr], available_locales_source: source } }).call
+    end
+
+    it "says a list read off the locale files is not the app's enabled list" do
+      expect(i18n_output("locale_files")).to include("- Available locales (from locale files): en, fr")
+    end
+
+    it "states a configured list plainly" do
+      expect(i18n_output("config")).to include("- Available locales: en, fr")
+    end
+  end
+
   describe "the Hotwire section against the static fixture" do
     it "names each model's broadcast macros" do
       output = described_class.new(IntrospectedFixture.context).call
