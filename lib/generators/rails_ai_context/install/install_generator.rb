@@ -35,12 +35,6 @@ module RailsAiContext
 
       desc "Install rails-ai-context: creates initializer, MCP config, and generates initial context files."
 
-      CONTEXT_RESULT_LINES = {
-        written: "✅ %s",
-        skipped: "⏭️  %s (unchanged)",
-        not_applicable: "➖  %s (%s)"
-      }.freeze
-
       CONTEXT_RESULT_COLORS = { written: :green, skipped: :yellow, not_applicable: :yellow }.freeze
 
       class_option :defaults, type: :boolean, default: false,
@@ -530,7 +524,8 @@ module RailsAiContext
 
         begin
           result = RailsAiContext.generate_context(format: @selected_formats)
-          RailsAiContext::ContextFileReport.each_line(result, CONTEXT_RESULT_LINES) do |bucket, text|
+          style = RailsAiContext::ContextFileReport.style(:emoji)
+          RailsAiContext::ContextFileReport.each_line(result, style) do |bucket, text|
             say "  #{text}", CONTEXT_RESULT_COLORS[bucket]
           end
         rescue => e

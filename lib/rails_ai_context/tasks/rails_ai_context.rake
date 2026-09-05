@@ -19,14 +19,9 @@ ASSISTANT_TABLE = begin
     .join("\n") + "\n"
 end unless defined?(ASSISTANT_TABLE)
 
-CONTEXT_RESULT_LINES = {
-  written: "✅ %s",
-  skipped: "⏭️  %s (unchanged)",
-  not_applicable: "➖  %s (%s)"
-}.freeze unless defined?(CONTEXT_RESULT_LINES)
-
 def print_result(result)
-  RailsAiContext::ContextFileReport.each_line(result, CONTEXT_RESULT_LINES) { |_bucket, text| puts "  #{text}" }
+  style = RailsAiContext::ContextFileReport.style(:emoji)
+  RailsAiContext::ContextFileReport.each_line(result, style) { |_bucket, text| puts "  #{text}" }
 end unless defined?(print_result)
 
 def abort_boot_failure(result, timeout)

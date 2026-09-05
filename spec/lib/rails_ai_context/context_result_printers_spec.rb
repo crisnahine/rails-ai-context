@@ -99,19 +99,36 @@ RSpec.describe "not-applicable context files on every surface" do
     end
   end
 
-  # Each surface words the three buckets its own way, but the walk over them
-  # belongs to one printer, or a fourth bucket reaches only the surfaces
-  # someone remembered to edit.
-  it "routes every surface through the one report printer" do
-    surfaces = [
-      File.join(repo_root, "exe", "rails-ai-context"),
-      File.join(repo_root, "lib", "rails_ai_context", "tasks", "rails_ai_context.rake"),
-      File.join(repo_root, "lib", "rails_ai_context", "watcher.rb"),
-      File.join(repo_root, "lib", "generators", "rails_ai_context", "install", "install_generator.rb")
-    ]
+  # The rake task and the install generator print the same emoji wording, so
+  # the table is one edit rather than one per surface. Both are driven here
+  # with the shared table replaced: a surface holding its own copy keeps
+  # printing the old words.
+  it "words the emoji surfaces from the one shared table" do
+    stub_const(
+      "RailsAiContext::ContextFileReport::STYLES",
+      RailsAiContext::ContextFileReport::STYLES.merge(
+        emoji: RailsAiContext::ContextFileReport::STYLES[:emoji].merge(written: "MARKER %s")
+      )
+    )
+    allow(RailsAiContext).to receive(:generate_context).and_return(
+      written: [ "/app/CLAUDE.md" ], skipped: [], not_applicable: {}
+    )
+    allow(RailsAiContext::LegacyCleanup).to receive(:prompt_legacy_files)
 
-    silent = surfaces.reject { |path| File.read(path).include?("ContextFileReport") }
+    generator = RailsAiContext::Generators::InstallGenerator.new
+    generator.instance_variable_set(:@selected_formats, [ :claude ])
+    said = []
+    allow(generator).to receive(:say) { |text, *| said << text }
+    generator.send(:generate_context_files)
 
-    expect(silent).to be_empty
+    Dir.mktmpdir do |tmp|
+      root = Pathname.new(File.realpath(tmp))
+      File.write(root.join(".rails-ai-context.yml"), "ai_tools:\n  - claude\ntool_mode: mcp\n")
+      allow(Rails).to receive(:root).and_return(root)
+
+      expect(invoke_rake_context).to include("  MARKER /app/CLAUDE.md")
+    end
+
+    expect(said).to include("  MARKER /app/CLAUDE.md")
   end
 end

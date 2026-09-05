@@ -388,14 +388,9 @@ class RailsAiContextCLI < Thor
       ::RailsAiContext::Server.builtin_tools.size
     end
 
-    CONTEXT_RESULT_LINES = {
-      written: "Written: %s",
-      skipped: "Skipped: %s (unchanged)",
-      not_applicable: "Not applicable: %s (%s)"
-    }.freeze
-
     def print_context_result(result)
-      ::RailsAiContext::ContextFileReport.each_line(result, CONTEXT_RESULT_LINES) do |_bucket, text|
+      style = ::RailsAiContext::ContextFileReport.style(:plain)
+      ::RailsAiContext::ContextFileReport.each_line(result, style) do |_bucket, text|
         $stderr.puts "  #{text}"
       end
     end
