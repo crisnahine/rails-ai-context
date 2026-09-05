@@ -8,7 +8,9 @@ require "tmpdir"
 # with its facts missing and no reason reads as an entry that declares nothing,
 # which is a different answer from the one the tools give.
 RSpec.describe "Generated files over an app with unreadable files" do
-  UNREADABLE = %w[app/models/vehicle.rb app/controllers/trucks_controller.rb].freeze
+  # A local, not a constant: a constant assigned in a describe block lands on
+  # Object and is visible to every later example in the run.
+  let(:unreadable) { %w[app/models/vehicle.rb app/controllers/trucks_controller.rb] }
 
   def build_app(dir)
     FileUtils.mkdir_p(File.join(dir, "app", "models"))
@@ -37,7 +39,7 @@ RSpec.describe "Generated files over an app with unreadable files" do
         def index; end
       end
     RUBY
-    UNREADABLE.each { |rel| File.chmod(0o000, File.join(dir, rel)) }
+    unreadable.each { |rel| make_unreadable(File.join(dir, rel)) }
   end
 
   # Every prose file the generator wrote, as path => contents. The JSON dump
@@ -55,7 +57,7 @@ RSpec.describe "Generated files over an app with unreadable files" do
         .to_h { |path| [ path.sub("#{dir}/", ""), File.read(path) ] }
     ensure
       RailsAiContext.tier = previous_tier
-      UNREADABLE.each do |rel|
+      unreadable.each do |rel|
         path = File.join(dir, rel)
         File.chmod(0o644, path) if File.exist?(path)
       end
@@ -79,5 +81,9 @@ RSpec.describe "Generated files over an app with unreadable files" do
     (model_rows + controller_rows).each do |row|
       expect(row).to include("[UNAVAILABLE:")
     end
+  end
+
+  it "leaves no name of its own on Object" do
+    expect(Object.const_defined?(:UNREADABLE)).to be(false)
   end
 end
