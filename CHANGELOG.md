@@ -867,8 +867,9 @@ Changed.
   An app with no models, controllers or schema dump got 11 of the 20 files and
   nothing named the other 9, so a deliberate omission and a failed run looked
   the same. Every unwritten file now comes back with the reason it does not
-  apply, and the CLI, the `ai:context` rake task, the watcher and the install
-  generator all print it as `Not applicable: <file> (no models)`. Root files
+  apply, on all four surfaces that print a generate result: the CLI and the
+  watcher word it `Not applicable: <file> (no models)`, the rake task and the
+  installer `➖  <file> (no models)`, off one table. Root files
   switched off with `generate_root_files = false`, and the OpenCode
   `AGENTS.md` files whose directory does not exist, are reported the same way
   instead of vanishing.
@@ -985,6 +986,39 @@ Changed.
   files.** Markdown renders two lines with no blank between them as one
   paragraph, so the notice read as part of the generator credit. It goes
   through the same helper the other renders use and keeps its own blank lines.
+
+- **The same typo exited 1 from the binary and 3 from the rake task.**
+  docs/CLI.md states one rule - a usage error exits 1 - and the binary has
+  always kept it. `rails 'ai:tool[schema]' bogus=1` exited 3, and anything else
+  that raised out of the task exited 2, both undocumented and unpinned. One
+  status now, on both surfaces, with a spec on each.
+- **An unreadable file under `app/models` was answered as a model with a
+  table.** `app/models` holds POROs too - a form object, a service, a generated
+  data class - and a file the walk cannot read might be one, so a derived
+  `table_name` claimed more than the tier knows. The entry still names the file
+  and why it is empty, and carries a table only where another model's
+  inheritance says it is a base.
+- **`onboard` wrote `[UNAVAILABLE: app not booted]` mid-sentence.** The Ruby
+  half of the sentence had learned to drop its clause rather than print the
+  marker; the Rails half was still interpolated raw, so an app whose lockfile
+  names no rails wrote the marker into a file it commits. Both halves read
+  through one rule now.
+- **`polymorphic: false` was in the static answer and absent from the booted
+  one.** One model read two ways carried two different key sets into
+  `.ai-context.json`. The booted side reads the key the way it already reads
+  `optional`.
+- **A file declaring only a module was named by camelizing its path.** That is
+  wrong for a module in exactly the way it is wrong for a class - an app
+  inflection only changes case - so `app/serializers/activitypub/actor.rb` was
+  listed under a constant the app does not have. The resolver tries the modules
+  the file declares before falling back to the path.
+- **A compressed controller group with no namespace was headed by a count.**
+  Two such groups in one document carried the same heading and neither named
+  anything; the heading names a member now.
+- **Three documented claims the code does not keep.** `tree` prints commands
+  and not their options, the `rails_search_code` parameter table omitted
+  `limit` while the paragraph under it used the name, and the changelog said
+  four surfaces print `Not applicable:` where two print the emoji form.
 
 - **Five tools took a path from the caller and answered a refusal with exit 0.**
   `rails_get_test_info` said "the name was refused, it leaves the app root or

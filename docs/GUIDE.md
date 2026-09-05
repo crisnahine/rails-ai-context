@@ -681,6 +681,7 @@ Ripgrep-powered regex search across the codebase.
 | `exclude_tests` | boolean | Exclude test/spec/features directories. Default: false. |
 | `group_by_file` | boolean | Group results by file with match counts. Default: false. |
 | `offset` | integer | Skip this many lines for pagination. Default: 0. |
+| `limit` | integer | Max lines to return; the default is sized in matches. |
 | `context_lines` | integer | Lines of context before and after each match (like grep -C). Default: 2, max: 5. Needs ripgrep; without it the search returns match lines only. |
 
 Smart result limiting, sized in matches: under 10 shows all, 10-100 shows half, over 100 caps at 100. `offset` and `limit` count emitted lines, so a search with context returns more lines than matches. The header says how many matches were found, how many the page shows, and whether the line cap was reached. Once it names the cap, the count covers only the lines it scanned, so it is written `N+`.

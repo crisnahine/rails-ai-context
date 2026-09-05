@@ -194,10 +194,10 @@ Result: controller and view tools automatically include relevant schema informat
 | `MarkdownSerializer` | Base formatting |
 | `ContextFileSerializer` | Atomic file writes with section markers |
 | `CompactSerializerHelper` | Compact mode (≤150 lines) |
-| `StackOverviewHelper` | Stack overview sections |
+| `StackOverviewHelper` | Stack overview sections, and the rule-file write path four serializers share |
 | `ToolGuideHelper` | MCP/CLI tool reference sections |
 | `TestCommandDetection` | Test framework detection |
-| `SectionFacts` | One-line facts (auth, assets, associations) shared by every serializer |
+| `SectionFacts` | The facts every surface states about an app - auth, assets, associations, the filter chain, an unread entry's row, the static-tier notice - each rendered in one place |
 | `SectionGuard` | Whether a section resolved, so a refused one is not rendered |
 | `SectionMarkerWriter` | Writes a managed section into a file the user also owns |
 | `ContextModeDispatch` | Picks full or compact rendering for a run |

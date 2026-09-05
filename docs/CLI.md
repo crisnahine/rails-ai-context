@@ -212,7 +212,8 @@ rails-ai-context preset architecture
 
 ### `tree`
 
-Print a tree of every command and its options.
+Print a tree of every command. `rails-ai-context help <command>` lists that
+command's options.
 
 ```bash
 rails-ai-context tree
