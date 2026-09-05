@@ -90,9 +90,7 @@ RSpec.describe RailsAiContext::ConcernMacros do
   end
 
   it "exposes collect alone" do
-    expect(described_class).to respond_to(:collect)
-    expect(described_class).not_to respond_to(:walk)
-    expect(described_class).not_to respond_to(:tagged)
+    expect(described_class.singleton_methods(false)).to eq([ :collect ])
   end
 
   it "does not reach outside the owner kind's concerns directory" do

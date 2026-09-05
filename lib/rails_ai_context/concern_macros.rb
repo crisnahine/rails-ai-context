@@ -10,6 +10,56 @@ module RailsAiContext
   module ConcernMacros
     MAX_DEPTH = 3
 
+    # One walk's state. The root, the directories, the keys and the cache are
+    # fixed for the run and `seen`, `collected` and `unresolved` accumulate
+    # across it, so they belong to the run rather than to every call.
+    class Run
+      attr_reader :collected, :unresolved
+
+      def initialize(root, dirs, keys, cache)
+        @root = root
+        @dirs = dirs
+        @keys = keys
+        @cache = cache
+        @seen = Set.new
+        @collected = Hash.new { |hash, key| hash[key] = [] }
+        @unresolved = []
+      end
+
+      def walk(names, within, depth)
+        return if depth.negative?
+
+        names.each do |name|
+          next unless @seen.add?(name)
+
+          path = ConcernPaths.find_file(@root, name, within: within, dirs: @dirs)
+          if path.nil? || File.size(path) > RailsAiContext.configuration.max_file_size
+            @unresolved << name
+            next
+          end
+
+          data = introspect(path)
+          @keys.each do |key|
+            Array(data[key]).each { |entry| @collected[key] << tagged(entry, name) }
+          end
+
+          walk(ConcernMembership.from_mixins(data[:mixins]), name, depth - 1)
+        end
+      end
+
+      private
+
+      def introspect(path)
+        return Introspectors::SourceIntrospector.call(path) if @cache.nil?
+
+        @cache[path] ||= Introspectors::SourceIntrospector.call(path)
+      end
+
+      def tagged(entry, concern_name)
+        entry.is_a?(Hash) ? entry.merge(from_concern: concern_name) : entry
+      end
+    end
+
     module_function
 
     # @param root [String] application root
@@ -25,53 +75,17 @@ module RailsAiContext
     #   configured paths and the files themselves change in-process.
     # @return [Array(Hash, Array<String>)] the collected entries per key, and
     #   the names whose file could not be read
-    def collect(root, mixins, keys:, prefer: nil, within: nil, depth: MAX_DEPTH, cache: nil)
+    def collect(root, mixins, keys:, prefer: nil, within: nil, cache: nil)
       names = ConcernMembership.from_mixins(mixins)
       return [ {}, [] ] if names.empty?
 
-      # Resolved once per call and threaded through the recursion: the
-      # configured paths change in-process, so a cache keyed on root goes
-      # stale with no reset hook.
-      dirs = ConcernPaths.ordered_dirs(root.to_s, prefer)
-      collected = Hash.new { |hash, key| hash[key] = [] }
-      unresolved = []
+      # Resolved once per call and held by the run: the configured paths
+      # change in-process, so a cache keyed on root goes stale with no reset
+      # hook.
+      run = Run.new(root.to_s, ConcernPaths.ordered_dirs(root.to_s, prefer), keys, cache)
+      run.walk(names, within, MAX_DEPTH)
 
-      walk(names, root.to_s, dirs, keys, within, depth, Set.new, collected, unresolved, cache)
-
-      [ collected, unresolved ]
+      [ run.collected, run.unresolved ]
     end
-
-    def walk(names, root, dirs, keys, within, depth, seen, collected, unresolved, cache)
-      return if depth.negative?
-
-      names.each do |name|
-        next unless seen.add?(name)
-
-        path = ConcernPaths.find_file(root, name, within: within, dirs: dirs)
-        if path.nil? || File.size(path) > RailsAiContext.configuration.max_file_size
-          unresolved << name
-          next
-        end
-
-        data = introspect(path, cache)
-        keys.each do |key|
-          Array(data[key]).each { |entry| collected[key] << tagged(entry, name) }
-        end
-
-        walk(ConcernMembership.from_mixins(data[:mixins]), root, dirs, keys, name, depth - 1, seen, collected, unresolved, cache)
-      end
-    end
-
-    def introspect(path, cache)
-      return Introspectors::SourceIntrospector.call(path) if cache.nil?
-
-      cache[path] ||= Introspectors::SourceIntrospector.call(path)
-    end
-
-    def tagged(entry, concern_name)
-      entry.is_a?(Hash) ? entry.merge(from_concern: concern_name) : entry
-    end
-
-    private_class_method :walk, :introspect, :tagged
   end
 end
