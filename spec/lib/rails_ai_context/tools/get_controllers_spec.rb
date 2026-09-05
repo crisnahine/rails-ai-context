@@ -207,6 +207,18 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       })
     end
 
+    # A base controller with no public actions rendered as a name, a dash and
+    # nothing, which reads as a truncated line rather than an answer.
+    it "says so when a controller has no public actions" do
+      stub_controllers({
+        "Admin::BaseController" => { actions: [], filters: [], strong_params: [], parent_class: "ApplicationController" }
+      })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("- **Admin::BaseController** - (no public actions)")
+    end
+
     it "names both strong params methods of a controller under an app parent" do
       stub_controllers({
         "Admin::AccountsController" => {

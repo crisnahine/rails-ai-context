@@ -175,9 +175,8 @@ module RailsAiContext
           if matched.any?
             lines << "## Controllers (#{matched.size})"
             matched.sort.each do |name, info|
-              actions = info[:actions]&.join(", ") || "none"
               lines << "" << "### #{name}"
-              lines << "- **Actions:** #{actions}"
+              lines << "- **Actions:** #{Serializers::SectionFacts.actions_phrase(info)}"
 
               split = RailsAiContext::ActionFilters.for_controller(ctx, name, root: rails_app.root.to_s)
               if split[:inherited].any?

@@ -106,8 +106,7 @@ module RailsAiContext
             lines = [ "# Controllers (#{page[:total]})", "" ]
             paginated_names.each do |name|
               info = app_controllers[name]
-              actions = info[:actions]&.join(", ") || "none"
-              lines << "- **#{name}** - #{actions}"
+              lines << "- **#{name}** - #{Serializers::SectionFacts.actions_phrase(info)}"
             end
             lines << "" << "_Use `controller:\"Name\"` for filters and strong params, or `detail:\"full\"` for everything._#{pagination_hint}"
             text_response(lines.join("\n"))
