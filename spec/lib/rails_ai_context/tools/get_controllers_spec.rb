@@ -266,6 +266,30 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).not_to include("before authenticate_user!")
     end
 
+    # The compressed group renders one member's filters for all of them, so a
+    # skip has to keep the skipper out of a group of declarers.
+    it "does not group a controller that skips a filter with the ones that declare it" do
+      declarer = {
+        actions: %w[index show],
+        filters: [ { kind: "before", name: "authenticate" } ],
+        strong_params: [],
+        parent_class: "Admin::BaseController"
+      }
+      stub_controllers({
+        "Admin::PostsController" => declarer.merge(
+          filters: [ { kind: "before", name: "authenticate", skipped: true } ]
+        ),
+        "Admin::TagsController" => declarer.dup,
+        "Admin::UsersController" => declarer.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Admin::PostsController")
+      expect(text).to include("- Filters: ~~authenticate~~ _(skipped)_")
+      expect(text).not_to include("## Admin::* (Posts, Tags, Users)")
+    end
+
     it "pairs each rescued exception with its handler" do
       stub_controllers({
         "MediaProxyController" => {

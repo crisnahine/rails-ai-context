@@ -123,7 +123,11 @@ module RailsAiContext
               # Group by parent + actions + filters + params fingerprint
               if parent && parent != "ApplicationController"
                 actions_sig = info[:actions]&.sort&.join(",")
-                filters_sig = info[:filters]&.map { |f| "#{f[:kind]}:#{f[:name]}" }&.sort&.join(",")
+                # The group renders one member's filter line for all of them,
+                # so a skip has to tell the fingerprints apart.
+                filters_sig = info[:filters]&.map { |f|
+                  "#{f[:kind]}:#{f[:name]}#{':skipped' if f[:skipped]}"
+                }&.sort&.join(",")
                 params_sig = Serializers::SectionFacts.strong_param_names(info).sort.join(",")
                 "#{parent}|#{actions_sig}|#{filters_sig}|#{params_sig}"
               else
