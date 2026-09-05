@@ -40,18 +40,16 @@ to #181), and the sibling defects behind them.
   marked rather than named. Options are spelled as `key: value` pairs, so the
   line reads the same on every Ruby, and a plain `encrypts` with no options
   prints the attribute alone.
-- **The Callbacks section of `rails_get_model_details` printed the
-  `[inline_block]` marker raw.** It handed the reader a bracketed token where
-  `rails_get_callbacks` prints `do`; both render a block callback the same way
-  now, and `generate_test` names one "runs its inline block" instead of
-  writing the marker into an example name.
 - **A callback declared as an anonymous block was listed as a callback named
-  `do`.** The word the declaration line is composed from was reused wherever
-  the tools print a comma list of callback target names, so `after_create do
-  ... end` read as a method called `do` in the callbacks listing, in the model
-  details and in the feature analysis. A block is listed by the payload's own
-  `[inline_block]` marker now. The concern declaration lines still read
-  `after_create do`, because that is what the file says.
+  `do`, and the two tools that list one did not agree.** The word the
+  declaration line is composed from was reused wherever the tools print a comma
+  list of callback target names, so `after_create do ... end` read as a method
+  called `do` in the callbacks listing, in the model details and in the feature
+  analysis. A block is listed by the payload's own `[inline_block]` marker now,
+  the same marker in all three. The concern declaration lines still read
+  `after_create do`, because that is what the file says, and `generate_test`
+  names one "runs its inline block" rather than writing the marker into an
+  example name.
 - **Callbacks were named after the wrong thing, and `around` callbacks
   disappeared.** The concern section re-parsed the file with a line regex
   whose colon was optional, so `after_create do` printed as `after_create :do`

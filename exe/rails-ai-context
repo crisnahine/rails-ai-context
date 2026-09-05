@@ -521,7 +521,10 @@ class RailsAiContextCLI < Thor
       Dir.chdir(app_root) if app_path_opt
       # Apps read RAILS_ENV in config/boot.rb, before anything the gem can
       # rescue; leaving it unset made the documented default unreachable.
-      ENV["RAILS_ENV"] = environment_opt || ENV["RAILS_ENV"] || "development"
+      # The chain is Rails' own (`Rails.env`): RAILS_ENV, then RACK_ENV, then
+      # development, with an empty value read as unset.
+      ambient = [ environment_opt, ENV["RAILS_ENV"], ENV["RACK_ENV"] ]
+      ENV["RAILS_ENV"] = ambient.find { |v| v && !v.empty? } || "development"
 
       # A command that can serve the static tier reads a source-only tree
       # instead of refusing it.

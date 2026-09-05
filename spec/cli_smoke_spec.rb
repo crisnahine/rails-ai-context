@@ -298,6 +298,35 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       end
     end
 
+    # Rails resolves its own environment as RAILS_ENV, then RACK_ENV, then
+    # development, and treats an empty value as unset. "The ambient RAILS_ENV"
+    # the help text promises is that whole answer, not the first term of it.
+    it "takes an ambient RACK_ENV before falling back to development" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, <<~RUBY)
+          File.write(File.join(__dir__, "..", "seen_env.txt"), ENV["RAILS_ENV"].to_s)
+          raise "boot needs a database"
+        RUBY
+
+        `cd #{dir} && env -u RAILS_ENV RACK_ENV=staging ruby -I #{lib} #{exe} tool model_details 2>&1`
+
+        expect(File.read(File.join(dir, "seen_env.txt"))).to eq("staging")
+      end
+    end
+
+    it "reads an empty RAILS_ENV as unset, the way Rails does" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, <<~RUBY)
+          File.write(File.join(__dir__, "..", "seen_env.txt"), ENV["RAILS_ENV"].to_s)
+          raise "boot needs a database"
+        RUBY
+
+        `cd #{dir} && RAILS_ENV= ruby -I #{lib} #{exe} tool model_details 2>&1`
+
+        expect(File.read(File.join(dir, "seen_env.txt"))).to eq("development")
+      end
+    end
+
     # An app that calls exit/abort in an initializer is a fifth boot-failure
     # mode. The binary owns this process, and it has a static tier to answer
     # from, so the exit is a boot failure here rather than a process decision.
