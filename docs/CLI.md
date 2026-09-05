@@ -65,6 +65,14 @@ Global options may be typed before or after the command name:
 `rails-ai-context --app-path /srv/app doctor` and
 `rails-ai-context doctor --app-path /srv/app` run the same check.
 
+`--app-path` names the Rails root, and defaults to the working directory.
+`--environment` names the `RAILS_ENV` to boot under. It defaults to the ambient
+`RAILS_ENV`, and to `development` when nothing set one, so an app whose
+`config/boot.rb` refuses to run without the variable still gets booted rather
+than answering nothing. Name it explicitly on a machine that runs more than one
+environment, because the environment decides which database configuration the
+booted tier reads.
+
 #### Exit status
 
 `tool` exits 0 when the tool answered and 1 when it could not. A required
