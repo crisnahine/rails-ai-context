@@ -54,9 +54,11 @@ to #181), and the sibling defects behind them.
   owner's concerns directory and walks the enclosing namespaces outward so a
   namespace-relative `include` resolves the way Ruby resolves it. The "From
   Concerns" section of `rails_get_callbacks` attributes each callback to the
-  concern that declared it and stops there, instead of printing the
-  declaration and its body a second time under the execution order. A concern
-  shared by many models is walked once per run.
+  concern that declared it, with the options it was written with, and at
+  `detail: "full"` the body is printed once, in the ordered list, read from
+  the concern file. On the booted tier an unread concern is marked for the
+  keys it costs (scopes, callbacks and macros), since reflection already
+  answered the rest. A concern shared by many models is walked once per run.
 - **Rails' anonymous join class for a `has_and_belongs_to_many` was reported
   as one of the app's models.** Rails names it through a singleton `name=`, so
   it answered `HABTM_Tags` while living at `Account::HABTM_Tags`, and the
@@ -124,7 +126,9 @@ to #181), and the sibling defects behind them.
   now carries the skip, one renderer draws the listing for the tool and the
   generated markdown, and an ancestor's own skip no longer reaches a child as
   an inherited filter - Mastodon's Api::V1 controllers listed
-  `require_functional!` that way.
+  `require_functional!` that way. A skip that names `only:` or `except:`
+  covers those actions only, so an action the skip does not name still lists
+  the filter it runs.
 - **Static `get_api` named serializers by camelizing the file path, so an app
   acronym came out miscased.** `ActivityPub::AcceptFollowSerializer` was
   reported as `Activitypub::AcceptFollowSerializer` and
@@ -149,6 +153,15 @@ to #181), and the sibling defects behind them.
   the app's own major.minor. When neither the context nor a loaded Rails names
   a version, the tool stamps its supported floor and says so in a Note line
   above the code.
+- **`migration_advisor` printed an empty "Affected Models" section for any
+  model whose table is not the camelized form of its class.** The section
+  camelized the table back into a model name, so `Admin::ActionLog`
+  (`admin_action_logs`) and every `self.table_name` model came back with a
+  bare heading while `get_schema` named the model for the same table in the
+  same run. The models for a table are now looked up from the table each model
+  records, associations are matched against those names, and the heading is
+  left out when no model uses the table. `remove_column`'s `ignored_columns`
+  step names the model's own file for the same reason.
 - **`generate_test` and `get_test_info` wrote test data the app does not
   have.** A Devise app with no factory_bot got `let(:user) { create(:user) }`,
   a Devise app with no fixtures got `@user = users(:one)`, and the "follow
@@ -164,9 +177,11 @@ to #181), and the sibling defects behind them.
   had no row at all. Categories are now read from whatever the app keeps under
   `spec/` and `test/`: one row per top-level directory holding test files, a
   row for files loose at the root, joined locations when a category lives
-  under both, sorted by count. The "Test Files" section also stops counting
-  support Ruby that sits beside the specs, so it agrees with the counts above
-  it.
+  under both, sorted by count. One "Test Files" section states each category
+  once, with its count and the directories it lives in, and support Ruby that
+  sits beside the specs is not counted. The walk runs once per introspection,
+  and a directory it cannot read costs the categories rather than the whole
+  test section.
 - **`search_code --exact-match` treated the pattern as a regex, so `def
   reblog?` also matched `def reblog`.** The pattern is now escaped and matched
   literally. Boundaries are added only on the side whose pattern edge is a
@@ -183,6 +198,12 @@ to #181), and the sibling defects behind them.
   headings carry the same two facts, and trace mode marks a caller list that
   stopped at the cap. Against Mastodon, `def reblog?` with `--context-lines 5`
   reports 3 matches rather than 30, and `def call` reports its 103 matches.
+- **A ripgrep too old for a flag the search passes answered "No results
+  found".** The exit status of the `rg` run was discarded, so a run that
+  failed outright looked the same as a run that matched nothing.
+  `--field-context-separator` and `--field-match-separator` need ripgrep 12; a
+  status other than success or 1 (no matches) now falls through to the Ruby
+  search backend instead of reporting an empty result.
 - **Static `get_i18n` reported the locale files as the app's available
   locales.** Rails builds `available_locales` from `config/locales` only while
   the app leaves the setting alone; once it assigns
@@ -194,7 +215,9 @@ to #181), and the sibling defects behind them.
   initializers, takes the last one Rails would apply, and falls back to the
   files for an app that never sets it or whose value is computed, saying so in
   the field name. Fallbacks left the static answer with it: `I18n.fallbacks`
-  belongs to whichever process asks, and no app booted in this one.
+  belongs to whichever process asks, and no app booted in this one. The
+  generated context files carry the same qualifier, so CLAUDE.md and AGENTS.md
+  no longer state the file list as the enabled one.
 - **`excluded_concerns` in `.rails-ai-context.yml` did nothing, and a mistyped
   key did nothing quietly.** The key was missing from the YAML allowlist, so a
   standalone user who set it kept the framework defaults and the concern
@@ -263,6 +286,16 @@ to #181), and the sibling defects behind them.
 - **docs/GUIDE.md counted 29 generated files and listed 18.** The real maximum
   is 20. The per-tool tables were missing `.claude/rules/rails-components.md`
   and `.cursorrules`, and two section headers undercounted by one.
+
+### Changed
+
+- **What the callback list covers is now stated.** `rails_get_callbacks` said
+  "execution order" without saying that the list is what the model file and
+  its concerns declare, so a callback a gem registers on `include` read as
+  absent rather than out of scope. The description, the rendered headings,
+  docs/TOOLS.md and docs/GUIDE.md now say "grouped by type, in Rails event
+  order", and docs/COMPATIBILITY.md names the limit: order within a type is
+  declaration order, order across types is Rails' event order.
 
 ## [5.25.0] - 2026-09-03
 
