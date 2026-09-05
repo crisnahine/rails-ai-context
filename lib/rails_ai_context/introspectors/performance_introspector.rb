@@ -63,8 +63,12 @@ module RailsAiContext
             includes: -> { Listeners::ChainedCallListener.new(:includes) }
           })
 
-          class_name = active_record_class_name(ast[:classes])
-          next unless class_name
+          # The listener names the class node alone, so the qualified name is
+          # the one the app can resolve; the superclass check stays the guard
+          # that this file holds a model at all.
+          next unless active_record_class_name(ast[:classes])
+
+          class_name = declared_name(record)
 
           has_many = ast[:associations].select { |a| a[:type] == "has_many" }.map do |a|
             opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
@@ -86,7 +90,7 @@ module RailsAiContext
             # reach here and the stem stands alone. The declaration is looked
             # up by the qualified name the file writes, which is what a model
             # nested inside a module body is called.
-            table_name: TableName.explicit(record.source, declared_name(record)) || TableName.stem(record.path),
+            table_name: TableName.explicit(record.source, class_name) || TableName.stem(record.path),
             has_many: has_many,
             belongs_to: belongs_to,
             includes_calls: includes_calls
@@ -105,7 +109,9 @@ module RailsAiContext
       def detect_n_plus_one(model_data)
         risks = []
         view_contents = preload_view_contents
-        model_lookup = model_data.each_with_object({}) { |m, h| h[m[:name]] = m }
+        # The scan captures a single word, and a controller inside the model's
+        # own namespace writes the bare name, so the lookup is keyed on it.
+        model_lookup = model_data.each_with_object({}) { |m, h| h[m[:name].demodulize] = m }
 
         SourceScan.each(root, kind: "app/controllers").each do |record|
           analyze_controller_n_plus_one(record.source, record.file, model_lookup, view_contents, risks)
@@ -151,7 +157,7 @@ module RailsAiContext
               risk = classify_n_plus_one_risk(full_chain, action_body, assoc_name)
 
               risks << {
-                model: model_name,
+                model: model[:name],
                 association: assoc_name,
                 controller: controller_path,
                 action: action_name,
@@ -273,7 +279,7 @@ module RailsAiContext
 
             has_count_column = table[:columns].any? { |c| c[:name] == count_col }
             has_counter_cache = assoc[:options]&.include?("counter_cache")
-            belongs_to_model = model_data.find { |m| m[:name] == assoc_name.classify }
+            belongs_to_model = model_data.find { |m| m[:name].demodulize == assoc_name.classify }
             belongs_to_has_counter = belongs_to_model&.dig(:belongs_to)&.any? { |b|
               b[:options]&.include?("counter_cache")
             }
@@ -284,7 +290,8 @@ module RailsAiContext
                 model: model[:name],
                 association: assoc_name,
                 column: count_col,
-                suggestion: "Add counter_cache: true to belongs_to :#{model[:name].underscore} in #{assoc_name.classify}"
+                suggestion: "Add counter_cache: true to belongs_to " \
+                            ":#{model[:name].demodulize.underscore} in #{assoc_name.classify}"
               }
             end
           end
@@ -377,7 +384,9 @@ module RailsAiContext
             associations: Listeners::AssociationsListener
           })
 
-          class_name = active_record_class_name(ast[:classes]) or next
+          next unless active_record_class_name(ast[:classes])
+
+          class_name = declared_name(record)
           has_many_assocs = ast[:associations]
             .select { |a| a[:type] == "has_many" }
             .map { |a| a[:name].to_s }

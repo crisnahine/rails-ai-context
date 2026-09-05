@@ -125,6 +125,52 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
 
         expect(missing).to contain_exactly(a_hash_including(association: "tokens"))
       end
+
+      # The row is keyed by the constant the app has, or the same tool then
+      # answers "Model 'Invoice' not found" for a row it just printed.
+      it "names a model nested in a module body by its qualified constant" do
+        missing = counter_cache_for(
+          File.join("billing", "invoice.rb"),
+          "module Billing\n  class Invoice < ApplicationRecord\n    has_many :tokens\n  end\nend\n",
+          "create_table \"invoices\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(
+          a_hash_including(model: "Billing::Invoice",
+                           suggestion: "Add counter_cache: true to belongs_to :invoice in Token")
+        )
+      end
+
+      it "finds the declared counter cache on a child nested in the same module body" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
+          File.write(File.join(dir, "app", "models", "billing", "invoice.rb"),
+                     "module Billing\n  class Invoice < ApplicationRecord\n    has_many :tokens\n  end\nend\n")
+          File.write(File.join(dir, "app", "models", "billing", "token.rb"),
+                     "module Billing\n  class Token < ApplicationRecord\n" \
+                     "    belongs_to :invoice, counter_cache: true\n  end\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"),
+                     "create_table \"invoices\" do |t|\n  t.integer \"tokens_count\"\nend\n")
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+
+          expect(missing).to be_empty
+        end
+      end
+    end
+
+    it "names an eager-load candidate nested in a module body by its qualified constant" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
+        File.write(File.join(dir, "app", "models", "billing", "invoice.rb"),
+                   "module Billing\n  class Invoice < ApplicationRecord\n" \
+                   "    has_many :tokens\n    has_many :notes\n  end\nend\n")
+
+        candidates = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:eager_load_candidates]
+
+        expect(candidates).to contain_exactly(a_hash_including(model: "Billing::Invoice"))
+      end
     end
 
     it "detects Model.all in controllers" do
