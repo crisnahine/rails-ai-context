@@ -255,6 +255,66 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
     end
   end
 
+  # `--help` promises "the ambient RAILS_ENV or development", and apps read
+  # RAILS_ENV in config/boot.rb before anything else runs. Only the flag set
+  # it, so an app that insists on the variable never saw the documented
+  # default.
+  describe "an app that needs RAILS_ENV set" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    def build_app(dir, environment_rb)
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "environment.rb"), environment_rb)
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+    end
+
+    it "applies the documented default when the caller set nothing" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, <<~RUBY)
+          File.write(File.join(__dir__, "..", "seen_env.txt"), ENV["RAILS_ENV"].to_s)
+          raise "boot needs a database"
+        RUBY
+
+        out = `cd #{dir} && env -u RAILS_ENV ruby -I #{lib} #{exe} tool model_details 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(File.read(File.join(dir, "seen_env.txt"))).to eq("development")
+        expect(out).to include("Widget")
+      end
+    end
+
+    it "still honours an explicit --environment" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, <<~RUBY)
+          File.write(File.join(__dir__, "..", "seen_env.txt"), ENV["RAILS_ENV"].to_s)
+          raise "boot needs a database"
+        RUBY
+
+        `cd #{dir} && env -u RAILS_ENV ruby -I #{lib} #{exe} tool model_details --environment test 2>&1`
+
+        expect(File.read(File.join(dir, "seen_env.txt"))).to eq("test")
+      end
+    end
+
+    # An app that calls exit/abort in an initializer is a fifth boot-failure
+    # mode. The binary owns this process, and it has a static tier to answer
+    # from, so the exit is a boot failure here rather than a process decision.
+    it "serves the static tier when the app aborts during boot" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, %(abort "The RAILS_ENV environment variable is not set."\n))
+
+        out = `cd #{dir} && ruby -I #{lib} #{exe} tool model_details 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("The RAILS_ENV environment variable is not set.")
+        expect(out).to include("static tier active")
+        expect(out).to include("Widget")
+      end
+    end
+  end
+
   it "documents the static-tier flags" do
     help = `ruby #{File.expand_path('../exe/rails-ai-context', __dir__)} help serve 2>&1`
     expect(help).to include("--no-boot")

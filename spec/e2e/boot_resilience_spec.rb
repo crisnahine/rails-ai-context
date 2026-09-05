@@ -141,6 +141,22 @@ RSpec.describe "E2E: boot resilience", type: :e2e do
     end
   end
 
+  # A real one: Mastodon's config/boot.rb aborts when RAILS_ENV is unset. The
+  # binary owns this process and has a static tier to answer from, so an
+  # initializer's exit is a boot failure here, not a decision about the app's
+  # own process.
+  describe "app that exits during boot" do
+    it "falls back to static analysis on an aborting initializer" do
+      with_initializer("zz_abort.rb", %(abort "MISSING_CREDENTIALS: set SECRET_KEY_BASE"\n)) do
+        result = @cli.cli_tool("schema")
+        expect(result.exit_status).to eq(0), result.to_s
+        expect(result.stderr).to include("MISSING_CREDENTIALS")
+        expect(result.stderr).to include("static tier active")
+        expect(result.stdout).not_to be_empty
+      end
+    end
+  end
+
   describe "app that prints to stdout during boot" do
     it "keeps the stdio MCP handshake parseable" do
       with_initializer("zz_chatty.rb", %(puts "BOOT NOISE that must not reach stdout"\n)) do
