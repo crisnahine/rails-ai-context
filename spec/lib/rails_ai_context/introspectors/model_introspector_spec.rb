@@ -1440,6 +1440,68 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # A base the walk cannot read costs that base's own declarations. Without
+    # a guard the read escaped the walk and the child's whole entry - table,
+    # associations, validations, enums, callbacks, scopes - became one error.
+    it "keeps the child's own answer when the STI base is over the size cap" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        base_path = File.join(dir, "app", "models", "post.rb")
+        child_path = File.join(dir, "app", "models", "article.rb")
+        File.write(base_path, "class Post < ApplicationRecord\n  scope :published, -> { all }\n" \
+                              "  # #{"x" * 400}\nend\n")
+        File.write(child_path, "class Article < Post\n  scope :recent, -> { all }\nend\n")
+
+        base = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Post"
+        end
+        child = Class.new(base) do
+          def self.name = "Article"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        paths = { "Post" => base_path, "Article" => child_path }
+        allow(introspector).to receive(:model_source_path) { |model| paths[model.name] }
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(200)
+
+        details = introspector.send(:extract_model_details, child)
+
+        expect(details[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
+        expect(details[:concerns_unread]).to include("Post")
+      end
+    end
+
+    it "keeps the child's own answer when the STI base cannot be read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        base_path = File.join(dir, "app", "models", "post.rb")
+        child_path = File.join(dir, "app", "models", "article.rb")
+        File.write(base_path, "class Post < ApplicationRecord\n  scope :published, -> { all }\nend\n")
+        File.write(child_path, "class Article < Post\n  scope :recent, -> { all }\nend\n")
+        File.chmod(0o000, base_path)
+
+        base = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Post"
+        end
+        child = Class.new(base) do
+          def self.name = "Article"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        paths = { "Post" => base_path, "Article" => child_path }
+        allow(introspector).to receive(:model_source_path) { |model| paths[model.name] }
+
+        details = introspector.send(:extract_model_details, child)
+
+        expect(details[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
+        expect(details[:concerns_unread]).to include("Post")
+      ensure
+        File.chmod(0o644, base_path) if base_path && File.exist?(base_path)
+      end
+    end
+
     it "reads the shared base once for two children" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))

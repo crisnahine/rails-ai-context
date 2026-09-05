@@ -857,12 +857,30 @@ module RailsAiContext
       # first, so the closer declaration wins over the further one.
       def merge_sti_macros(data, unread, bases)
         Array(bases).each do |name, path|
-          own = (@concern_cache[path] ||= SourceIntrospector.call(path))
+          own = sti_base_source(path)
+          if own.nil?
+            unread |= [ name ]
+            next
+          end
+
           base, base_unread = merge_concern_macros(own, name)
           data = merge_inherited(data, base.slice(*MERGED_CONCERN_KEYS))
           unread |= base_unread
         end
         [ data, unread ]
+      end
+
+      # A base too big or unreadable costs its own declarations, not the
+      # child's whole entry. The rescue still earns its place with the size
+      # check in front of it: max_file_size can be configured above
+      # AstCache::MAX_PARSE_SIZE, and the parse raises on its own limit.
+      def sti_base_source(path)
+        return nil unless path && File.exist?(path)
+        return nil if File.size(path) > RailsAiContext.configuration.max_file_size
+
+        @concern_cache[path] ||= SourceIntrospector.call(path)
+      rescue StandardError
+        nil
       end
 
       def merge_inherited(mine, inherited)
