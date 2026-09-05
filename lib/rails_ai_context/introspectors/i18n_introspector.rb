@@ -15,7 +15,7 @@ module RailsAiContext
       # Anchored past the line start so a commented example does not win:
       # GitLab ships `# config.i18n.default_locale = :de` and every coverage
       # line then measured an English app against German.
-      DEFAULT_LOCALE_ASSIGNMENT = /^[^\S\n]*(?:config\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
+      DEFAULT_LOCALE_ASSIGNMENT = /^[^\S\n]*(config\.i18n|I18n)\.default_locale\s*=\s*[:"']([\w-]+)/
 
       # `config.i18n.available_locales`, and only that: the listener strips the
       # root it matched, so a bare `config.available_locales` is any gem's own
@@ -99,25 +99,46 @@ module RailsAiContext
       end
 
       # Rails' own default is :en, so "en" is the right answer when the app
-      # never says otherwise - not a guess. Rails hands app.config.i18n to
-      # I18n once, after every initializer has run, so the last assignment
-      # executed is the one that lands.
+      # never says otherwise - not a guess.
       def default_locale_from_config
-        found = nil
-
-        config_candidate_files.each do |path|
+        entries = config_candidate_files.flat_map do |path, ambiguous|
           content = RailsAiContext::SafeFile.read(path)
-          # The last assignment, here and across the files, for the same
-          # reason configured_available_locales keeps the last one.
-          match = content&.scan(DEFAULT_LOCALE_ASSIGNMENT)&.last
-          found = match.first if match
+          (content&.scan(DEFAULT_LOCALE_ASSIGNMENT) || []).map do |spelling, locale|
+            { spelling: spelling_of(spelling), ambiguous: ambiguous, value: locale }
+          end
         end
-        found || "en"
+
+        resolve_assignments(entries) || "en"
+      end
+
+      def spelling_of(prefix)
+        prefix.start_with?("config") ? :config : :i18n
+      end
+
+      # I18n::Railtie buffers app.config.i18n and applies it from
+      # after_initialize, once every initializer has run, so a `config.i18n`
+      # assignment lands on top of a bare `I18n` one wherever either sits.
+      # Within one spelling the last assignment executed is the one that lands.
+      def resolve_assignments(entries)
+        by_spelling = entries.group_by { |entry| entry[:spelling] }
+        group = [ :config, :i18n ].lazy.map { |spelling| decided(by_spelling[spelling] || []) }.find(&:any?)
+        group&.last&.fetch(:value)
+      end
+
+      # Environment files read only because the running one is absent are
+      # alternatives, not a sequence. When they disagree, which one runs
+      # decides and source cannot say, so they drop out rather than let
+      # filename order pick.
+      def decided(entries)
+        ambiguous = entries.select { |entry| entry[:ambiguous] }
+        return entries if ambiguous.map { |entry| entry[:value] }.uniq.size <= 1
+
+        entries - ambiguous
       end
 
       # The config files Rails runs, in the order it runs them: application.rb,
-      # then the environment file, then the initializers. Both readers walk
-      # this list and keep the last assignment they find.
+      # then the environment file, then the initializers. Each pairs with
+      # whether it is one of several environments read as a fallback.
       def config_candidate_files
         # Rails runs one environment file, so another environment's assignment
         # says nothing about this one. The rest are read only when the running
@@ -125,32 +146,32 @@ module RailsAiContext
         env = ENV["RAILS_ENV"] || "development"
         all_environments = Dir.glob(File.join(root, "config", "environments", "*.rb")).sort
         running = all_environments.select { |path| File.basename(path, ".rb") == env }
-        environments = running.any? ? running : all_environments
+        environments = running.any? ? running.map { |path| [ path, false ] }
+                                    : all_environments.map { |path| [ path, true ] }
 
-        ([ File.join(root, "config", "application.rb") ] + environments +
-          Dir.glob(File.join(root, "config", "initializers", "*.rb")).sort).select { |path| File.exist?(path) }
+        ([ [ File.join(root, "config", "application.rb"), false ] ] + environments +
+          Dir.glob(File.join(root, "config", "initializers", "*.rb")).sort.map { |path| [ path, false ] })
+          .select { |path, _ambiguous| File.exist?(path) }
       end
 
-      # The list the app enables, or nil when it never says. Rails hands
-      # app.config.i18n to I18n once, after every initializer has run, so the
-      # last assignment executed is the one that lands.
+      # The list the app enables, or nil when it never says. Resolved the same
+      # way the default locale is: the buffered config.i18n spelling first,
+      # last assignment within a spelling.
       def configured_available_locales
-        found = nil
-
-        config_candidate_files.each do |path|
+        entries = config_candidate_files.flat_map do |path, ambiguous|
           # Reading first also keeps an unreadable file away from the parser.
           source = RailsAiContext::SafeFile.read(path)
-          next unless source&.include?("available_locales")
+          next [] unless source&.include?("available_locales")
 
           # Every assignment, not only the readable ones: a literal a later
           # computed assignment overwrites is not the list Rails hands I18n,
           # so it falls through to the locale files and says so.
-          available_locales_assignments(path).each do |entry|
-            found = literal_locale_list(entry[:value])
+          available_locales_assignments(path).map do |entry|
+            { spelling: entry[:spelling], ambiguous: ambiguous, value: literal_locale_list(entry[:value]) }
           end
         end
 
-        found
+        resolve_assignments(entries)
       end
 
       def available_locales_assignments(path)
@@ -159,8 +180,10 @@ module RailsAiContext
           i18n:   -> { Listeners::ConfigAssignmentListener.new("I18n") }
         })
 
-        entries = walked[:config].select { |entry| CONFIG_AVAILABLE_LOCALES.include?(entry[:path]) } +
+        entries = walked[:config].select { |entry| CONFIG_AVAILABLE_LOCALES.include?(entry[:path]) }
+                                 .map { |entry| entry.merge(spelling: :config) } +
                   walked[:i18n].select { |entry| I18N_AVAILABLE_LOCALES.include?(entry[:path]) }
+                               .map { |entry| entry.merge(spelling: :i18n) }
         entries.select { |entry| entry[:assignment] }.sort_by { |entry| entry[:location] }
       # One initializer this introspector cannot parse must not take the whole
       # I18n answer down through static_call's rescue.
