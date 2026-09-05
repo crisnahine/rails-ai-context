@@ -111,7 +111,7 @@ module RailsAiContext
         view_contents = preload_view_contents
         # The scan captures a single word, and a controller inside the model's
         # own namespace writes the bare name, so the lookup is keyed on it.
-        model_lookup = model_data.each_with_object({}) { |m, h| h[m[:name].demodulize] = m }
+        model_lookup = model_data.group_by { |m| m[:name].demodulize }
 
         SourceScan.each(root, kind: "app/controllers").each do |record|
           analyze_controller_n_plus_one(record.source, record.file, model_lookup, view_contents, risks)
@@ -142,7 +142,7 @@ module RailsAiContext
             chain = Regexp.last_match[0]
             query_re = /\.(#{QUERY_METHODS.map { |m| Regexp.escape(m) }.join("|")})\b/
             next unless chain.match?(query_re)
-            model = model_lookup[model_name]
+            model = resolve_bare_model(model_lookup[model_name], controller_path)
             next unless model
 
             full_chain = extract_query_chain(action_body, ivar)
@@ -167,6 +167,30 @@ module RailsAiContext
             end
           end
         end
+      end
+
+      # The scan captures a bare word, and two models can demodulize to it.
+      # Rails would resolve it against the controller's own lexical scope,
+      # outermost module last, so the file's directory breaks the tie. When
+      # nothing there picks one, the row would name a model at random, so it
+      # is not written at all.
+      def resolve_bare_model(candidates, controller_path)
+        candidates = Array(candidates)
+        return candidates.first if candidates.size <= 1
+
+        controller_scopes(controller_path).each do |scope|
+          match = candidates.find { |m| m[:name].deconstantize == scope }
+          return match if match
+        end
+        nil
+      end
+
+      # "app/controllers/admin/billing/invoices_controller.rb" reads as
+      # ["Admin::Billing", "Admin", ""], the lexical scopes of the class in it.
+      def controller_scopes(controller_path)
+        parts = File.dirname(controller_path.to_s).split(File::SEPARATOR)
+        parts = parts.drop(2) if parts.first(2) == %w[app controllers]
+        parts.length.downto(0).map { |n| parts.first(n).join("/").camelize }
       end
 
       # Extract public action methods from controller source.
@@ -291,7 +315,8 @@ module RailsAiContext
                 association: assoc_name,
                 column: count_col,
                 suggestion: "Add counter_cache: true to belongs_to " \
-                            ":#{model[:name].demodulize.underscore} in #{assoc_name.classify}"
+                            ":#{model[:name].demodulize.underscore} in " \
+                            "#{belongs_to_model&.dig(:name) || assoc_name.classify}"
               }
             end
           end

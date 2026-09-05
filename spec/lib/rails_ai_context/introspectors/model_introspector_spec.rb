@@ -1440,6 +1440,68 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # A base the walk cannot read costs that base's own declarations. Without
+    # a guard the read escaped the walk and the child's whole entry - table,
+    # associations, validations, enums, callbacks, scopes - became one error.
+    it "keeps the child's own answer when the STI base is over the size cap" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        base_path = File.join(dir, "app", "models", "post.rb")
+        child_path = File.join(dir, "app", "models", "article.rb")
+        File.write(base_path, "class Post < ApplicationRecord\n  scope :published, -> { all }\n" \
+                              "  # #{"x" * 400}\nend\n")
+        File.write(child_path, "class Article < Post\n  scope :recent, -> { all }\nend\n")
+
+        base = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Post"
+        end
+        child = Class.new(base) do
+          def self.name = "Article"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        paths = { "Post" => base_path, "Article" => child_path }
+        allow(introspector).to receive(:model_source_path) { |model| paths[model.name] }
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(200)
+
+        details = introspector.send(:extract_model_details, child)
+
+        expect(details[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
+        expect(details[:concerns_unread]).to include("Post")
+      end
+    end
+
+    it "keeps the child's own answer when the STI base cannot be read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        base_path = File.join(dir, "app", "models", "post.rb")
+        child_path = File.join(dir, "app", "models", "article.rb")
+        File.write(base_path, "class Post < ApplicationRecord\n  scope :published, -> { all }\nend\n")
+        File.write(child_path, "class Article < Post\n  scope :recent, -> { all }\nend\n")
+        File.chmod(0o000, base_path)
+
+        base = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Post"
+        end
+        child = Class.new(base) do
+          def self.name = "Article"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        paths = { "Post" => base_path, "Article" => child_path }
+        allow(introspector).to receive(:model_source_path) { |model| paths[model.name] }
+
+        details = introspector.send(:extract_model_details, child)
+
+        expect(details[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
+        expect(details[:concerns_unread]).to include("Post")
+      ensure
+        File.chmod(0o644, base_path) if base_path && File.exist?(base_path)
+      end
+    end
+
     it "reads the shared base once for two children" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
@@ -1466,6 +1528,89 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         expect(RailsAiContext::Introspectors::SourceIntrospector)
           .to receive(:call).with(base_path).once.and_call_original
         children.each { |child| introspector.send(:extract_model_details, child) }
+      end
+    end
+  end
+
+  describe "#extract_model_details over a file the tier cannot read" do
+    def details_for(model_source, max_file_size: nil, unreadable: false)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        path = File.join(dir, "app", "models", "post.rb")
+        File.write(path, model_source)
+        File.chmod(0o000, path) if unreadable
+
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          def self.name = "Post"
+        end
+
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:model_source_path).and_return(path)
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(max_file_size) if max_file_size
+
+        begin
+          introspector.send(:extract_model_details, model)
+        ensure
+          File.chmod(0o644, path)
+        end
+      end
+    end
+
+    # The constants walk parses the file a second time, on its own, so a file
+    # the source walk already declared unreadable still reached it - and the
+    # raise took the model's whole entry with it.
+    it "still answers for a model whose own file cannot be read" do
+      details = details_for("class Post < ApplicationRecord\n  ROLES = %w[a b]\nend\n", unreadable: true)
+
+      expect(details[:table_name]).to eq("posts")
+      expect(details).not_to have_key(:constants)
+    end
+
+    it "does not read constants out of a file it declared over the size cap" do
+      source = "class Post < ApplicationRecord\n  ROLES = %w[a b]\n  # #{"x" * 400}\nend\n"
+      details = details_for(source, max_file_size: 200)
+
+      expect(details[:table_name]).to eq("posts")
+      expect(details).not_to have_key(:constants)
+    end
+  end
+
+  describe "confidence on a static entry" do
+    # The entry says [STATIC] while its own records claimed [VERIFIED], so one
+    # answer contradicted itself: the renderer prints the scope tag next to the
+    # header tag, and --format json hands every one of these keys through.
+    it "does not let a record claim more than the tier that carries it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            belongs_to :user
+            validates :title, presence: true
+            scope :published, -> { all }
+            def summary = title
+          end
+        RUBY
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post[:confidence]).to eq(RailsAiContext::Confidence::STATIC)
+        %i[associations validations scopes methods].each do |key|
+          expect(post[key].map { |r| r[:confidence] })
+            .to all(eq(RailsAiContext::Confidence::STATIC)), "#{key} still claims more than the entry"
+        end
+      end
+    end
+
+    it "keeps a record the parser could not resolve at its own lower mark" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"),
+                   "class Post < ApplicationRecord\n  scope :recent, SOME_LAMBDA\nend\n")
+
+        post = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+        expect(post[:scopes].map { |s| s[:confidence] }).to eq([ RailsAiContext::Confidence::INFERRED ])
       end
     end
   end

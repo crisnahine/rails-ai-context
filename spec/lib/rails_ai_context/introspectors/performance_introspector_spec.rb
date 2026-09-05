@@ -141,6 +141,28 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         )
       end
 
+      # The suggestion has to name the class the app can look up, or it sends
+      # the reader to a constant a namespaced app does not have.
+      it "names the resolved belongs_to side by its qualified constant" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
+          File.write(File.join(dir, "app", "models", "billing", "invoice.rb"),
+                     "module Billing\n  class Invoice < ApplicationRecord\n    has_many :tokens\n  end\nend\n")
+          File.write(File.join(dir, "app", "models", "billing", "token.rb"),
+                     "module Billing\n  class Token < ApplicationRecord\n    belongs_to :invoice\n  end\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"),
+                     "create_table \"invoices\" do |t|\n  t.integer \"tokens_count\"\nend\n")
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+
+          expect(missing).to contain_exactly(
+            a_hash_including(model: "Billing::Invoice",
+                             suggestion: "Add counter_cache: true to belongs_to :invoice in Billing::Token")
+          )
+        end
+      end
+
       it "finds the declared counter cache on a child nested in the same module body" do
         Dir.mktmpdir do |dir|
           FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
@@ -157,6 +179,53 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
 
           expect(missing).to be_empty
         end
+      end
+    end
+
+    # Two models can demodulize to one word. The bare key is what the scan
+    # captures, so the controller's own namespace has to break the tie, or the
+    # row names whichever model happened to be written last.
+    describe "two models sharing one demodulized name" do
+      def n1_for(controller_path, controller_source)
+        Dir.mktmpdir do |dir|
+          %w[billing legacy].each do |ns|
+            FileUtils.mkdir_p(File.join(dir, "app", "models", ns))
+            File.write(File.join(dir, "app", "models", ns, "invoice.rb"),
+                       "module #{ns.capitalize}\n  class Invoice < ApplicationRecord\n" \
+                       "    has_many :lines\n  end\nend\n")
+          end
+          FileUtils.mkdir_p(File.dirname(File.join(dir, "app", "controllers", controller_path)))
+          File.write(File.join(dir, "app", "controllers", controller_path), controller_source)
+          described_class.new(RailsAiContext::StaticApp.new(dir)).call[:n_plus_one_risks]
+        end
+      end
+
+      it "takes the model in the controller's own namespace" do
+        risks = n1_for(File.join("billing", "invoices_controller.rb"), <<~RUBY)
+          module Billing
+            class InvoicesController < ApplicationController
+              def index
+                @invoices = Invoice.all
+                @invoices.each { |invoice| logger.info(invoice.lines.size) }
+              end
+            end
+          end
+        RUBY
+
+        expect(risks).to contain_exactly(a_hash_including(model: "Billing::Invoice", association: "lines"))
+      end
+
+      it "leaves the row out when no namespace picks one of them" do
+        risks = n1_for("invoices_controller.rb", <<~RUBY)
+          class InvoicesController < ApplicationController
+            def index
+              @invoices = Invoice.all
+              @invoices.each { |invoice| logger.info(invoice.lines.size) }
+            end
+          end
+        RUBY
+
+        expect(risks).to be_empty
       end
     end
 

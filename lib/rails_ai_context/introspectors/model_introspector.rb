@@ -17,9 +17,10 @@ module RailsAiContext
       def initialize(app)
         @app    = app
         @config = RailsAiContext.configuration
-        # One introspection per instance, so a concern shared by 100 models is
-        # walked once. Anything longer-lived would outlast the files it read.
-        @concern_cache = {}
+        # One introspection per file per instance, so a concern or an STI base
+        # shared by 100 models is walked once. Anything longer-lived would
+        # outlast the files it read.
+        @source_cache = {}
       end
 
       # @return [Hash] model metadata keyed by model name
@@ -624,12 +625,14 @@ module RailsAiContext
       # Finds ConstantWriteNode where the value is an ArrayNode
       # (covers %w[], %i[], and literal array forms).
       def extract_constants_from_source(source_path)
-        return nil unless source_path && File.exist?(source_path)
+        return nil unless readable_source?(source_path)
 
         parse_result = AstCache.parse(source_path)
         constants = []
         find_constant_arrays(parse_result.value, constants)
         constants.empty? ? nil : constants
+      rescue StandardError
+        nil
       end
 
       def find_constant_arrays(node, constants)
@@ -813,7 +816,7 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(own[:mixins]),
-          concern_callbacks: concern_callbacks(data[:callbacks], confidence: Confidence::STATIC),
+          concern_callbacks: concern_callbacks(data[:callbacks]),
           concerns_unread: (unread if unread.any?),
           macros: data[:macros],
           methods: ActionResolver.own_methods(own[:methods], class_name),
@@ -822,7 +825,7 @@ module RailsAiContext
         }
         details.merge!(extract_macros_from_ast(data, path))
         details.merge!(extract_detailed_macros_from_ast(data))
-        details.compact
+        downgrade_records(details.compact)
       end
 
       # Both tiers collect all six. The booted tier reads five of them off the
@@ -843,7 +846,7 @@ module RailsAiContext
         collected, unread = ConcernMacros.collect(
           app.root.to_s, own[:mixins] || [],
           keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name,
-          cache: @concern_cache
+          cache: @source_cache
         )
         return [ own, unread ] if collected.empty?
 
@@ -857,12 +860,40 @@ module RailsAiContext
       # first, so the closer declaration wins over the further one.
       def merge_sti_macros(data, unread, bases)
         Array(bases).each do |name, path|
-          own = (@concern_cache[path] ||= SourceIntrospector.call(path))
+          own = sti_base_source(path)
+          if own.nil?
+            unread |= [ name ]
+            next
+          end
+
           base, base_unread = merge_concern_macros(own, name)
           data = merge_inherited(data, base.slice(*MERGED_CONCERN_KEYS))
           unread |= base_unread
         end
         [ data, unread ]
+      end
+
+      # A base too big or unreadable costs its own declarations, not the
+      # child's whole entry. The rescue still earns its place with the size
+      # check in front of it: max_file_size can be configured above
+      # AstCache::MAX_PARSE_SIZE, and the parse raises on its own limit.
+      def sti_base_source(path)
+        return nil unless readable_source?(path)
+
+        @source_cache[path] ||= SourceIntrospector.call(path)
+      rescue StandardError
+        nil
+      end
+
+      # The size the whole introspector agrees a file is worth reading. Both
+      # tiers ask this before the first walk, so a second walk over the same
+      # file has to ask it too or the two disagree.
+      def readable_source?(path)
+        return false unless path && File.exist?(path)
+
+        File.size(path) <= RailsAiContext.configuration.max_file_size
+      rescue SystemCallError
+        false
       end
 
       def merge_inherited(mine, inherited)
@@ -878,12 +909,22 @@ module RailsAiContext
         Array(entries).uniq { |entry| entry.is_a?(Hash) ? yield(entry) : entry }
       end
 
-      # A record cannot claim more than the tier that carries it, so the
-      # static payload downgrades what the listener verified in the file.
-      def concern_callbacks(callbacks, confidence: nil)
+      def concern_callbacks(callbacks)
         found = Array(callbacks).select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
-        found = found.map { |cb| cb[:confidence] == Confidence::VERIFIED ? cb.merge(confidence: confidence) : cb } if confidence
         found if found.any?
+      end
+
+      # A record cannot claim more than the tier that carries it: nothing in a
+      # static entry is runtime-confirmed, whatever the listener read off the
+      # file. A record the parser could not resolve keeps its own lower mark.
+      def downgrade_records(details)
+        details.transform_values do |value|
+          next value unless value.is_a?(Array)
+
+          value.map do |entry|
+            entry.is_a?(Hash) && entry[:confidence] == Confidence::VERIFIED ? entry.merge(confidence: Confidence::STATIC) : entry
+          end
+        end
       end
 
       # `defined_enums` keys both levels with Strings; the listener uses
@@ -986,7 +1027,7 @@ module RailsAiContext
         }
         collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
         details[:collection] = collection if collection
-        details
+        downgrade_records(details)
       end
     end
   end
