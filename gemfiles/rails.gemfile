@@ -31,4 +31,12 @@ group :development, :test do
   # relies on Logger being loaded at boot, so pull it in explicitly; harmless
   # on 7.1+, which requires logger itself.
   gem "logger"
+
+  # json 3.0 dropped the `quirks_mode` keyword, and ActiveSupport passes it on
+  # every `to_json` through 8.0, so those lines cannot encode against it at
+  # all. 8.1 dropped the keyword and resolves json 3 cleanly, which is why the
+  # pin is conditional: the newest line still tests what an app will actually
+  # have. This binds the test bundle only - what an app resolves is between its
+  # own Rails and json.
+  gem "json", "< 3" if Gem::Version.new(rails_version) < Gem::Version.new("8.1")
 end

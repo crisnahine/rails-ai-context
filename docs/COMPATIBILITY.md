@@ -21,6 +21,14 @@ document is aspirational.
 - **thor:** `>= 1.0, < 3.0`
 - **prism:** `>= 1.4, < 2.0` (a CI leg pins the floor exactly and runs the suite against it)
 - **concurrent-ruby:** `>= 1.2, < 3.0`
+- **json:** unconstrained by this gem, but `json >= 3.0` and Rails 7.0 to 8.0 do
+  not work together, whatever gem is in the middle. `json 3.0` removed the
+  `quirks_mode` keyword and `ActiveSupport::JSON::Encoding` passes it on every
+  `to_json` through 8.0, so the pair raises `ArgumentError: unknown keyword:
+  quirks_mode` inside Rails itself. Rails 8.1 dropped the keyword and resolves
+  json 3 cleanly. The test bundle pins `json < 3` below 8.1 for that reason; an
+  app on those lines has the same choice to make, and it is between its own
+  Rails and json rather than anything here.
 
 The gemspec's `railties` bound is wider than the CI matrix: point releases inside
 7.0-8.1 and any future 8.x minor satisfy Bundler's constraint without a gem
