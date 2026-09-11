@@ -1833,6 +1833,38 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # The root `ApplicationRecord` is in `excluded_models` by default, so every
+    # example that writes one passes whether or not the abstract check reads
+    # `primary_abstract_class`. A namespaced base is in no such list: it is the
+    # one that says the check works. GitLab has Ci::ApplicationRecord.
+    it "keeps a namespaced base out of the listing on what its source says" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "ci"))
+        File.write(File.join(dir, "app", "models", "application_record.rb"),
+                   "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n")
+        File.write(File.join(dir, "app", "models", "ci", "application_record.rb"), <<~RUBY)
+          module Ci
+            class ApplicationRecord < ::ApplicationRecord
+              primary_abstract_class
+              scope :for_ci, -> { all }
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "ci", "build.rb"), <<~RUBY)
+          module Ci
+            class Build < Ci::ApplicationRecord
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to eq([ "Ci::Build" ])
+        expect(result["Ci::Build"][:table_name]).to eq("builds")
+        expect(result["Ci::Build"][:scopes].map { |s| s[:name] }).to eq([ "for_ci" ])
+      end
+    end
+
     # A name rule stood in for a fact the source states. The app's own base
     # says `primary_abstract_class`, and a concrete model whose name happens to
     # end the same way is still a model.
@@ -1855,7 +1887,10 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
-    it "answers the same concerns on both tiers" do
+    # The booted concern list comes off the ancestor chain whatever the walk
+    # does, so it is the scopes and the callbacks that this pins on that side;
+    # the static concern list is the walk's own answer.
+    it "answers the base's scopes and callbacks on both tiers" do
       Dir.mktmpdir do |dir|
         analytics_app(dir)
         stub_const("Trackable", Module.new)
@@ -1876,9 +1911,6 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         expect(booted[:concerns]).to include("Trackable")
         expect(static[:concerns]).to eq([ "Trackable" ])
-        # Both sides answering nothing is the shape this example exists to
-        # catch, so each is named rather than only compared.
-        expect(booted[:concerns] & static[:concerns]).to eq([ "Trackable" ])
         expect(booted[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
         expect(booted[:callbacks]["before_save"]).to contain_exactly("stamp", "touch_tracker")
       end
