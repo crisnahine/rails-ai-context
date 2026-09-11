@@ -84,9 +84,14 @@ module RailsAiContext
             next
           end
 
-          # An abstract base is dropped from the result but not from the walk:
-          # a per-connection base like Analytics::Record is how its models
-          # reach ApplicationRecord.
+          # A base is dropped from the result but not from the walk: it is not
+          # a model of the app, and it is how its children reach what it
+          # declares. `primary_abstract_class` is why the app's own base needs
+          # its own line - the abstract check reads the assignment form.
+          next if model_base?(class_name)
+          # Hidden from the listing, kept in the walk: its children still
+          # inherit its table and its declarations.
+          next if config.excluded_models.include?(class_name)
           next if candidate[:abstract]
           next unless model_class?(class_name, candidates)
 
@@ -96,7 +101,7 @@ module RailsAiContext
           table = resolve_table_name(class_name, candidates)
           result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
                                                     table_name: table,
-                                                    inherited_from: sti_bases(class_name, candidates),
+                                                    inherited_from: declaring_bases(class_name, candidates),
                                                     sti: static_sti_info(class_name, sti_parents))
         rescue => e
           # What the booted tier does with a model that raises: the entry says
@@ -156,8 +161,6 @@ module RailsAiContext
       # is not there. The count is an answer too.
       def static_candidates
         SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each_with_object({}) do |record, found|
-          next if record.path_name == "ApplicationRecord"
-
           begin
             source = model_source(record.path) if File.size(record.path) <= RailsAiContext.configuration.max_file_size
             if source.nil?
@@ -170,7 +173,6 @@ module RailsAiContext
             declarations = DeclaredConstant.declarations(source)
             class_name = declarations.map(&:name).find { |name| name.casecmp?(record.path_name) } || record.path_name
             next if found.key?(class_name)
-            next if config.excluded_models.include?(class_name)
 
             # A module file declares no class and is kept for the prefix and
             # the suffix alone: they belong to the namespace, not to any one
@@ -285,9 +287,9 @@ module RailsAiContext
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
       end
 
-      # The STI bases above this class, nearest first. It inherits their
-      # macros the way it inherits their table, and a child that declares
-      # nothing answers for everything they declared.
+      # The STI bases above this class, nearest first: the ones it shares a
+      # table with. What it inherits declarations from is a longer chain,
+      # which `declaring_bases` answers.
       def sti_bases(class_name, candidates, seen = [])
         parent = sti_parent(class_name, candidates, seen)
         return [] unless parent && candidates.dig(parent, :path)
@@ -296,16 +298,39 @@ module RailsAiContext
           sti_bases(parent, candidates, seen + [ class_name ])
       end
 
-      # The same chain off the loaded class. An abstract base ends it: a child
-      # of one has a table of its own and inherits none of its macros through
-      # STI. A base whose file Ruby cannot place is skipped, not walked past,
+      # Every class this one inherits declarations from: the superclass chain
+      # up to the model base, abstract bases included. Rails runs what an
+      # abstract base declares in each of its children; only the table stops
+      # there, which is what `sti_parent` answers. A base whose file the walk
+      # could not name is skipped rather than ending the chain.
+      def declaring_bases(class_name, candidates, seen = [])
+        return [] if seen.include?(class_name)
+
+        parent = candidates.dig(class_name, :superclass)
+        return [] if parent.nil?
+
+        # It ends at ActiveRecord::Base, which the app has no file for. The
+        # app's own base does have one, and Rails runs what it declares in
+        # every model, so the walk does not stop on the name.
+        resolved = resolve_superclass(parent, class_name, candidates)
+        return [] unless resolved && candidates.key?(resolved)
+
+        inherited = declaring_bases(resolved, candidates, seen + [ class_name ])
+        path = candidates.dig(resolved, :path)
+        path ? [ [ resolved, path ] ] + inherited : inherited
+      end
+
+      # The same chain off the loaded class, abstract bases included: the
+      # ancestor list reflection answers carries what they declared, so a walk
+      # that stopped at one gave the two tiers different concerns for the same
+      # child. A base whose file Ruby cannot place is skipped, not walked past,
       # because its own base's macros do not reach the child any other way.
-      def booted_sti_bases(model)
+      def booted_declaring_bases(model)
         return [] unless defined?(ActiveRecord::Base)
 
         bases = []
         parent = model.superclass
-        while parent.is_a?(Class) && parent < ActiveRecord::Base && !parent.abstract_class?
+        while parent.is_a?(Class) && parent < ActiveRecord::Base
           path = parent.name && model_source_path(parent)
           bases << [ parent.name, path ] if path && File.exist?(path)
           parent = parent.superclass
@@ -422,11 +447,11 @@ module RailsAiContext
         own_source = introspect_source(model)
         # Reflection covers associations, validations and enums, but scopes,
         # macros and custom validates are read off the file - so the concerns
-        # and the STI bases are merged here too, or the static tier
+        # and the superclasses are merged here too, or the static tier
         # out-answers this one.
         source_data, unread, hidden = merge_concern_macros(own_source, model.name)
         source_data, unread, bases_unread, hidden =
-          merge_sti_macros(source_data, unread, hidden, booted_sti_bases(model))
+          merge_inherited_macros(source_data, unread, hidden, booted_declaring_bases(model))
 
         details = {
           table_name:       model.table_name,
@@ -898,7 +923,7 @@ module RailsAiContext
                                sti: nil)
         own = SourceIntrospector.call(path)
         data, unread, hidden = merge_concern_macros(own, class_name)
-        data, unread, bases_unread, hidden = merge_sti_macros(data, unread, hidden, inherited_from)
+        data, unread, bases_unread, hidden = merge_inherited_macros(data, unread, hidden, inherited_from)
         details = {
           confidence: Confidence::STATIC,
           table_name: table_name || TableName.stem(path),
@@ -967,7 +992,7 @@ module RailsAiContext
       # A base the walk could not read is answered apart from the unread
       # concerns: it is a class, not a concern, and a child with no concerns
       # never reaches the line that names them.
-      def merge_sti_macros(data, unread, hidden, bases)
+      def merge_inherited_macros(data, unread, hidden, bases)
         bases_unread = []
         Array(bases).each do |name, path|
           own = sti_base_source(path)
@@ -1015,6 +1040,10 @@ module RailsAiContext
         merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
         merged[:scopes] = dedup(merged[:scopes]) { |s| s[:name] }
         merged[:enums] = dedup(merged[:enums]) { |e| e[:name].to_s }
+        # `encrypts :secret` on a base and again on the child is one macro, and
+        # the consumers read it as a list of attributes. The concern tag is out
+        # of the key so the same declaration reached two ways collapses.
+        merged[:macros] = dedup(merged[:macros]) { |m| m.except(:from_concern) }
         merged
       end
 

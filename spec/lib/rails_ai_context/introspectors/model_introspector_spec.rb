@@ -1568,6 +1568,123 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # Rails runs what a superclass declares in every child, abstract or not. Only
+  # the table stops at an abstract base: a child of one has its own. The walk
+  # that merges declarations followed the table chain, so a per-connection base
+  # like `Analytics::Record` gave its children nothing, while the booted tier
+  # listed its concerns off the ancestor chain.
+  describe "what an abstract base declares" do
+    def analytics_app(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+      File.write(File.join(dir, "app", "models", "concerns", "trackable.rb"), <<~RUBY)
+        module Trackable
+          extend ActiveSupport::Concern
+
+          included do
+            has_many :audits
+            before_save :touch_tracker
+          end
+        end
+      RUBY
+      File.write(File.join(dir, "app", "models", "analytics_record.rb"), <<~RUBY)
+        class AnalyticsRecord < ApplicationRecord
+          self.abstract_class = true
+          include Trackable
+          scope :recent, -> { order(created_at: :desc) }
+          before_save :stamp
+          validates :name, presence: true
+        end
+      RUBY
+      File.write(File.join(dir, "app", "models", "page_view.rb"), "class PageView < AnalyticsRecord\nend\n")
+    end
+
+    it "reaches the child that declares nothing of its own" do
+      Dir.mktmpdir do |dir|
+        analytics_app(dir)
+
+        page_view = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["PageView"]
+
+        expect(page_view[:concerns]).to eq([ "Trackable" ])
+        expect(page_view[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
+        expect(page_view[:callbacks]["before_save"]).to contain_exactly("stamp", "touch_tracker")
+        expect(page_view[:associations].map { |a| a[:name] }).to eq([ "audits" ])
+        expect(page_view[:validations].map { |v| [ v[:kind], v[:attributes] ] }).to eq([ [ "presence", [ "name" ] ] ])
+      end
+    end
+
+    # The table is the one thing an abstract base does not pass down.
+    it "leaves the child its own table, and the base out of the listing" do
+      Dir.mktmpdir do |dir|
+        analytics_app(dir)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to eq([ "PageView" ])
+        expect(result["PageView"][:table_name]).to eq("page_views")
+        expect(result["PageView"]).not_to have_key(:sti)
+      end
+    end
+
+    # The app's own base is a superclass like any other: Mastodon's
+    # ApplicationRecord includes Remotable, and Rails runs it in all 111
+    # models. It stays out of the listing because it is not a model.
+    it "reaches the child from the app's own base" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "remotable.rb"), <<~RUBY)
+          module Remotable
+            extend ActiveSupport::Concern
+
+            included do
+              before_save :fetch_remote
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+            include Remotable
+            scope :ordered, -> { order(:id) }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to eq([ "Widget" ])
+        expect(result["Widget"][:concerns]).to eq([ "Remotable" ])
+        expect(result["Widget"][:scopes].map { |s| s[:name] }).to eq([ "ordered" ])
+        expect(result["Widget"][:callbacks]["before_save"]).to eq([ "fetch_remote" ])
+      end
+    end
+
+    it "answers the same concerns on both tiers" do
+      Dir.mktmpdir do |dir|
+        analytics_app(dir)
+        stub_const("Trackable", Module.new)
+        base = Class.new(ApplicationRecord) do
+          self.abstract_class = true
+          include Trackable
+          def self.name = "AnalyticsRecord"
+        end
+        stub_const("AnalyticsRecord", base)
+        child = Class.new(base) do
+          self.table_name = "posts"
+          def self.name = "PageView"
+        end
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        static = introspector.static_call["PageView"]
+        booted = introspector.send(:extract_model_details, child)
+
+        expect(booted[:concerns]).to include("Trackable")
+        expect(static[:concerns]).to eq([ "Trackable" ])
+        expect(booted[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
+        expect(booted[:callbacks]["before_save"]).to contain_exactly("stamp", "touch_tracker")
+      end
+    end
+  end
+
   # The child's record already carries what its base's concerns declared, so a
   # Concerns section that named none of them contradicted the Callbacks
   # section under it, which credits them by name.
@@ -1905,7 +2022,9 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         end
 
         introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
-        allow(introspector).to receive(:model_source_path).and_return(model_path)
+        # Named, not blanket: this is asked for every class in the chain, and a
+        # base answering the model's own file would merge it into itself.
+        allow(introspector).to receive(:model_source_path) { |klass| model_path if klass.name == "Widget" }
 
         details = introspector.send(:extract_model_details, model)
 

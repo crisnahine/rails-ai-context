@@ -506,7 +506,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
   # An STI child carries its base's declarations, so a base the walk could not
   # read is a gap the reader has to be told about even when the child includes
   # no concern at all.
-  describe "an STI base the tier could not read" do
+  describe "a base class the tier could not read" do
     before do
       described_class.reset_cache!
       allow(described_class).to receive(:cached_context).and_return(
@@ -519,7 +519,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
       text = described_class.call(model: "Article", detail: "full").content.first[:text]
 
-      expect(text).to include("[UNAVAILABLE] 1 STI base not read: Post")
+      expect(text).to include("[UNAVAILABLE] 1 base class not read: Post")
       expect(text).not_to include("## Concerns")
     end
 
@@ -529,7 +529,7 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       text = described_class.call(model: "Article", detail: "full").content.first[:text]
 
       expect(text).to include(
-        "[UNAVAILABLE] 1 STI base not read for scopes, callbacks and macros: Post"
+        "[UNAVAILABLE] 1 base class not read for scopes, callbacks and macros: Post"
       )
     end
   end

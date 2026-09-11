@@ -128,7 +128,7 @@ module RailsAiContext
         end
         lines = [ "# #{name}#{header_tag}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
-        # An STI base is not a concern, and the child may have no concerns at
+        # A base class is not a concern, and the child may have no concerns at
         # all, so this stands outside that section.
         bases_unread = data[:bases_unread]
         lines << unread_bases_line(bases_unread) if bases_unread&.any?
@@ -506,7 +506,7 @@ module RailsAiContext
       # Reflection inherits associations, validations and enums onto the child,
       # so an unread base costs the same keys an unread concern does.
       private_class_method def self.unread_bases_line(unread)
-        "#{RailsAiContext::Confidence::UNAVAILABLE} #{count_phrase(unread.size, "STI base")} " \
+        "#{RailsAiContext::Confidence::UNAVAILABLE} #{count_phrase(unread.size, "base class")} " \
           "not read#{unread_gap_label}: #{unread.join(', ')}"
       end
 

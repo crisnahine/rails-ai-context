@@ -1037,6 +1037,25 @@ Changed.
   already use, through one helper on the base class. The contract's spec no
   longer trusts a hand-typed list either: it asks the tool registry which tools
   declare a path-shaped parameter and fails when one of them is not covered.
+- **A model inherited nothing from an abstract base.** Rails runs what a
+  superclass declares in every child, abstract or not; only the table stops at
+  an abstract base, because a child of one has its own. The walk that merges
+  declarations followed the table chain, so a per-connection base like
+  `Analytics::Record` gave its children nothing, and the app's own
+  `ApplicationRecord` was not walked at all. The booted tier listed the base's
+  concerns off the ancestor chain while the static tier listed none, which is
+  two answers to one question. Both tiers now walk every class the model
+  inherits from, up to `ActiveRecord::Base`. On Mastodon that is 111 of 111
+  models naming `Remotable`, which `ApplicationRecord` includes, against 51
+  before; the model count, the tables, the callbacks and the scopes are
+  unchanged.
+- **`excluded_models` removed a class from the walk, not just from the list.**
+  The key hides an entry; it does not stop the class being the superclass its
+  children inherit a table and declarations from. It is applied where the
+  listing is built now, the way `excluded_concerns` is.
+- **A macro declared by both a base and its child was reported twice.**
+  Associations, scopes and enums were deduped on merge and macros were not, so
+  `encrypts :secret` on both sides answered `["secret", "secret"]`.
 - **A filter a controller declares itself was reported as inherited.** The
   chain moved any filter whose name an ancestor also declares into `inherited`,
   which is right for the booted tier - its list carries names it only inherits -
