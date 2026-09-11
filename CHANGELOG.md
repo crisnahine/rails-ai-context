@@ -1059,7 +1059,10 @@ Changed.
   twice.** Associations, scopes and enums were deduped on merge and these two
   were not, so `encrypts :secret` on both sides answered `["secret", "secret"]`.
   Rails keeps one entry for a symbol callback declared twice and two validators
-  for a validation declared twice, so the answer now says one and two.
+  for a validation declared twice, so the answer now says one and two. One
+  source line read twice is a third case: a concern the model and one of its
+  bases both include was walked once per class, and `included do` runs once, so
+  its validation is reported once.
 - **A concrete model named like a base was dropped from the static listing.**
   The rule was the name, and the fact is in the source: `abstract_class?` reads
   `primary_abstract_class` as well as the assignment, which is the form a

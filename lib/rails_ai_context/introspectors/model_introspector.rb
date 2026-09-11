@@ -1061,6 +1061,11 @@ module RailsAiContext
         # again on the child, and two validators for a validation declared
         # twice, so these two are not deduped alike.
         merged[:callbacks] = dedup(merged[:callbacks]) { |c| [ c[:type], c[:method].to_s ] }
+        # One source line read twice is still one declaration: a concern the
+        # model and one of its bases both include is walked once per class, and
+        # `included do` runs once. Two validations really written twice differ
+        # by the line they are on and both stay.
+        merged[:validations] = dedup(merged[:validations]) { |v| v }
         merged
       end
 

@@ -1775,6 +1775,37 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # A concern the model and one of its bases both include is walked once per
+    # class, so one `validates` line arrived twice. ActiveSupport::Concern runs
+    # `included do` once, so Rails holds one validator and the answer says one.
+    it "reports one concern's declaration once when two classes in the chain include it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "trackable.rb"), <<~RUBY)
+          module Trackable
+            extend ActiveSupport::Concern
+
+            included do
+              validates :name, presence: true
+              before_save :touch_tracker
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+            include Trackable
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\n  include Trackable\nend\n")
+
+        widget = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Widget"]
+
+        expect(widget[:validations].size).to eq(1)
+        expect(widget[:callbacks]["before_save"]).to eq([ "touch_tracker" ])
+      end
+    end
+
     # Rails keeps one entry for a symbol callback declared twice and two
     # validators for a validation declared twice, so the answer says one and
     # two. Checked against a real ActiveRecord class rather than assumed.
