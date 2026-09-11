@@ -1707,6 +1707,35 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # The chain is nearest first, and the merge keeps the first of two
+    # declarations that share a name, so the order is what decides which one
+    # the child answers with. With the chain almost always one base long that
+    # never showed; every model has at least two now.
+    it "takes the nearest base's declaration when two bases declare the same name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+
+            scope :recent, -> { order(:id) }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "analytics_record.rb"), <<~RUBY)
+          class AnalyticsRecord < ApplicationRecord
+            self.abstract_class = true
+            scope :recent, -> { order(created_at: :desc) }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "page_view.rb"), "class PageView < AnalyticsRecord\nend\n")
+
+        page_view = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["PageView"]
+
+        expect(page_view[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
+        expect(page_view[:scopes].first[:body]).to eq("order(created_at: :desc)")
+      end
+    end
+
     # The static tier can only walk files under the app root, so a booted walk
     # that read a gem's base would answer a scope the other tier can never see.
     # Reflection still carries that base's associations, validations and enums.
@@ -1816,6 +1845,9 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         expect(booted[:concerns]).to include("Trackable")
         expect(static[:concerns]).to eq([ "Trackable" ])
+        # Both sides answering nothing is the shape this example exists to
+        # catch, so each is named rather than only compared.
+        expect(booted[:concerns] & static[:concerns]).to eq([ "Trackable" ])
         expect(booted[:scopes].map { |s| s[:name] }).to eq([ "recent" ])
         expect(booted[:callbacks]["before_save"]).to contain_exactly("stamp", "touch_tracker")
       end
