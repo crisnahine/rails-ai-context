@@ -1658,6 +1658,26 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Every model loses what the base declared, so every model says so. The
+    # base itself is still not a row.
+    it "names the app's own base when its file cannot be read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        base = File.join(dir, "app", "models", "application_record.rb")
+        File.write(base, "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n")
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+        make_unreadable(base)
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to eq([ "Post" ])
+        expect(result["Post"][:bases_unread]).to eq([ "ApplicationRecord" ])
+        expect(result["Post"][:table_name]).to eq("posts")
+      ensure
+        File.chmod(0o644, base) if base && File.exist?(base)
+      end
+    end
+
     it "answers the same concerns on both tiers" do
       Dir.mktmpdir do |dir|
         analytics_app(dir)

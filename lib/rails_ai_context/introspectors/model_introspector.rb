@@ -69,6 +69,15 @@ module RailsAiContext
         sti_parents = candidates.keys.to_h { |name| [ name, sti_parent(name, candidates, []) ] }
         bases = declared_bases(candidates)
         candidates.each_with_object({}) do |(class_name, candidate), result|
+          # A base is dropped from the result and kept in the walk: it is not a
+          # model of the app, and it is how its children reach what it declares.
+          # `primary_abstract_class` is why the app's own base needs this line -
+          # the abstract check below reads the assignment form.
+          next if model_base?(class_name)
+          # Hidden from the listing, kept in the walk: its children still
+          # inherit its table and its declarations.
+          next if config.excluded_models.include?(class_name)
+
           if candidate[:error]
             result[class_name] = { error: candidate[:error], file: candidate[:file] }.compact
             next
@@ -84,14 +93,6 @@ module RailsAiContext
             next
           end
 
-          # A base is dropped from the result but not from the walk: it is not
-          # a model of the app, and it is how its children reach what it
-          # declares. `primary_abstract_class` is why the app's own base needs
-          # its own line - the abstract check reads the assignment form.
-          next if model_base?(class_name)
-          # Hidden from the listing, kept in the walk: its children still
-          # inherit its table and its declarations.
-          next if config.excluded_models.include?(class_name)
           next if candidate[:abstract]
           next unless model_class?(class_name, candidates)
 
@@ -213,8 +214,7 @@ module RailsAiContext
       # Nothing distinguishes an unreadable concern from an unreadable model,
       # and a concern is not a model, so it stays out.
       def skip_unread?(record)
-        record.path_name.underscore.split("/").include?("concerns") ||
-          config.excluded_models.include?(record.path_name)
+        record.path_name.underscore.split("/").include?("concerns")
       end
 
       # Every candidate another candidate inherits from, by the name the walk

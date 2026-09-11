@@ -1052,7 +1052,9 @@ Changed.
 - **`excluded_models` removed a class from the walk, not just from the list.**
   The key hides an entry; it does not stop the class being the superclass its
   children inherit a table and declarations from. It is applied where the
-  listing is built now, the way `excluded_concerns` is.
+  listing is built now, the way `excluded_concerns` is, and so is the app's own
+  base. An unreadable base is a gap for its children either way, so they name it
+  under `bases_unread` rather than losing its declarations silently.
 - **A macro declared by both a base and its child was reported twice.**
   Associations, scopes and enums were deduped on merge and macros were not, so
   `encrypts :secret` on both sides answered `["secret", "secret"]`.
