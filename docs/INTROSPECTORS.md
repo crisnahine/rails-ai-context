@@ -84,7 +84,7 @@ end
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
 | SchemaIntrospector | `:schema` | Database tables, columns, types, indexes, defaults, encrypted hints |
-| ModelIntrospector | `:models` | Associations, validations, scopes, enums, concerns (AST-based) |
+| ModelIntrospector | `:models` | Associations, validations, scopes, enums, concerns (AST-based). Both tiers merge what the included concerns declare, tagged `from_concern:`; a concern whose file could not be read is listed in `concerns_unread`, a base class whose file could not be read in `bases_unread`, and the number of concerns `excluded_concerns` hid in `concerns_hidden` |
 | RouteIntrospector | `:routes` | Routes with helpers, HTTP methods, constraints |
 | ControllerIntrospector | `:controllers` | Actions, filters, strong params, render paths |
 | ViewIntrospector | `:views` | View files, layouts, partials |
@@ -182,7 +182,7 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 | ValidationsListener | `validates`, `validates_*_of`, custom `validate :method` |
 | ScopesListener | `scope :name, -> { ... }` |
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
-| CallbacksListener | All AR callback types, `after_commit` with `on:` resolution |
+| CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]` |
 | MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` |
 | MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`; `include_initialize: true` adds the constructor a caller reports on its own |
 | MixinsListener | `include`, `prepend`, `extend`, flagging the ones that reach the ancestor chain |
@@ -201,7 +201,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | MiddlewareConfigListener | `config.middleware.use` / `insert_before` / `insert_after` |
 | SchemaDslListener | `schema.rb`: `create_table`, `t.string`, `t.index`, `add_foreign_key`, `create_enum` |
 | MigrationDslListener | Migration DSL: `create_table`, `add_column`, `add_index`, `add_reference`, and friends |
-| RoutesDslListener | `config/routes.rb`, resolving namespace/scope/resources nesting into flat routes |
+| RoutesDslListener | `config/routes.rb`, resolving namespace/scope/resources nesting into flat routes; routing concerns (`concern` definitions replayed at each `concerns:` site), `with_options` defaults merged under each inner call, and the `as:`, `param:`, `module:`, `path:` and `only:`/`except:` options |
 | MountListener | `mount Sidekiq::Web, at: "/sidekiq"` and the hash form |
 | GemfileDslListener | `gem "name", "version"` and `group :development do ... end` |
 | RakeTaskDslListener | `namespace`, `desc`, `task` in `.rake` files |

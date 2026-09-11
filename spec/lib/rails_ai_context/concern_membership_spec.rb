@@ -70,4 +70,26 @@ RSpec.describe RailsAiContext::ConcernMembership do
       end
     end
   end
+
+  # The walk asks the two halves of the payload rule apart: a name the key hid
+  # is worth counting, and framework plumbing never was.
+  describe ".candidate?" do
+    around do |example|
+      original = RailsAiContext.configuration.excluded_concerns
+      RailsAiContext.configuration.excluded_concerns = [ /\AAudit/ ]
+      example.run
+      RailsAiContext.configuration.excluded_concerns = original
+    end
+
+    it "keeps a name the configured key hides" do
+      expect(described_class.candidate?("Auditable")).to be true
+      expect(described_class.payload?("Auditable")).to be false
+    end
+
+    it "drops framework plumbing, the stdlib and the generated modules" do
+      expect(described_class.candidate?("ActiveRecord::Core")).to be false
+      expect(described_class.candidate?("Kernel")).to be false
+      expect(described_class.candidate?("Post::GeneratedAttributeMethods")).to be false
+    end
+  end
 end

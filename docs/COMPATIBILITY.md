@@ -21,6 +21,14 @@ document is aspirational.
 - **thor:** `>= 1.0, < 3.0`
 - **prism:** `>= 1.4, < 2.0` (a CI leg pins the floor exactly and runs the suite against it)
 - **concurrent-ruby:** `>= 1.2, < 3.0`
+- **json:** unconstrained by this gem, but `json >= 3.0` and Rails 7.0 to 8.0 do
+  not work together, whatever gem is in the middle. `json 3.0` removed the
+  `quirks_mode` keyword and `ActiveSupport::JSON::Encoding` passes it on every
+  `to_json` through 8.0, so the pair raises `ArgumentError: unknown keyword:
+  quirks_mode` inside Rails itself. Rails 8.1 dropped the keyword and resolves
+  json 3 cleanly. The test bundle pins `json < 3` below 8.1 for that reason; an
+  app on those lines has the same choice to make, and it is between its own
+  Rails and json rather than anything here.
 
 The gemspec's `railties` bound is wider than the CI matrix: point releases inside
 7.0-8.1 and any future 8.x minor satisfy Bundler's constraint without a gem
@@ -91,7 +99,7 @@ from the booted path:
 | `routes` | `config/routes.rb` parsed with a dedicated Prism listener |
 | `controllers` | `app/controllers/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
 | `jobs` | `app/jobs`, `app/mailers` and `app/channels` parsed for classes and their public methods |
-| `i18n` | every top-level key across `config/locales`, and the default locale read from `config/` |
+| `i18n` | `config.i18n.available_locales` read from `config/`, or every top-level key across `config/locales` when the app never assigns it; the default locale read from `config/`. The backend and the fallbacks stay in the answer and are declared unanswered, being facts about the running process |
 | `api` | every detection but the mode is a file read and runs unchanged; `config.api_only` comes from the assignment in `config/application.rb` |
 | `engines` | `config/routes.rb` mounts, plus the Gemfile |
 | `active_support` | concern and core-extension use read from source |
@@ -107,10 +115,14 @@ and is the same whatever put the gem in the static tier.
 so it always requires a bootable app.
 
 Boot failure degrades `serve`/`tool` to the static tier automatically (proven
-across four boot-failure modes - raises, prints to stdout, writes via the
-`STDOUT` constant, and hangs past the timeout - in
+across five boot-failure modes - raises, prints to stdout, writes via the
+`STDOUT` constant, calls `exit`/`abort`, and hangs past the timeout - in
 `spec/e2e/boot_resilience_spec.rb`); `--no-boot` forces it without attempting a
 boot at all (`spec/e2e/static_tier_spec.rb`).
+
+The exit mode is the standalone binary only. The rake tasks boot inside the
+app's own process, where `exit` is that process deciding to stop, so
+`rails ai:serve` on an app that aborts stops with it.
 
 ### Confidence vocabulary
 
@@ -125,10 +137,35 @@ Source: `lib/rails_ai_context/confidence.rb`.
 
 `[VERIFIED]`/`[INFERRED]` are per-value tags applied inside the schema, model,
 route, controller, and mailbox-routing introspectors as they walk the AST
-(`Confidence.for_node`). `[STATIC]`/`[UNAVAILABLE]` are whole-response tags:
-`[STATIC]` marks any answer that came from the static tier; `[UNAVAILABLE]`
-marks a section with no static path, or (in either tier) a data source that
-genuinely doesn't exist for this app.
+(`Confidence.for_node`). `[UNAVAILABLE]` is a whole-response tag, marking a
+section with no static path, or (in either tier) a data source that genuinely
+doesn't exist for this app. It also marks a single row: a model or controller
+whose file could not be read is named with the reason, in the generated files
+and the tool listings alike, rather than rendered as an entry that declares
+nothing. The count above the row still includes it, because the app has it.
+
+`[STATIC]` marks the whole response of any answer that came from the static
+tier, and it also caps the records inside it: no record can claim more than the
+tier carrying it, so a static model entry's associations, validations, scopes
+and methods read `[STATIC]` rather than the `[VERIFIED]` the AST walk would
+give them on its own. A record the parser could not resolve keeps its lower
+`[INFERRED]`. The same cap decides the header of a hydrated Schema Hints block.
+
+A generated context file says the same thing. A run that did not boot writes a
+`[STATIC]` line under the header of every file that states app counts
+(CLAUDE.md, AGENTS.md, the Copilot instructions, the split AGENTS.md pair and
+every per-tool rules file except the MCP tool reference, which lists the gem's
+own tools in either tier), and `.ai-context.json` carries the tier as a `tier` key
+reading `static` or `booted`. A booted run writes no notice into the markdown
+files, so a file that states app counts and carries none came from a booted
+run; `.ai-context.json` names its tier either way.
+
+A model's `file` in `.ai-context.json` is app-relative, except for a model a
+gem owns: that value begins `gem:` and the rest of it starts with the gem's own
+directory name, as in `gem:doorkeeper-5.9.5/app/models/access_grant.rb`. It is
+relative to the directory the gems are unpacked under, not to the app root, so
+a consumer must not join it to the app root. The gem's own readers ask
+`PortablePath.resolve`, which answers both shapes.
 
 ## Shape matrix
 
@@ -161,7 +198,9 @@ Proof sources:
    exercised across the install-path suite - in-Gemfile, standalone, zero-config);
    real Rails 8.0 apps in the v5.14.0 release QA (`blog`, `sandbox`); Mastodon
    (Rails 8.1, Ruby 3.4) in the v5.25.0 release QA, booted and static tiers,
-   standalone and in-Gemfile installs.
+   standalone and in-Gemfile installs; Mastodon again in the v5.26.0 release QA,
+   with packs, in-repo engines, Postgres and concurrent tool calls covered by
+   hand where no lab shape plants them.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
@@ -204,6 +243,29 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
 
 ## Known limits
 
+- **What a model inherits, and from where.** The model answer walks the model
+  file, the files of the concerns it includes, and the files of every class it
+  inherits from up to `ActiveRecord::Base`, in both tiers. An abstract base is
+  in that chain: a per-connection `Analytics::Record`, and the app's own
+  `ApplicationRecord`, pass their concerns, scopes, callbacks and macros down
+  the way Rails does. Only the table stops at an abstract base, because a child
+  of one has its own. A concern's macro is tagged with the concern that
+  declared it. Both tiers stop at the same place: a superclass whose file is not
+  under one of the app's model directories, a gem-owned base for example. The
+  booted tier could read that file and deliberately does not, because an answer
+  the static tier can never match is two answers to one question. Reflection
+  still carries such a base's associations, validations and enums onto the
+  child. The validations Rails generates at boot
+  (implicit `belongs_to` presence, attachment validations) are runtime-only and
+  stay marked `[UNAVAILABLE]`. A concern whose file cannot be found, a gem's
+  module for example, is named under `Concerns` as not read.
+- **Callbacks are what the file declares.** In both tiers the callback list is
+  what the model file, the app concerns it includes and the classes it
+  inherits from declare. A callback a
+  gem registers on include without an `include` line in the model file (Devise,
+  counter caches, attachment purges) is not listed. Within one type the order
+  is declaration order, the model file first and then its concerns, not the
+  order Rails registered them in; the order across types is Rails' event order.
 - **Concern-style Mongoid documents in runtime results.** Mongoid documents
   are invisible to ActiveRecord reflection, so `ModelIntrospector#call` falls
   back to the same source-parsing pass used in the static tier even when the
@@ -220,11 +282,35 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   assignment) has no static path and reports `[UNAVAILABLE]` in the static
   tier. Only the schema introspector's own secondary-database dump parsing
   (`db/*_schema.rb`, `db/*_structure.sql`) works without a boot.
-- **Constraints and lambda routes surface as a dynamic tally, not resolved
-  entries.** `RouteIntrospector#static_call` counts routes behind
-  `constraints do...end` blocks, lambdas, `devise_for`, and `concern`-based
-  route declarations into a `dynamic_routes` count rather than fabricating
-  per-route controller/action pairs it can't actually determine from source.
+- **Inherited controller actions and filters are resolved by parent name, so
+  some walks end early.** A controller that defines no action of its own takes
+  the actions of the nearest app ancestor the listing holds, walked through the
+  `parent_class` each entry carries, and the filter chain is walked the same
+  way. A superclass spelled relatively inside a `module` body (`module
+  Settings; class ProfileController < BaseController`) is resolved against the
+  enclosing namespace first, the way Ruby resolves it. What still ends the walk
+  is a gem-owned parent such as `OAuth::AuthorizationsController <
+  Doorkeeper::AuthorizationsController`, which the payload cannot hold. A
+  booted run answers that one.
+- **`ApplicationController` is not in the listing, but its filters are in the
+  chain.** Every app has one and it would sit in every listing row, so the
+  controller listing leaves it out. The chain walk reads its file anyway, by
+  the one name Rails fixes, so a filter it declares is attributed to it in both
+  tiers with its `only:`/`except:`/`if:` intact. A parent the listing does not
+  hold and the app has no file for still ends the walk: reconstructing a path
+  from a class name breaks on an app inflection, and a gem-owned parent such as
+  `Doorkeeper::AuthorizationsController` has no file under the app root at all.
+  A booted run answers that one from reflection.
+- **Some route macros surface as a dynamic tally, not resolved entries.**
+  `RouteIntrospector#static_call` counts routes behind `devise_for`, `match`,
+  `direct`, `resolve`, a `draw` it cannot read, and a route whose `to:` is a
+  lambda or a `redirect(...)` into a `dynamic_routes` count rather than
+  fabricating per-route controller/action pairs it can't actually determine
+  from source. Routing concerns and a `with_options` block that takes no block
+  parameter are expanded, so they are not in that count. A `with_options` that
+  yields a mapper is in it, and so is a `concerns:` naming a concern defined in
+  another drawn file. `constraints do...end` does not hide its
+  children: they are read and resolved, the constraint itself is ignored.
 
 <br>
 

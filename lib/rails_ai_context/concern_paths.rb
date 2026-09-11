@@ -44,13 +44,45 @@ module RailsAiContext
     #
     # @param root [String] application root
     # @param concern_name [String] constant name, e.g. "BulkMailSettingsConcern"
-    def find_file(root, concern_name)
-      underscore = concern_name.to_s.underscore
-      return nil if underscore.empty? || underscore.include?("..")
+    # @param prefer [String, nil] owner kind ("model", "controller") whose
+    #   concerns directory is searched first. `resolve` sorts, so without it
+    #   app/controllers/concerns wins a basename two owners share.
+    # @param within [String, nil] the enclosing constant of the reference. A
+    #   bare `include DebugConcern` inside Fasp::Provider resolves at runtime
+    #   to Fasp::Provider::DebugConcern, which the literal spelling misses.
+    # @param dirs [Array<String>, nil] pre-resolved concern directories
+    def find_file(root, concern_name, prefer: nil, within: nil, dirs: nil)
+      dirs = ordered_dirs(root, prefer, dirs)
 
-      resolve(root)
-        .map { |dir| File.join(dir, "#{underscore}.rb") }
-        .find { |path| File.exist?(path) }
+      candidate_names(concern_name, within).each do |name|
+        underscore = name.underscore
+        next if underscore.empty? || underscore.include?("..")
+
+        path = dirs.map { |dir| File.join(dir, "#{underscore}.rb") }.find { |p| File.exist?(p) }
+        return path if path
+      end
+
+      nil
     end
+
+    def ordered_dirs(root, prefer, dirs = nil)
+      dirs ||= resolve(root)
+      return dirs unless prefer
+
+      dirs.partition { |dir| type_for(dir) == prefer }.flatten
+    end
+
+    # The enclosing namespaces from the innermost outward, then the reference
+    # itself - Ruby's own constant lookup order, which reaches the top level
+    # last. Bare-name-first would bind Fasp::Provider's `include DebugConcern`
+    # to a top-level DebugConcern the runtime never sees.
+    def candidate_names(concern_name, within)
+      name = concern_name.to_s
+      return [ name ] if within.nil? || name.include?("::")
+
+      scopes = within.to_s.split("::")
+      scopes.size.downto(1).map { |n| "#{scopes.first(n).join('::')}::#{name}" } + [ name ]
+    end
+    private_class_method :candidate_names
   end
 end

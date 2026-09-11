@@ -58,6 +58,38 @@ class RailsAiContextCLI < Thor
       true
     end
 
+    # Thor reads a leading switch as "no command given" and falls back to
+    # `help`, which answers `rails-ai-context --app-path /x doctor` with usage
+    # and exit 0. Move every switch this binary declares
+    # (global or per-command) behind the command name; anything else is left
+    # where it is, so `--help`, `--version` and an unknown switch keep their
+    # own answers.
+    def self.normalize_argv(argv)
+      declared = class_options.values + commands.each_value.flat_map { |c| c.options.values }
+      switches = declared.each_with_object({}) do |option, table|
+        ([ option.switch_name ] + Array(option.aliases)).each { |name| table[name] = option.type }
+      end
+
+      globals = []
+      rest = argv.dup
+      while (token = rest.first) && token.start_with?("-")
+        name, inline = token.split("=", 2)
+        type = switches[name]
+        break unless type
+
+        globals << rest.shift
+        globals << rest.shift if inline.nil? && type != :boolean && rest.first && !rest.first.start_with?("-")
+      end
+
+      return argv if globals.empty?
+      # A switch this binary does not know still belongs to Thor, which
+      # refuses it; the globals it follows have nothing to attach to.
+      return rest if rest.first.to_s.start_with?("-")
+      return argv if rest.empty?
+
+      [ rest.first, *globals, *rest[1..] ]
+    end
+
     # Let Thor pass unknown options through to ToolRunner for the tool command
     stop_on_unknown_option! :tool
 
@@ -148,6 +180,10 @@ class RailsAiContextCLI < Thor
       # the boot, is the one that still fails.
       boot_rails!(command: "context", allow_static: true)
 
+      # Before the cleanup prompt and the introspection, both of which a
+      # format nothing can write would waste.
+      ::RailsAiContext::Serializers::ContextFileSerializer.validate_format!(options[:format]&.to_sym)
+
       if options[:format]
         cleanup_tools = options[:format] == "all" ? nil : [ options[:format].to_sym ]
       else
@@ -175,6 +211,11 @@ class RailsAiContextCLI < Thor
 
       context = ::RailsAiContext.introspect
       puts JSON.pretty_generate(context)
+    rescue SystemExit
+      raise
+    rescue StandardError, ScriptError => e
+      $stderr.puts "Error: #{e.message}"
+      exit 1
     end
 
     # Thor registers commands under their Ruby method names, and this method
@@ -188,6 +229,11 @@ class RailsAiContextCLI < Thor
     def watch
       boot_rails!(command: "watch", allow_static: true)
       ::RailsAiContext::Watcher.new.start
+    rescue SystemExit
+      raise
+    rescue StandardError, ScriptError => e
+      $stderr.puts "Error: #{e.message}"
+      exit 1
     end
 
     desc "doctor", "Run diagnostic checks and report AI readiness score"
@@ -200,15 +246,7 @@ class RailsAiContextCLI < Thor
       result = ::RailsAiContext::Doctor.new.run
       # The report is the command's product - it belongs on stdout so
       # `doctor > report.txt` captures it. stderr stays for errors only.
-      result[:checks].each do |check|
-        icon = case check.status
-        when :pass then "PASS"
-        when :warn then "WARN"
-        when :fail then "FAIL"
-        end
-        puts "  [#{icon}] #{check.name}: #{check.message}"
-        puts "         Fix: #{check.fix}" if check.fix
-      end
+      puts ::RailsAiContext::Doctor.report_lines(result)
       puts ""
       puts "AI Readiness Score: #{result[:score]}/100"
 
@@ -217,6 +255,11 @@ class RailsAiContextCLI < Thor
         $stderr.puts "#{RailsAiContext::CountPhrase.call(failed, "check")} failed (--strict)"
         exit 1
       end
+    rescue SystemExit
+      raise
+    rescue StandardError, ScriptError => e
+      $stderr.puts "Error: #{e.message}"
+      exit 1
     end
 
     desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml and .mcp.json)"
@@ -271,17 +314,10 @@ class RailsAiContextCLI < Thor
     def preset(name = nil)
       require_relative "../lib/rails_ai_context/presets"
 
-      unless name && ::RailsAiContext::Presets.resolve(name)
-        $stderr.puts "Unknown preset: #{name}\n\n" if name
-        $stderr.print ::RailsAiContext::Presets.listing(invocation: ->(k) { "rails-ai-context preset #{k}" })
-        # Bare `preset` is a listing request (exit 0); a name that matches no
-        # preset is an input error, so scripts get a non-zero exit.
-        exit 1 if name
-        return
+      outcome = ::RailsAiContext::Presets.dispatch(name, invocation: ->(k) { "rails-ai-context preset #{k}" }) do
+        boot_rails!(command: "preset", allow_static: true)
       end
-
-      boot_rails!(command: "preset", allow_static: true)
-      exit 1 unless ::RailsAiContext::Presets.run(name)
+      exit 1 unless ::RailsAiContext::Presets.ok?(outcome)
     rescue SystemExit
       raise
     rescue StandardError, ScriptError => e
@@ -404,8 +440,10 @@ class RailsAiContextCLI < Thor
     end
 
     def print_context_result(result)
-      (result[:written] || []).each { |f| $stderr.puts "  Written: #{f}" }
-      (result[:skipped] || []).each { |f| $stderr.puts "  Skipped: #{f} (unchanged)" }
+      style = ::RailsAiContext::ContextFileReport.style(:plain)
+      ::RailsAiContext::ContextFileReport.each_line(result, style) do |_bucket, text|
+        $stderr.puts "  #{text}"
+      end
     end
 
     # The tool list only needs tool names/descriptions/schemas - none of that
@@ -474,10 +512,19 @@ class RailsAiContextCLI < Thor
       app_path_opt = @app_path_override || options[:app_path]
       environment_opt = @environment_override || options[:environment]
       app_root = File.expand_path(app_path_opt || Dir.pwd)
+      if app_path_opt && !Dir.exist?(app_root)
+        $stderr.puts "Error: No such directory: #{app_root}"
+        exit 1
+      end
       # Relative paths inside the app (log/, tmp/, sqlite files) assume the
       # process cwd is the app root, so honor --app-path by moving there.
       Dir.chdir(app_root) if app_path_opt
-      ENV["RAILS_ENV"] = environment_opt if environment_opt
+      # Apps read RAILS_ENV in config/boot.rb, before anything the gem can
+      # rescue, so the default is only reachable if it is set here.
+      # The chain is Rails' own (`Rails.env`): RAILS_ENV, then RACK_ENV, then
+      # development, with an empty value read as unset.
+      ambient = [ environment_opt, ENV["RAILS_ENV"], ENV["RACK_ENV"] ]
+      ENV["RAILS_ENV"] = ambient.find { |v| v && !v.empty? } || "development"
 
       # A command that can serve the static tier reads a source-only tree
       # instead of refusing it.
@@ -523,4 +570,4 @@ class RailsAiContextCLI < Thor
     end
 end
 
-RailsAiContextCLI.start(ARGV)
+RailsAiContextCLI.start(RailsAiContextCLI.normalize_argv(ARGV))

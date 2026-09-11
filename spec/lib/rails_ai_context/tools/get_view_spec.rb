@@ -13,6 +13,21 @@ RSpec.describe RailsAiContext::Tools::GetView do
       expect(text).to include("posts")
     end
 
+    # The template and partial counts left the layouts out, so the numbers in
+    # the heading never added up to the files under app/views.
+    it "counts layouts in the heading so the file count reconciles" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to match(/# Views \(\d+ templates?, \d+ partials?, 1 layout\)/)
+    end
+
+    it "leaves layouts out of the heading when the listing is one controller" do
+      text = described_class.call(controller: "posts", detail: "summary").content.first[:text]
+
+      expect(text).to match(/# Views \(\d+ templates?, \d+ partials?\)/)
+      expect(text).not_to include("layout)")
+    end
+
     it "lists views for a specific controller" do
       result = described_class.call(controller: "posts", detail: "summary")
       text = result.content.first[:text]
@@ -133,6 +148,34 @@ RSpec.describe RailsAiContext::Tools::GetView do
       it "denies a sensitive name under app/views" do
         result = described_class.call(path: ".env")
         expect(result.content.first[:text]).to include("Access denied")
+      end
+    end
+
+    # The payload-less listing reads the same app/views directory, so its
+    # heading has to reconcile against the same files.
+    context "when the payload carries no views section" do
+      before { allow(described_class).to receive(:cached_context).and_return({}) }
+
+      it "counts layouts and partials in the heading it reads off disk" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to match(/# Views \(\d+ templates?, \d+ partials?, \d+ layouts?\)/)
+      end
+
+      it "answers the pointer its own heading prints" do
+        heading = described_class.call(detail: "summary").content.first[:text]
+        expect(heading).to include('`controller:"layouts"`')
+
+        text = described_class.call(controller: "layouts", detail: "summary").content.first[:text]
+
+        expect(text).to include("layouts/application.html.erb")
+      end
+
+      it "leaves layouts out of the heading when the listing is one controller" do
+        text = described_class.call(controller: "posts", detail: "summary").content.first[:text]
+
+        expect(text).to match(/# Views \(\d+ templates?, \d+ partials?\)/)
+        expect(text).not_to include("layout)")
       end
     end
 

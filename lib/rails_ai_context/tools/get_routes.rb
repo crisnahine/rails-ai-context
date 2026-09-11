@@ -38,6 +38,20 @@ module RailsAiContext
         RailsAiContext::RouteCoverage.framework_controller?(name)
       end
 
+      HINTED_FILTERS = 3
+
+      # The filters this controller actually runs, read the way every other
+      # surface reads them, so a skipped one is never named here. The cut is
+      # stated rather than silent.
+      def self.filter_hint(ctrl_class, ctx)
+        chain = RailsAiContext::ActionFilters.for_controller(ctx, ctrl_class, root: rails_app&.root&.to_s)
+        names = (chain[:inherited] + chain[:own]).map { |f| f[:name] }
+        return nil if names.empty?
+
+        rest = names.size - HINTED_FILTERS
+        "#{names.first(HINTED_FILTERS).join(', ')}#{rest.positive? ? " (+#{rest} more)" : ''}"
+      end
+
       guide_row(
         order: 8,
         mcp: "rails_get_routes(controller:\"X\")",
@@ -51,6 +65,10 @@ module RailsAiContext
         fetch_section(:routes, subject: "Route introspection") do |routes|
           by_controller = routes[:by_controller] || {}
           offset = [ offset.to_i, 0 ].max
+
+          # Every read of the shared cache deep-copies the whole payload, so
+          # the listing reads it once and hands the copy down.
+          ctx = cached_context
 
           # Routes with no controller#action (engine mounts like propshaft's
           # /assets) never enter by_controller; surface their count so the
@@ -68,7 +86,7 @@ module RailsAiContext
 
           # Filter by controller - accepts "posts", "PostsController", "posts_controller", "Api::V1::Posts"
           if controller
-            normalized = RailsAiContext::Payload.controller_route_key(cached_context, controller)
+            normalized = RailsAiContext::Payload.controller_route_key(ctx, controller)
             normalized_alt = controller.downcase.delete_suffix("_controller").delete_suffix("controller")
             filtered = by_controller.select { |k, _| k.downcase.include?(normalized) || k.downcase.include?(normalized_alt) }
             return empty_response("No routes for '#{controller}'. Controllers: #{by_controller.keys.sort.join(', ')}") if filtered.empty?
@@ -160,13 +178,13 @@ module RailsAiContext
               if ctrl != current_ctrl
                 current_ctrl = ctrl
                 ctrl_class = "#{ctrl.camelize}Controller"
-                ctrl_data = cached_context.dig(:controllers, :controllers, ctrl_class)
+                ctrl_data = ctx.dig(:controllers, :controllers, ctrl_class)
                 ctrl_summary = ""
                 if ctrl_data
-                  filters = (ctrl_data[:filters] || []).map { |f| f[:name] }.first(3)
+                  filters = filter_hint(ctrl_class, ctx)
                   formats = ctrl_data[:respond_to_formats]
                   parts = []
-                  parts << "filters: #{filters.join(', ')}" if filters.any?
+                  parts << "filters: #{filters}" if filters
                   parts << "formats: #{formats.join(', ')}" if formats&.any?
                   ctrl_summary = " (#{parts.join(' | ')})" if parts.any?
                 end

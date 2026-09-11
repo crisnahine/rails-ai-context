@@ -13,12 +13,22 @@ module RailsAiContext
       "#{count} #{count == 1 ? noun : plural || noun.pluralize}"
     end
 
+    # A cut list makes its count a floor. Every line of one answer marks it the
+    # same way, so a listing and its hint cannot disagree.
+    def self.floor(phrase)
+      phrase.sub(/\A\d+/) { |n| "#{n}+" }
+    end
+
     private
 
     # Mixed in for the classes; rake tasks and generators, which have no class
     # to mix into, call CountPhrase.call directly.
     def count_phrase(count, noun, plural: nil)
       CountPhrase.call(count, noun, plural: plural)
+    end
+
+    def floor_phrase(phrase)
+      CountPhrase.floor(phrase)
     end
   end
 end

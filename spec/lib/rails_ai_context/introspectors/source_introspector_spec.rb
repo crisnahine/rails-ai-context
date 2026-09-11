@@ -50,9 +50,9 @@ RSpec.describe RailsAiContext::Introspectors::SourceIntrospector do
       it "extracts associations" do
         assocs = result[:associations]
         expect(assocs.size).to eq(3)
-        expect(assocs).to include(a_hash_including(type: :has_many, name: :posts))
-        expect(assocs).to include(a_hash_including(type: :has_one, name: :profile))
-        expect(assocs).to include(a_hash_including(type: :belongs_to, name: :organization))
+        expect(assocs).to include(a_hash_including(type: "has_many", name: :posts))
+        expect(assocs).to include(a_hash_including(type: "has_one", name: :profile))
+        expect(assocs).to include(a_hash_including(type: "belongs_to", name: :organization))
       end
 
       it "includes association options" do
@@ -75,13 +75,13 @@ RSpec.describe RailsAiContext::Introspectors::SourceIntrospector do
 
       it "extracts validations" do
         vals = result[:validations]
-        presence_val = vals.find { |v| v[:kind] == :presence }
+        presence_val = vals.find { |v| v[:kind] == "presence" }
         expect(presence_val).not_to be_nil
         expect(presence_val[:attributes]).to include("email")
       end
 
       it "extracts custom validates" do
-        customs = result[:validations].select { |v| v[:kind] == :custom }
+        customs = result[:validations].select { |v| v[:kind] == "custom" }
         expect(customs.map { |v| v[:attributes] }.flatten).to include("custom_check")
       end
 
@@ -295,5 +295,20 @@ RSpec.describe RailsAiContext::Introspectors::SourceIntrospector do
         expect(enums.first[:values]).to include(draft: 0, published: 1, archived: 2)
       end
     end
+  end
+
+  # The listener kept only symbol and string arguments, so a callback whose
+  # target is a class object produced no entry at all in either tier.
+  it "reports an around callback whose target is a class object" do
+    result = described_class.from_source(<<~RUBY)
+      class Status < ApplicationRecord
+        around_create Mastodon::Snowflake::Callbacks
+        before_save :normalize
+      end
+    RUBY
+
+    expect(result[:callbacks]).to include(
+      a_hash_including(type: "around_create", method: "Mastodon::Snowflake::Callbacks")
+    )
   end
 end

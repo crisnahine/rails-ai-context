@@ -119,7 +119,7 @@ Three modules answer questions every introspector used to answer for itself:
 Two more answer a question a tool asks:
 
 - **PendingMigrations** - which migration files are not in the applied set, from one derivation both the schema and migrations sections read
-- **ActionFilters** - which filters apply to a controller or to one of its actions: own, inherited, skipped
+- **ActionFilters** - which filters apply to a controller or to one of its actions: own, inherited, skipped. `skipped` holds unconditional skips only; a skip carrying `if:`/`unless:` leaves the filter in `own` or `inherited` with the condition on the record. Every controller surface reads its filter line from here, so no two answers can disagree
 
 ### AST Engine
 
@@ -128,7 +128,7 @@ Two more answer a question a tool asks:
 - **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by path + SHA256 + mtime
 - **SourceIntrospector** - Single-pass Prism Dispatcher walks the AST once, feeding every registered listener simultaneously
 - **26 Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros and Methods are the default map for model analysis; the rest are used through targeted walks over schema dumps, migrations, Gemfiles, rake tasks and initializers, and `MethodCallListener` reports a named call with its arguments and options wherever one is asked for
-- **Confidence** - Every result carries `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions)
+- **Confidence** - Every result carries `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions), and a record in a static-tier entry is capped at `[STATIC]`, since no record can claim more than the tier that carries it
 
 ### Tool Registry (`lib/rails_ai_context/tools/base_tool.rb`)
 
@@ -194,10 +194,10 @@ Result: controller and view tools automatically include relevant schema informat
 | `MarkdownSerializer` | Base formatting |
 | `ContextFileSerializer` | Atomic file writes with section markers |
 | `CompactSerializerHelper` | Compact mode (≤150 lines) |
-| `StackOverviewHelper` | Stack overview sections |
+| `StackOverviewHelper` | Stack overview sections, and the rule-file write path four serializers share |
 | `ToolGuideHelper` | MCP/CLI tool reference sections |
 | `TestCommandDetection` | Test framework detection |
-| `SectionFacts` | One-line facts (auth, assets, associations) shared by every serializer |
+| `SectionFacts` | The facts every surface states about an app - auth, assets, associations, the filter chain, an unread entry's row, the static-tier notice - each rendered in one place |
 | `SectionGuard` | Whether a section resolved, so a refused one is not rendered |
 | `SectionMarkerWriter` | Writes a managed section into a file the user also owns |
 | `ContextModeDispatch` | Picks full or compact rendering for a run |

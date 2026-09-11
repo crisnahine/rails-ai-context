@@ -194,4 +194,17 @@ RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
       expect(project_rule).not_to include("- Routes:")
     end
   end
+
+  it "names the files it did not generate and why" do
+    Dir.mktmpdir do |dir|
+      empty = context.merge(models: {}, controllers: { controllers: {} })
+      result = described_class.new(empty).call(dir)
+      rules = File.join(dir, ".cursor", "rules")
+
+      expect(result[:not_applicable]).to eq(
+        File.join(rules, "rails-models.mdc") => "no models",
+        File.join(rules, "rails-controllers.mdc") => "no controllers"
+      )
+    end
+  end
 end

@@ -25,21 +25,21 @@ module RailsAiContext
         @context = context
       end
 
+      # Split rule files (.cursor/rules/*.mdc) are fully gem-owned, written
+      # as-is with no markers (the gem manages every file in that
+      # directory).
+      RULE_FILES = {
+        "rails-project.mdc" => { renderer: :render_project_rule, reason: "nothing to document" },
+        "rails-models.mdc" => { renderer: :render_models_rule, reason: "no models" },
+        "rails-controllers.mdc" => { renderer: :render_controllers_rule, reason: "no controllers" },
+        "rails-mcp-tools.mdc" => { renderer: :render_mcp_tools_rule, reason: "nothing to document" }
+      }.freeze
+
       # @param output_dir [String] Rails root path
-      # @return [Hash] { written: [paths], skipped: [paths] }
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
         rules_dir = File.join(output_dir, Install::AiTool.find(:cursor).rules_dir)
-
-        # Split rule files (.cursor/rules/*.mdc) are fully gem-owned.
-        # written as-is with no markers (the gem manages every file in
-        # that directory).
-        mdc_files = {
-          File.join(rules_dir, "rails-project.mdc")    => render_project_rule,
-          File.join(rules_dir, "rails-models.mdc")     => render_models_rule,
-          File.join(rules_dir, "rails-controllers.mdc") => render_controllers_rule,
-          File.join(rules_dir, "rails-mcp-tools.mdc")  => render_mcp_tools_rule
-        }
-        result = write_rule_files(mdc_files)
+        result = write_rule_table(rules_dir, RULE_FILES)
 
         # .cursorrules is at the project root and may pre-date the gem
         # install (users frequently hand-write .cursorrules before
@@ -71,6 +71,7 @@ module RailsAiContext
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
 
         if (db_line = SectionFacts.database_line(context))
           lines << db_line
@@ -133,12 +134,18 @@ module RailsAiContext
           "# Models (#{models.size})",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
 
         lines << "Check here first for scopes, constants, associations. Read model files for business logic/methods."
         lines << ""
 
         models.keys.sort.first(30).each do |name|
           data = models[name]
+          if (unread = SectionFacts.unread_row("- #{name}", data))
+            lines << unread
+            next
+          end
+
           assocs = (data[:associations] || []).size
           lines << "- #{name} (#{count_phrase(assocs, "association")}, table: #{data[:table_name] || '?'})"
           extras = model_extras_line(data)
@@ -167,6 +174,7 @@ module RailsAiContext
           "# Controllers (#{controllers.size})",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
 
         lines.concat(render_compact_controllers_list(controllers))
 

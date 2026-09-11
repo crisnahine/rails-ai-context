@@ -14,20 +14,18 @@ module RailsAiContext
         @context = context
       end
 
+      RULE_FILES = {
+        "rails-context.md" => { renderer: :render_context_overview, reason: "nothing to document" },
+        "rails-schema.md" => { renderer: :render_schema_reference, reason: "no schema dump" },
+        "rails-models.md" => { renderer: :render_models_reference, reason: "no models" },
+        "rails-mcp-tools.md" => { renderer: :render_mcp_tools_reference, reason: "nothing to document" },
+        "rails-components.md" => { renderer: :render_components_reference, reason: "no view components" }
+      }.freeze
+
       # @param output_dir [String] Rails root path
-      # @return [Hash] { written: [paths], skipped: [paths] }
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
-        rules_dir = File.join(output_dir, Install::AiTool.find(:claude).rules_dir)
-
-        files = {
-          File.join(rules_dir, "rails-context.md") => render_context_overview,
-          File.join(rules_dir, "rails-schema.md") => render_schema_reference,
-          File.join(rules_dir, "rails-models.md") => render_models_reference,
-          File.join(rules_dir, "rails-mcp-tools.md") => render_mcp_tools_reference,
-          File.join(rules_dir, "rails-components.md") => render_components_reference
-        }
-
-        write_rule_files(files)
+        write_rule_table(File.join(output_dir, Install::AiTool.find(:claude).rules_dir), RULE_FILES)
       end
 
       private
@@ -39,6 +37,7 @@ module RailsAiContext
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
 
         # Compact counts - gems and architecture are already in the root file (CLAUDE.md/AGENTS.md)
         if (db_line = SectionFacts.database_line(context))
@@ -78,10 +77,11 @@ module RailsAiContext
           "---",
           "",
           "# Database Tables (#{tables.size})",
-          "",
-          "_Snapshot - may be stale after migrations. Use `rails_get_schema(table:\"name\")` for live data._",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
+        lines << "_Snapshot - may be stale after migrations. Use `rails_get_schema(table:\"name\")` for live data._"
+        lines << ""
 
         skip_cols = %w[id created_at updated_at]
         keep_cols = %w[type deleted_at discarded_at]
@@ -177,13 +177,19 @@ module RailsAiContext
           "---",
           "",
           "# ActiveRecord Models (#{models.size})",
-          "",
-          "_Quick reference - use `rails_get_model_details(model:\"Name\")` for live data with resolved concerns and callbacks._",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
+        lines << "_Quick reference - use `rails_get_model_details(model:\"Name\")` for live data with resolved concerns and callbacks._"
+        lines << ""
 
         models.keys.sort.each do |name|
           data = models[name]
+          if (unread = SectionFacts.unread_row("- #{name}", data))
+            lines << unread
+            next
+          end
+
           assocs = (data[:associations] || []).size
           vals = (data[:validations] || []).size
           table = data[:table_name]
@@ -241,11 +247,14 @@ module RailsAiContext
           "---",
           "",
           "# Components (#{components.size})",
-          "",
+          ""
+        ]
+        lines.concat(SectionFacts.static_notice_lines(context))
+        lines.concat([
           "ViewComponent and Phlex components available for reuse.",
           "Use `rails_get_component_catalog(component:\"Name\")` for full details.",
           ""
-        ]
+        ])
 
         components.each do |c|
           slots = (c[:slots] || []).map { |s| s[:name] }

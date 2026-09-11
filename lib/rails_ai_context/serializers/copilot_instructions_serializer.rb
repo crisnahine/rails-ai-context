@@ -14,17 +14,17 @@ module RailsAiContext
         @context = context
       end
 
+      RULE_FILES = {
+        "rails-context.instructions.md" => { renderer: :render_context_instructions, reason: "nothing to document" },
+        "rails-models.instructions.md" => { renderer: :render_models_instructions, reason: "no models" },
+        "rails-controllers.instructions.md" => { renderer: :render_controllers_instructions, reason: "no controllers" },
+        "rails-mcp-tools.instructions.md" => { renderer: :render_mcp_tools_instructions, reason: "nothing to document" }
+      }.freeze
+
+      # @param output_dir [String] Rails root path
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
-        dir = File.join(output_dir, Install::AiTool.find(:copilot).rules_dir)
-
-        files = {
-          File.join(dir, "rails-context.instructions.md") => render_context_instructions,
-          File.join(dir, "rails-models.instructions.md") => render_models_instructions,
-          File.join(dir, "rails-controllers.instructions.md") => render_controllers_instructions,
-          File.join(dir, "rails-mcp-tools.instructions.md") => render_mcp_tools_instructions
-        }
-
-        write_rule_files(files)
+        write_rule_table(File.join(output_dir, Install::AiTool.find(:copilot).rules_dir), RULE_FILES)
       end
 
       private
@@ -42,6 +42,7 @@ module RailsAiContext
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
 
         if (db_line = SectionFacts.database_line(context))
           lines << db_line
@@ -97,13 +98,19 @@ module RailsAiContext
           "---",
           "",
           "# ActiveRecord Models (#{models.size})",
-          "",
-          "Check here first for scopes, constants, associations. Read model files for business logic/methods.",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
+        lines << "Check here first for scopes, constants, associations. Read model files for business logic/methods."
+        lines << ""
 
         models.keys.sort.first(30).each do |name|
           data = models[name]
+          if (unread = SectionFacts.unread_row("- #{name}", data))
+            lines << unread
+            next
+          end
+
           assocs = (data[:associations] || []).size
           lines << "- #{name} (#{count_phrase(assocs, "association")})"
           extras = model_extras_line(data)
@@ -126,10 +133,11 @@ module RailsAiContext
           "---",
           "",
           "# Controllers (#{controllers.size})",
-          "",
-          "Use `rails_get_controllers` MCP tool for full details.",
           ""
         ]
+        lines.concat(SectionFacts.static_notice_lines(context))
+        lines << "Use `rails_get_controllers` MCP tool for full details."
+        lines << ""
 
         lines.concat(render_compact_controllers_list(controllers))
 

@@ -78,6 +78,236 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
       end
     end
 
+    # This check reads the table off the model itself, and underscoring the
+    # class name asks for o_auth_client_configs - a table no app has, so every
+    # model whose name carries an acronym was skipped in silence.
+    context "missing counter_cache" do
+      def counter_cache_for(model_path, model_source, schema_source)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, "app", "models", model_path)))
+          File.write(File.join(dir, "app", "models", model_path), model_source)
+          File.write(File.join(dir, "app", "models", "token.rb"), "class Token < ApplicationRecord\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), schema_source)
+          described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+        end
+      end
+
+      it "finds the table through the file name, not the underscored class name" do
+        missing = counter_cache_for(
+          "oauth_client_config.rb",
+          "class OAuthClientConfig < ApplicationRecord\n  has_many :tokens\nend\n",
+          "create_table \"oauth_client_configs\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(a_hash_including(model: "OAuthClientConfig", association: "tokens"))
+      end
+
+      it "reads the table a model assigns itself" do
+        missing = counter_cache_for(
+          "tagging.rb",
+          "class Tagging < ApplicationRecord\n  self.table_name = 'comments'\n  has_many :tokens\nend\n",
+          "create_table \"comments\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(a_hash_including(model: "Tagging", association: "tokens"))
+      end
+
+      # The listener names the class node alone, so a model written inside a
+      # module body was looked up as "Invoice" while its declaration reads
+      # "Billing::Invoice", and its assigned table went unread.
+      it "reads the assigned table of a model nested in a module body" do
+        missing = counter_cache_for(
+          File.join("billing", "invoice.rb"),
+          "module Billing\n  class Invoice < ApplicationRecord\n    self.table_name = 'legacy_bills'\n" \
+          "    has_many :tokens\n  end\nend\n",
+          "create_table \"legacy_bills\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(a_hash_including(association: "tokens"))
+      end
+
+      # The row is keyed by the constant the app has, or the same tool then
+      # answers "Model 'Invoice' not found" for a row it just printed.
+      it "names a model nested in a module body by its qualified constant" do
+        missing = counter_cache_for(
+          File.join("billing", "invoice.rb"),
+          "module Billing\n  class Invoice < ApplicationRecord\n    has_many :tokens\n  end\nend\n",
+          "create_table \"invoices\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(
+          a_hash_including(model: "Billing::Invoice",
+                           suggestion: "Add counter_cache: true to belongs_to :invoice in Token")
+        )
+      end
+
+      # The suggestion has to name the class the app can look up, or it sends
+      # the reader to a constant a namespaced app does not have.
+      it "names the resolved belongs_to side by its qualified constant" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
+          File.write(File.join(dir, "app", "models", "billing", "invoice.rb"),
+                     "module Billing\n  class Invoice < ApplicationRecord\n    has_many :tokens\n  end\nend\n")
+          File.write(File.join(dir, "app", "models", "billing", "token.rb"),
+                     "module Billing\n  class Token < ApplicationRecord\n    belongs_to :invoice\n  end\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"),
+                     "create_table \"invoices\" do |t|\n  t.integer \"tokens_count\"\nend\n")
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+
+          expect(missing).to contain_exactly(
+            a_hash_including(model: "Billing::Invoice",
+                             suggestion: "Add counter_cache: true to belongs_to :invoice in Billing::Token")
+          )
+        end
+      end
+
+      it "finds the declared counter cache on a child nested in the same module body" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
+          File.write(File.join(dir, "app", "models", "billing", "invoice.rb"),
+                     "module Billing\n  class Invoice < ApplicationRecord\n    has_many :tokens\n  end\nend\n")
+          File.write(File.join(dir, "app", "models", "billing", "token.rb"),
+                     "module Billing\n  class Token < ApplicationRecord\n" \
+                     "    belongs_to :invoice, counter_cache: true\n  end\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"),
+                     "create_table \"invoices\" do |t|\n  t.integer \"tokens_count\"\nend\n")
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+
+          expect(missing).to be_empty
+        end
+      end
+
+      # The association's own class_name is the answer; the name it is
+      # written under is only the fallback.
+      it "names the class the association declares" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          File.write(File.join(dir, "app", "models", "post.rb"),
+                     "class Post < ApplicationRecord\n  has_many :remarks, class_name: 'Comment'\nend\n")
+          File.write(File.join(dir, "app", "models", "comment.rb"),
+                     "class Comment < ApplicationRecord\n  belongs_to :post\nend\n")
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"),
+                     "create_table \"posts\" do |t|\n  t.integer \"remarks_count\"\nend\n")
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+
+          expect(missing).to contain_exactly(
+            a_hash_including(suggestion: "Add counter_cache: true to belongs_to :post in Comment")
+          )
+        end
+      end
+
+      it "leaves the row out when the declared class is not a model in the app" do
+        missing = counter_cache_for(
+          "post.rb",
+          "class Post < ApplicationRecord\n  has_many :remarks, class_name: 'Comment'\nend\n",
+          "create_table \"posts\" do |t|\n  t.integer \"remarks_count\"\nend\n"
+        )
+
+        expect(missing).to be_empty
+      end
+
+      it "leaves the row out when nothing in the app answers the association name" do
+        missing = counter_cache_for(
+          "post.rb",
+          "class Post < ApplicationRecord\n  has_many :remarks\nend\n",
+          "create_table \"posts\" do |t|\n  t.integer \"remarks_count\"\nend\n"
+        )
+
+        expect(missing).to be_empty
+      end
+
+      # A :through association reaches its records over another one, so there
+      # is no belongs_to on the far side to hold the counter.
+      it "skips a has_many :through" do
+        missing = counter_cache_for(
+          "post.rb",
+          "class Post < ApplicationRecord\n  has_many :tokens, through: :sessions\nend\n",
+          "create_table \"posts\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to be_empty
+      end
+
+      it "names the polymorphic belongs_to by the association's :as option" do
+        missing = counter_cache_for(
+          "post.rb",
+          "class Post < ApplicationRecord\n  has_many :tokens, as: :holder\nend\n",
+          "create_table \"posts\" do |t|\n  t.integer \"tokens_count\"\nend\n"
+        )
+
+        expect(missing).to contain_exactly(
+          a_hash_including(suggestion: "Add counter_cache: true to belongs_to :holder in Token")
+        )
+      end
+    end
+
+    # Two models can demodulize to one word. The bare key is what the scan
+    # captures, so the controller's own namespace has to break the tie, or the
+    # row names whichever model happened to be written last.
+    describe "two models sharing one demodulized name" do
+      def n1_for(controller_path, controller_source)
+        Dir.mktmpdir do |dir|
+          %w[billing legacy].each do |ns|
+            FileUtils.mkdir_p(File.join(dir, "app", "models", ns))
+            File.write(File.join(dir, "app", "models", ns, "invoice.rb"),
+                       "module #{ns.capitalize}\n  class Invoice < ApplicationRecord\n" \
+                       "    has_many :lines\n  end\nend\n")
+          end
+          FileUtils.mkdir_p(File.dirname(File.join(dir, "app", "controllers", controller_path)))
+          File.write(File.join(dir, "app", "controllers", controller_path), controller_source)
+          described_class.new(RailsAiContext::StaticApp.new(dir)).call[:n_plus_one_risks]
+        end
+      end
+
+      it "takes the model in the controller's own namespace" do
+        risks = n1_for(File.join("billing", "invoices_controller.rb"), <<~RUBY)
+          module Billing
+            class InvoicesController < ApplicationController
+              def index
+                @invoices = Invoice.all
+                @invoices.each { |invoice| logger.info(invoice.lines.size) }
+              end
+            end
+          end
+        RUBY
+
+        expect(risks).to contain_exactly(a_hash_including(model: "Billing::Invoice", association: "lines"))
+      end
+
+      it "leaves the row out when no namespace picks one of them" do
+        risks = n1_for("invoices_controller.rb", <<~RUBY)
+          class InvoicesController < ApplicationController
+            def index
+              @invoices = Invoice.all
+              @invoices.each { |invoice| logger.info(invoice.lines.size) }
+            end
+          end
+        RUBY
+
+        expect(risks).to be_empty
+      end
+    end
+
+    it "names an eager-load candidate nested in a module body by its qualified constant" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "billing"))
+        File.write(File.join(dir, "app", "models", "billing", "invoice.rb"),
+                   "module Billing\n  class Invoice < ApplicationRecord\n" \
+                   "    has_many :tokens\n    has_many :notes\n  end\nend\n")
+
+        candidates = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:eager_load_candidates]
+
+        expect(candidates).to contain_exactly(a_hash_including(model: "Billing::Invoice"))
+      end
+    end
+
     it "detects Model.all in controllers" do
       expect(result[:model_all_in_controllers]).to be_an(Array)
       models = result[:model_all_in_controllers].map { |f| f[:model] }

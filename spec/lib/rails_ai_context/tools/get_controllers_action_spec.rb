@@ -14,7 +14,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
             { kind: "before_action", name: "set_post", only: %w[show edit update destroy] },
             { kind: "before_action", name: "authenticate_user!" }
           ],
-          strong_params: %w[post_params],
+          strong_params: [ { name: "post_params", permits: %w[title body] } ],
           file: "app/controllers/posts_controller.rb"
         }
       }
@@ -133,15 +133,18 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       MD
     end
 
-    it "strikes the skipped filter through in the whole-controller view too" do
+    # The skip names one action, so the filter runs on every other one. The
+    # whole-controller view keeps it and says where it is lost, which is what
+    # the per-action answers above say between them.
+    it "keeps a constrained skip in the whole-controller view and names its actions" do
       text = described_class.call(controller: "PostsController").content.first[:text]
 
       expect(text[/## Filters\n(?:- .*\n?)*/].to_s.strip).to eq(<<~MD.strip)
         ## Filters
+        - `before` **authenticate** _(from ApplicationController)_ (skipped on: index)
         - `before` **set_locale** _(from ApplicationController)_ (except: health)
         - `after` **track** _(from ApplicationController)_
         - `before` **set_post** (only: show)
-        - ~~authenticate~~ _(skipped)_
       MD
     end
   end

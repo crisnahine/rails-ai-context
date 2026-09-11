@@ -75,7 +75,10 @@ module RailsAiContext
             lines = [ "# Models (#{page[:total]})", "" ]
             paginated.each do |name|
               data = models[name]
-              next if data[:error]
+              if data[:error]
+                lines << unavailable_row(name, data)
+                next
+              end
               assoc_count = (data[:associations] || []).size
               val_count = (data[:validations] || []).size
               line = "- **#{name}**"
@@ -89,7 +92,10 @@ module RailsAiContext
             lines = [ "# Models (#{page[:total]})", "" ]
             paginated.each do |name|
               data = models[name]
-              next if data[:error]
+              if data[:error]
+                lines << unavailable_row(name, data)
+                next
+              end
               assocs = Serializers::SectionFacts.associations_list(data).join(", ")
               line = "- **#{name}**"
               line += " (table: #{data[:table_name]})" if data[:table_name]
@@ -106,6 +112,10 @@ module RailsAiContext
         end
       end
 
+      private_class_method def self.unavailable_row(name, data)
+        Serializers::SectionFacts.unread_row("- **#{name}**", data)
+      end
+
       private_class_method def self.format_model(name, data)
         # Static-tier entries already carry [STATIC]; a runtime entry with a
         # resolved table is reflection-confirmed, hence [VERIFIED].
@@ -118,6 +128,10 @@ module RailsAiContext
         end
         lines = [ "# #{name}#{header_tag}", "" ]
         lines << "**Table:** `#{data[:table_name]}`" if data[:table_name]
+        # A base class is not a concern, and the child may have no concerns at
+        # all, so this stands outside that section.
+        bases_unread = data[:bases_unread]
+        lines << unread_bases_line(bases_unread) if bases_unread&.any?
 
         # File structure - compact one-line format
         structure = extract_model_structure(name)
@@ -189,11 +203,13 @@ module RailsAiContext
             .map { |a| a[:name] }
             .to_set
 
-          # Deduplicate validations with same kind and attributes
+          # The options are part of the key: a model can validate one
+          # attribute twice under different conditions, and the two rules are
+          # different declarations, not a repeat of one.
           seen_validations = Set.new
           seen_inclusions = {}
           data[:validations].each do |v|
-            dedup_key = "#{v[:kind]}:#{v[:attributes].sort.join(',')}"
+            dedup_key = [ v[:kind].to_s, v[:attributes].sort, v[:options] ]
             next if seen_validations.include?(dedup_key)
             seen_validations << dedup_key
             attrs = v[:attributes].join(", ")
@@ -271,7 +287,7 @@ module RailsAiContext
         if data[:callbacks]&.any?
           lines << "" << "## Callbacks"
           data[:callbacks].each do |type, methods|
-            lines << "- `#{type}`: #{methods.join(', ')}"
+            lines << "- `#{type}`: #{methods.map { |m| callback_target(m.to_s) }.join(', ')}"
           end
         end
 
@@ -299,8 +315,7 @@ module RailsAiContext
         if data[:encryption_details]&.any?
           lines << "" << "## Encryption Details"
           data[:encryption_details].each do |ed|
-            detail_str = ed.is_a?(Hash) ? "**#{ed[:attribute]}** (#{ed.reject { |k, _| k == :attribute }.map { |k, v| "#{k}: #{v}" }.join(', ')})" : ed.to_s
-            lines << "- #{detail_str}"
+            lines << "- #{encryption_detail_line(ed)}"
           end
         end
 
@@ -308,8 +323,7 @@ module RailsAiContext
         if data[:normalizes_details]&.any?
           lines << "" << "## Normalizes Details"
           data[:normalizes_details].each do |nd|
-            detail_str = nd.is_a?(Hash) ? "**#{nd[:attribute]}** - #{nd[:with] || nd[:block]}" : nd.to_s
-            lines << "- #{detail_str}"
+            lines << "- #{normalization_line(nd)}"
           end
         end
 
@@ -340,20 +354,23 @@ module RailsAiContext
         end
 
         # The payload is already membership-filtered at the introspector seam
-        # (ConcernMembership), so render it as-is.
-        if data[:concerns]&.any?
-          app_concerns = data[:concerns]
-          if app_concerns.any?
-            lines << "" << "## Concerns"
-            app_concerns.each do |c|
-              methods = extract_concern_methods(c)
-              if methods&.any?
-                lines << "- **#{c}** - #{methods.join(', ')}"
-              else
-                lines << "- #{c}"
-              end
+        # (ConcernMembership), so render it as-is. A model whose every concern
+        # was hidden still reaches the section: the hidden count is the only
+        # thing that says its declarations went somewhere.
+        hidden = data[:concerns_hidden].to_i
+        if data[:concerns]&.any? || hidden.positive?
+          lines << "" << "## Concerns"
+          Array(data[:concerns]).each do |c|
+            methods = extract_concern_methods(c)
+            if methods&.any?
+              lines << "- **#{c}** - #{methods.join(', ')}"
+            else
+              lines << "- #{c}"
             end
           end
+          unread = data[:concerns_unread]
+          lines << unread_concerns_line(unread) if unread&.any?
+          lines << "_#{count_phrase(hidden, "concern")} hidden by `excluded_concerns`._" if hidden.positive?
         end
 
         # Class methods - only show methods defined in the actual model file
@@ -407,14 +424,41 @@ module RailsAiContext
         RailsAiContext::Payload.model_file(cached_context, model_name)
       end
 
-      private_class_method def self.model_source_path(model_name)
-        rails_app.root.join(relative_model_path(model_name))
+      # A carried path can name a gem rather than the app, and joining that to
+      # the app root opens nothing. One reader answers both shapes.
+      private_class_method def self.resolved_model_path(model_name)
+        RailsAiContext::PortablePath.resolve(relative_model_path(model_name), rails_app.root.to_s)
+      end
+
+      # The macro's options are nested under an :options key. Printing that
+      # hash leans on Hash#to_s, whose format changed in Ruby 3.4, so the
+      # pairs are spelled here and an empty set drops the parenthesis.
+      private_class_method def self.encryption_detail_line(ed)
+        return ed.to_s unless ed.is_a?(Hash)
+
+        pairs = ed.reject { |key, _| key == :field }.flat_map do |key, value|
+          value.is_a?(Hash) ? value.map { |k, v| "#{k}: #{v}" } : "#{key}: #{value}"
+        end
+
+        pairs.any? ? "**#{ed[:field]}** (#{pairs.join(', ')})" : "**#{ed[:field]}**"
+      end
+
+      # A transformation the parser could not resolve is a marker, not the
+      # name of a transformation, so it never follows the dash.
+      private_class_method def self.normalization_line(nd)
+        return nd.to_s unless nd.is_a?(Hash)
+
+        transformation = nd[:transformation]
+        return "**#{nd[:field]}** #{RailsAiContext::Confidence::INFERRED}" if transformation.nil? ||
+          transformation == RailsAiContext::Confidence::INFERRED
+
+        "**#{nd[:field]}** - #{transformation}"
       end
 
       # Extract bodies of custom validate methods (single-line or first meaningful line)
       private_class_method def self.extract_custom_validate_bodies(model_name, method_names)
-        path = model_source_path(model_name)
-        return {} unless File.exist?(path) && File.size(path) <= max_file_size
+        path = resolved_model_path(model_name)
+        return {} unless path && File.exist?(path) && File.size(path) <= max_file_size
 
         source = RailsAiContext::SafeFile.read(path)
         return {} unless source
@@ -434,8 +478,8 @@ module RailsAiContext
 
       # The model's own source, nil when the file is missing or too large.
       private_class_method def self.model_source(model_name)
-        path = model_source_path(model_name)
-        return nil unless File.exist?(path) && File.size(path) <= max_file_size
+        path = resolved_model_path(model_name)
+        return nil unless path && File.exist?(path) && File.size(path) <= max_file_size
 
         RailsAiContext::SafeFile.read(path)
       end
@@ -449,6 +493,33 @@ module RailsAiContext
       private_class_method def self.extract_method_signatures(model_name)
         source = model_source(model_name) or return nil
         Introspectors::ActionResolver.public_methods_from_source(source, owner: model_name)
+      end
+
+      # On the booted tier reflection has already answered associations,
+      # validations and enums for the concern, so the bare line overstates
+      # what an unread file costs.
+      private_class_method def self.unread_concerns_line(unread)
+        "#{RailsAiContext::Confidence::UNAVAILABLE} #{count_phrase(unread.size, "concern")} " \
+          "not read#{unread_gap_label}: #{unread.join(', ')}"
+      end
+
+      # Reflection inherits associations, validations and enums onto the child,
+      # so an unread base costs the same keys an unread concern does.
+      # The link to the next class up is written in the file the walk could not
+      # open, so the static tier ends the chain there. The booted tier has the
+      # class object and steps over it.
+      private_class_method def self.unread_bases_line(unread)
+        tail = RailsAiContext.static_tier? ? ". The static tier cannot follow the chain past a file it could not read" : ""
+        "#{RailsAiContext::Confidence::UNAVAILABLE} #{count_phrase(unread.size, "base class")} " \
+          "not read#{unread_gap_label}: #{unread.join(', ')}#{tail}"
+      end
+
+      private_class_method def self.unread_gap_label
+        return "" if RailsAiContext.static_tier?
+
+        keys = Introspectors::ModelIntrospector::MERGED_CONCERN_KEYS -
+          Introspectors::ModelIntrospector::REFLECTED_CONCERN_KEYS
+        " for #{keys.to_sentence(last_word_connector: " and ")}"
       end
 
       # Public method names from a concern's source file
@@ -467,8 +538,8 @@ module RailsAiContext
 
       private_class_method def self.extract_model_structure(model_name)
         path = relative_model_path(model_name)
-        full_path = rails_app.root.join(path)
-        return nil unless File.exist?(full_path)
+        full_path = resolved_model_path(model_name)
+        return nil unless full_path && File.exist?(full_path)
         return nil if File.size(full_path) > max_file_size
 
         source_lines = (RailsAiContext::SafeFile.read(full_path) || "").lines

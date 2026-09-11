@@ -47,7 +47,7 @@ rails-ai-context version            # Show version
 
 ## How standalone mode works
 
-1. **Pre-loads the gem** before Rails boots - the CLI loads `rails-ai-context` before `Bundler.setup`
+1. **Loads only its boot shim** before the app - the binary requires the two files it needs to boot Rails, then `config/environment.rb`, and requires the gem itself only after the boot returns
 2. **Restores `$LOAD_PATH`** entries that `Bundler.setup` strips (since the gem isn't in the Gemfile)
 3. **YAML config** - uses `.rails-ai-context.yml` instead of a Ruby initializer
 
@@ -92,20 +92,21 @@ skip_tools:
 
 ### YAML limitations
 
-Two config options are Ruby-only and can't be set via YAML:
+One config option is Ruby-only and can't be set via YAML:
 
-- `custom_tools` - requires Ruby class references
-- `excluded_concerns` - requires Regex objects
+- `custom_tools` - a tool class is a Ruby class reference, which a YAML file cannot name
 
-For these, use the initializer approach (in-Gemfile mode).
+For that one, use the initializer approach (in-Gemfile mode). Naming it in the YAML file warns that it is initializer-only and ignores it.
+
+Every other option is a YAML key, `excluded_concerns` included: write the patterns as strings and each is compiled at load. A YAML list replaces the framework defaults rather than adding to them, and a string is an unanchored pattern - see [Configuration](CONFIGURATION.md#filtering).
+
+A key the gem does not know warns on stderr and is ignored; the rest of the file still applies.
 
 ### Precedence
 
-If both exist, the initializer takes priority over YAML:
+In standalone mode `.rails-ai-context.yml` is the only config source. The gem is not loaded while `config/initializers` runs, so a `config/initializers/rails_ai_context.rb` contributes nothing: the generated file, which guards on `defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)`, is a silent no-op, and one without that guard raises `NoMethodError` (the binary opens the `RailsAiContext` namespace before the boot, so the constant exists but `configure` is not defined on it) and drops the command into the static tier.
 
-1. `config/initializers/rails_ai_context.rb` (highest)
-2. `.rails-ai-context.yml`
-3. Defaults
+For in-Gemfile installs both sources apply and merge key by key - see [Precedence](CONFIGURATION.md#precedence).
 
 ## Ruby version manager compatibility
 
@@ -155,7 +156,11 @@ ruby -v                       # Right Ruby version?
 
 ### "YAML config not loading"
 
-Check that no initializer exists - if `config/initializers/rails_ai_context.rb` runs, YAML is skipped.
+The file is read from the app root, once, at boot. Check:
+
+1. You are in the app root, or passed `--app-path`.
+2. The key is one the gem knows. An unknown key warns on stderr and is ignored; `custom_tools` is initializer-only.
+3. The file is readable and parses. A directory at that path, an unreadable file or broken YAML warns on stderr and keeps the defaults.
 
 ### Commands hang
 

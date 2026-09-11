@@ -68,8 +68,8 @@ module RailsAiContext
           ast_data[:validations].each do |v|
             attrs = v[:attributes] || []
             attrs.each do |attr|
-              validations << { model: model, attachment: attr, type: "content_type" } if v[:options].key?(:content_type)
-              validations << { model: model, attachment: attr, type: "size" } if v[:options].key?(:size)
+              validations << { model: model, attachment: attr, type: "content_type" } if attachment_rule?(v, :content_type)
+              validations << { model: model, attachment: attr, type: "size" } if attachment_rule?(v, :size)
             end
           end
         end
@@ -77,6 +77,14 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] extract_attachment_validations failed: #{e.message}" if ENV["DEBUG"]
         []
+      end
+
+      # `validates :avatar, content_type: [...]` names its validator in the
+      # option key, so the listener reports it as the rule's kind; a rule
+      # written with the same key beside another kind still carries it as an
+      # option.
+      def attachment_rule?(rule, key)
+        rule[:kind].to_s == key.to_s || rule[:options].key?(key)
       end
 
       def extract_variants

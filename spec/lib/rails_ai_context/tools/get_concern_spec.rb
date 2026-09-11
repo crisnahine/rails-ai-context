@@ -95,6 +95,22 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
 
         expect(text).not_to include("Searchable")
         expect(text).to include("# Concerns (1)")
+        expect(text).to include("1 concern hidden by `excluded_concerns`")
+      ensure
+        RailsAiContext.configuration.excluded_concerns = original
+      end
+
+      # An empty listing and a fully excluded one read the same, so the
+      # answer blamed the app for a setting the user chose.
+      it "says the exclusions emptied the listing rather than that the app has none" do
+        original = RailsAiContext.configuration.excluded_concerns
+        RailsAiContext.configuration.excluded_concerns = [ /Searchable/, /Authenticatable/ ]
+
+        text = described_class.call.content.first[:text]
+
+        # The same fact as the listing's own line, so it is worded the same.
+        expect(text).to include("2 concerns hidden by `excluded_concerns`")
+        expect(text).not_to include("No concerns found in")
       ensure
         RailsAiContext.configuration.excluded_concerns = original
       end
@@ -400,6 +416,43 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("Callbacks")
         expect(text).to include("before_save")
         expect(text).to include("after_create")
+      end
+
+      # The section used to spell its own macro list, so a callback the
+      # Macros section named was missing from the Callbacks section.
+      it "names every callback the macros section names" do
+        File.write(File.join(model_concerns_dir, "rate_limitable.rb"), <<~RUBY)
+          module RateLimitable
+            extend ActiveSupport::Concern
+
+            included do
+              before_save :normalize
+              after_commit :announce, on: :create
+              after_rollback :undo
+              after_touch :bust
+              after_initialize :seed
+              after_find :log
+              after_create_commit :ping
+              around_create Some::CallbackObject
+              after_update do
+                bump!
+              end
+            end
+          end
+        RUBY
+
+        text = described_class.call(name: "RateLimitable").content.first[:text]
+        callbacks = text.split("## Callbacks").last
+
+        expect(callbacks).to include("before_save :normalize")
+        expect(callbacks).to include("after_commit :announce, on: :create")
+        expect(callbacks).to include("after_rollback :undo")
+        expect(callbacks).to include("after_touch :bust")
+        expect(callbacks).to include("after_initialize :seed")
+        expect(callbacks).to include("after_find :log")
+        expect(callbacks).to include("after_create_commit :ping")
+        expect(callbacks).to include("around_create Some::CallbackObject")
+        expect(callbacks).to include("after_update do")
       end
     end
 

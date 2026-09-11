@@ -154,9 +154,11 @@ end
 
 ## Generated Files
 
-`rails ai:context` generates **29 files** across all AI assistants:
+`rails ai:context` generates **20 files** across all AI assistants:
 
-### Claude Code (5 files)
+A file whose section has nothing in it is not written. An app with no models gets no `.claude/rules/rails-models.md`, and every surface names the file and the reason so a deliberate omission is not mistaken for a failed run. `rails ai:context` and the installer print `➖  .claude/rules/rails-models.md (no models)`; the CLI and the watcher print `Not applicable: .claude/rules/rails-models.md (no models)`.
+
+### Claude Code (6 files)
 
 | File | Purpose | Notes |
 |------|---------|-------|
@@ -165,6 +167,7 @@ end
 | `.claude/rules/rails-models.md` | Model listing with associations | Auto-loaded by Claude Code alongside CLAUDE.md. |
 | `.claude/rules/rails-context.md` | Project context and conventions | Auto-loaded by Claude Code alongside CLAUDE.md. |
 | `.claude/rules/rails-mcp-tools.md` | Full MCP tool reference | Parameters, detail levels, pagination, workflow guide. |
+| `.claude/rules/rails-components.md` | View component listing | Written only when the app has view components. |
 
 ### OpenCode (3 files)
 
@@ -174,7 +177,7 @@ end
 | `app/models/AGENTS.md` | Model reference | Auto-loaded by OpenCode when reading files in `app/models/`. |
 | `app/controllers/AGENTS.md` | Controller reference | Auto-loaded by OpenCode when reading files in `app/controllers/`. |
 
-### Cursor (4 files)
+### Cursor (5 files)
 
 | File | Purpose | Notes |
 |------|---------|-------|
@@ -182,6 +185,7 @@ end
 | `.cursor/rules/rails-models.mdc` | Model reference | `globs: app/models/**/*.rb` - auto-attaches when editing models. |
 | `.cursor/rules/rails-controllers.mdc` | Controller reference | `globs: app/controllers/**/*.rb` - auto-attaches when editing controllers. |
 | `.cursor/rules/rails-mcp-tools.mdc` | MCP tool reference | `alwaysApply: false` - agent-requested when relevant. |
+| `.cursorrules` | Legacy fallback | Read by older Cursor clients. Wrapped in markers, so hand-written content around it survives. |
 
 ### GitHub Copilot (5 files)
 
@@ -203,6 +207,15 @@ end
 
 Commit **all files except `.ai-context.json`** (which is gitignored). This gives your entire team AI-assisted context automatically.
 
+### Telling a static file from a booted one
+
+A run that could not boot the app, or was given `--no-boot`, reads source files
+instead of a running Rails. The counts differ, so every generated file that
+states them says so: a `[STATIC]` line under the header, and a
+`"tier": "static"` key in `.ai-context.json`. The MCP tool references carry no
+app counts, so they carry no line. A booted run says nothing extra, so an
+unmarked file was generated with the app running.
+
 ---
 
 ## All Commands
@@ -211,7 +224,7 @@ Commit **all files except `.ai-context.json`** (which is gitignored). This gives
 
 | Command | Mode | Format | Description |
 |---------|------|--------|-------------|
-| `rails ai:context` | compact | all | Generate all 29 context files |
+| `rails ai:context` | compact | all | Generate all 20 context files |
 | `rails ai:context:full` | full | all | Generate all files in full mode |
 | `rails ai:context:claude` | compact | Claude | CLAUDE.md + .claude/rules/ |
 | `rails ai:context:opencode` | compact | OpenCode | AGENTS.md + per-directory AGENTS.md |
@@ -270,7 +283,7 @@ rails-ai-context help                      # Show all commands
 
 Must be run from your Rails app root directory (requires `config/environment.rb`).
 
-**Config:** Standalone mode reads from `.rails-ai-context.yml` (created by `init`). If no config file exists, defaults are used. If the gem is also in the Gemfile, the initializer takes precedence over the YAML file.
+**Config:** Standalone mode reads from `.rails-ai-context.yml` (created by `init`), and that is its only config source - the gem is not loaded while `config/initializers` runs. If no config file exists, defaults are used. With the gem in the Gemfile the two merge key by key ([Precedence](CONFIGURATION.md#precedence)).
 
 ### Legacy command
 
@@ -365,7 +378,7 @@ Returns database schema: tables, columns, indexes, foreign keys.
 | `detail` | string | `summary` / `standard` (default) / `full` |
 | `limit` | integer | Max tables to return. Default: 50 (summary), 15 (standard), 5 (full). |
 | `offset` | integer | Skip tables for pagination. Default: 0. |
-| `format` | string | `markdown` (default) / `json` |
+| `format` | string | `markdown` (default) / `json`. JSON returns the same page of tables keyed by table name, or the single table's own data when `table` is given. |
 
 **Examples:**
 
@@ -383,7 +396,7 @@ rails_get_schema(detail: "summary", limit: 20, offset: 40)
   → Tables 41-60 with column counts
 
 rails_get_schema(detail: "full", format: "json")
-  → Full schema as JSON (all tables)
+  → The same page of tables as JSON, with indexes and foreign keys
 ```
 
 ### rails_get_model_details
@@ -664,13 +677,14 @@ Ripgrep-powered regex search across the codebase.
 | `path` | string | Subdirectory to search in (e.g. `app/models`, `config`). Default: entire app. |
 | `file_type` | string | Filter by file extension (e.g. `rb`, `erb`, `js`). Alphanumeric only. |
 | `match_type` | string | `any` (default), `definition` (def lines), `class` (class/module lines), `call` (call sites only), `trace` (**full picture** - definition with class context + source code + internal calls + sibling methods + callers with route chain + test coverage separated). |
-| `exact_match` | boolean | Match whole words only (wraps pattern in `\b` boundaries). Default: false. |
+| `exact_match` | boolean | Match the pattern literally, whole-word where its edges are word characters. `def reblog?` does not match `def reblog`. Default: false. |
 | `exclude_tests` | boolean | Exclude test/spec/features directories. Default: false. |
 | `group_by_file` | boolean | Group results by file with match counts. Default: false. |
-| `offset` | integer | Skip this many results for pagination. Default: 0. |
-| `context_lines` | integer | Lines of context before and after each match (like grep -C). Default: 2, max: 5. |
+| `offset` | integer | Skip this many lines for pagination. Default: 0. |
+| `limit` | integer | Max lines to return; the default is sized in matches. |
+| `context_lines` | integer | Lines of context before and after each match (like grep -C). Default: 2, max: 5. Needs ripgrep; without it the search returns match lines only. |
 
-Smart result limiting: <10 results shows all, 10-100 shows half, >100 caps at 100. Use `offset` for pagination.
+Smart result limiting, sized in matches: under 10 shows all, 10-100 shows half, over 100 caps at 100. `offset` and `limit` count emitted lines, so a search with context returns more lines than matches. The header says how many matches were found, how many the page shows, and whether the line cap was reached. Once it names the cap, the count covers only the lines it scanned, so it is written `N+`.
 
 **Examples:**
 
@@ -789,20 +803,20 @@ rails_get_concern(type: "model")
 
 ### rails_get_callbacks
 
-Get ActiveRecord model callbacks in execution order: before/after/around for validation, save, create, update, destroy. Specify a model for one model's callbacks, or omit to see all models with their callbacks.
+Get ActiveRecord model callbacks grouped by type, in Rails event order: before/after/around for validation, save, create, update, destroy. Specify a model for one model's callbacks, or omit to see all models with their callbacks.
 
 **Parameters:**
 
 | Param | Type | Description |
 |-------|------|-------------|
 | `model` | string | Model class name (e.g. `User`, `Post`). Omit to see all models with their callbacks. |
-| `detail` | string | `summary` / `standard` (default) / `full`. summary: model names + callback counts. standard: callbacks in execution order. full: callbacks with method source code. |
+| `detail` | string | `summary` / `standard` (default) / `full`. summary: model names + callback counts. standard: callbacks by type in Rails event order. full: callbacks with method source code. |
 
 **Examples:**
 
 ```
 rails_get_callbacks(model: "User")
-  → User's callbacks in execution order: before_validation, after_validation, before_save, etc.
+  → User's callbacks by type, in Rails event order: before_validation, after_validation, before_save, etc.
 
 rails_get_callbacks(detail: "summary")
   → All models with callback counts, sorted by most callbacks
@@ -811,7 +825,7 @@ rails_get_callbacks(model: "Order", detail: "full")
   → Order's callbacks with the actual method source code for each callback
 ```
 
-**Returns:** Callbacks organized in Rails execution order. Includes concern-provided callbacks. Full detail shows the Ruby source code of each callback method with line numbers.
+**Returns:** Callbacks grouped by type, in Rails event order. Includes concern-provided callbacks, with their bodies read from the concern file. Within one type the order is declaration order, not the order Rails registered them in.
 
 ### rails_get_helper_methods
 
@@ -1027,7 +1041,7 @@ In addition to tools, the gem registers static MCP resources that AI clients can
 | `rails://schema` | Full database schema (JSON) |
 | `rails://routes` | All routes (JSON) |
 | `rails://conventions` | Detected patterns and architecture (JSON) |
-| `rails://gems` | Notable gems with categories (JSON) |
+| `rails://gems` | Notable gems with categories, plus `declared_ruby_version`, from the lockfile's RUBY VERSION section or, failing that, the Gemfile's `ruby` line (JSON) |
 | `rails://controllers` | All controllers with actions and filters (JSON) |
 | `rails://config` | Application configuration (JSON) |
 | `rails://tests` | Test infrastructure details (JSON) |
@@ -1347,12 +1361,12 @@ end
 | `max_schema_file_size` | Integer | `10_000_000` | schema.rb / structure.sql parse limit (10MB) |
 | `max_view_total_size` | Integer | `10_000_000` | Doctor threshold: app/views above this warns (10MB). Not a read cap |
 | `max_view_file_size` | Integer | `1_000_000` | Named in that doctor warning's fix line (1MB). Not a read cap |
-| `max_search_results` | Integer | `200` | Max search results per call |
+| `max_search_results` | Integer | `200` | Max lines a search may emit per call, matches and context together |
 | `max_validate_files` | Integer | `50` | Max files per validate call |
 | `excluded_controllers` | Array | `DeviseController`, etc. | Controller classes hidden from listings |
 | `excluded_route_prefixes` | Array | `action_mailbox/`, `active_storage/`, etc. | Route controller prefixes hidden with `app_only` |
 | `excluded_association_names` | Array | 7 framework associations | Framework association names hidden from model output |
-| `excluded_concerns` | Array | framework regex patterns | Regex patterns for concerns to hide from model output |
+| `excluded_concerns` | Array of Regex or String | framework regex patterns | Patterns for concerns to hide. A YAML list replaces the framework defaults; the initializer's `+=` adds to them |
 | `excluded_filters` | Array | `verify_authenticity_token`, etc. | Framework filter names hidden from controller output |
 | `excluded_middleware` | Array | standard Rails middleware | Default middleware hidden from config output |
 | `search_extensions` | Array | `rb js erb yml yaml json ts tsx vue svelte haml slim` | File extensions the Ruby fallback searches (ripgrep, when installed, searches every file) |

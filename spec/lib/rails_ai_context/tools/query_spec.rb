@@ -346,11 +346,14 @@ RSpec.describe RailsAiContext::Tools::Query do
         expect(result.error?).to be true
       end
 
-      it "keeps policy blocks informational (no error flag)" do
+      # The same contract every path-taking tool keeps: a refusal on policy is
+      # a question left unanswered, so a script reading the exit status can
+      # tell it from a result.
+      it "flags a policy block as an error result" do
         result = described_class.call(sql: "UPDATE users SET email = 'x'")
         text = result.content.first[:text]
         expect(text).to include("Blocked")
-        expect(result.error?).to be false
+        expect(result.error?).to be true
       end
 
       it "keeps successful queries unflagged" do

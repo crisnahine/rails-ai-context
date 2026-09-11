@@ -36,6 +36,24 @@ module RailsAiContext
       check_performance_view_count
     ].freeze
 
+    ICONS = { pass: "[PASS]", warn: "[WARN]", fail: "[FAIL]" }.freeze
+    EMOJI_ICONS = { pass: "✅", warn: "⚠️ ", fail: "❌" }.freeze
+
+    # An icon's character count is not its display width ("✅" is one
+    # character and two columns), so the Fix line is indented by a constant
+    # rather than by the icon above it.
+    FIX_INDENT = " " * 9
+
+    # The report the CLI and the rake task print, so the two say the same
+    # thing about the same result.
+    def self.report_lines(result, icons: ICONS)
+      result[:checks].flat_map do |check|
+        lines = [ "  #{icons[check.status]} #{check.name}: #{check.message}" ]
+        lines << "#{FIX_INDENT}Fix: #{check.fix}" if check.fix
+        lines
+      end
+    end
+
     attr_reader :app
 
     def initialize(app = nil)
@@ -45,7 +63,7 @@ module RailsAiContext
     def run
       results = CHECKS.filter_map do |check|
         send(check)
-      rescue StandardError => e
+      rescue StandardError, ScriptError => e
         $stderr.puts "[rails-ai-context] Doctor check #{check} failed: #{e.class}: #{e.message}"
         nil
       end
@@ -133,7 +151,7 @@ module RailsAiContext
       dir = File.join(app.root, "app/views")
       if Dir.exist?(dir)
         count = Dir.glob(File.join(dir, "**/*")).reject { |f| File.directory?(f) }.size
-        Check.new(name: "Views", status: :pass, message: "#{count_phrase(count, "view file")} found", fix: nil)
+        Check.new(name: "Views", status: :pass, message: "#{count_phrase(count, "file")} under app/views", fix: nil)
       else
         Check.new(name: "Views", status: :warn, message: "No view files", fix: nil)
       end
@@ -239,12 +257,19 @@ module RailsAiContext
     # A guard written before the respond_to? check was added only tests
     # `defined?(RailsAiContext)`, which the gemspec's version stub satisfies
     # even outside this gem's Bundler group - `.configure` then raises
-    # NoMethodError in that environment.
+    # NoMethodError in that environment. No guard at all fails the same way
+    # wherever the gem is not loaded, standalone mode included.
     def check_initializer_guard
       path = File.join(app.root, "config/initializers/rails_ai_context.rb")
       return nil unless File.exist?(path)
 
       content = File.read(path)
+      if Install::InitializerFile.configures?(content) && !Install::InitializerFile.any_guard_before_configure?(content)
+        return Check.new(name: "Initializer guard", status: :warn,
+          message: "config/initializers/rails_ai_context.rb has no recognised guard around the `configure` block",
+          fix: "Wrap it in `if defined?(RailsAiContext) && RailsAiContext.respond_to?(:configure)` - " \
+               "without one it raises where the gem is not loaded, such as standalone mode or a group-scoped Gemfile entry")
+      end
       return nil unless Install::InitializerFile.bare_guard?(content)
 
       Check.new(name: "Initializer guard", status: :warn,
@@ -392,30 +417,47 @@ module RailsAiContext
 
     def check_introspector_health
       config = RailsAiContext.configuration
-      errors = []
+      introspector = RailsAiContext::Introspector.new(app)
+      failures = []
 
       config.introspectors.each do |name|
-        begin
-          result = RailsAiContext::Introspector.new(app).send(:resolve_introspector, name).call
-          errors << name.to_s if result.is_a?(Hash) && result[:error]
-        rescue => e
-          errors << "#{name} (#{e.message.truncate(50)})"
-        end
+        result = introspector.send(:resolve_introspector, name).call
+        failures << [ name.to_s, result[:error].to_s ] if result.is_a?(Hash) && result[:error]
+      rescue StandardError, ScriptError => e
+        # ScriptError included: a syntax-broken app file must cost one
+        # introspector, not the diagnosis the user ran doctor for.
+        failures << [ name.to_s, "#{e.class}: #{e.message}" ]
       end
 
-      if errors.empty?
+      if failures.empty?
         Check.new(name: "Introspector health", status: :pass,
           message: "All #{count_phrase(config.introspectors.size, "introspector")} return data " \
             "(these feed the #{count_phrase(Server.builtin_tools.size, "MCP tool")})",
           fix: nil)
       else
         Check.new(name: "Introspector health", status: :warn,
-          message: "#{count_phrase(errors.size, "introspector")} returned errors: #{errors.join(', ')}",
-          fix: "Check if the app has the required features (e.g., stimulus needs app/javascript/controllers/)")
+          message: "#{count_phrase(failures.size, "introspector")} returned errors: #{failures.map(&:first).join(', ')}",
+          fix: introspector_failure_hint(failures))
       end
-    rescue => e
+    rescue StandardError, ScriptError => e
       $stderr.puts "[rails-ai-context] check_introspector_health failed: #{e.message}" if ENV["DEBUG"]
       nil
+    end
+
+    MAX_SHOWN_FAILURES = 3
+
+    def introspector_failure_hint(failures)
+      shown = failures.first(MAX_SHOWN_FAILURES).map { |name, message| "#{name}: #{first_error_line(message)}" }
+      remaining = failures.size - MAX_SHOWN_FAILURES
+      shown << "and #{count_phrase(remaining, "more introspector")}" if remaining.positive?
+      shown.join("; ")
+    end
+
+    # Plain slicing, not truncate: this runs on the rescue path, where an
+    # app without ActiveSupport's core_ext loaded would lose the whole check.
+    def first_error_line(message)
+      line = message.to_s.lines.first.to_s.strip
+      line.length > 120 ? "#{line[0, 117]}..." : line
     end
 
     def check_preset_coverage
@@ -656,11 +698,11 @@ module RailsAiContext
 
       if pct >= 80
         Check.new(name: "View aggregation size", status: :warn,
-          message: "#{count_phrase(count, "view file")} totaling #{(total_size / 1_000_000.0).round(1)}MB (#{pct}% of #{(limit / 1_000_000.0).round}MB limit for UI pattern extraction)",
+          message: "#{count_phrase(count, "erb/haml/slim template")} totaling #{(total_size / 1_000_000.0).round(1)}MB (#{pct}% of #{(limit / 1_000_000.0).round}MB limit for UI pattern extraction)",
           fix: "Increase `config.max_view_total_size` or `config.max_view_file_size`")
       else
         Check.new(name: "View aggregation size", status: :pass,
-          message: "#{count_phrase(count, "view file")} (#{(total_size / 1024.0).round}KB total, within limits)",
+          message: "#{count_phrase(count, "erb/haml/slim template")} (#{(total_size / 1024.0).round}KB total, within limits)",
           fix: nil)
       end
     end

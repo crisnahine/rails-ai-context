@@ -98,6 +98,11 @@ Adding or removing a fixture model means changing that spec in the same commit.
 4. Update CHANGELOG.md under an `## [Unreleased]` section
 5. Open a PR with a clear title and description
 
+## Releasing
+
+`docs/RELEASING.md` is the checklist. The tag publishes, not the merge, and the
+release gate wants a green E2E run for the tagged commit before it will start.
+
 ## Reporting Bugs
 
 Open an issue at https://github.com/crisnahine/rails-ai-context/issues with:

@@ -65,6 +65,101 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  describe ".report_lines" do
+    # The struct check below is not what a user reads. The printed report is.
+    it "prints the introspector's own error under its check" do
+      allow(RailsAiContext.configuration).to receive(:introspectors).and_return([ :database_stats ])
+      allow(ActiveRecord::Base).to receive(:connection)
+        .and_raise(StandardError, "Database not found: no_such_db. Run bin/rails db:create")
+
+      lines = described_class.report_lines(doctor.run)
+      index = lines.index { |line| line.include?("Introspector health") }
+
+      expect(lines[index]).to include("[WARN] Introspector health:")
+      expect(lines[index + 1]).to include("Fix: database_stats: Database not found: no_such_db")
+      expect(lines[index + 1]).not_to include("stimulus")
+    end
+
+    # The emoji icons are not one width, so indenting the Fix line by the
+    # icon above it put the rake report's Fix lines at three columns.
+    it "indents every Fix line to the same column under the emoji icons" do
+      result = {
+        checks: [
+          described_class::Check.new(name: "Schema", status: :fail, message: "missing", fix: "run db:migrate"),
+          described_class::Check.new(name: "Views", status: :warn, message: "none", fix: "add a view"),
+          described_class::Check.new(name: "Gems", status: :pass, message: "ok", fix: nil)
+        ]
+      }
+
+      lines = described_class.report_lines(result, icons: described_class::EMOJI_ICONS)
+      fixes = lines.grep(/Fix:/)
+
+      expect(fixes.size).to eq(2)
+      expect(fixes.map { |line| line.index("Fix:") }.uniq.size).to eq(1)
+    end
+  end
+
+  describe "#check_introspector_health" do
+    subject(:check) { doctor.send(:check_introspector_health) }
+
+    def only_introspectors(*names)
+      allow(RailsAiContext.configuration).to receive(:introspectors).and_return(names)
+    end
+
+    it "quotes the error the introspector returned" do
+      only_introspectors(:database_stats)
+      allow(ActiveRecord::Base).to receive(:connection)
+        .and_raise(StandardError, "Database not found: no_such_db. Run bin/rails db:create")
+
+      expect(check.status).to eq(:warn)
+      expect(check.message).to include("database_stats")
+      expect(check.fix).to include("database_stats: Database not found: no_such_db")
+      expect(check.fix).not_to include("stimulus")
+    end
+
+    it "keeps the message line to names when an introspector raises" do
+      only_introspectors(:gems)
+      allow_any_instance_of(RailsAiContext::Introspectors::GemIntrospector)
+        .to receive(:call).and_raise(StandardError, "no Gemfile.lock here")
+
+      expect(check.message).to eq("1 introspector returned errors: gems")
+      expect(check.fix).to include("no Gemfile.lock here")
+    end
+
+    it "reports an introspector that raises a ScriptError" do
+      only_introspectors(:gems)
+      allow_any_instance_of(RailsAiContext::Introspectors::GemIntrospector)
+        .to receive(:call).and_raise(SyntaxError, "app/models/user.rb:3: syntax error")
+
+      expect(check.status).to eq(:warn)
+      expect(check.fix).to include("app/models/user.rb:3: syntax error")
+    end
+
+    it "shows the first three errors and counts the rest" do
+      only_introspectors(:gems, :routes, :schema, :controllers, :views)
+      [
+        RailsAiContext::Introspectors::GemIntrospector,
+        RailsAiContext::Introspectors::RouteIntrospector,
+        RailsAiContext::Introspectors::SchemaIntrospector,
+        RailsAiContext::Introspectors::ControllerIntrospector,
+        RailsAiContext::Introspectors::ViewIntrospector
+      ].each do |klass|
+        allow_any_instance_of(klass).to receive(:call).and_raise(StandardError, "boom")
+      end
+
+      expect(check.fix.scan("boom").size).to eq(3)
+      expect(check.fix).to include("and 2 more introspectors")
+    end
+
+    it "keeps the rest of the report when a check raises a ScriptError" do
+      allow(doctor).to receive(:check_introspector_health).and_raise(SyntaxError, "broken")
+      result = nil
+
+      expect { result = doctor.run }.to output(/check_introspector_health failed/).to_stderr
+      expect(result[:checks].map(&:name)).to include("Schema")
+    end
+  end
+
   describe "#check_codex_env_staleness" do
     subject(:check) { doctor.send(:check_codex_env_staleness) }
 
@@ -259,6 +354,24 @@ RSpec.describe RailsAiContext::Doctor do
       end
     end
 
+    # An unguarded file is correct in an app that bundles the gem everywhere,
+    # so this is a warn about another environment, never a fail.
+    context "when the initializer has no guard at all" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          RailsAiContext.configure do |config|
+          end
+        RUBY
+      end
+
+      it "warns that it breaks where the gem is not loaded" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("no recognised guard")
+        expect(check.fix).to include("defined?(RailsAiContext)")
+      end
+    end
+
     context "when the initializer already guards with respond_to?" do
       before do
         allow(File).to receive(:exist?).with(initializer_path).and_return(true)
@@ -272,6 +385,57 @@ RSpec.describe RailsAiContext::Doctor do
 
       it "returns nil" do
         expect(check).to be_nil
+      end
+    end
+
+    # The two generated spellings are not the only working guards, and a
+    # readiness score must not be docked for a file that is already safe.
+    context "when the initializer guards on respond_to? alone" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          if RailsAiContext.respond_to?(:configure)
+            RailsAiContext.configure do |config|
+            end
+          end
+        RUBY
+      end
+
+      it "returns nil" do
+        expect(check).to be_nil
+      end
+    end
+
+    context "when the initializer returns early unless the gem is defined" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          return unless defined?(RailsAiContext::Configuration)
+
+          RailsAiContext.configure do |config|
+          end
+        RUBY
+      end
+
+      it "returns nil" do
+        expect(check).to be_nil
+      end
+    end
+
+    context "when the only mention of a guard comes after the configure call" do
+      before do
+        allow(File).to receive(:exist?).with(initializer_path).and_return(true)
+        allow(File).to receive(:read).with(initializer_path).and_return(<<~RUBY)
+          RailsAiContext.configure do |config|
+          end
+
+          # TODO: wrap this in defined?(RailsAiContext)
+        RUBY
+      end
+
+      it "still warns" do
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("no recognised guard")
       end
     end
   end
@@ -638,6 +802,28 @@ RSpec.describe RailsAiContext::Doctor do
     it "warns without naming one directory when no model file exists anywhere" do
       Dir.mktmpdir do |dir|
         expect(check_named(dir, "Models")).to have_attributes(status: :warn, message: "No model files")
+      end
+    end
+  end
+
+  describe "view counts" do
+    def check_named(dir, name)
+      described_class.new(RailsAiContext::StaticApp.new(dir)).run[:checks].find { |c| c.name == name }
+    end
+
+    # Two lines of one report counted different populations under the same
+    # noun, so a reader saw two view counts and could not tell which was which.
+    it "says what each of the two view lines counted" do
+      Dir.mktmpdir do |dir|
+        views = File.join(dir, "app", "views", "posts")
+        FileUtils.mkdir_p(views)
+        File.write(File.join(views, "index.html.erb"), "<h1>Posts</h1>\n")
+        File.write(File.join(views, "show.html.erb"), "<h1>Post</h1>\n")
+        File.write(File.join(views, "index.json.jbuilder"), "json.posts []\n")
+
+        expect(check_named(dir, "Views").message).to eq("3 files under app/views")
+        expect(check_named(dir, "View aggregation size").message)
+          .to start_with("2 erb/haml/slim templates")
       end
     end
   end

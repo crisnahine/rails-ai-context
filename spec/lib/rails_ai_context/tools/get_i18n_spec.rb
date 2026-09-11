@@ -36,6 +36,27 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       expect(text).to include("**Locale files:** 4")
     end
 
+    # Without a booted app the list is read from config/locales unless the app
+    # assigns one, and those two answers are not the same question. Mastodon
+    # ships files for 106 locales and enables 97.
+    context "when the list was read from the locale files" do
+      let(:i18n_data) { super().merge(available_locales_source: "locale_files") }
+
+      it "says where the list came from" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("**Available locales (from locale files):** en, fr (2)")
+      end
+    end
+
+    context "when the app configures the list" do
+      let(:i18n_data) { super().merge(available_locales_source: "config") }
+
+      it "names the field plainly" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("**Available locales:** en, fr (2)")
+      end
+    end
+
     it "renders coverage vs the default locale" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Coverage (vs en)")
@@ -162,6 +183,36 @@ RSpec.describe RailsAiContext::Tools::GetI18n do
       it "reports the failure honestly" do
         text = described_class.call.content.first[:text]
         expect(text).to include("I18n introspection failed: boom")
+      end
+    end
+
+    context "when the static tier declares the fallbacks unanswered" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          { i18n: i18n_data.merge(backend: nil, fallbacks: nil, unavailable_sections: %w[backend fallbacks]) }
+        )
+      end
+
+      it "marks the fallbacks section unavailable instead of dropping it" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("## Fallbacks")
+        expect(text).to include("[UNAVAILABLE:")
+        expect(text).not_to include("**fr** →")
+      end
+
+      # The whole answer is here; two fields of it are not. Borrowing the
+      # tier's own refusal sentence made one unanswered field read as the
+      # tool declining, which is what an app that cannot boot really gets.
+      it "says why the two runtime-only fields are unanswered, not that the tool refused" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("- **Backend:** [UNAVAILABLE:")
+        expect(text).not_to include("requires a booted Rails app")
+        expect(text).to include("belongs to the process that answers")
+      end
+
+      it "marks the per-locale fallback line unavailable" do
+        text = described_class.call(locale: "fr").content.first[:text]
+        expect(text).to include("**Fallbacks:** [UNAVAILABLE:")
       end
     end
 

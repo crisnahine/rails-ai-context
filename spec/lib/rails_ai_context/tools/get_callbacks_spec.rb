@@ -29,6 +29,15 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
     allow(described_class).to receive(:cached_context).and_return({ models: models })
   end
 
+  # The payload key the introspector fills, built the way it builds it, so
+  # these render what a real run would hand the tool.
+  def payload_concern_callbacks(root, concern_name)
+    collected, = RailsAiContext::ConcernMacros.collect(
+      root, [ { name: concern_name, ancestor: true } ], keys: %i[callbacks], prefer: "model"
+    )
+    collected[:callbacks] || []
+  end
+
   describe "detail levels for all models" do
     it "returns model names with callback counts for detail:summary" do
       result = described_class.call(detail: "summary")
@@ -55,6 +64,37 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       expect(text).to include("`:generate_slug`")
       expect(text).to include("**after_create**")
       expect(text).to include("`:notify_subscribers`")
+    end
+  end
+
+  # A list of targets is a list of names, so the block keyword the
+  # declaration line is composed from reads there as a callback named `do`.
+  describe "a block callback in a list of targets" do
+    let(:models) do
+      {
+        "Status" => {
+          callbacks: {
+            "after_create" => [ "set_poll_id", "[inline_block]" ],
+            "after_rollback" => [ "[inline_block]" ]
+          },
+          concerns: []
+        }
+      }
+    end
+
+    it "names the block with the payload's marker at detail:standard" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("- **after_create** → `:set_poll_id`, `[inline_block]`")
+      expect(text).to include("- **after_rollback** → `[inline_block]`")
+      expect(text).not_to include("`do`")
+    end
+
+    it "names the block with the payload's marker at detail:full" do
+      text = described_class.call(model: "Status", detail: "full").content.first[:text]
+
+      expect(text).to include("`[inline_block]`")
+      expect(text).not_to include("`do`")
     end
   end
 
@@ -107,22 +147,26 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
       allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+      models["Post"][:concern_callbacks] = payload_concern_callbacks(tmpdir, "HtmlSanitizable")
+      # The introspector merges the concern's callbacks into the model's own
+      # list, so the execution-order list really holds this method.
+      models["Post"][:callbacks]["before_save"] = %w[generate_slug sanitize_body]
     end
 
     after { FileUtils.remove_entry(tmpdir) }
 
-    it "shows concern callback method source at detail:full" do
+    # The section attributes the callback; the body belongs to the
+    # execution-order list, once, read from the concern that declared it.
+    it "shows a concern-declared callback body once, in the execution-order list" do
       result = described_class.call(model: "Post", detail: "full")
       text = result.content.first[:text]
 
-      # Should have the From Concerns section with the concern name as heading
       expect(text).to include("## From Concerns")
-      expect(text).to include("### HtmlSanitizable")
-      expect(text).to include("before_save :sanitize_body")
-
-      # Should include the method source code from the concern
-      expect(text).to include("def sanitize_body")
-      expect(text).to include("ActionController::Base.helpers.sanitize")
+      expect(text).to include("- **HtmlSanitizable:** before_save :sanitize_body")
+      expect(text).not_to include("### HtmlSanitizable")
+      expect(text.scan("ActionController::Base.helpers.sanitize").size).to eq(1)
+      expect(text).to include("### :sanitize_body (HtmlSanitizable lines 10-12)")
+      expect(text.index("def sanitize_body")).to be < text.index("## From Concerns")
     end
 
     it "shows model callback method source at detail:full" do
@@ -175,17 +219,16 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
       allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+      models["Post"][:concern_callbacks] = payload_concern_callbacks(tmpdir, "HtmlSanitizable")
     end
 
     after { FileUtils.remove_entry(tmpdir) }
 
-    it "shows the callback declaration without source when method is not found" do
+    it "shows the callback declaration when the method has no def" do
       result = described_class.call(model: "Post", detail: "full")
       text = result.content.first[:text]
 
-      expect(text).to include("### HtmlSanitizable")
-      expect(text).to include("before_save :sanitize_body")
-      # No source block since method def is missing
+      expect(text).to include("- **HtmlSanitizable:** before_save :sanitize_body")
       expect(text).not_to include("```ruby")
     end
   end
@@ -211,6 +254,208 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       result = described_class.call(model: "post")
       text = result.content.first[:text]
       expect(text).to include("# Post")
+    end
+  end
+
+  # `after_create do` was matched by a line regex whose colon was optional,
+  # so the block keyword was printed as the method name.
+  describe "concern callbacks the line regex mangled" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models", "concerns"))
+      File.write(File.join(tmpdir, "app", "models", "concerns", "rate_limitable.rb"), <<~RUBY)
+        module RateLimitable
+          extend ActiveSupport::Concern
+
+          included do
+            after_create do
+              rate_limiter.record!
+            end
+
+            around_create Some::CallbackObject
+            after_commit :announce, on: :create
+            after_commit :sync, on: [ :create, :update ]
+            before_validation :relax_policy, if: -> { quote_policy? }
+            after_rollback do
+              rate_limiter.rollback!
+            end
+          end
+
+          def rate_limiter(by = nil)
+            @rate_limiter ||= RateLimiter.new(by)
+          end
+        end
+      RUBY
+
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(RailsAiContext.configuration).to receive(:concern_paths).and_return(%w[app/models/concerns])
+      allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Status" => {
+            callbacks: { "before_save" => %w[touch_thread] },
+            concerns: %w[RateLimitable],
+            concern_callbacks: payload_concern_callbacks(tmpdir, "RateLimitable")
+          }
+        }
+      )
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "names the block and the class object instead of inventing a method" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("after_create do")
+      expect(text).to include("around_create Some::CallbackObject")
+      expect(text).to include("after_rollback do")
+      expect(text).not_to include(":do")
+      expect(text).not_to include(":Some")
+    end
+
+    # `after_commit_on_create` is the resolved type, not a Ruby method - the
+    # concern line prints what the file declares.
+    it "keeps the declared macro name for an after_commit with on:" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("after_commit :announce")
+      expect(text).not_to include("after_commit_on_create")
+    end
+
+    # Four after_commit lines that differ only in `on:` read as one
+    # declaration without the tail.
+    it "keeps the options tail the declaration was written with" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("after_commit :announce, on: :create")
+    end
+
+    # One declaration resolves to one record per `on:` event, and the section
+    # prints declarations, not resolved types.
+    it "prints a multi-event after_commit once" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text.scan("after_commit :sync, on: [:create, :update]").size).to eq(1)
+    end
+
+    # A quoted marker reads as a string the app wrote.
+    it "leaves an unresolved option value unquoted" do
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("before_validation :relax_policy, if: [INFERRED]")
+      expect(text).not_to include(%(if: "[INFERRED]"))
+    end
+
+    it "attaches no method source to a block callback at detail:full" do
+      text = described_class.call(model: "Status", detail: "full").content.first[:text]
+
+      expect(text).to include("after_create do")
+      expect(text).not_to include("def rate_limiter")
+    end
+  end
+
+  # The section used to walk the concern files itself, so it disagreed with
+  # the callbacks the payload already carries and it resolved a namespaced
+  # concern differently.
+  describe "the concern section reads the payload" do
+    it "groups the payload's concern-tagged callbacks by the concern that declared them" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Status" => {
+            callbacks: { "before_validation" => %w[set_visibility] },
+            concerns: %w[Status::Visibility],
+            concern_callbacks: [
+              { name: "before_validation", type: "before_validation", method: "set_visibility",
+                from_concern: "Status::Visibility" }
+            ]
+          }
+        }
+      )
+
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).to include("## From Concerns")
+      expect(text).to include("**Status::Visibility:** before_validation :set_visibility")
+    end
+
+    it "renders no concern section when the payload tags nothing" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Status" => { callbacks: { "before_save" => %w[touch] }, concerns: %w[Discard::Model] } }
+      )
+
+      text = described_class.call(model: "Status", detail: "standard").content.first[:text]
+
+      expect(text).not_to include("## From Concerns")
+    end
+  end
+
+  # Every read of the shared cache is a deep copy of the whole payload, so a
+  # full listing that reads it once per callback pays for the app many times
+  # over.
+  describe "shared context reads in the full listing" do
+    def context_with(count)
+      entries = (1..count).to_h do |i|
+        [ "Model#{i}", { callbacks: { "before_save" => %w[touch_slug], "after_create" => %w[notify] }, concerns: [] } ]
+      end
+      { models: entries }
+    end
+
+    def reads_for(count)
+      described_class.reset_cache!
+      reads = 0
+      ctx = context_with(count)
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(detail: "full")
+      reads
+    end
+
+    it "reads the shared context the same number of times for 3 models as for 40" do
+      expect(reads_for(40)).to eq(reads_for(3))
+    end
+  end
+
+  # A gem-owned model carries a path that names the gem, so joining it to the
+  # app root opened nothing and the callback body was silently absent.
+  describe "a model whose file belongs to a gem" do
+    it "reads the callback body out of the gem's own file" do
+      gem_file = File.join(Gem.loaded_specs["activesupport"].full_gem_path,
+                           "lib", "active_support", "notifications.rb")
+      marked = RailsAiContext::PortablePath.relativize_marked(gem_file, Rails.root.to_s)
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Doorkeeper::AccessGrant" => {
+          name: "Doorkeeper::AccessGrant", file: marked,
+          callbacks: { "before_validation" => [ "instrument" ] }
+        } }
+      })
+
+      text = described_class.call(model: "Doorkeeper::AccessGrant", detail: "full").content.first[:text]
+
+      expect(marked).to start_with("gem:")
+      expect(text).to include("def instrument")
+    end
+  end
+
+  # One Rails event, two declared spellings. The synthesized key was absent
+  # from the order list, so it sorted to the end and the event's second half
+  # printed below after_rollback.
+  describe "the two spellings of one commit event" do
+    it "keeps them together, and both above after_rollback" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Status" => { name: "Status", callbacks: {
+          "after_rollback" => [ "undo" ],
+          "after_commit_on_create" => [ "announce" ],
+          "after_create_commit" => [ "store_uri" ]
+        } } }
+      })
+
+      lines = described_class.call(model: "Status").content.first[:text].lines
+      order = lines.filter_map { |l| l[/^- \*\*(\w+)\*\*/, 1] }
+
+      expect(order).to eq(%w[after_create_commit after_commit_on_create after_rollback])
     end
   end
 end

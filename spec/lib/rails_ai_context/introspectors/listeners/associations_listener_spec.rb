@@ -13,23 +13,28 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
   it "detects belongs_to" do
     results = parse_and_dispatch("belongs_to :user")
     expect(results.size).to eq(1)
-    expect(results.first).to include(type: :belongs_to, name: :user)
+    expect(results.first).to include(type: "belongs_to", name: :user)
   end
 
   it "detects has_many with options" do
     results = parse_and_dispatch("has_many :posts, dependent: :destroy")
-    expect(results.first).to include(type: :has_many, name: :posts)
+    expect(results.first).to include(type: "has_many", name: :posts)
     expect(results.first[:options]).to include(dependent: :destroy)
   end
 
   it "detects has_one" do
     results = parse_and_dispatch("has_one :profile, dependent: :destroy")
-    expect(results.first).to include(type: :has_one, name: :profile)
+    expect(results.first).to include(type: "has_one", name: :profile)
   end
 
   it "detects has_and_belongs_to_many" do
     results = parse_and_dispatch("has_and_belongs_to_many :tags")
-    expect(results.first).to include(type: :has_and_belongs_to_many, name: :tags)
+    expect(results.first).to include(type: "has_and_belongs_to_many", name: :tags)
+  end
+
+  it "spells the macro the way the booted tier does" do
+    results = parse_and_dispatch("has_many :posts")
+    expect(results.first[:type]).to be_a(String)
   end
 
   it "ignores method calls with a receiver" do

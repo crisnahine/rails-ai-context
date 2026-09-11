@@ -46,8 +46,9 @@ module RailsAiContext
       # files it draws.
       # Output mirrors the runtime shape exactly so tools, resources, and
       # serializers need no static-awareness of their own. Routes behind
-      # dynamic constructs (devise_for, draw, concerns) are counted in
-      # :dynamic_routes rather than fabricated.
+      # dynamic constructs (devise_for, an unreadable draw, a lambda or
+      # redirect target) are counted in :dynamic_routes rather than
+      # fabricated.
       def static_call
         routes_path = File.join(app.root.to_s, "config", "routes.rb")
         return { error: "config/routes.rb not found in #{app.root}" } unless File.exist?(routes_path)

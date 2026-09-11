@@ -7,6 +7,11 @@ module RailsAiContext
     module StackOverviewHelper
       include CountPhrase
 
+      # One rule file on its way to disk. The reason travels with the path it
+      # explains; when it lived in a second hash keyed by the same path, an
+      # entry missing from that hash lost its reason silently.
+      RuleFile = Struct.new(:path, :content, :reason)
+
       # Returns an array of summary lines for full-preset introspectors.
       # Each line is only added if the introspector returned meaningful data.
       def full_preset_stack_lines(ctx = context)
@@ -32,8 +37,8 @@ module RailsAiContext
           lines << "- API: #{parts.join(', ')}" if parts.any?
         end
 
-        locales = Payload.available_locales(ctx)
-        lines << "- I18n: #{count_phrase(locales.size, "locale")} (#{locales.first(5).join(', ')})" if locales.size > 1
+        i18n_line = SectionFacts.i18n_line(ctx)
+        lines << i18n_line if i18n_line
 
         attachments = Payload.storage_attachments(ctx)
         if attachments.any?
@@ -94,6 +99,11 @@ module RailsAiContext
         lines = []
         controllers_hash.keys.sort.first(limit).each do |name|
           info = controllers_hash[name]
+          if (unread = SectionFacts.unread_row(with_actions ? "- **#{name}**" : "- #{name}", info))
+            lines << unread
+            next
+          end
+
           if with_actions
             actions = (info[:actions] || []).map { |a| a.is_a?(Hash) ? a[:name] : a }.compact
             line = "- **#{name}**"
@@ -130,24 +140,43 @@ module RailsAiContext
         RailsAiContext::Tools::GetConventions::PATTERN_LABELS rescue {}
       end
 
+      # Render and write a serializer's whole rule-file table.
+      # @param dir [String] directory the table's relative names hang off
+      # @param table [Hash<String, Hash>] name => { renderer:, reason: }
+      def write_rule_table(dir, table)
+        write_rule_files(
+          table.map do |name, rule|
+            RuleFile.new(File.join(dir, name), send(rule[:renderer]), rule[:reason])
+          end
+        )
+      end
+
       # Write split-rule files with diff-check and atomic writes.
-      # @param files [Hash<String, String|nil>] filepath => content mapping
-      # @return [Hash] { written: [paths], skipped: [paths] }
-      def write_rule_files(files)
+      # A nil render means the app has nothing to put in that file. It is
+      # reported rather than dropped, so a deliberate omission never looks
+      # like a failed generation.
+      # @param entries [Array<RuleFile>]
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
+      def write_rule_files(entries)
         written = []
         skipped = []
+        not_applicable = {}
 
-        files.each do |filepath, content|
-          next unless content
-          if File.exist?(filepath) && File.read(filepath) == content
-            skipped << filepath
+        entries.each do |entry|
+          if entry.content.nil?
+            not_applicable[entry.path] = entry.reason || "nothing to document"
+            next
+          end
+
+          if File.exist?(entry.path) && File.read(entry.path) == entry.content
+            skipped << entry.path
           else
-            SafeFile.atomic_write(filepath, content)
-            written << filepath
+            SafeFile.atomic_write(entry.path, entry.content)
+            written << entry.path
           end
         end
 
-        { written: written, skipped: skipped }
+        { written: written, skipped: skipped, not_applicable: not_applicable }
       end
 
       # Shared utility: resolve the project root directory.
@@ -181,22 +210,19 @@ module RailsAiContext
         []
       end
 
-      # The filters ApplicationController runs on every request.
-      #
-      # "Global" is the claim the generated files make, so two shapes are not
-      # it: `skip_before_action`, which says the opposite, and a filter carrying
-      # only:/except:/if:/unless:, which runs on some requests.
+      # The filters ApplicationController runs on every request, through the
+      # reader the chain walk uses, so this line and `rails_get_controllers`
+      # cannot disagree about one file. "Global" is the claim the generated
+      # files make, so a `skip_before_action` and a filter carrying
+      # only:/except:/if:/unless: are both out.
       def detect_before_actions(root = project_root)
-        app_ctrl_file = File.join(root, "app", "controllers", "application_controller.rb")
-        return [] unless File.exist?(app_ctrl_file)
+        source = ActionFilters.base_controller_source("ApplicationController", root)
+        return [] unless source
 
-        File.read(app_ctrl_file).lines.filter_map do |line|
-          match = line.match(/(?<!skip_)\bbefore_action\s+:(?<name>[\w!?]+)(?<rest>.*)/)
-          next unless match
-          next if match[:rest].match?(/\b(only|except|if|unless):/)
-
-          match[:name]
-        end
+        Introspectors::ControllerFilters.from_source(source)
+          .select { |filter| filter[:kind] == "before" && !filter[:skipped] }
+          .reject { |filter| filter[:only] || filter[:except] || filter[:if] || filter[:unless] }
+          .map { |filter| filter[:name] }
       rescue => e
         $stderr.puts "[rails-ai-context] Before actions scan skipped: #{e.message}" if ENV["DEBUG"]
         []

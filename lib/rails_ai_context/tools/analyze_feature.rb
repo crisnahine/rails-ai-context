@@ -95,6 +95,14 @@ module RailsAiContext
       class << self
         private
 
+        # A filter the chain runs but no ancestor the payload carries
+        # declares has no class to attribute it to, and a conditional skip
+        # names the condition it is taken out on.
+        def inherited_filter_label(filter)
+          from = filter[:from] ? " _(from #{filter[:from]})_" : ""
+          "#{filter[:name]}#{from}#{Serializers::SectionFacts.skip_condition_tail(filter)}"
+        end
+
         # Word-boundary match against the feature keyword: `pattern` must align
         # with a contiguous run of whole "words" in `text` (as split by
         # underscores, path separators, and CamelCase boundaries), allowing
@@ -175,20 +183,19 @@ module RailsAiContext
           if matched.any?
             lines << "## Controllers (#{matched.size})"
             matched.sort.each do |name, info|
-              actions = info[:actions]&.join(", ") || "none"
               lines << "" << "### #{name}"
-              lines << "- **Actions:** #{actions}"
+              lines << "- **Actions:** #{Serializers::SectionFacts.actions_phrase(info)}"
 
               split = RailsAiContext::ActionFilters.for_controller(ctx, name, root: rails_app.root.to_s)
               if split[:inherited].any?
-                lines << "- **Inherited filters:** #{split[:inherited].map { |f| "#{f[:name]} _(from #{f[:from]})_" }.join(', ')}"
+                lines << "- **Inherited filters:** #{split[:inherited].map { |f| inherited_filter_label(f) }.join(', ')}"
               end
 
               filters = split[:own].map do |f|
                 label = "#{f[:kind]} #{f[:name]}"
                 label += " only: #{Array(f[:only]).join(', ')}" if f[:only]&.any?
                 label += " except: #{Array(f[:except]).join(', ')}" if f[:except]&.any?
-                label
+                label + Serializers::SectionFacts.skip_condition_tail(f)
               end
               lines << "- **Filters:** #{filters.join('; ')}" if filters.any?
 
@@ -510,7 +517,7 @@ module RailsAiContext
             next unless data.is_a?(Hash)
             (data[:callbacks] || {}).each do |type, methods|
               next unless methods.is_a?(Array)
-              methods.each { |m| callbacks << "#{name}: #{type} :#{m}" }
+              methods.each { |m| callbacks << "#{name}: #{type} #{callback_target(m)}" }
             end
           end
           return if callbacks.empty?

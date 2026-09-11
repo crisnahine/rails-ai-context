@@ -78,9 +78,14 @@ Search your codebase with regex, ripgrep acceleration, and sensitive file blocki
 | `path` | string | - | Subdirectory to search in (relative to Rails root) |
 | `match_type` | enum | `any` | `any`, `definition`, `class`, `call`, `trace` |
 | `file_type` | string | - | Filter by extension (`rb`, `erb`, `js`, etc.) |
-| `exact_match` | boolean | `false` | Word boundary matching |
+| `exact_match` | boolean | `false` | Literal, whole-word match. `def reblog?` does not match `def reblog` |
 | `exclude_tests` | boolean | `false` | Skip test/spec directories |
 | `group_by_file` | boolean | `false` | Group results by file with counts |
+| `context_lines` | integer | `2` | Lines of context around each match, max 5. Needs ripgrep; without it the search returns match lines only |
+| `offset` | integer | `0` | Skip this many emitted lines |
+| `limit` | integer | auto | Max lines to return; the default is sized in matches |
+
+The header counts matches, not emitted lines, so below the cap it does not move with `context_lines`. When the search hits `max_search_results` (a cap on emitted lines) the header says `first N lines scanned` and marks the count `N+`: it is then the matches among the lines that were scanned, a floor rather than the total, so it falls as `context_lines` grows. `offset` and `limit` count lines, so a search with context returns more lines than matches; without ripgrep there are no context lines, so lines and matches are the same thing.
 
 > **Trace mode** returns definition + source code + every caller grouped by type + tests - replaces 4-5 sequential file reads.
 
@@ -152,10 +157,17 @@ AST-parsed model internals. Every result carries `[VERIFIED]` or `[INFERRED]` co
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
 Returns: associations, validations, scopes, enums, callbacks, macros, methods, concerns.
+What the included concerns declare is merged in, so the answer does not stop
+at the model file. A concern whose file could not be read is named under
+Concerns as `[UNAVAILABLE]` rather than dropped.
 
 ### `rails_get_callbacks`
 
-All callbacks in Rails execution order with source code.
+Callbacks grouped by type, in Rails event order, with source code. The list
+covers concern-declared callbacks too, with the body read from the concern
+file, and the "From Concerns" section says which concern declared each one.
+Within one type the order is declaration order (the model file first, then
+its concerns), not the order Rails registered them in.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -444,7 +456,7 @@ Model/service dependency graph in Mermaid or text format.
 
 ### `rails_migration_advisor`
 
-Migration code generation with duplicate/nonexistent column warnings, reversibility flags, table name normalization.
+Migration code generation with duplicate/nonexistent column warnings, reversibility flags, table name normalization. The generated class is stamped with the app's own Rails version (from the booted app, or from `Gemfile.lock` under `--no-boot`); when neither names one, the output says which version it fell back to.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

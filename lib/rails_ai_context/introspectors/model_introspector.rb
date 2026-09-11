@@ -14,16 +14,19 @@ module RailsAiContext
 
       attr_reader :app, :config
 
-      EXCLUDED_CALLBACKS = %w[autosave_associated_records_for].freeze
-
       def initialize(app)
         @app    = app
         @config = RailsAiContext.configuration
+        # One introspection per file per instance, so a concern or an STI base
+        # shared by 100 models is walked once. Anything longer-lived would
+        # outlast the files it read.
+        @source_cache = {}
       end
 
       # @return [Hash] model metadata keyed by model name
       def call
         EagerLoad.dir(app.root, kind: "app/models")
+        @unloadable = {}
         models = discover_models
 
         result = models.each_with_object({}) do |model, hash|
@@ -46,38 +49,106 @@ module RailsAiContext
           end
         end
 
+        unloadable_models.each { |class_name, details| result[class_name] ||= details }
+
         result
       end
 
       # Static tier: models are discovered by globbing every model directory
       # PathResolver resolves (conventional app/models, packs, engines, and
       # configured extras) and parsed with the source listeners; nothing is
-      # constantized. The table name is inferred from the class name (Rails
-      # convention), which is why every entry is tagged STATIC rather than
-      # VERIFIED - custom table_name= calls surface in :macros but are not
-      # resolved. When the same class name is found in more than one
-      # directory, the first discovery wins.
+      # constantized. The table comes from TableName over those same sources,
+      # which is close to Rails but not the connection's own answer - a prefix
+      # declared outside the model directories stays invisible - so every entry
+      # is tagged STATIC rather than VERIFIED. When the same class name is
+      # found in more than one directory, the first discovery wins.
       def static_call
         return mongoid_static_models if RailsAiContext::AppKind.mongoid?(app.root)
 
         candidates = static_candidates
+        sti_parents = candidates.keys.to_h { |name| [ name, sti_parent(name, candidates, []) ] }
+        bases = declared_bases(candidates)
         candidates.each_with_object({}) do |(class_name, candidate), result|
+          # Hidden from the listing, kept in the walk: its children still
+          # inherit its table and its declarations.
+          next if config.excluded_models.include?(class_name)
+
           if candidate[:error]
-            result[class_name] = { error: candidate[:error] }
+            result[class_name] = { error: candidate[:error], file: candidate[:file] }.compact
             next
           end
 
-          # An abstract base is dropped from the result but not from the walk:
-          # a per-connection base like Analytics::Record is how its models
-          # reach ApplicationRecord.
+          if candidate[:unreadable]
+            # app/models holds POROs too, and a file the walk could not read
+            # might be one. The entry says what it knows and claims a table
+            # only where a child's inheritance says it is a model.
+            table = resolve_table_name(class_name, candidates) if bases.include?(class_name)
+            result[class_name] = { error: candidate[:unreadable], file: candidate[:file],
+                                   table_name: table }.compact
+            next
+          end
+
+          # An abstract base is dropped from the result and kept in the walk:
+          # it is not a model of the app, and it is how its children reach what
+          # it declares.
           next if candidate[:abstract]
           next unless model_class?(class_name, candidates)
 
-          result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file])
+          # Resolved before the details, so the rescue below states it rather
+          # than calling again: a second raise from the same call would escape
+          # the rescue meant to contain the first.
+          table = resolve_table_name(class_name, candidates)
+          result[class_name] = static_model_details(candidate[:path], class_name, file: candidate[:file],
+                                                    table_name: table,
+                                                    inherited_from: declaring_bases(class_name, candidates),
+                                                    sti: static_sti_info(class_name, sti_parents))
+        rescue => e
+          # What the booted tier does with a model that raises: the entry says
+          # so and the rest of the section still answers. It keeps the two
+          # facts the unreadable branch keeps, because a consumer with no file
+          # derives app/models/<name>.rb, which is a path a pack model does
+          # not have.
+          result[class_name] = { error: e.message, file: candidate[:file], table_name: table }.compact
         end
       end
 
       private
+
+      # The same shape the booted tier reports under :sti, off the chain the
+      # static tier already resolves to share the base's table. A model that
+      # inherits from another model IS the STI relation, so no type column has
+      # to be read to name it.
+      def static_sti_info(class_name, sti_parents)
+        parent = sti_parents[class_name]
+        children = sti_parents.select { |_name, other_parent| other_parent == class_name }.keys.sort
+
+        return nil if parent.nil? && children.empty?
+
+        {
+          sti_base: parent.nil? && children.any?,
+          sti_parent: parent,
+          sti_children: (children unless children.empty?)
+        }.compact
+      end
+
+      # A model file the app cannot load leaves its class out of reflection,
+      # and leaving it out here answers that the model does not exist and that
+      # its table has no model at all. The file is a fact the source walk
+      # already holds, so the name is kept with the load error and with the
+      # table the static tier reads off that same file.
+      def unloadable_models
+        return {} if @unloadable.nil? || @unloadable.empty?
+
+        candidates = static_candidates
+        @unloadable.each_with_object({}) do |(class_name, error), entries|
+          candidate = candidates[class_name]
+          entries[class_name] = {
+            error: error,
+            file: candidate&.dig(:file),
+            table_name: candidate && resolve_table_name(class_name, candidates)
+          }.compact
+        end
+      end
 
       # Every class file under the model directories, by declared name, with
       # the superclass it names. Modelhood is decided over the whole walk
@@ -89,36 +160,79 @@ module RailsAiContext
       # is not there. The count is an answer too.
       def static_candidates
         SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each_with_object({}) do |record, found|
-          next if record.path_name == "ApplicationRecord"
-
           begin
-            next if File.size(record.path) > RailsAiContext.configuration.max_file_size
+            source = model_source(record.path) if File.size(record.path) <= RailsAiContext.configuration.max_file_size
+            if source.nil?
+              found[record.path_name] ||= unread_candidate(record) unless skip_unread?(record)
+              next
+            end
 
-            source = model_source(record.path)
-            next if source.nil? || mixin_path?(record.path_name.underscore, source)
+            next if mixin_path?(record.path_name.underscore, source)
 
             declarations = DeclaredConstant.declarations(source)
             class_name = declarations.map(&:name).find { |name| name.casecmp?(record.path_name) } || record.path_name
             next if found.key?(class_name)
-            next if config.excluded_models.include?(class_name)
 
+            # A module file declares no class and is kept for the prefix and
+            # the suffix alone: they belong to the namespace, not to any one
+            # model.
             found[class_name] = {
               path: record.path,
               file: record.file,
               superclass: declarations.find { |d| d.name == class_name }&.superclass,
               abstract: abstract_class?(source)
-            }
+            }.merge(TableName.declarations(source, class_name))
           rescue => e
-            found[record.path_name] = { error: e.message }
+            # The file is known here whatever failed, and a consumer with none
+            # derives app/models/<name>.rb, which a pack model does not have.
+            found[record.path_name] = { error: e.message, file: record.file }.compact
           end
         end
       end
 
-      # A model is a class whose superclass chain reaches a model base. A form
-      # object, a filter or a namespaced calculator under app/models has no
-      # superclass, or one the chain never resolves, so it is not a model.
+      # A file the walk could not read stays a candidate, because its children
+      # reach ApplicationRecord through it and nothing else names their base.
+      # It carries no superclass, so the entry says what happened instead of
+      # answering the declarations it could not read.
+      def unread_candidate(record)
+        size = begin
+          File.size(record.path)
+        rescue SystemCallError
+          nil
+        end
+        reason = if size && size > RailsAiContext.configuration.max_file_size
+          "file is too large to read (#{size} bytes)"
+        else
+          "file is unreadable"
+        end
+
+        { path: record.path, file: record.file, unreadable: reason }
+      end
+
+      # Nothing distinguishes an unreadable concern from an unreadable model,
+      # and a concern is not a model, so it stays out.
+      def skip_unread?(record)
+        record.path_name.underscore.split("/").include?("concerns")
+      end
+
+      # Every candidate another candidate inherits from, by the name the walk
+      # resolves the superclass to.
+      def declared_bases(candidates)
+        candidates.each_with_object(Set.new) do |(name, candidate), found|
+          parent = candidate[:superclass]
+          next unless parent
+
+          resolved = resolve_superclass(parent, name, candidates)
+          found << resolved if resolved
+        end
+      end
+
       def model_class?(class_name, candidates, seen = [])
         return false if seen.include?(class_name)
+        # A base under app/models that nobody can read is taken at its word:
+        # refusing it would drop every child that reaches a model base only
+        # through it.
+        return true if candidates.dig(class_name, :unreadable)
 
         parent = candidates.dig(class_name, :superclass)
         return false unless parent
@@ -152,6 +266,117 @@ module RailsAiContext
         nil
       end
 
+      # Rails' own order: what the class assigns itself wins, an STI child
+      # reads its parent's table, and otherwise the namespace's prefix and
+      # suffix wrap the stem the file name already carries.
+      def resolve_table_name(class_name, candidates, seen = [])
+        candidate = candidates[class_name]
+        # An entry the walk recorded as an error carries no path, and a table
+        # derived from no path is the empty string, which is truthy.
+        return nil unless candidate && candidate[:path]
+        return candidate[:table_name] if candidate[:table_name]
+
+        parent = sti_parent(class_name, candidates, seen)
+        inherited = parent && resolve_table_name(parent, candidates, seen + [ class_name ])
+        return inherited unless inherited.nil? || inherited.empty?
+
+        [ namespace_affix(class_name, candidates, :table_name_prefix),
+          TableName.stem(candidate[:path]),
+          namespace_affix(class_name, candidates, :table_name_suffix) ].join
+      end
+
+      # The STI bases above this class, nearest first: the ones it shares a
+      # table with. What it inherits declarations from is a longer chain,
+      # which `declaring_bases` answers.
+      def sti_bases(class_name, candidates, seen = [])
+        parent = sti_parent(class_name, candidates, seen)
+        return [] unless parent && candidates.dig(parent, :path)
+
+        [ [ parent, candidates[parent][:path] ] ] +
+          sti_bases(parent, candidates, seen + [ class_name ])
+      end
+
+      # Every class this one inherits declarations from: the superclass chain
+      # up to the model base, abstract bases included. Rails runs what an
+      # abstract base declares in each of its children; only the table stops
+      # there, which is what `sti_parent` answers. A base whose file the walk
+      # could not name is skipped rather than ending the chain.
+      def declaring_bases(class_name, candidates, seen = [])
+        return [] if seen.include?(class_name)
+
+        parent = candidates.dig(class_name, :superclass)
+        return [] if parent.nil?
+
+        # It ends at ActiveRecord::Base, which the app has no file for. The
+        # app's own base does have one, and Rails runs what it declares in
+        # every model, so the walk does not stop on the name.
+        resolved = resolve_superclass(parent, class_name, candidates)
+        return [] unless resolved && candidates.key?(resolved)
+
+        inherited = declaring_bases(resolved, candidates, seen + [ class_name ])
+        path = candidates.dig(resolved, :path)
+        path ? [ [ resolved, path ] ] + inherited : inherited
+      end
+
+      # The same chain off the loaded class, abstract bases included: the
+      # ancestor list reflection answers carries what they declared, so a walk
+      # that stopped at one gave the two tiers different concerns for the same
+      # child. A base whose file Ruby cannot place is skipped, not walked past,
+      # because its own base's macros do not reach the child any other way.
+      def booted_declaring_bases(model)
+        return [] unless defined?(ActiveRecord::Base)
+
+        dirs = PathResolver.model_dirs(app.root.to_s).map { |dir| "#{File.expand_path(dir)}/" }
+        bases = []
+        parent = model.superclass
+        while parent.is_a?(Class) && parent < ActiveRecord::Base
+          path = parent.name && model_source_path(parent)
+          # The files the static walk reads, and no others. A gem's base is a
+          # file that walk can never reach, so reading it here would answer a
+          # scope the other tier cannot. Reflection still carries that base's
+          # associations, validations and enums onto the child.
+          bases << [ parent.name, path ] if path && File.exist?(path) && within?(path, dirs)
+          parent = parent.superclass
+        end
+        bases
+      end
+
+      def within?(path, dirs)
+        expanded = File.expand_path(path)
+        dirs.any? { |dir| expanded.start_with?(dir) }
+      end
+
+      # The model this one inherits its table from. A model base ends the
+      # chain, and so does an abstract base: a child of one has a table of
+      # its own.
+      def sti_parent(class_name, candidates, seen)
+        return nil if seen.include?(class_name)
+
+        parent = candidates.dig(class_name, :superclass)
+        return nil if parent.nil? || model_base?(parent)
+
+        resolved = resolve_superclass(parent, class_name, candidates)
+        return nil if resolved.nil? || candidates.dig(resolved, :abstract)
+
+        resolved
+      end
+
+      # Rails takes the first of these its module parents answers, walking
+      # innermost outward, so an inner namespace overrides an outer one.
+      # Rails takes the affix off the innermost namespace that declares one and
+      # falls back to the class itself: `module_parents.detect { |p|
+      # p.respond_to?(:table_name_prefix) } || self`.
+      def namespace_affix(class_name, candidates, key)
+        scope = class_name.split("::")[0..-2]
+        while scope.any?
+          declared = candidates.dig(scope.join("::"), key)
+          return declared if declared
+
+          scope.pop
+        end
+        candidates.dig(class_name, key) || ""
+      end
+
       # Zeitwerk resolves a path through the app's own inflector, which the
       # static tier never loads, so camelizing invents `Activitypub::` for an
       # app that declares `ActivityPub::`.
@@ -163,8 +388,12 @@ module RailsAiContext
       # or the same app gets two model counts. A namespaced base is one of
       # these - GitLab has Ci::ApplicationRecord and SecApplicationRecord - and
       # the root application_record is not the only one to leave out.
+      # Both forms Rails accepts. A generated ApplicationRecord says
+      # `primary_abstract_class`, so reading the assignment alone left the app's
+      # own base looking like a model with a table.
       def abstract_class?(source)
-        source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/)
+        source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/) ||
+          source.match?(/^[^\S\n]*primary_abstract_class\b/)
       end
 
       # `concerns/` under app/models is the Zeitwerk root for mixins: it does
@@ -185,6 +414,7 @@ module RailsAiContext
         models = ActiveRecord::Base.descendants.reject do |model|
           model.abstract_class? ||
             model.name.nil? ||
+            DeclaredConstant.renamed?(model) ||
             config.excluded_models.include?(model.name)
         end
 
@@ -195,8 +425,16 @@ module RailsAiContext
         # so its files declare no `Concerns::` prefix and that path name never
         # constantizes.
         SourceScan.paths(app.root, kind: "app/models", skip_concerns: false).each do |record|
-          class_name = record.path_name
-          next if class_name.start_with?("Concerns::")
+          next if record.path_name.start_with?("Concerns::")
+          next if known.include?(record.path_name)
+          next if config.excluded_models.include?(record.path_name)
+
+          # The path does not name the class: an app inflection only changes
+          # case, so activitypub/activity.rb camelizes to a constant the app
+          # does not have and the file was listed as a model that will not
+          # load. Read only where the camelized name is not already loaded, so
+          # a booted run does not parse every model file to learn nothing.
+          class_name = declared_model_name(model_source(record.path).to_s, record.path_name)
           next if known.include?(class_name)
           next if config.excluded_models.include?(class_name)
 
@@ -205,9 +443,11 @@ module RailsAiContext
             next unless klass < ActiveRecord::Base && !klass.abstract_class?
             models << klass
             known << class_name
-          rescue NameError, LoadError, ScriptError
-            # Not a valid (or currently loadable) model class - a
-            # syntax-broken file costs itself, not the whole listing.
+          rescue NameError, LoadError, ScriptError => e
+            # A syntax-broken file costs itself, not the whole listing, but
+            # its name is recorded: a file that exists for a class reflection
+            # lacks is not the same answer as no such model.
+            @unloadable[class_name] = e.message.to_s.lines.first.to_s.strip
           end
         end
 
@@ -216,7 +456,14 @@ module RailsAiContext
 
       def extract_model_details(model)
         # AST-based source introspection (replaces all regex parsing)
-        source_data = introspect_source(model)
+        own_source = introspect_source(model)
+        # Reflection covers associations, validations and enums, but scopes,
+        # macros and custom validates are read off the file - so the concerns
+        # and the superclasses are merged here too, or the static tier
+        # out-answers this one.
+        source_data, unread, hidden = merge_concern_macros(own_source, model.name)
+        source_data, unread, bases_unread, hidden =
+          merge_inherited_macros(source_data, unread, hidden, booted_declaring_bases(model))
 
         details = {
           table_name:       model.table_name,
@@ -225,8 +472,14 @@ module RailsAiContext
           associations:     extract_associations(model),
           validations:      extract_validations(model),
           enums:            extract_enums(model),
-          callbacks:        extract_callbacks(model, source_data),
+          # Rails' event chains carry the framework's own registrations and
+          # hold no block callbacks, so both tiers read the model's source.
+          callbacks:        extract_callbacks_from_ast(source_data),
           concerns:         extract_concerns(model),
+          concerns_hidden:  (hidden.size if hidden.any?),
+          concern_callbacks: concern_callbacks(source_data[:callbacks]),
+          concerns_unread:  (unread if unread.any?),
+          bases_unread:     (bases_unread if bases_unread.any?),
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           scopes:           extract_scopes_from_ast(source_data),
@@ -272,8 +525,10 @@ module RailsAiContext
       # ── Reflection-based extraction (unchanged) ─────────────────────
 
       def extract_associations(model)
-        excluded = config.excluded_association_names
-        model.reflect_on_all_associations.reject { |assoc| excluded.include?(assoc.name.to_s) }.map do |assoc|
+        # The reject stays ahead of the map: class_name/foreign_key on an
+        # excluded reflection with a broken :through raises, and `call`'s
+        # per-model rescue would replace the whole model with one error line.
+        model.reflect_on_all_associations.reject { |assoc| excluded_association?(assoc.name) }.map do |assoc|
           detail = {
             name: assoc.name.to_s,
             type: assoc.macro.to_s,
@@ -281,7 +536,10 @@ module RailsAiContext
             foreign_key: assoc.foreign_key.to_s
           }
           detail[:through]    = assoc.options[:through].to_s if assoc.options[:through]
-          detail[:polymorphic] = true if assoc.options[:polymorphic]
+          # Read like `:optional` below: the static tier writes the value the
+          # model declared, so writing only a truthy one here would give the
+          # two tiers different keys for `polymorphic: false`.
+          detail[:polymorphic] = assoc.options[:polymorphic] if assoc.options.key?(:polymorphic)
           detail[:dependent]  = assoc.options[:dependent].to_s if assoc.options[:dependent]
           detail[:optional]   = assoc.options[:optional] if assoc.options.key?(:optional)
           detail.compact
@@ -343,34 +601,6 @@ module RailsAiContext
         nil
       end
 
-      def extract_callbacks(model, source_data)
-        callback_types = %i[
-          before_validation after_validation
-          before_save after_save
-          before_create after_create
-          before_update after_update
-          before_destroy after_destroy
-          after_commit after_rollback
-        ]
-
-        result = callback_types.each_with_object({}) do |type, hash|
-          callbacks = model.send(:"_#{type}_callbacks").reject do |cb|
-            cb.filter.nil? || cb.filter.to_s.start_with?(*EXCLUDED_CALLBACKS) || cb.filter.is_a?(Proc)
-          end
-
-          next if callbacks.empty?
-
-          hash[type.to_s] = callbacks.map { |cb| cb.filter.to_s }
-        end
-
-        # If reflection returned nothing, fall back to AST-based extraction
-        return result if result.any?
-        extract_callbacks_from_ast(source_data)
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_callbacks failed: #{e.message}" if ENV["DEBUG"]
-        extract_callbacks_from_ast(source_data)
-      end
-
       # ── AST-based extraction (replaces all regex parsing) ──────────
 
       def extract_scopes_from_ast(source_data)
@@ -386,7 +616,7 @@ module RailsAiContext
 
       def extract_custom_validates_from_ast(source_data)
         source_data[:validations]
-          .select { |v| v[:kind] == :custom }
+          .select { |v| v[:kind] == "custom" }
           .flat_map { |v| v[:attributes] }
       end
 
@@ -515,12 +745,14 @@ module RailsAiContext
       # Finds ConstantWriteNode where the value is an ArrayNode
       # (covers %w[], %i[], and literal array forms).
       def extract_constants_from_source(source_path)
-        return nil unless source_path && File.exist?(source_path)
+        return nil unless readable_source?(source_path)
 
         parse_result = AstCache.parse(source_path)
         constants = []
         find_constant_arrays(parse_result.value, constants)
         constants.empty? ? nil : constants
+      rescue StandardError
+        nil
       end
 
       def find_constant_arrays(node, constants)
@@ -580,19 +812,37 @@ module RailsAiContext
 
       # ── Helpers ────────────────────────────────────────────────────
 
-      # Ruby knows where the class was defined, and the name does not: a model
-      # in a pack or engine does not live under app/models, and an inflected
-      # namespace does not underscore back to its own directory. The
-      # containment check keeps a gem-defined constant from being reported as
-      # the app's own file.
+      # Ruby does not always name the file holding the `class` keyword: a class
+      # whose body raised leaves the constant a pending autoload, and Ruby
+      # records Zeitwerk's cref.rb, which answers nothing the model declares.
+      # A location inside the app is the model's own file; one outside it is
+      # believed only when no model directory holds a file for the name, which
+      # is what a gem's model looks like.
       def model_source_path(model)
-        root = app.root.to_s
+        root = File.expand_path(app.root.to_s)
         located = Object.const_source_location(model.name)&.first
-        return located if located && File.expand_path(located).start_with?("#{File.expand_path(root)}/")
+        return located if located && File.expand_path(located).start_with?("#{root}/")
 
-        File.join(root, "app", "models", "#{model.name.underscore}.rb")
+        declared_source_path(model.name) || located
       rescue NameError, TypeError
-        File.join(root, "app", "models", "#{model.name.underscore}.rb")
+        nil
+      end
+
+      # The file that declares the constant, from the walk that read the
+      # files. A name does not round-trip to a path - an app inflection only
+      # changes case, so `ActivityPub::Activity` lives in activitypub/ - and a
+      # model in a pack or an engine is not under app/models at all.
+      #
+      # Built on the first miss and held for the run: a booted answer reaches
+      # it only for a model whose constant Ruby cannot place inside the app.
+      def declared_source_path(class_name)
+        # Joined onto the app's own spelling of its root, not the realpath the
+        # scan walked: the answer is relativized against that spelling, and on
+        # a symlinked root (macOS /var) the two do not match.
+        @declared_paths ||= static_candidates.each_with_object({}) do |(name, candidate), map|
+          map[name] = candidate[:file] ? File.join(app.root.to_s, candidate[:file]) : candidate[:path]
+        end
+        @declared_paths[class_name.to_s]
       end
 
       DEVISE_CLASS_METHOD_PATTERNS = %w[
@@ -639,24 +889,67 @@ module RailsAiContext
         []
       end
 
+      # The listener names an association with a Symbol and reflection with a
+      # String, so the key is compared as text on both tiers.
+      def excluded_association?(name)
+        config.excluded_association_names.include?(name.to_s)
+      end
+
+      def reject_excluded_associations(associations)
+        Array(associations).reject { |assoc| excluded_association?(assoc[:name]) }
+                           .map { |assoc| booted_association_shape(assoc) }
+      end
+
+      # The booted tier lifts these options onto the record and spells every
+      # name as a String, and each renderer reads them there; a static record
+      # that leaves them nested under `options` reads as an association with
+      # no `dependent:` and no `through:` at all.
+      LIFTED_ASSOCIATION_OPTIONS = %i[through dependent class_name foreign_key polymorphic optional].freeze
+      BOOLEAN_ASSOCIATION_OPTIONS = %i[polymorphic optional].freeze
+
+      def booted_association_shape(assoc)
+        return assoc unless assoc.is_a?(Hash)
+
+        shaped = assoc.merge(assoc[:name] ? { name: assoc[:name].to_s } : {})
+        options = assoc[:options]
+        return shaped unless options.is_a?(Hash)
+
+        LIFTED_ASSOCIATION_OPTIONS.each_with_object(shaped) do |key, acc|
+          next unless options.key?(key) && !acc.key?(key)
+
+          value = options[key]
+          # `dependent: nil` is a declaration of nothing, and the booted tier
+          # drops it; lifting it as "" renders `.dependent(:)`.
+          next if value.nil?
+
+          acc[key] = BOOLEAN_ASSOCIATION_OPTIONS.include?(key) ? value : value.to_s
+        end
+      end
+
       def sanitize_options(options)
         options.reject { |_k, v| v.is_a?(Proc) || v.is_a?(Regexp) }
                .transform_values(&:to_s)
       end
 
-      def static_model_details(path, class_name, file: relative_to_root(path))
-        data = SourceIntrospector.call(path)
-        {
+      def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],
+                               sti: nil)
+        own = SourceIntrospector.call(path)
+        data, unread, hidden = merge_concern_macros(own, class_name)
+        data, unread, bases_unread, hidden = merge_inherited_macros(data, unread, hidden, inherited_from)
+        details = {
           confidence: Confidence::STATIC,
-          # Rails derives the table through its own inflector, and the file's
-          # name already carries that inflection - Zeitwerk resolved the
-          # constant from it. Underscoring the constant instead turns
-          # OAuthClientConfig into o_auth_client_configs, a table no app has.
-          table_name: File.basename(path, ".rb").pluralize,
-          associations: data[:associations],
-          validations: data[:validations],
+          table_name: table_name || TableName.stem(path),
+          associations: reject_excluded_associations(data[:associations]),
+          # The booted tier's validations come from model.validators, which
+          # never holds a `validate :method`; those are reported once, under
+          # custom_validates.
+          validations: Array(data[:validations]).reject { |v| v[:kind] == "custom" },
+          custom_validates: extract_custom_validates_from_ast(data),
           scopes: data[:scopes],
-          enums: data[:enums],
+          # The booted tier answers a Hash of attribute => value map, and
+          # every renderer destructures one; the listener's records are a
+          # different shape under the same key.
+          enums: static_enums(data[:enums]),
           # Same shape as the booted tier: a Hash keyed by callback type. The
           # listener hands back a flat Array, and every consumer filters on
           # `callbacks.is_a?(Hash)` - so passing it through rendered "No models
@@ -664,18 +957,161 @@ module RailsAiContext
           # against an Array.
           callbacks: group_callbacks_by_type(data[:callbacks]),
           concerns: static_concerns(data[:mixins]),
+          concerns_hidden: (hidden.size if hidden.any?),
+          concern_callbacks: concern_callbacks(data[:callbacks]),
+          concerns_unread: (unread if unread.any?),
+          bases_unread: (bases_unread if bases_unread.any?),
           macros: data[:macros],
-          methods: ActionResolver.own_methods(data[:methods], class_name),
-          file: file
+          methods: ActionResolver.own_methods(own[:methods], class_name),
+          file: file,
+          sti: sti
         }
+        details.merge!(extract_macros_from_ast(data, path))
+        details.merge!(extract_detailed_macros_from_ast(data))
+        downgrade_records(details.compact)
+      end
+
+      # Both tiers collect all six. The booted tier reads five of them off the
+      # source too - a concern's `validate :x` reaches custom_validates, its
+      # enum options reach enum_options - and reflection overwrites the sixth,
+      # associations, on that tier.
+      MERGED_CONCERN_KEYS = %i[associations validations scopes enums callbacks macros].freeze
+
+      # Reflection answers these whether or not the concern's file was read,
+      # so on the booted tier an unread concern costs the other keys only.
+      REFLECTED_CONCERN_KEYS = %i[associations validations enums].freeze
+
+      # The mixin names are in the same walk and their files are on disk, so
+      # the class's own declarations and its concerns' answer as one. Methods
+      # and mixins stay the model's own: those are its interface, not the
+      # sum of what it included.
+      def merge_concern_macros(own, class_name)
+        collected, unread, hidden = ConcernMacros.collect(
+          app.root.to_s, own[:mixins] || [],
+          keys: MERGED_CONCERN_KEYS, prefer: "model", within: class_name,
+          cache: @source_cache
+        )
+        return [ own, unread, hidden ] if collected.empty?
+
+        [ merge_inherited(own, collected), unread, hidden ]
+      end
+
+      # An STI child inherits its base's macros along with its table.
+      # Reflection inherits three of the six keys - associations, validations
+      # and enums - and the other three are read off the file, so both tiers
+      # walk the chain the way they walk the concerns. Read nearest base
+      # first, so the closer declaration wins over the further one.
+      # A base the walk could not read is answered apart from the unread
+      # concerns: it is a class, not a concern, and a child with no concerns
+      # never reaches the line that names them.
+      def merge_inherited_macros(data, unread, hidden, bases)
+        bases_unread = []
+        Array(bases).each do |name, path|
+          own = sti_base_source(path)
+          if own.nil?
+            bases_unread |= [ name ]
+            next
+          end
+
+          base, base_unread, base_hidden = merge_concern_macros(own, name)
+          data = merge_inherited(data, base.slice(*MERGED_CONCERN_KEYS))
+          # A base's concerns are the child's too: the child's record already
+          # carries what they declared, and its callbacks credit them by name.
+          data[:mixins] = Array(data[:mixins]) | Array(own[:mixins])
+          unread |= base_unread
+          hidden |= base_hidden
+        end
+        [ data, unread, bases_unread, hidden ]
+      end
+
+      # A base too big or unreadable costs its own declarations, not the
+      # child's whole entry. The rescue still earns its place with the size
+      # check in front of it: max_file_size can be configured above
+      # AstCache::MAX_PARSE_SIZE, and the parse raises on its own limit.
+      def sti_base_source(path)
+        return nil unless readable_source?(path)
+
+        @source_cache[path] ||= SourceIntrospector.call(path)
+      rescue StandardError
+        nil
+      end
+
+      # The size the whole introspector agrees a file is worth reading. Both
+      # tiers ask this before the first walk, so a second walk over the same
+      # file has to ask it too or the two disagree.
+      def readable_source?(path)
+        return false unless path && File.exist?(path)
+
+        File.size(path) <= RailsAiContext.configuration.max_file_size
+      rescue SystemCallError
+        false
+      end
+
+      def merge_inherited(mine, inherited)
+        merged = mine.merge(inherited) { |_key, ours, theirs| Array(ours) + Array(theirs) }
+        merged[:associations] = dedup(merged[:associations]) { |a| [ a[:type], a[:name] ] }
+        merged[:scopes] = dedup(merged[:scopes]) { |s| s[:name] }
+        merged[:enums] = dedup(merged[:enums]) { |e| e[:name].to_s }
+        # `encrypts :secret` on a base and again on the child is one macro, and
+        # the consumers read it as a list of attributes. The key is the
+        # declaration: the line it was read at differs between two files, and
+        # the concern tag differs between two ways of reaching one file.
+        merged[:macros] = dedup(merged[:macros]) { |m| m.except(:from_concern, :location) }
+        # Rails keeps one entry for a symbol callback declared on a base and
+        # again on the child, and two validators for a validation declared
+        # twice, so these two are not deduped alike.
+        merged[:callbacks] = dedup(merged[:callbacks]) { |c| [ c[:type], c[:method].to_s ] }
+        # One source line read twice is still one declaration: a concern the
+        # model and one of its bases both include is walked once per class, and
+        # `included do` runs once. Two validations really written twice differ
+        # by the line they are on and both stay.
+        merged[:validations] = dedup(merged[:validations]) { |v| v }
+        merged
+      end
+
+      # The model's own declaration wins: it is the one whose options the
+      # class actually runs with.
+      def dedup(entries)
+        Array(entries).uniq { |entry| entry.is_a?(Hash) ? yield(entry) : entry }
+      end
+
+      def concern_callbacks(callbacks)
+        found = Array(callbacks).select { |cb| cb.is_a?(Hash) && cb[:from_concern] }
+        found if found.any?
+      end
+
+      # A record cannot claim more than the tier that carries it: nothing in a
+      # static entry is runtime-confirmed, whatever the listener read off the
+      # file. A record the parser could not resolve keeps its own lower mark.
+      def downgrade_records(details)
+        details.transform_values do |value|
+          next value unless value.is_a?(Array)
+
+          value.map do |entry|
+            entry.is_a?(Hash) && entry[:confidence] == Confidence::VERIFIED ? entry.merge(confidence: Confidence::STATIC) : entry
+          end
+        end
+      end
+
+      # `defined_enums` keys both levels with Strings; the listener uses
+      # Symbols, and a consumer that looks a value up by name misses.
+      def static_enums(enums)
+        Array(enums).each_with_object({}) do |enum, hash|
+          values = enum[:values]
+          hash[enum[:name].to_s] = values.is_a?(Hash) ? values.transform_keys(&:to_s) : values
+        end
       end
 
       # Consumers used to turn a model name back into
       # app/models/<underscored>.rb, which is wrong for a model in a pack or an
       # engine and wrong wherever the app registers an inflection. The path
-      # travels with the model instead.
+      # travels with the model instead. It goes into .ai-context.json, which
+      # the app commits, so a gem path keeps the gem and drops the install
+      # prefix.
       def relative_to_root(path)
-        path.to_s.sub(%r{\A#{Regexp.escape(app.root.to_s)}/}, "")
+        return nil if path.nil?
+
+        PortablePath.relativize_marked(path, app.root.to_s)
       end
 
       # This sees the model file alone, where the booted tier also walks what
@@ -707,7 +1143,10 @@ module RailsAiContext
               result[class_name] = if source.include?("Mongoid::Document")
                 mongoid_model_details(path).merge(file: relative_to_root(path))
               else
-                static_model_details(path, class_name)
+                # This walk keeps no candidate hash, so an AR model in a
+                # hybrid app gets the table it assigns itself and the derived
+                # stem otherwise - no namespace prefix, no STI parent.
+                static_model_details(path, class_name, table_name: TableName.explicit(source, class_name))
               end
             rescue => e
               result[relative.camelize] = { error: e.message }
@@ -741,7 +1180,7 @@ module RailsAiContext
                         .map { |m| { name: m[:args].first, type: m[:options][:type] }.compact },
           embeds: macros.select { |m| %i[embeds_many embeds_one embedded_in].include?(m[:macro]) }
                         .map { |m| { type: m[:macro], name: m[:args].first } },
-          associations: data[:associations],
+          associations: reject_excluded_associations(data[:associations]),
           validations: data[:validations],
           scopes: data[:scopes],
           # Same shape as the booted tier: a Hash keyed by callback type. The
@@ -754,7 +1193,7 @@ module RailsAiContext
         }
         collection = macros.find { |m| m[:macro] == :store_in }&.dig(:options, :collection)
         details[:collection] = collection if collection
-        details
+        downgrade_records(details)
       end
     end
   end

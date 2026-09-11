@@ -63,6 +63,15 @@ module RailsAiContext
       }.freeze
 
       def self.call(files: nil, confidence: "weak", checks: nil, detail: "standard", server_context: nil)
+        # A leading slash has always meant "from the Rails root here", and the
+        # filter below strips it. Normalize first, so the guard reads the path
+        # this tool means rather than refusing the app's own file.
+        files = files.map { |f| f.to_s.delete_prefix("/") } if files
+        # Filtering by a path outside the app would report "no warnings found
+        # in /etc/passwd", which reads as a file this tool looked at.
+        refused = refuse_unsafe_paths(files)
+        return refused if refused
+
         unless brakeman_available?
           return text_response(
             "Brakeman is not installed. Add it to your Gemfile:\n\n" \
@@ -101,10 +110,9 @@ module RailsAiContext
             return text_response("File(s) not found: #{missing.join(', ')}. Provide paths relative to Rails root.")
           end
 
-          normalized = files.map { |f| f.delete_prefix("/") }
           warnings = warnings.select do |w|
             path = w.file.relative
-            normalized.any? { |f| path == f || path.start_with?(f) }
+            files.any? { |f| path == f || path.start_with?(f) }
           end
         end
 

@@ -44,7 +44,7 @@ module RailsAiContext
           result[name] = details
         end
 
-        { controllers: result }
+        { controllers: fill_inherited_actions(result) }
       rescue => e
         { error: e.message }
       end
@@ -61,7 +61,7 @@ module RailsAiContext
           hash[path_name] = { error: e.message }
         end
         {
-          controllers: result,
+          controllers: fill_inherited_actions(result),
           note: "Parsed statically from app/controllers (app not booted)"
         }
       rescue => e
@@ -69,6 +69,20 @@ module RailsAiContext
       end
 
       private
+
+      # One file cannot see its ancestor, so the inherited answer is filled in
+      # over the finished listing, walked by the parent name each entry
+      # carries. Only entries with no actions of their own are touched.
+      def fill_inherited_actions(result)
+        result.each do |name, info|
+          next unless info.is_a?(Hash) && Array(info[:actions]).empty?
+
+          inherited = ActionResolver.inherited_actions_by_name(result, info[:parent_class],
+                                                               kind: :controller, within: name)
+          info[:actions] = inherited if inherited.any?
+        end
+        result
+      end
 
       # What both tiers do with a file: read it, name it by what it declares,
       # and extract. A file it cannot read is an entry saying so, not a gap.
@@ -87,7 +101,7 @@ module RailsAiContext
         bases << ActionController::API if defined?(ActionController::API)
 
         bases.flat_map(&:descendants).reject do |ctrl|
-          ctrl.name.nil? || ctrl.name == "ApplicationController" ||
+          ctrl.name.nil? || ctrl.name == "ApplicationController" || DeclaredConstant.renamed?(ctrl) ||
             ctrl.name.start_with?("Rails::", "ActionMailbox::", "ActiveStorage::")
         end.uniq.sort_by(&:name)
       end
@@ -201,7 +215,7 @@ module RailsAiContext
             # Evaluate known runtime conditions to remove inapplicable filters
             reflection_filters.reject! { |f| filter_excluded_by_condition?(ctrl, f) }
 
-            return reflection_filters
+            return merge_own_source(reflection_filters, source || read_source(ctrl))
           end
         end
 
@@ -217,7 +231,10 @@ module RailsAiContext
         []
       end
 
-      # Walk up the controller inheritance chain and collect filter constraints from source files
+      # A compiled callback keeps only:/except: in private ivars, so the
+      # constraint has to come from the chain's source. A skip record states
+      # the actions on which the filter does NOT run, which is the opposite
+      # of what the filter is being asked for, so it never supplies one.
       def collect_source_constraints(ctrl, current_source = nil)
         constraints = {}
         klass = ctrl
@@ -225,6 +242,8 @@ module RailsAiContext
           src = (klass == ctrl) ? (current_source || read_source(klass)) : read_source(klass)
           if src
             extract_filters_from_source(src).each do |sf|
+              next if sf[:skipped]
+
               # First definition wins (most specific controller in chain)
               constraints[sf[:name]] ||= sf
             end
@@ -237,56 +256,44 @@ module RailsAiContext
         {}
       end
 
-      def extract_filters_from_source(source)
-        filter_macros = %i[
-          before_action after_action around_action
-          prepend_before_action append_before_action
-          skip_before_action skip_after_action append_after_action
-        ]
-        ast_result = SourceIntrospector.walk_source(source, {
-          filters: -> { Listeners::GenericMacroListener.new(*filter_macros) }
-        })
-        raw = ast_result[:filters] || []
-        raw.filter_map do |entry|
-          name_sym = entry[:args]&.first
-          next unless name_sym
-          kind = entry[:macro].to_s.sub(/_action\z/, "").sub(/\A(?:prepend|append|skip)_/, "")
-          filter = { name: name_sym.to_s, kind: kind }
+      # Reflection hands every class the whole chain and no skips at all, so
+      # the class's own body is the only thing that says which of those names
+      # it declares itself and what it took out. Both go on the record: the
+      # skips the way the static tier carries them, and `declared` on the rest.
+      # The chain's own order is the run order, so it is kept: each skip is
+      # spliced in beside the record it takes out, and the body's order
+      # decides only whether the skip reads before or after a re-declaration
+      # of the same name.
+      def merge_own_source(filters, source)
+        return filters unless source
 
-          opts = entry[:options] || {}
-          only = normalize_constraint(opts[:only])
-          except = normalize_constraint(opts[:except])
-          filter[:only] = only if only&.any?
-          filter[:except] = except if except&.any?
+        own = extract_filters_from_source(source)
+        declared = own.reject { |f| f[:skipped] }.map { |f| f[:name] }.to_set
+        by_name = filters.group_by { |f| f[:name] }
+        declared.each { |name| Array(by_name[name]).each { |f| f[:declared] = true } }
+        skips = own.select { |f| f[:skipped] }
+        return filters if skips.empty?
 
-          if opts[:unless]
-            filter[:unless] = opts[:unless].to_s
-          end
-          if opts[:if]
-            # A lambda has no literal value, so `opts[:if]` is "[INFERRED]".
-            # When the condition is an action_name comparison the AST can say
-            # exactly which action it names; report that instead of nothing.
-            actions = extract_action_condition(entry[:option_nodes][:if])
-            filter[:if] = actions ? %(action_name == "#{actions.first}") : opts[:if].to_s
-          end
-
-          filter
-        end
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_filters_from_source AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        splice_skips(filters, own, skips)
       end
 
-      # Normalize constraint values from AST extraction.
-      # Could be a single symbol, an array of symbols, or a string.
-      def normalize_constraint(value)
-        case value
-        when Array then value.map(&:to_s)
-        when Symbol then [ value.to_s ]
-        when String then [ value ]
-        when nil then nil
-        else [ value.to_s ]
+      def splice_skips(filters, own, skips)
+        placed = Set.new
+        merged = filters.flat_map do |f|
+          name = f[:name]
+          mine = skips.select { |s| s[:name] == name }
+          next [ f ] if mine.empty? || placed.include?(name)
+
+          placed << name
+          skip_at = own.index { |o| o[:name] == name && o[:skipped] }
+          declare_at = own.index { |o| o[:name] == name && !o[:skipped] }
+          declare_at && skip_at < declare_at ? mine + [ f ] : [ f ] + mine
         end
+        merged + skips.reject { |s| placed.include?(s[:name]) }
+      end
+
+      def extract_filters_from_source(source)
+        ControllerFilters.from_source(source)
       end
 
       # Statically evaluate known runtime conditions to exclude inapplicable filters.
@@ -311,30 +318,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] devise_controller? failed: #{e.message}" if ENV["DEBUG"]
         false
-      end
-
-      # `if: -> { action_name == "create" }` narrows a filter to one action the
-      # same way `only:` does. Returns the action name, or nil for any other
-      # condition.
-      def extract_action_condition(node)
-        node = lambda_body(node)
-        return nil unless node.is_a?(Prism::CallNode) && node.name == :==
-
-        receiver = node.receiver
-        return nil unless receiver.is_a?(Prism::CallNode) && receiver.name == :action_name && receiver.receiver.nil?
-
-        operand = node.arguments&.arguments&.first
-        case operand
-        when Prism::StringNode then [ operand.unescaped ]
-        when Prism::SymbolNode then [ operand.value.to_s ]
-        end
-      end
-
-      def lambda_body(node)
-        return node unless node.is_a?(Prism::LambdaNode) || node.is_a?(Prism::BlockNode)
-        statements = node.body
-        return nil unless statements.is_a?(Prism::StatementsNode) && statements.body.size == 1
-        statements.body.first
       end
 
       def extract_concerns(ctrl)

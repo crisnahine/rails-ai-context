@@ -179,6 +179,49 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
         end
       end
 
+      # The app calls RailsAiContext.configure but does not bundle the gem, so
+      # the constant is the bare namespace the binary opened. Both branches
+      # must say so: the static banner sends the user to doctor, and doctor
+      # boots with static refused.
+      context "when an initializer calls configure without the gem in the Gemfile" do
+        let(:failed) do
+          RailsAiContext::BootManager::Result.new(
+            status: :failed,
+            error: NoMethodError.new("undefined method 'configure' for module RailsAiContext")
+          )
+        end
+
+        it "names the cause and the two ways out in the static banner" do
+          failing_app do |dir|
+            messages = described_class.call(root: dir, allow_static: true).messages.join("\n")
+
+            expect(messages).to include("does not bundle the gem")
+            expect(messages).to include("bundle add rails-ai-context --group development")
+            expect(messages).to include(".rails-ai-context.yml")
+          end
+        end
+
+        it "names the same cause where static is refused" do
+          failing_app do |dir|
+            messages = described_class.call(root: dir, allow_static: false).messages.join("\n")
+
+            expect(messages).to include("does not bundle the gem")
+            expect(messages).to include("bundle add rails-ai-context --group development")
+          end
+        end
+
+        it "says nothing about configure for an unrelated boot failure" do
+          other = RailsAiContext::BootManager::Result.new(status: :failed, error: RuntimeError.new("boom"))
+          allow(RailsAiContext::BootManager).to receive(:boot!).and_return(other)
+
+          failing_app do |dir|
+            messages = described_class.call(root: dir, allow_static: false).messages.join("\n")
+
+            expect(messages).not_to include("does not bundle the gem")
+          end
+        end
+      end
+
       # A broken install cannot load the gem either; the boot diagnosis
       # collected so far must still reach the terminal.
       it "keeps the boot-failure lines when the static tier itself cannot load" do

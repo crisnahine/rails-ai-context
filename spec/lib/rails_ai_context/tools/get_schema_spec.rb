@@ -120,6 +120,49 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  # Rails builds no model for a has_and_belongs_to_many join table, so one is
+  # not a table whose model went missing, and the reader was being pointed at
+  # a table the app uses on every request.
+  describe "tables no model file declares" do
+    let(:join_tables) do
+      tables.merge(
+        "posts_tags" => { columns: [ { name: "post_id", type: "integer" } ], indexes: [], foreign_keys: [] },
+        "legacy_audits" => { columns: [ { name: "id", type: "integer" } ], indexes: [], foreign_keys: [] }
+      )
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: join_tables, total_tables: 5 },
+        models: {
+          "Post" => {
+            table_name: "posts",
+            associations: [ { name: "tags", type: "has_and_belongs_to_many", options: {} } ]
+          }
+        }
+      })
+    end
+
+    def warning_line
+      described_class.call.content.first[:text].lines.find { |l| l.start_with?("⚠") }.to_s
+    end
+
+    it "leaves a habtm join table out" do
+      expect(warning_line).not_to include("posts_tags")
+    end
+
+    it "still names a table nothing declares" do
+      expect(warning_line).to include("legacy_audits")
+    end
+
+    it "does not claim the table has no model anywhere" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("no ActiveRecord model")
+      expect(text).to include("no model file in this app")
+    end
+  end
+
   describe ".call with specific table" do
     it "returns full detail for a specific table" do
       result = described_class.call(table: "users")
@@ -180,6 +223,19 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       text = result.content.first[:text]
       expect(text).to include("Table: users")
     end
+
+    # Underscoring a namespaced model asks for `admin/action_logs`, a table no
+    # app has. The model already carries the table it reads.
+    it "resolves a namespaced model through the table its model recorded" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: tables, total_tables: 3 },
+        models: { "Admin::Comment" => { table_name: "comments" } }
+      })
+
+      result = described_class.call(table: "Admin::Comment")
+
+      expect(result.content.first[:text]).to include("Table: comments")
+    end
   end
 
   describe ".call with JSON format" do
@@ -195,6 +251,55 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       text = result.content.first[:text]
       parsed = JSON.parse(text)
       expect(parsed).to have_key("tables")
+    end
+
+    it "returns JSON for the default table listing" do
+      result = described_class.call(format: "json")
+      text = result.content.first[:text]
+
+      expect { JSON.parse(text) }.not_to raise_error
+      expect(JSON.parse(text)["tables"]).to include("users")
+    end
+
+    it "returns JSON for a summary listing" do
+      result = described_class.call(detail: "summary", format: "json")
+
+      expect(JSON.parse(result.content.first[:text])["tables"]).to include("users")
+    end
+
+    it "honours limit and offset in the JSON listing" do
+      first = described_class.call(detail: "summary", format: "json", limit: 1)
+      second = described_class.call(detail: "summary", format: "json", limit: 1, offset: 1)
+
+      first_tables = JSON.parse(first.content.first[:text])["tables"]
+      second_tables = JSON.parse(second.content.first[:text])["tables"]
+
+      expect(first_tables.size).to eq(1)
+      expect(second_tables.size).to eq(1)
+      expect(second_tables.keys).not_to eq(first_tables.keys)
+    end
+
+    # A page past the end is still a JSON request. It answered prose, which
+    # no caller parsing the body can read.
+    %w[summary standard full].each do |level|
+      it "answers an empty #{level} page as JSON" do
+        result = described_class.call(detail: level, format: "json", offset: 9999)
+
+        expect(JSON.parse(result.content.first[:text])["tables"]).to eq({})
+      end
+    end
+
+    # The markdown banner rides on every static-tier response; appended to a
+    # JSON body it stops the body parsing, so it moves inside the document.
+    it "still parses in the static tier, with the tier note inside the document" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      allow(RailsAiContext).to receive(:static_reason).and_return("static mode requested with --no-boot")
+      allow(RailsAiContext).to receive(:static_kind).and_return(:requested)
+
+      parsed = JSON.parse(described_class.call(format: "json").content.first[:text])
+
+      expect(parsed["_static_tier"]).to include("[STATIC]")
+      expect(parsed["tables"]).to include("users")
     end
   end
 
@@ -322,6 +427,34 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       text = result.content.first[:text]
       expect(text).to include("# Schema Full Detail (1 of 1 table)")
       expect(text).not_to include("1 tables")
+    end
+  end
+
+  # Every read of the shared cache is a deep copy of the whole payload, so a
+  # listing that reads it once per table pays for the app several times over.
+  describe "shared context reads in the table listing" do
+    def context_with(count)
+      entries = (1..count).to_h do |i|
+        [ "table#{i}", { columns: [ { name: "id", type: "integer", null: false } ], indexes: [], foreign_keys: [] } ]
+      end
+      models = (1..count).to_h { |i| [ "Model#{i}", { table_name: "table#{i}", associations: [], validations: [] } ] }
+      { schema: { adapter: "sqlite3", tables: entries, total_tables: count }, models: models }
+    end
+
+    def reads_for(count)
+      described_class.reset_cache!
+      reads = 0
+      ctx = context_with(count)
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(detail: "standard", limit: 200)
+      reads
+    end
+
+    it "reads the shared context the same number of times for 3 tables as for 40" do
+      expect(reads_for(40)).to eq(reads_for(3))
     end
   end
 end

@@ -53,6 +53,14 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(text).to include("en, es, fr, de")
     end
 
+    # The generated files make the same claim the tool does, so they carry the
+    # same qualifier when the list came off config/locales.
+    it "qualifies the I18n line when the locales came from the locale files" do
+      ctx = { i18n: { available_locales: %w[en fr], available_locales_source: "locale_files" } }
+      helper = test_class.new(ctx)
+      expect(helper.full_preset_stack_lines.join("\n")).to include("I18n: 2 locales from locale files (en, fr)")
+    end
+
     it "skips I18n when only one locale" do
       ctx = { i18n: { available_locales: %w[en] } }
       helper = test_class.new(ctx)
@@ -224,17 +232,73 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
   describe "#write_rule_files" do
     require "tmpdir"
 
+    def rule_file(path, content, reason = nil)
+      RailsAiContext::Serializers::StackOverviewHelper::RuleFile.new(path, content, reason)
+    end
+
     it "writes through SafeFile.atomic_write and skips unchanged files" do
       Dir.mktmpdir do |root|
         helper = test_class.new({})
         path = File.join(root, ".claude", "rules", "rails-context.md")
 
-        first = helper.write_rule_files({ path => "content" })
-        expect(first).to eq(written: [ path ], skipped: [])
+        first = helper.write_rule_files([ rule_file(path, "content") ])
+        expect(first).to eq(written: [ path ], skipped: [], not_applicable: {})
         expect(File.read(path)).to eq("content")
 
-        second = helper.write_rule_files({ path => "content" })
-        expect(second).to eq(written: [], skipped: [ path ])
+        second = helper.write_rule_files([ rule_file(path, "content") ])
+        expect(second).to eq(written: [], skipped: [ path ], not_applicable: {})
+      end
+    end
+
+    it "reports a nil render with its reason instead of dropping it" do
+      Dir.mktmpdir do |root|
+        helper = test_class.new({})
+        path = File.join(root, ".claude", "rules", "rails-models.md")
+
+        result = helper.write_rule_files([ rule_file(path, nil, "no models") ])
+
+        expect(result).to eq(written: [], skipped: [], not_applicable: { path => "no models" })
+        expect(Dir.exist?(File.join(root, ".claude"))).to be false
+      end
+    end
+
+    it "falls back to a generic reason when the entry carries none" do
+      Dir.mktmpdir do |root|
+        helper = test_class.new({})
+        path = File.join(root, "rails-models.md")
+
+        result = helper.write_rule_files([ rule_file(path, nil) ])
+
+        expect(result[:not_applicable]).to eq(path => "nothing to document")
+      end
+    end
+
+    # The reason used to travel in a second hash keyed by the same path, so a
+    # path present in one and missing from the other lost its reason silently.
+    it "carries the reason on the entry, not in a parallel hash" do
+      expect(RailsAiContext::Serializers::StackOverviewHelper::RuleFile.members)
+        .to eq(%i[path content reason])
+    end
+  end
+
+  describe "#write_rule_table" do
+    it "reads the renderer and the reason by name off each table entry" do
+      Dir.mktmpdir do |root|
+        klass = Class.new do
+          include RailsAiContext::Serializers::StackOverviewHelper
+
+          def render_present = "body"
+          def render_absent = nil
+        end
+
+        result = klass.new.write_rule_table(
+          root,
+          "present.md" => { renderer: :render_present, reason: "nothing to document" },
+          "absent.md" => { renderer: :render_absent, reason: "no models" }
+        )
+
+        expect(result[:written]).to eq([ File.join(root, "present.md") ])
+        expect(result[:not_applicable]).to eq(File.join(root, "absent.md") => "no models")
       end
     end
   end

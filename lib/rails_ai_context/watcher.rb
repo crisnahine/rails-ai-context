@@ -7,10 +7,16 @@ module RailsAiContext
   # by nature, so it also gets the one-time legacy-files prompt the
   # server-side reload deliberately skips.
   class Watcher
+    RESULT_LINES = {
+      written: "Updated: %s",
+      skipped: "Unchanged: %s",
+      not_applicable: "Not applicable: %s (%s)"
+    }.freeze
+
     attr_reader :app
 
     def initialize(app = nil)
-      @app = app || Rails.application
+      @app = app || RailsAiContext.default_app
       @watch = ChangeWatch.new(@app)
     end
 
@@ -30,11 +36,13 @@ module RailsAiContext
         warn_only: true
       )
 
-      $stderr.puts "[rails-ai-context] Watching for changes..."
-      $stderr.puts "[rails-ai-context] Directories: #{dirs.map { |d| d.sub("#{root}/", '') }.join(', ')}"
-
       listener = @watch.start { |_paths, _reloaded| regenerate }
       return unless listener
+
+      # After the listener, not before: the banner is only true once a watch
+      # is running, and a missing `listen` or an empty watch list starts none.
+      $stderr.puts "[rails-ai-context] Watching for changes..."
+      $stderr.puts "[rails-ai-context] Directories: #{dirs.map { |d| d.sub("#{root}/", '') }.join(', ')}"
 
       # Keep the process alive
       loop do
@@ -61,8 +69,7 @@ module RailsAiContext
     def regenerate
       $stderr.puts "[rails-ai-context] Changes detected, regenerating context files..."
       result = RailsAiContext.generate_context(format: :all)
-      result[:written].each { |f| $stderr.puts "  Updated: #{f}" }
-      result[:skipped].each { |f| $stderr.puts "  Unchanged: #{f}" }
+      ContextFileReport.each_line(result, RESULT_LINES) { |_bucket, text| $stderr.puts "  #{text}" }
     rescue => e
       $stderr.puts "[rails-ai-context] Error regenerating: #{e.message}"
     end

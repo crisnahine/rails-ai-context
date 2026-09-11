@@ -284,5 +284,35 @@ RSpec.describe RailsAiContext::Serializers::ContextFileSerializer do
         expect(result[:written]).not_to be_empty
       end
     end
+
+    it "reports the root files it left out and why" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        allow(RailsAiContext.configuration).to receive(:generate_root_files).and_return(false)
+        result = described_class.new(context, format: :all).call
+
+        expect(result[:not_applicable].values.uniq).to include("root files disabled")
+        left_out = result[:not_applicable].keys.map { |f| File.basename(f) }
+        expect(left_out).to include("CLAUDE.md", "AGENTS.md", ".ai-context.json", "copilot-instructions.md")
+      end
+    end
+  end
+
+  describe "files that do not apply to this app" do
+    it "names them with a reason instead of dropping them" do
+      Dir.mktmpdir do |dir|
+        allow(RailsAiContext.configuration).to receive(:output_dir_for).and_return(dir)
+        bare = context.merge(models: {}, schema: { tables: {} }, controllers: { controllers: {} })
+
+        result = described_class.new(bare, format: :all).call
+
+        expect(result[:not_applicable]).to be_a(Hash)
+        paths = result[:not_applicable].keys
+        expect(paths.grep(/rails-models\.md$/)).not_to be_empty
+        expect(paths.grep(/rails-schema\.md$/)).not_to be_empty
+        expect(result[:not_applicable][File.join(dir, ".claude", "rules", "rails-models.md")]).to eq("no models")
+        expect(result[:written] & paths).to be_empty
+      end
+    end
   end
 end

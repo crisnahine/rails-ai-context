@@ -97,14 +97,6 @@ module RailsAiContext
           unanswered?(data, key) ? unavailable_text : yield
         end
 
-        def unanswered?(data, key)
-          Array(data[:unavailable_sections]).map(&:to_s).include?(key.to_s)
-        end
-
-        def unavailable_text
-          Confidence.unavailable(Introspectors::StaticTier.unavailable_reason)
-        end
-
         def graphql_line(data)
           return graphql_label(data[:graphql]) if data[:graphql].is_a?(Hash)
           "not detected (no app/graphql directory)"

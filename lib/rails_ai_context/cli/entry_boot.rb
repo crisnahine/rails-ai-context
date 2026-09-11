@@ -77,6 +77,7 @@ module RailsAiContext
           if result.error.is_a?(BootManager::BootTimeoutError)
             messages << "[rails-ai-context]   If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
           end
+          result.configure_hint.each { |line| messages << "[rails-ai-context]   #{line}" }
           messages << "[rails-ai-context] Serving static analysis; runtime-only data is marked [UNAVAILABLE]."
           messages << "[rails-ai-context] Run `rails-ai-context doctor` for boot diagnostics."
           restore_standalone_environment!(pre_boot_paths, pre_boot_specs, messages)
@@ -132,9 +133,12 @@ module RailsAiContext
           messages << "  Run with DEBUG=1 for the full backtrace."
         end
 
+        hint = result.configure_hint
         if result.error.is_a?(BootManager::BootTimeoutError)
           messages << "  The app took longer than #{timeout}s to boot. Raise the limit with"
           messages << "  RAILS_AI_CONTEXT_BOOT_TIMEOUT=<seconds> (current: #{timeout}s)."
+        elsif hint.any?
+          hint.each { |line| messages << "  #{line}" }
         else
           messages << "  Common causes: missing ENV vars or credentials, an initializer"
           messages << "  that needs a service (database, Redis), or a syntax error."

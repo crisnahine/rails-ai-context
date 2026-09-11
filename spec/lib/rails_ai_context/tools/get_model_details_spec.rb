@@ -134,6 +134,18 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("could not load")
     end
 
+    # The count includes it either way, so a listing that skips it reads as
+    # a count that does not match its own rows.
+    it "names a model whose file it could not read in the listing" do
+      models_with_error = models.merge("Broken" => { error: "file is unreadable" })
+      allow(described_class).to receive(:cached_context).and_return({ models: models_with_error })
+
+      %w[standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        expect(text).to include("- **Broken** [UNAVAILABLE: file is unreadable]")
+      end
+    end
+
     it "strips whitespace from model name input" do
       result = described_class.call(model: "  User  ")
       text = result.content.first[:text]
@@ -299,6 +311,254 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("- `overdue`")
       expect(text).not_to include("example_usage")
       expect(text).not_to include("- `internal`")
+    end
+  end
+
+  describe "callbacks" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Status" => {
+            table_name: "statuses",
+            callbacks: { "after_create" => [ "set_poll_id", "[inline_block]" ] }
+          }
+        }
+      )
+    end
+
+    # A list of targets is a list of names, so the block keyword read there
+    # as a callback named `do`.
+    it "names a block callback with the payload's marker" do
+      text = described_class.call(model: "Status", detail: "full").content.first[:text]
+
+      expect(text).to include("- `after_create`: :set_poll_id, [inline_block]")
+      expect(text).not_to include(", do")
+    end
+  end
+
+  describe "repeated validations" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Account" => {
+            table_name: "accounts",
+            validations: [
+              { kind: "length", attributes: [ "username" ], options: { maximum: "HARD_LIMIT" } },
+              { kind: "length", attributes: [ "username" ], options: { maximum: "LOCAL_LIMIT" } },
+              { kind: "length", attributes: [ "username" ], options: { maximum: "HARD_LIMIT" } }
+            ]
+          }
+        }
+      )
+    end
+
+    # A model can validate one attribute twice under different conditions;
+    # collapsing on kind and attribute alone dropped the second rule.
+    it "keeps a second declaration on the same attribute and kind" do
+      text = described_class.call(model: "Account", detail: "full").content.first[:text]
+
+      expect(text).to include("- `length` on username (maximum: HARD_LIMIT)")
+      expect(text).to include("- `length` on username (maximum: LOCAL_LIMIT)")
+      expect(text.scan("- `length` on username (maximum: HARD_LIMIT)").size).to eq(1)
+    end
+  end
+
+  # The builder emits `field:` and `transformation:`; the renderer read
+  # `attribute:` and `with:`, so both blocks printed "- **** ...".
+  describe "detailed macro blocks" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Keypair" => {
+            table_name: "keypairs",
+            encryption_details: [ { field: "private_key", options: { deterministic: true } },
+                                  { field: "ssn", options: {} } ],
+            normalizes_details: [
+              { field: "email", transformation: "strip" },
+              { field: "phone", transformation: RailsAiContext::Confidence::INFERRED }
+            ]
+          }
+        }
+      )
+    end
+
+    it "names the encrypted field and its options" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).to include("## Encryption Details")
+      expect(text).to include("- **private_key** (deterministic: true)")
+    end
+
+    # Interpolating the options hash printed Hash#to_s, whose format changed
+    # in Ruby 3.4, so the same app rendered two different lines.
+    it "renders the options as pairs rather than a Ruby hash" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).not_to include("options: {")
+    end
+
+    it "leaves out the parenthesis when the macro carried no options" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).to include("- **ssn**\n")
+      expect(text).not_to include("- **ssn** (")
+    end
+
+    it "names the normalized field and its transformation" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).to include("## Normalizes Details")
+      expect(text).to include("- **email** - strip")
+    end
+
+    # A transformation the parser could not resolve is a marker, not the name
+    # of a transformation, so it never follows the dash.
+    it "marks an unresolved transformation instead of naming one" do
+      text = described_class.call(model: "Keypair", detail: "full").content.first[:text]
+
+      expect(text).to include("- **phone** [INFERRED]")
+      expect(text).not_to include("- **phone** - [INFERRED]")
+    end
+  end
+
+  # The footer promises runtime-only data is marked; a concern whose file
+  # cannot be found is not runtime-only, it is unread.
+  describe "concerns the static tier could not read" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Widget" => {
+            table_name: "widgets",
+            concerns: %w[Wired Discard::Model],
+            concerns_unread: %w[Discard::Model]
+          }
+        }
+      )
+    end
+
+    it "names them under the Concerns section" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).to include("## Concerns")
+      expect(text).to include("[UNAVAILABLE] 1 concern not read: Discard::Model")
+    end
+
+    # Reflection already answered associations, validations and enums for the
+    # concern, so the bare line overstates the gap on this tier.
+    it "names the keys the gap covers on the booted tier" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(false)
+
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).to include(
+        "[UNAVAILABLE] 1 concern not read for scopes, callbacks and macros: Discard::Model"
+      )
+    end
+  end
+
+  # The key hides a concern's declarations along with its name, so a reader
+  # comparing the model file against this answer would otherwise call the
+  # difference a bug.
+  describe "concerns excluded_concerns hid" do
+    before { described_class.reset_cache! }
+
+    it "says how many, beside the concerns it did list" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Widget" => { table_name: "widgets", concerns: %w[Wired], concerns_hidden: 2 } }
+      )
+
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).to include("## Concerns")
+      expect(text).to include("- Wired")
+      expect(text).to include("_2 concerns hidden by `excluded_concerns`._")
+    end
+
+    # The section is keyed off the concerns it can name, so a model whose only
+    # concern was hidden had nowhere to say so.
+    it "says so when every concern was hidden" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Widget" => { table_name: "widgets", concerns: [], concerns_hidden: 1 } }
+      )
+
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).to include("_1 concern hidden by `excluded_concerns`._")
+    end
+
+    it "says nothing when the key hid none" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Widget" => { table_name: "widgets", concerns: %w[Wired] } }
+      )
+
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).not_to include("excluded_concerns")
+    end
+  end
+
+  # An STI child carries its base's declarations, so a base the walk could not
+  # read is a gap the reader has to be told about even when the child includes
+  # no concern at all.
+  describe "a base class the tier could not read" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: { "Article" => { table_name: "posts", concerns: [], bases_unread: %w[Post] } }
+      )
+    end
+
+    it "names it outside the Concerns section" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+      text = described_class.call(model: "Article", detail: "full").content.first[:text]
+
+      expect(text).to include("[UNAVAILABLE] 1 base class not read: Post")
+      # The chain link is written in the file the walk could not open, so the
+      # classes above it are out of reach too, and the line says so.
+      expect(text).to include("cannot follow the chain past a file it could not read")
+      expect(text).not_to include("## Concerns")
+    end
+
+    it "names the keys the gap covers on the booted tier" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(false)
+
+      text = described_class.call(model: "Article", detail: "full").content.first[:text]
+
+      expect(text).to include(
+        "[UNAVAILABLE] 1 base class not read for scopes, callbacks and macros: Post"
+      )
+    end
+  end
+
+  # The path a gem-owned model carries names the gem, not the app, so joining
+  # it to the app root opened nothing and the model lost its structure.
+  describe "a model whose file belongs to a gem" do
+    let(:gem_file) do
+      File.join(Gem.loaded_specs["activesupport"].full_gem_path,
+                "lib", "active_support", "notifications.rb")
+    end
+
+    it "reads the file the gem marker names" do
+      marked = RailsAiContext::PortablePath.relativize_marked(gem_file, Rails.root.to_s)
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Doorkeeper::AccessGrant" => {
+          name: "Doorkeeper::AccessGrant", table_name: "oauth_access_grants",
+          file: marked, associations: [], validations: []
+        } }
+      })
+
+      text = described_class.call(model: "Doorkeeper::AccessGrant").content.first[:text]
+
+      expect(marked).to start_with("gem:")
+      expect(text).to include("**File:** `#{marked}`")
+      expect(text).to match(/\*\*Structure:\*\* .+/)
     end
   end
 end

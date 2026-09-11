@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "timeout"
 
 # Runtime smoke test: every registered tool must execute via ToolRunner
 # against the combustion fixture without raising. Tools are allowed to
@@ -94,6 +95,270 @@ RSpec.describe "CLI smoke: every tool executes", type: :smoke do
       doctor = `cd #{dir} && ruby -I #{lib} #{exe} doctor 2>&1`
       expect($?.exitstatus).to eq(1), doctor
       expect(doctor).to include("doctor needs a bootable app: no config/environment.rb")
+    end
+  end
+
+  # A listing the user asked for belongs on stdout; only the error framing and
+  # the listing that follows a rejected name go to stderr.
+  it "puts the bare preset listing on stdout and a rejected name on stderr" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+
+    Dir.mktmpdir do |dir|
+      listing = `cd #{dir} && ruby -I #{lib} #{exe} preset 2>/dev/null`
+      expect($?.exitstatus).to eq(0), listing
+      expect(listing).to include("Available presets:")
+
+      rejected = `cd #{dir} && ruby -I #{lib} #{exe} preset bogus 2>&1 1>/dev/null`
+      expect($?.exitstatus).to eq(1), rejected
+      expect(rejected).to include("Unknown preset: bogus")
+      expect(rejected).to include("Available presets:")
+    end
+  end
+
+  # Thor reads a leading switch as "no command given" and falls back to
+  # `help`, so a CI job wrapping `rails-ai-context --app-path <dir> doctor`
+  # went green having checked nothing.
+  describe "a global option typed before the command" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    it "runs the command instead of printing usage" do
+      Dir.mktmpdir do |dir|
+        out = `ruby -I #{lib} #{exe} --app-path #{dir} doctor 2>&1`
+
+        expect($?.exitstatus).to eq(1), out
+        expect(out).to include("No Rails app found in ")
+        expect(out).to include(File.basename(dir))
+        expect(out).not_to include("Usage:\n  rails-ai-context doctor")
+      end
+    end
+
+    it "carries the value through to the command" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        out = `ruby -I #{lib} #{exe} --app-path #{dir} tool model_details --no-boot 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("Widget")
+      end
+    end
+
+    it "accepts the equals spelling" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        out = `ruby -I #{lib} #{exe} --app-path=#{dir} tool model_details --no-boot 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("Widget")
+      end
+    end
+
+    # `--no-boot` is declared per command rather than globally, and typing it
+    # first is the same mistake with the same silent answer.
+    it "moves a command's own switch behind the command too" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+        out = `ruby -I #{lib} #{exe} --app-path #{dir} --no-boot tool model_details 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("Widget")
+      end
+    end
+
+    it "still answers --version and --help" do
+      version = `ruby -I #{lib} #{exe} --version 2>&1`
+      expect($?.exitstatus).to eq(0), version
+      expect(version).to include("rails-ai-context v")
+
+      help = `ruby -I #{lib} #{exe} --help 2>&1`
+      expect($?.exitstatus).to eq(0), help
+      expect(help).to include("rails-ai-context doctor")
+    end
+
+    it "still refuses a leading unknown switch" do
+      out = `ruby -I #{lib} #{exe} --bogus doctor 2>&1`
+      expect($?.exitstatus).to eq(1), out
+    end
+  end
+
+  # Nine frames of backtrace where a one-line refusal belongs. `tool` already
+  # gave one; doctor, inspect and watch did not.
+  describe "an --app-path that does not exist" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    [ "doctor", "inspect", "watch", "tool schema" ].each do |command|
+      it "refuses in one line from #{command}" do
+        out = `ruby -I #{lib} #{exe} #{command} --app-path /nonexistent-app-path 2>&1`
+
+        expect($?.exitstatus).to eq(1), out
+        expect(out).to include("/nonexistent-app-path")
+        expect(out).not_to include("(NameError)")
+        expect(out).not_to match(/^\s+from /)
+      end
+    end
+  end
+
+  # docs/CLI.md lists watch among the commands that take --no-boot, and it
+  # died with an uninitialized-constant backtrace.
+  it "watches a source-only tree with --no-boot" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+    # The child inherits this environment, so it reaches the same `listen`
+    # this does. Which of the two outcomes to demand follows from that,
+    # rather than from a pattern both of them match.
+    listen_reachable = system(RbConfig.ruby, "-e", "require 'listen'", out: File::NULL, err: File::NULL)
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+      # With `listen` reachable the watcher runs until it is killed, so the
+      # child is bounded rather than read to EOF.
+      io = IO.popen([ "ruby", "-I", lib, exe, "watch", "--no-boot", "--app-path", dir ], err: %i[child out])
+      out = +""
+      timed_out = false
+      begin
+        Timeout.timeout(30) do
+          while (line = io.gets)
+            out << line
+            break if out.include?("Watching for changes")
+          end
+        end
+      rescue Timeout::Error
+        timed_out = true
+      ensure
+        begin
+          Process.kill("KILL", io.pid)
+        rescue Errno::ESRCH
+          nil
+        end
+        io.close
+      end
+
+      expect(timed_out).to be(false), "watch printed nothing for 30s. Output so far:\n#{out}"
+      expect(out).not_to include("uninitialized constant")
+      if listen_reachable
+        # Printed only once the listener is running, so it names a watch that
+        # actually started.
+        expect(out).to include("Watching for changes")
+      else
+        expect(out).to include("Error: The `listen` gem is required for watch mode.")
+      end
+    end
+  end
+
+  # `--help` promises "the ambient RAILS_ENV or development", and apps read
+  # RAILS_ENV in config/boot.rb before anything else runs. Only the flag set
+  # it, so an app that insists on the variable never saw the documented
+  # default.
+  describe "an app that needs RAILS_ENV set" do
+    let(:exe) { File.expand_path("../exe/rails-ai-context", __dir__) }
+    let(:lib) { File.expand_path("../lib", __dir__) }
+
+    def build_app(dir, environment_rb)
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "environment.rb"), environment_rb)
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+    end
+
+    it "applies the documented default when the caller set nothing" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, <<~RUBY)
+          File.write(File.join(__dir__, "..", "seen_env.txt"), ENV["RAILS_ENV"].to_s)
+          raise "boot needs a database"
+        RUBY
+
+        out = `cd #{dir} && env -u RAILS_ENV -u RACK_ENV ruby -I #{lib} #{exe} tool model_details 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(File.read(File.join(dir, "seen_env.txt"))).to eq("development")
+        expect(out).to include("Widget")
+      end
+    end
+
+    it "still honours an explicit --environment" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, <<~RUBY)
+          File.write(File.join(__dir__, "..", "seen_env.txt"), ENV["RAILS_ENV"].to_s)
+          raise "boot needs a database"
+        RUBY
+
+        `cd #{dir} && env -u RAILS_ENV -u RACK_ENV ruby -I #{lib} #{exe} tool model_details --environment test 2>&1`
+
+        expect(File.read(File.join(dir, "seen_env.txt"))).to eq("test")
+      end
+    end
+
+    # Rails resolves its own environment as RAILS_ENV, then RACK_ENV, then
+    # development, and treats an empty value as unset. "The ambient RAILS_ENV"
+    # the help text promises is that whole answer, not the first term of it.
+    it "takes an ambient RACK_ENV before falling back to development" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, <<~RUBY)
+          File.write(File.join(__dir__, "..", "seen_env.txt"), ENV["RAILS_ENV"].to_s)
+          raise "boot needs a database"
+        RUBY
+
+        `cd #{dir} && env -u RAILS_ENV RACK_ENV=staging ruby -I #{lib} #{exe} tool model_details 2>&1`
+
+        expect(File.read(File.join(dir, "seen_env.txt"))).to eq("staging")
+      end
+    end
+
+    it "reads an empty RAILS_ENV as unset, the way Rails does" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, <<~RUBY)
+          File.write(File.join(__dir__, "..", "seen_env.txt"), ENV["RAILS_ENV"].to_s)
+          raise "boot needs a database"
+        RUBY
+
+        `cd #{dir} && env -u RACK_ENV RAILS_ENV= ruby -I #{lib} #{exe} tool model_details 2>&1`
+
+        expect(File.read(File.join(dir, "seen_env.txt"))).to eq("development")
+      end
+    end
+
+    # An app that calls exit/abort in an initializer is a fifth boot-failure
+    # mode. The binary owns this process, and it has a static tier to answer
+    # from, so the exit is a boot failure here rather than a process decision.
+    it "serves the static tier when the app aborts during boot" do
+      Dir.mktmpdir do |dir|
+        build_app(dir, %(abort "The RAILS_ENV environment variable is not set."\n))
+
+        out = `cd #{dir} && ruby -I #{lib} #{exe} tool model_details 2>&1`
+
+        expect($?.exitstatus).to eq(0), out
+        expect(out).to include("The RAILS_ENV environment variable is not set.")
+        expect(out).to include("static tier active")
+        expect(out).to include("Widget")
+      end
+    end
+  end
+
+  # The serializer refuses an unknown format, but only after a full
+  # introspection has run and written nothing.
+  it "refuses an unknown context format before introspecting" do
+    exe = File.expand_path("../exe/rails-ai-context", __dir__)
+    lib = File.expand_path("../lib", __dir__)
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "widget.rb"), "class Widget < ApplicationRecord\nend\n")
+
+      out = `cd #{dir} && ruby -I #{lib} #{exe} context --format bogus --no-boot 2>&1`
+
+      expect($?.exitstatus).to eq(1), out
+      expect(out).to include("Unknown format: bogus")
+      expect(out).not_to include("Introspecting Rails app")
     end
   end
 

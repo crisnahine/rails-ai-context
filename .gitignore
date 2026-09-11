@@ -11,6 +11,8 @@
 /Gemfile.lock
 gemfiles/*.lock
 spec/internal/log/
+# A CLI or spec run from the repo root leaves one behind.
+/log/
 
 # AI assistant configuration (local only)
 .claude/

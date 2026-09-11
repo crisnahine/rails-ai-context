@@ -27,7 +27,22 @@ module RailsAiContext
       # @param path_name [String] the name the file's path camelizes to
       # @return [String] the constant to call this file's class
       def resolve(source, path_name)
-        declared_names(source).find { |name| name.casecmp?(path_name) } || path_name
+        declared_names(source).find { |name| name.casecmp?(path_name) } ||
+          declared_module_names(source).find { |name| name.casecmp?(path_name) } ||
+          path_name
+      end
+
+      # A loaded class that answers a name no constant carries belongs to no
+      # file - Rails names the anonymous join class it builds for a
+      # has_and_belongs_to_many through a singleton `name=`, so it answers
+      # "HABTM_Tags" while it lives at "Account::HABTM_Tags". Keyed by that
+      # name it would overwrite the real entry, or collapse two owners of one
+      # association name onto one.
+      #
+      # @param klass [Class] a loaded class
+      # @return [Boolean]
+      def renamed?(klass)
+        klass.name != klass.to_s
       end
 
       # @return [Boolean] whether the source declares a class at all. A file
@@ -40,6 +55,21 @@ module RailsAiContext
       # nesting included. Empty when nothing parses.
       def declared_names(source)
         declarations(source).map(&:name)
+      end
+
+      # The same for modules, for a file that declares no class: a mixin is
+      # named by an inflection the same way a class is, and the camelized path
+      # is wrong for it in the same way.
+      def declared_module_names(source)
+        return [] unless source
+
+        root = AstCache.parse_string(source)&.value
+        return [] unless root
+
+        [].tap { |found| collect_modules(root, [], found) }
+      rescue StandardError, ScriptError => e
+        $stderr.puts "[rails-ai-context] DeclaredConstant failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
       # Every class the source declares, with the superclass it names -
@@ -73,6 +103,18 @@ module RailsAiContext
         node.child_nodes.compact.each { |child| collect(child, scope, found) }
       end
 
+      def collect_modules(node, scope, found)
+        case node
+        when Prism::ModuleNode
+          found << qualify(scope, node)
+          scope += [ segment(node) ]
+        when Prism::ClassNode
+          # Not recorded, but it is part of the name of anything inside it.
+          scope += [ segment(node) ]
+        end
+        node.child_nodes.compact.each { |child| collect_modules(child, scope, found) }
+      end
+
       def qualify(scope, node)
         (scope + [ segment(node) ]).join("::")
       end
@@ -90,7 +132,7 @@ module RailsAiContext
         node.slice.delete_prefix("::")
       end
 
-      private_class_method :collect, :descend, :qualify, :segment, :superclass_name
+      private_class_method :collect, :collect_modules, :descend, :qualify, :segment, :superclass_name
     end
   end
 end

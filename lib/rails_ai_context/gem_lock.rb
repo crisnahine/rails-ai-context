@@ -13,19 +13,32 @@ module RailsAiContext
   module GemLock
     MAX_SIZE = 5 * 1024 * 1024
     SPEC_LINE = /\A {4}(\S+) \(([^)]+)\)\s*\z/
-    RUBY_LINE = /\A {3}ruby (\S+)/
+    RUBY_LINE = /\A\s+ruby (\S+)/
+    GEMFILE_RUBY_LINE = /^\s*ruby\s+(["'])([^"']+)\1/
+    PLAIN_VERSION = /\A\d+(?:\.\d+)*\S*\z/
 
     class Spec
-      attr_reader :ruby_version
+      attr_reader :ruby_version, :reason
 
-      def initialize(versions, ruby_version: nil, missing: false)
+      def initialize(versions, ruby_version: nil, reason: nil, absent: false)
         @versions = versions
         @ruby_version = ruby_version
-        @missing = missing
+        @reason = reason
+        @absent = absent
       end
 
+      # No lockfile, and a lockfile that named no gem, are both "the app's
+      # gems are unknown". Neither is an app that resolved no gems, and a
+      # caller reading them that way answers that the app uses none of them.
       def missing?
-        @missing
+        !@reason.nil?
+      end
+
+      # An app with no lockfile at all, as opposed to one whose lockfile
+      # could not be read: the first is an absent source, the second a
+      # failure, and a caller reporting them has to say which.
+      def absent?
+        @absent
       end
 
       def present?(name)
@@ -53,45 +66,76 @@ module RailsAiContext
 
     def for(root)
       path = File.join(root.to_s, "Gemfile.lock")
-      stamp = begin
-        File.mtime(path)
-      rescue SystemCallError
-        nil
-      end
+      gemfile = File.join(root.to_s, "Gemfile")
+      stamp = [ mtime(path), mtime(gemfile) ]
 
       MUTEX.synchronize do
         cached = CACHE[path]
         return cached[:spec] if cached && cached[:stamp] == stamp
 
-        spec = stamp ? parse(path) : Spec.new({}, missing: true)
+        # Which gems resolved and which Ruby the app declares are two facts,
+        # and the Gemfile answers the second whether or not a lockfile answers
+        # the first.
+        spec = if stamp.first
+          parse(path, gemfile)
+        else
+          Spec.new({}, ruby_version: gemfile_ruby_version(gemfile),
+                       reason: "No Gemfile.lock found", absent: true)
+        end
         CACHE[path] = { stamp: stamp, spec: spec }
         spec
       end
     end
 
-    def parse(path)
+    def mtime(path)
+      File.mtime(path)
+    rescue SystemCallError
+      nil
+    end
+    private_class_method :mtime
+
+    def parse(path, gemfile)
       content = SafeFile.read(path, max_size: MAX_SIZE)
-      return Spec.new({}, missing: true) unless content
+      return Spec.new({}, reason: "Gemfile.lock could not be read") unless content
 
       versions = {}
       ruby_version = nil
       in_specs = false
+      specs_section = false
       content.each_line do |line|
         if line.match?(/\A\S/)
           in_specs = false
         elsif line.strip == "specs:"
           in_specs = true
+          specs_section = true
         elsif in_specs && (match = line.match(SPEC_LINE))
           # A platform-specific gem is "name (1.2.3-x86_64-linux)", one line
           # per platform. The text before the first hyphen is the version; a
           # prerelease tag ("1.70.0-beta1") is dropped along with the platform.
           versions[match[1]] ||= match[2].split("-", 2).first
-        elsif (match = line.match(RUBY_LINE))
+        elsif (match = line.match(RUBY_LINE)) && match[1].match?(PLAIN_VERSION)
           ruby_version = match[1]
         end
       end
-      Spec.new(versions, ruby_version: ruby_version, missing: false)
+      # An empty Gemfile still locks to a file with a specs: section, so no
+      # gems is an answer there. A file without one is not a lockfile at all,
+      # and answering it as an app with no gems denies every gem it holds.
+      return Spec.new({}, reason: "Gemfile.lock has no specs section") unless specs_section
+
+      Spec.new(versions, ruby_version: ruby_version || gemfile_ruby_version(gemfile))
     end
     private_class_method :parse
+
+    # A lockfile without a RUBY VERSION section leaves the Gemfile as the only
+    # statement of the version. A requirement such as `ruby ">= 3.3.0"` names a
+    # range, not a version, so it is left unanswered rather than reported as one.
+    def gemfile_ruby_version(path)
+      content = SafeFile.read(path, max_size: MAX_SIZE)
+      return nil unless content
+
+      declared = content[GEMFILE_RUBY_LINE, 2]
+      declared if declared&.match?(PLAIN_VERSION)
+    end
+    private_class_method :gemfile_ruby_version
   end
 end

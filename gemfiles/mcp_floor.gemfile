@@ -10,4 +10,10 @@ gemspec path: ".."
 
 gem "mcp", "= 0.13.0"
 
+# mcp's 0.x line validates tool schemas through json-schema, which parses with
+# the `quirks_mode` keyword json 3.0 removed, so the floor cannot load a single
+# tool against it. Stated here as well as in rails.gemfile: this leg has its
+# own reason and must not depend on which Rails line happens to be the default.
+gem "json", "< 3"
+
 eval_gemfile "rails.gemfile"

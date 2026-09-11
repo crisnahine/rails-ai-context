@@ -73,13 +73,6 @@ module RailsAiContext
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
 
-            if data[:test_count_by_category].is_a?(Hash) && data[:test_count_by_category].any?
-              lines << "" << "## Test Counts by Category"
-              data[:test_count_by_category].each do |cat, count|
-                lines << "- #{cat}: #{count}"
-              end
-            end
-
             if data[:test_files]&.any?
               lines << "" << "## Test Files"
               data[:test_files].each do |cat, info|
@@ -110,13 +103,6 @@ module RailsAiContext
             lines << "- **Framework:** #{data[:framework]}"
             lines << "- **CI:** #{data[:ci_config].join(', ')}" if data[:ci_config]&.any?
             lines << "- **Coverage:** #{data[:coverage]}" if data[:coverage]
-
-            if data[:test_count_by_category].is_a?(Hash) && data[:test_count_by_category].any?
-              lines << "" << "## Test Counts by Category"
-              data[:test_count_by_category].each do |cat, count|
-                lines << "- #{cat}: #{count}"
-              end
-            end
 
             if data[:factory_traits]&.any?
               lines << "" << "## Factory Traits"
@@ -206,6 +192,13 @@ module RailsAiContext
         end
         # For models, also try singular form (posts → post)
         snake_singular = snake.singularize
+        # A model or controller name is never a path. Without this the name is
+        # interpolated into a spec path, which cannot escape the root but
+        # answers "No test file found for /etc/passwd" at exit 0 where every
+        # other tool refuses.
+        refused = refuse_unsafe_paths([ name ])
+        return refused if refused
+
         candidates = case type
         when :model
           base = [
@@ -257,7 +250,7 @@ module RailsAiContext
         # A refused candidate was never read, so listing it reads as a search
         # that happened. When every one was refused, the name is the answer.
         if contained.empty?
-          return empty_response("No test file found for #{name}: the name was refused, it leaves the app root " \
+          return error_response("No test file found for #{name}: the name was refused, it leaves the app root " \
                                 "or names a sensitive file.")
         end
 
@@ -301,7 +294,14 @@ module RailsAiContext
           lines << ""
           lines << "  describe \"#method_name\" do"
           lines << "    it \"does something\" do"
-          lines << "      record = create(:model_name)"
+          if data[:factories]
+            lines << "      record = create(:model_name)"
+          else
+            # A template headed "follow this pattern" must not hand factory_bot
+            # syntax to an app that has no factories.
+            lines << "      # TODO: build the record with this app's own test data"
+            lines << "      record = ModelName.new"
+          end
           lines << "      expect(record.method_name).to eq(expected)"
           lines << "    end"
           lines << "  end"
@@ -327,7 +327,12 @@ module RailsAiContext
           lines << ""
           lines << "class ModelNameTest < ActiveSupport::TestCase"
           lines << "  test \"should be valid with required attributes\" do"
-          lines << "    record = model_names(:fixture_name)"
+          if data[:fixture_names]&.any?
+            lines << "    record = model_names(:fixture_name)"
+          else
+            lines << "    # TODO: build the record with this app's own test data"
+            lines << "    record = ModelName.new"
+          end
           lines << "    assert record.valid?"
           lines << "  end"
           lines << ""
@@ -354,7 +359,10 @@ module RailsAiContext
             lines << "  end"
             lines << ""
             lines << "  test \"shows page for signed in user\" do"
-            lines << "    sign_in users(:one)" if has_sign_in
+            if has_sign_in
+              user_key = fixture_key_for("users", data)
+              lines << (user_key ? "    sign_in users(:#{user_key})" : "    # TODO: sign in a user built from this app's own test data")
+            end
             lines << "    get feature_path"
             lines << "    assert_response :success"
             lines << "  end"

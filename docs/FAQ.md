@@ -109,7 +109,7 @@ PostgreSQL, MySQL, and SQLite. Each gets database-specific safety mechanisms (re
 
 ### Can I use YAML config with the Gemfile approach?
 
-Yes, but the initializer takes priority. If `config/initializers/rails_ai_context.rb` exists and runs, `.rails-ai-context.yml` is skipped.
+Yes. The file is applied first and a `configure` block wins only the keys it assigns, so a key the initializer never touches keeps the YAML value. See [Precedence](CONFIGURATION.md#precedence).
 
 ### What's `generate_root_files`?
 

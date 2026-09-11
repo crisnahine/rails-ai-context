@@ -58,6 +58,115 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).not_to include("error")
     end
 
+    # Statically the ruby version is the one the lockfile declares, and
+    # nothing is running it.
+    it "says the static tier's ruby version is declared, not running" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: "3.4",
+        gems: { declared_ruby_version: "3.4" },
+        tier: "static"
+      })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("declaring Ruby 3.4")
+      expect(text).not_to include("running Ruby")
+    end
+
+    # With no RUBY VERSION in the lockfile and no ruby line in the Gemfile the
+    # introspector refuses rather than naming the interpreter running the CLI,
+    # which the app declared nowhere.
+    it "claims no declared ruby version when nothing declares one" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: RailsAiContext::Confidence.unavailable("app declares none"),
+        gems: { declared_ruby_version: nil },
+        tier: "static"
+      })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("TestApp is a Rails 8.0 application on")
+      expect(text).not_to include("Ruby #{RUBY_VERSION}")
+    end
+
+    # Both depths describe the same app, so the depth that says less must not
+    # be the one that claims more.
+    it "keeps quick silent about a ruby version the app declares nowhere" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: RailsAiContext::Confidence.unavailable("app declares none"),
+        gems: { declared_ruby_version: nil },
+        tier: "static"
+      })
+
+      text = described_class.call(detail: "quick").content.first[:text]
+
+      expect(text).to include("TestApp** is a Rails 8.0 app")
+      expect(text).not_to include("UNAVAILABLE")
+    end
+
+    # The Ruby half degrades by dropping its clause; the Rails half was
+    # interpolated raw, so a lockfile naming no rails wrote
+    # "is a Rails [UNAVAILABLE: app not booted] application on sqlite"
+    # into a file the user commits.
+    it "names no Rails version rather than writing the marker mid-sentence" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: RailsAiContext::Confidence.unavailable("app not booted"),
+        ruby_version: "3.4",
+        gems: { declared_ruby_version: "3.4" },
+        tier: "static"
+      })
+
+      standard = described_class.call(detail: "standard").content.first[:text]
+      quick = described_class.call(detail: "quick").content.first[:text]
+
+      expect(standard).to include("TestApp is a Rails application declaring Ruby 3.4 on")
+      expect(quick).to include("**TestApp** is a Rails app")
+      [ standard, quick ].each { |text| expect(text.lines.first(4).join).not_to include("UNAVAILABLE") }
+    end
+
+    # The quick sentence lets the inferred purpose be its noun, so a version
+    # clause carrying its own noun gave the sentence two of them: "is a Rails
+    # 8.1 app declaring Ruby 4.0.6 news aggregation app with ...".
+    it "does not put a second noun in front of the purpose it infers" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: "3.4",
+        models: {
+          "Article" => { associations: [ { type: "belongs_to", name: "site" } ] },
+          "Site" => { associations: [ { type: "has_many", name: "articles" } ] }
+        },
+        jobs: { jobs: [ { name: "RssSiteJob" }, { name: "ArticleJob" } ] },
+        gems: { declared_ruby_version: "3.4" },
+        tier: "static"
+      })
+      allow(described_class).to receive(:extract_service_names).and_return([])
+
+      text = described_class.call(detail: "quick").content.first[:text]
+
+      expect(text).to include("news aggregation app")
+      expect(text).to include("TestApp** is a Rails 8.0 / Ruby 3.4 ")
+      expect(text).not_to include("app declaring")
+    end
+
+    it "says a booted run is running that ruby" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: "3.4",
+        tier: "booted"
+      })
+
+      expect(described_class.call(detail: "standard").content.first[:text]).to include("running Ruby 3.4")
+    end
+
     it "renders mounted engines from the introspector's own keys" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",
@@ -193,7 +302,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         text = result.content.first[:text]
 
         expect(text).to include("GenericApp")
-        expect(text).to include("Rails 8.0 / Ruby 3.4")
+        expect(text).to include("Rails 8.0 / Ruby 3.4 app")
         expect(text).not_to include("app with")
       end
 
@@ -216,6 +325,35 @@ RSpec.describe RailsAiContext::Tools::Onboard do
 
         expect(text).to include("25 tables")
         expect(text).not_to include("static_parse")
+      end
+    end
+
+    # An app whose async work runs through Sidekiq workers has nothing in
+    # app/jobs, and the section read as if it had no background work.
+    context "the async section on an app with no ActiveJob jobs" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "TestApp",
+          jobs: { jobs: [], mailers: [ { name: "UserMailer" } ], channels: [] }
+        })
+      end
+
+      it "states the limit the job listing states" do
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("## Background Jobs & Async")
+        expect(text).to include(RailsAiContext::Tools::GetJobPattern::NOT_COVERED)
+      end
+
+      it "leaves the caveat off when jobs were found" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "TestApp",
+          jobs: { jobs: [ { name: "ImportJob" } ], mailers: [], channels: [] }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).not_to include(RailsAiContext::Tools::GetJobPattern::NOT_COVERED)
       end
     end
 

@@ -21,7 +21,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
         "controllers" => { location: "spec/controllers", count: 4 },
         "requests" => { location: "spec/requests", count: 6 }
       },
-      test_count_by_category: { "models" => 42, "requests" => 18, "system" => 5 },
+      test_count_by_category: { "models" => 8, "requests" => 6, "controllers" => 4 },
       ci_config: %w[github_actions],
       coverage: "simplecov"
     }
@@ -47,6 +47,15 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("requests: 6 files")
     end
 
+    # The counts and the locations are one walk, so one section states both.
+    it "lists each category once, with its count and location" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- models: 8 files (spec/models)")
+      expect(text).not_to include("Test Counts by Category")
+      expect(text.scan(/^- models:/).size).to eq(1)
+    end
+
     it "shows CI config" do
       result = described_class.call
       text = result.content.first[:text]
@@ -57,6 +66,76 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("simplecov")
+    end
+  end
+
+  describe "the test template" do
+    it "shows a factory call when the app has factories" do
+      text = described_class.call.content.first[:text]
+      expect(text).to include("record = create(:model_name)")
+    end
+
+    it "does not show a factory call when the app has no factories" do
+      allow(described_class).to receive(:cached_context)
+        .and_return({ tests: test_data.merge(factories: nil, factory_names: nil) })
+      text = described_class.call.content.first[:text]
+      expect(text).not_to include("create(:model_name)")
+      expect(text).to include("record = ModelName.new")
+    end
+  end
+
+  # The minitest half of the template reads the app's own test directory, so
+  # each example builds one.
+  describe "the minitest test template" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "test", "controllers"))
+        File.write(
+          File.join(dir, "test", "controllers", "posts_controller_test.rb"),
+          "class PostsControllerTest < ActionDispatch::IntegrationTest\n" \
+          "  include Devise::Test::IntegrationHelpers\n" \
+          "  test \"x\" do\n    sign_in users(:admin)\n  end\nend\n"
+        )
+        @root = dir
+        example.run
+      end
+    end
+
+    def call_with(tests)
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+      allow(described_class).to receive(:cached_context).and_return({ tests: tests })
+      described_class.call.content.first[:text]
+    end
+
+    let(:minitest_data) do
+      {
+        framework: "minitest",
+        factories: nil,
+        fixtures: { location: "test/fixtures", count: 2 },
+        fixture_names: { "users" => %w[admin member], "posts" => %w[first_post] },
+        test_files: { "models" => { location: "test/models", count: 1 } }
+      }
+    end
+
+    it "signs in the app's own users fixture" do
+      text = call_with(minitest_data)
+
+      expect(text).to include("sign_in users(:admin)")
+      expect(text).not_to include("users(:one)")
+    end
+
+    it "leaves the tests unauthenticated when the app owns no users fixture" do
+      text = call_with(minitest_data.merge(fixture_names: { "posts" => %w[first_post] }))
+
+      expect(text).not_to include("sign_in users(")
+      expect(text).to include("# TODO: sign in a user built from this app's own test data")
+    end
+
+    it "does not hand fixture syntax to an app with no fixtures" do
+      text = call_with(minitest_data.merge(fixtures: nil, fixture_names: nil))
+
+      expect(text).not_to include("model_names(:fixture_name)")
+      expect(text).to include("record = ModelName.new")
     end
   end
 
@@ -90,11 +169,11 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("FactoryBot::Syntax::Methods")
     end
 
-    it "shows test counts by category" do
-      result = described_class.call(detail: "full")
-      text = result.content.first[:text]
-      expect(text).to include("Test Counts by Category")
-      expect(text).to include("models: 42")
+    it "lists each category once, with its count and location" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- models: 8 files (spec/models)")
+      expect(text.scan(/^- models:/).size).to eq(1)
     end
 
     it "shows test helper files" do
@@ -136,24 +215,29 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
         File.write(File.join(parent, "outside_marker.txt"), "x\n")
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
 
-        text = described_class.call(model: "../../outside", detail: "full").content.first[:text]
+        response = described_class.call(model: "../../outside", detail: "full")
+        text = response.content.first[:text]
 
-        expect(text).to include("No test file found")
+        expect(response.error?).to be(true)
+        expect(text).to include("Path not allowed")
         expect(text).not_to include("outside_marker.txt")
         expect(text).not_to include("Files in test directory")
       end
     end
 
-    # Listing paths that were refused reads as if they were searched.
-    it "says the name was refused rather than listing paths it never read" do
+    # Listing paths that were refused reads as if they were searched, and a
+    # refusal is an error result, so a script can tell it from an answer.
+    it "refuses the name rather than listing paths it never read" do
       Dir.mktmpdir do |parent|
         root = File.join(parent, "app")
         FileUtils.mkdir_p(File.join(root, "spec", "models"))
         allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
 
-        text = described_class.call(model: "../../etc", detail: "full").content.first[:text]
+        response = described_class.call(model: "../../etc", detail: "full")
+        text = response.content.first[:text]
 
-        expect(text).to include("refused")
+        expect(response.error?).to be(true)
+        expect(text).to include("Path not allowed")
         expect(text).not_to include("Searched:")
         expect(text).not_to include("../../etc_spec.rb")
       end

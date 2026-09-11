@@ -112,11 +112,33 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       expect(text).not_to include("N+1")
     end
 
+    it "shows the call site with the risk" do
+      response = described_class.call(detail: "standard", category: "n_plus_one")
+      text = response.content.first[:text]
+      expect(text).to include("**Post**.comments (app/controllers/posts_controller.rb#index)")
+    end
+
+    # Two call sites on one association are two findings. Printed without the
+    # call site they read as one line repeated, and the header's count then
+    # counts rows the reader cannot tell apart.
+    it "tells two call sites on the same association apart at standard detail" do
+      performance_data[:n_plus_one_risks] << {
+        model: "Post", association: "comments", controller: "app/controllers/admin/posts_controller.rb",
+        action: "show", risk: "high",
+        suggestion: "Add .includes(:comments) to the Post query to avoid N+1 queries"
+      }
+
+      response = described_class.call(detail: "standard", category: "n_plus_one")
+      lines = response.content.first[:text].lines.grep(/^- \[/).map(&:strip)
+
+      expect(lines.size).to eq(4)
+      expect(lines.uniq.size).to eq(4)
+    end
+
     it "shows full detail with action context" do
       response = described_class.call(detail: "full", category: "n_plus_one")
       text = response.content.first[:text]
-      expect(text).to include("posts_controller.rb")
-      expect(text).to include("Action: index")
+      expect(text).to include("posts_controller.rb#index")
     end
 
     it "includes risk counts in N+1 section header" do

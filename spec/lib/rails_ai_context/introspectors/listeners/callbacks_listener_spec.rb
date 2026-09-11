@@ -50,4 +50,39 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
     results = parse_and_dispatch("after_destroy :cleanup")
     expect(results.first[:location]).to eq(1)
   end
+
+  it "names a callback whose argument is a class object" do
+    results = parse_and_dispatch("around_create Mastodon::Snowflake::Callbacks")
+    expect(results.first).to include(type: "around_create", method: "Mastodon::Snowflake::Callbacks")
+    expect(results.first[:confidence]).to eq("[VERIFIED]")
+  end
+
+  it "detects the touch, initialize and find callbacks" do
+    results = parse_and_dispatch(<<~RUBY)
+      after_touch :bust
+      after_initialize :set_from_account
+      after_find :log
+    RUBY
+    expect(results.map { |r| r[:type] }).to contain_exactly("after_touch", "after_initialize", "after_find")
+  end
+
+  # A lambda has no name to print, and its source slice spans lines - it
+  # would break the bullet it lands in.
+  it "reports a lambda argument as an inline block" do
+    results = parse_and_dispatch("before_save ->(rec) { rec.slug = rec.title }")
+    expect(results.first).to include(type: "before_save", method: "[inline_block]")
+    expect(results.first[:confidence]).to eq("[INFERRED]")
+  end
+
+  it "records the declared macro name alongside the resolved type" do
+    results = parse_and_dispatch("after_commit :sync, on: :create")
+    expect(results.first).to include(name: "after_commit", type: "after_commit_on_create")
+  end
+
+  # `after_commit on: :create` has no target at all; reporting a block that
+  # is not in the source made every renderer print "runs a block here".
+  it "reports nothing for a macro that carries only keyword options" do
+    expect(parse_and_dispatch("after_commit on: :create")).to be_empty
+    expect(parse_and_dispatch("after_save unless: :skip?")).to be_empty
+  end
 end

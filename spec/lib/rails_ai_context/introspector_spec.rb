@@ -16,6 +16,17 @@ RSpec.describe RailsAiContext::Introspector do
       expect(result[:generated_at]).to be_a(String)
     end
 
+    # Every count in a generated file is a different number depending on this,
+    # and the files carried nothing that said which one they held.
+    it "records the tier the run was answered in" do
+      expect(introspector.call[:tier]).to eq("booted")
+
+      RailsAiContext.tier = :static
+      expect(described_class.new(RailsAiContext::StaticApp.new(Rails.root.to_s)).call[:tier]).to eq("static")
+    ensure
+      RailsAiContext.tier = :runtime
+    end
+
     it "includes all configured introspectors" do
       result = introspector.call
 
@@ -230,6 +241,29 @@ RSpec.describe RailsAiContext::Introspector do
         File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n    rails (7.2.2)\n")
         result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
         expect(result[:rails_version]).to eq("7.2.2")
+      end
+    end
+
+    # The interpreter running this gem is not the app's: statically it is
+    # whatever the binary was installed under, and .ai-context.json describes
+    # the app. The Rails version already reads the lockfile here.
+    it "answers the Ruby version from the app's lockfile, not the running interpreter" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n    rails (7.2.2)\n\nRUBY VERSION\n   ruby 4.0.6\n")
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:ruby_version]).to eq("4.0.6")
+      end
+    end
+
+    # The interpreter the binary was installed under is not an answer about
+    # the app, and the same sentence already refuses the Rails version.
+    it "refuses the Ruby version when the app declares none" do
+      Dir.mktmpdir do |dir|
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result[:ruby_version]).to eq("[UNAVAILABLE: app declares none]")
+        expect(result[:ruby_version]).not_to include(RUBY_VERSION)
       end
     end
   end

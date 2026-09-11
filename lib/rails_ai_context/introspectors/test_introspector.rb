@@ -8,6 +8,8 @@ module RailsAiContext
       extend StaticTier
       static_tier :files_only
 
+      TEST_FILE_GLOB = "*_{spec,test}.rb"
+
       attr_reader :app
 
       def initialize(app)
@@ -24,7 +26,7 @@ module RailsAiContext
           system_tests: detect_system_tests,
           test_helpers: detect_test_helpers,
           test_helper_setup: detect_test_helper_setup,
-          test_files: detect_test_files,
+          test_files: test_categories,
           vcr_cassettes: detect_vcr,
           ci_config: detect_ci,
           coverage: detect_coverage,
@@ -103,17 +105,19 @@ module RailsAiContext
         nil
       end
 
+      # Both bases are summed: an app that keeps system tests under spec/ and
+      # test/ has both, and reporting one hid the other.
       def detect_system_tests
-        dirs = [
-          File.join(root, "spec/system"),
-          File.join(root, "test/system")
-        ]
-
-        dirs.filter_map do |dir|
+        rows = %w[spec/system test/system].filter_map do |rel|
+          dir = File.join(root, rel)
           next unless Dir.exist?(dir)
-          count = Dir.glob(File.join(dir, "**/*.rb")).size
-          { location: dir.sub("#{root}/", ""), count: count } if count > 0
-        end.first
+
+          count = Dir.glob(File.join(dir, "**/#{TEST_FILE_GLOB}")).size
+          [ rel, count ] if count > 0
+        end
+        return nil if rows.empty?
+
+        { location: rows.map(&:first).join(", "), count: rows.sum(&:last) }
       end
 
       def detect_test_helpers
@@ -154,8 +158,7 @@ module RailsAiContext
           Dir.glob(File.join(dir, "**/*.yml")).each do |path|
             file = File.basename(path, ".yml")
             content = RailsAiContext::SafeFile.read(path) or next
-            # Top-level YAML keys are fixture names
-            keys = content.scan(/^(\w+):/).flatten
+            keys = content.scan(/^(\w+):/).flatten.select { |key| RailsAiContext::FixtureKeys.name?(key) }
             names[file] = keys if keys.any?
           end
           return names if names.any?
@@ -180,19 +183,6 @@ module RailsAiContext
           (ast[:bare] + ast[:chained]).each { |hit| setup.concat(hit[:values].map(&:to_s)) }
         end
         setup.uniq
-      end
-
-      def detect_test_files
-        categories = {}
-        %w[models models/concerns controllers requests system services integration features].each do |cat|
-          %w[spec test].each do |base|
-            dir = File.join(root, base, cat)
-            next unless Dir.exist?(dir)
-            count = Dir.glob(File.join(dir, "**/*.rb")).size
-            categories[cat] = { location: "#{base}/#{cat}", count: count } if count > 0
-          end
-        end
-        categories
       end
 
       def detect_vcr
@@ -288,22 +278,51 @@ module RailsAiContext
         nil
       end
 
+      # Kept for the .ai-context.json dump, whose keys are read back by
+      # tooling outside this gem. No tool renders it; the Test Files section
+      # states the same counts with their locations.
+      def detect_test_count_by_category
+        test_categories.transform_values { |row| row[:count] }
+      end
+
+      # One row per top-level directory under spec/ or test/ that holds test
+      # files, plus a row keyed by the base directory for files loose at its
+      # root. Naming the categories instead of reading them hid every
+      # directory a convention did not predict.
+      #
       # Only files named for a test framework are counted. Globbing every .rb
       # counted whatever a project keeps beside its specs - mailer previews,
       # shared contexts, page objects - under a heading that promises tests.
-      def detect_test_count_by_category
-        counts = {}
-        %w[models controllers requests system services integration features helpers views jobs mailers channels].each do |cat|
-          %w[spec test].each do |base|
-            dir = File.join(root, base, cat)
-            next unless Dir.exist?(dir)
-            count = Dir.glob(File.join(dir, "**/*_{spec,test}.rb")).size
-            counts[cat] = (counts[cat] || 0) + count if count > 0
+      # Two payload keys are built from this walk, so it runs once per call.
+      def test_categories
+        @test_categories ||= build_test_categories
+      end
+
+      def build_test_categories
+        rows = Hash.new { |h, k| h[k] = [] }
+
+        %w[spec test].each do |base|
+          base_dir = File.join(root, base)
+          next unless Dir.exist?(base_dir)
+
+          Dir.children(base_dir).sort.each do |entry|
+            dir = File.join(base_dir, entry)
+            next unless File.directory?(dir)
+
+            count = Dir.glob(File.join(dir, "**/#{TEST_FILE_GLOB}")).size
+            rows[entry] << [ "#{base}/#{entry}", count ] if count > 0
           end
+
+          loose = Dir.glob(File.join(base_dir, TEST_FILE_GLOB)).size
+          rows[base] << [ base, loose ] if loose > 0
         end
-        counts
+
+        rows
+          .transform_values { |pairs| { location: pairs.map(&:first).join(", "), count: pairs.sum(&:last) } }
+          .sort_by { |cat, row| [ -row[:count], cat ] }
+          .to_h
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_test_count_by_category failed: #{e.message}" if ENV["DEBUG"]
+        $stderr.puts "[rails-ai-context] test_categories failed: #{e.message}" if ENV["DEBUG"]
         {}
       end
     end

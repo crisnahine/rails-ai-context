@@ -226,7 +226,7 @@ The gem falls back to Ruby regex if ripgrep isn't available. Search still works,
 
 ### "Bundler can't find the gem"
 
-Standalone mode pre-loads the gem before Rails boot and restores `$LOAD_PATH` entries stripped by `Bundler.setup`. If this fails:
+Standalone mode boots the app with a small shim, then restores the `$LOAD_PATH` entries `Bundler.setup` stripped and requires the gem. If this fails:
 
 1. Check the gem is installed: `gem list rails-ai-context`
 2. Check Ruby version matches: `ruby -v`
@@ -234,13 +234,11 @@ Standalone mode pre-loads the gem before Rails boot and restores `$LOAD_PATH` en
 
 ### "YAML config not loading"
 
-YAML config (`.rails-ai-context.yml`) is skipped if an initializer runs. Check precedence:
+The file is read from the app root, once, at boot, and an initializer does not replace it: a `configure` block wins only the keys it assigns, key by key ([Precedence](CONFIGURATION.md#precedence)). In standalone mode the initializer contributes nothing at all, since the gem is not loaded while `config/initializers` runs. Check:
 
-1. Initializer (`config/initializers/rails_ai_context.rb`) - highest priority
-2. YAML (`.rails-ai-context.yml`)
-3. Defaults
-
-Corrupted YAML degrades gracefully with a warning.
+1. You are in the app root, or passed `--app-path`.
+2. The key is one the gem knows. An unknown key warns on stderr and is ignored.
+3. The file is readable and parses. Corrupted YAML degrades gracefully with a warning.
 
 ---
 

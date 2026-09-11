@@ -68,11 +68,7 @@ module RailsAiContext
         return nil unless introspector.respond_to?(:answers_statically?)
         return nil if introspector.answers_statically?
 
-        { unavailable: unavailable_static_reason }.then { |section| text_response(unavailable_note(section)) }
-      end
-
-      def unavailable_static_reason
-        Introspectors::StaticTier.unavailable_reason
+        text_response(unavailable_text)
       end
     end
   end

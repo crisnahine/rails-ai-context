@@ -49,4 +49,157 @@ RSpec.describe RailsAiContext::Serializers::SectionFacts do
       expect(described_class.assets_line({ assets: {} })).to be_nil
     end
   end
+
+  describe ".strong_param_names" do
+    it "names the methods the introspector recorded as hashes" do
+      data = { strong_params: [ { name: "filter_params", permits: %w[origin status] },
+                                { name: "form_account_batch_params", requires: "form_account_batch" } ] }
+
+      expect(described_class.strong_param_names(data)).to eq(%w[filter_params form_account_batch_params])
+    end
+
+    it "keeps a plain string entry, which is already a method name" do
+      expect(described_class.strong_param_names({ strong_params: %w[post_params] })).to eq(%w[post_params])
+    end
+
+    it "answers an empty list for a controller with no strong params" do
+      expect(described_class.strong_param_names({})).to eq([])
+    end
+  end
+
+  describe ".filters_line" do
+    def context_for(filters)
+      { controllers: { controllers: { "PostsController" => { filters: filters } } } }
+    end
+
+    it "names each filter by kind" do
+      ctx = context_for([ { kind: "before", name: "authenticate" }, { kind: "after", name: "track" } ])
+
+      expect(described_class.filters_line(ctx, "PostsController"))
+        .to eq("- Filters: before authenticate, after track")
+    end
+
+    # The per-action answer and docs/CONFIGURATION.md both spell a skip
+    # `~~name~~ _(skipped)_`, and one fact reads one way everywhere.
+    it "strikes a skipped filter through the way the per-action answer does" do
+      ctx = context_for([ { kind: "before", name: "authenticate", skipped: true } ])
+
+      expect(described_class.filters_line(ctx, "PostsController"))
+        .to eq("- Filters: ~~authenticate~~ _(skipped)_")
+    end
+
+    it "answers nil for a controller with no filters" do
+      expect(described_class.filters_line(context_for([]), "PostsController")).to be_nil
+    end
+  end
+
+  describe ".unread_row" do
+    it "carries the reason after the label a listing chose" do
+      expect(described_class.unread_row("- **Vehicle**", { error: "file is unreadable" }))
+        .to eq("- **Vehicle** [UNAVAILABLE: file is unreadable]")
+    end
+
+    it "answers nil for an entry the walk read" do
+      expect(described_class.unread_row("- **Car**", { associations: [] })).to be_nil
+    end
+  end
+
+  describe ".actions_phrase" do
+    it "names the error of an entry the walk could not read" do
+      expect(described_class.actions_phrase({ error: "unreadable" }))
+        .to eq("[UNAVAILABLE: unreadable]")
+    end
+
+    it "still says so when the entry carries an empty action list beside its error" do
+      expect(described_class.actions_phrase({ error: "unreadable", actions: [] }))
+        .to eq("[UNAVAILABLE: unreadable]")
+    end
+
+    it "says a readable controller has no public actions" do
+      expect(described_class.actions_phrase({ actions: [] })).to eq("(no public actions)")
+    end
+  end
+
+  describe ".controller_summary_lines" do
+    let(:controller_data) do
+      {
+        filters: [ { kind: "before", name: "authenticate" } ],
+        strong_params: [ { name: "post_params" } ],
+        rescue_from: [ { exception: "ActiveRecord::RecordNotFound", handler: "not_found" } ]
+      }
+    end
+    let(:ctx) { { controllers: { controllers: { "PostsController" => controller_data } } } }
+
+    def summary_lines(data = controller_data, **options)
+      described_class.controller_summary_lines(data, ctx: ctx, name: "PostsController", **options)
+    end
+
+    it "states the filters and the strong params, in that order" do
+      expect(summary_lines).to eq([ "- Filters: before authenticate", "- Strong params: post_params" ])
+    end
+
+    it "adds the rescue handlers for a surface that renders them" do
+      expect(summary_lines(rescue_handlers: true).last)
+        .to eq("- Rescue from: ActiveRecord::RecordNotFound -> not_found")
+    end
+
+    it "answers an empty list for a controller with none of them" do
+      expect(described_class.controller_summary_lines({}, ctx: { controllers: { controllers: {} } },
+                                                          name: "Nope", rescue_handlers: true)).to eq([])
+    end
+
+    it "states the error of an entry the walk could not read" do
+      expect(summary_lines({ error: "unreadable" })).to eq([ "- [UNAVAILABLE: unreadable]" ])
+    end
+  end
+
+  describe ".rescue_handler_lines" do
+    it "pairs each exception with its handler" do
+      data = { rescue_from: [ { exception: "ActiveRecord::RecordInvalid", handler: "not_found" } ] }
+
+      expect(described_class.rescue_handler_lines(data)).to eq([ "ActiveRecord::RecordInvalid -> not_found" ])
+    end
+
+    it "names the exception alone for a block form, which records no handler" do
+      data = { rescue_from: [ { exception: "Mastodon::NotPermittedError" } ] }
+
+      expect(described_class.rescue_handler_lines(data)).to eq([ "Mastodon::NotPermittedError" ])
+    end
+
+    it "answers an empty list for a controller with no rescue_from" do
+      expect(described_class.rescue_handler_lines({})).to eq([])
+    end
+  end
+
+  describe ".available_locales_label" do
+    it "qualifies a list read off the locale files" do
+      expect(described_class.available_locales_label(available_locales_source: "locale_files"))
+        .to eq("Available locales (from locale files)")
+    end
+
+    it "leaves a configured list unqualified" do
+      expect(described_class.available_locales_label(available_locales_source: "config"))
+        .to eq("Available locales")
+    end
+
+    it "leaves a payload that records no source unqualified" do
+      expect(described_class.available_locales_label({})).to eq("Available locales")
+    end
+  end
+
+  describe ".i18n_line" do
+    it "qualifies a list read off the locale files" do
+      ctx = { i18n: { available_locales: %w[en fr], available_locales_source: "locale_files" } }
+      expect(described_class.i18n_line(ctx)).to eq("- I18n: 2 locales from locale files (en, fr)")
+    end
+
+    it "leaves a configured list unqualified" do
+      ctx = { i18n: { available_locales: %w[en fr], available_locales_source: "config" } }
+      expect(described_class.i18n_line(ctx)).to eq("- I18n: 2 locales (en, fr)")
+    end
+
+    it "says nothing when the app has one locale" do
+      expect(described_class.i18n_line(i18n: { available_locales: %w[en] })).to be_nil
+    end
+  end
 end

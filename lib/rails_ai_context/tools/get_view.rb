@@ -102,10 +102,12 @@ module RailsAiContext
           return text_response(note) if note
         end
 
+        layouts = controller ? [] : layout_files
+
         case detail
         when "summary"
           all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
-          lines = [ "# Views (#{count_phrase(templates.size, "template")}, #{count_phrase(partials.size, "partial")})", "" ]
+          lines = views_header_lines(templates, partials, layouts)
           all_dirs.each do |ctrl|
             ctrl_templates = templates.select { |k, _| k.start_with?("#{ctrl}/") }
             ctrl_partials = partials.select { |k, _| k.start_with?("#{ctrl}/") }
@@ -128,7 +130,7 @@ module RailsAiContext
 
         when "standard"
           all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
-          lines = [ "# Views (#{count_phrase(templates.size, "template")}, #{count_phrase(partials.size, "partial")})", "" ]
+          lines = views_header_lines(templates, partials, layouts)
 
           # Form builders and component usage from views introspector
           form_builders = data[:form_builders_detected]
@@ -228,11 +230,31 @@ module RailsAiContext
         end
       end
 
+      # Layouts sit outside the template and partial maps, so a heading naming
+      # only those two numbers never added up to the files under app/views.
+      private_class_method def self.views_header_lines(templates, partials, layouts)
+        parts = [ count_phrase(templates.size, "template"), count_phrase(partials.size, "partial") ]
+        parts << count_phrase(layouts.size, "layout") if layouts.any?
+
+        lines = [ "# Views (#{parts.join(', ')})", "" ]
+        lines << "_Layouts are listed by `controller:\"layouts\"`._" << "" if layouts.any?
+        lines
+      end
+
+      # The template and partial maps exclude app/views/layouts, so the
+      # directory is the only statement of what is in it.
+      private_class_method def self.layout_files
+        layouts_dir = rails_app.root.join("app", "views", "layouts")
+        return [] unless Dir.exist?(layouts_dir)
+
+        Dir.glob(File.join(layouts_dir, "*")).reject { |f| File.directory?(f) }.sort
+      end
+
       private_class_method def self.list_layouts(detail)
         layouts_dir = rails_app.root.join("app", "views", "layouts")
         return text_response("No app/views/layouts/ directory found.") unless Dir.exist?(layouts_dir)
 
-        files = Dir.glob(File.join(layouts_dir, "*")).reject { |f| File.directory?(f) }.sort
+        files = layout_files
         return text_response("No layout files found.") if files.empty?
 
         views_dir = rails_app.root.join("app", "views")
@@ -257,8 +279,8 @@ module RailsAiContext
       private_class_method def self.read_view_file(path)
         content, result = RailsAiContext::ViewFile.read(rails_app.root.to_s, path)
         case result.refusal
-        when :traversal, :outside then return text_response("Path not allowed: #{path}")
-        when :sensitive then return text_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
+        when :traversal, :outside then return error_response("Path not allowed: #{path}")
+        when :sensitive then return error_response("Access denied: #{path} is a sensitive file (secrets/keys/credentials).")
         when :too_large then return text_response("File too large: #{path}")
         when :missing
           dir = File.dirname(path.to_s.delete_prefix("app/views/"))
@@ -414,23 +436,28 @@ module RailsAiContext
           return read_view_file(path)
         end
 
+        # This listing prints the same `controller:"layouts"` pointer the
+        # payload listing does, so it has to answer it the same way.
+        return list_layouts(detail) if controller&.downcase == "layouts"
+
         # List views from disk
-        templates = Dir.glob(File.join(views_dir, "**", "*"))
-          .reject { |f| File.directory?(f) || File.basename(f).start_with?("_") || f.include?("/layouts/") }
+        files = Dir.glob(File.join(views_dir, "**", "*"))
+          .reject { |f| File.directory?(f) || f.include?("/layouts/") }
           .map { |f| f.sub("#{views_dir}/", "") }
           .sort
 
         if controller
           ctrl_lower = RailsAiContext::Payload.controller_route_key(cached_context, controller)
           ctrl_lower_alt = controller.downcase.delete_suffix("controller")
-          templates = templates.select { |t|
+          files = files.select { |t|
             t_down = t.downcase
             t_down.start_with?(ctrl_lower + "/") || t_down.start_with?(ctrl_lower_alt + "/")
           }
         end
 
-        lines = [ "# Views (#{count_phrase(templates.size, "template")})", "" ]
-        templates.each { |t| lines << "- #{t}" }
+        templates, partials = files.partition { |f| !File.basename(f).start_with?("_") }
+        lines = views_header_lines(templates, partials, controller ? [] : layout_files)
+        files.each { |f| lines << "- #{f}" }
         text_response(lines.join("\n"))
       end
     end

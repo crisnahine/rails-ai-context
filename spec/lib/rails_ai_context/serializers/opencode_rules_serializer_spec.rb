@@ -89,4 +89,28 @@ RSpec.describe RailsAiContext::Serializers::OpencodeRulesSerializer do
       expect(result[:skipped]).to be_empty
     end
   end
+
+  it "names the files it did not generate and why" do
+    context[:models] = {}
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+
+      result = described_class.new(context).call(dir)
+
+      expect(result[:not_applicable]).to eq(File.join(dir, "app", "models", "AGENTS.md") => "no models")
+    end
+  end
+
+  it "reports a missing directory instead of dropping the file silently" do
+    Dir.mktmpdir do |dir|
+      result = described_class.new(context).call(dir)
+
+      expect(result[:not_applicable]).to eq(
+        File.join(dir, "app", "models", "AGENTS.md") => "app/models not present",
+        File.join(dir, "app", "controllers", "AGENTS.md") => "app/controllers not present"
+      )
+      expect(Dir.exist?(File.join(dir, "app"))).to be false
+    end
+  end
 end

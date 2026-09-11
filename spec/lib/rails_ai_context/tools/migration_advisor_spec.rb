@@ -29,6 +29,20 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       })
     end
 
+    # Underscoring a namespaced model asks for `admin/action_logs`, which the
+    # identifier guard then rejects as invalid - a dead end for a model the
+    # payload can name a table for.
+    it "takes a namespaced model's table from the model tier" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } },
+        models: { "Admin::Entry" => { table_name: "posts" } }
+      })
+
+      response = described_class.call(action: "add_column", table: "Admin::Entry", column: "phone", type: "string")
+
+      expect(response.content.first[:text]).to include("add_column :posts, :phone, :string")
+    end
+
     it "generates add_column migration" do
       response = described_class.call(action: "add_column", table: "users", column: "phone", type: "string")
       text = response.content.first[:text]
@@ -118,6 +132,78 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
       response = described_class.call(action: "add_column", table: "users", column: "age", type: "integer")
       text = response.content.first[:text]
       expect(text).to include("Affected Models")
+    end
+
+    context "with a model whose table is not the camelized table name" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { tables: { "admin_action_logs" => { columns: [ { name: "note", type: "string" } ] } } },
+          models: {
+            "Admin::ActionLog" => {
+              table_name: "admin_action_logs",
+              associations: [ { macro: :belongs_to, name: :account, class_name: "Account" } ]
+            },
+            "Account" => {
+              table_name: "accounts",
+              associations: [ { macro: :has_many, name: :action_logs, class_name: "Admin::ActionLog" } ]
+            }
+          }
+        })
+      end
+
+      it "names the model that records the table" do
+        response = described_class.call(action: "add_column", table: "Admin::ActionLog", column: "note2", type: "string")
+
+        expect(response.content.first[:text])
+          .to include("- **Admin::ActionLog** - directly affected (table: admin_action_logs)")
+      end
+
+      it "names the association that points at that model" do
+        response = described_class.call(action: "add_column", table: "Admin::ActionLog", column: "note2", type: "string")
+
+        expect(response.content.first[:text]).to include("- **Account** - has_many :action_logs")
+      end
+
+      it "points remove_column's ignored_columns step at the model's own file" do
+        allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+        response = described_class.call(action: "remove_column", table: "Admin::ActionLog", column: "note")
+
+        expect(response.content.first[:text]).to include("app/models/admin/action_log.rb")
+      end
+    end
+
+    # ignored_columns belongs on the class that owns the table, and every STI
+    # class on it records the same table, so the first name in payload order
+    # could be a child.
+    context "with an STI family on one table" do
+      before do
+        described_class.reset_cache!
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { tables: { "users" => { columns: [ { name: "note", type: "string" } ] } } },
+          models: {
+            "AdminUser" => { table_name: "users", file: "app/models/admin_user.rb" },
+            "User" => { table_name: "users", file: "app/models/user.rb" }
+          }
+        })
+      end
+
+      it "points ignored_columns at the base's file, not a child's" do
+        allow(described_class).to receive(:strong_migrations_gem_present?).and_return(true)
+        response = described_class.call(action: "remove_column", table: "users", column: "note")
+
+        expect(response.content.first[:text]).to include("app/models/user.rb")
+        expect(response.content.first[:text]).not_to include("app/models/admin_user.rb")
+      end
+    end
+
+    it "omits the Affected Models heading when no model uses the table" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { tables: { "flipper_gates" => { columns: [] } } }, models: {}
+      })
+
+      response = described_class.call(action: "add_column", table: "flipper_gates", column: "note", type: "string")
+
+      expect(response.content.first[:text]).not_to include("Affected Models")
     end
 
     it "generates rename_column with new_name parameter" do
@@ -262,6 +348,93 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         expect(text).to include("Strong Migrations Warnings")
         expect(text).to include("foreign_key_checks")
         expect(text).not_to include("validate_foreign_key")
+      end
+    end
+  end
+  describe "the migration superclass version" do
+    def text_for(**args)
+      described_class.call(**args).content.first[:text]
+    end
+
+    context "when the app's context names a Rails version" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          rails_version: "8.1.3.1",
+          schema: { adapter: "PostgreSQL", tables: { "accounts" => { columns: [ { name: "domain", type: "string" } ] } } },
+          models: {}
+        })
+      end
+
+      it "stamps the app's version, not the Rails the gem process loaded" do
+        expect(text_for(action: "add_index", table: "accounts", column: "domain"))
+          .to include("ActiveRecord::Migration[8.1]")
+      end
+
+      it "does the same for create_table" do
+        expect(text_for(action: "create_table", table: "widgets", column: "name:string"))
+          .to include("ActiveRecord::Migration[8.1]")
+      end
+
+      it "does the same for add_column" do
+        expect(text_for(action: "add_column", table: "accounts", column: "note", type: "string"))
+          .to include("ActiveRecord::Migration[8.1]")
+      end
+
+      it "does not note a fallback" do
+        expect(text_for(action: "add_index", table: "accounts", column: "domain"))
+          .not_to include("Could not determine this app's Rails version")
+      end
+    end
+
+    context "when the context carries an unavailable marker" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return({
+          rails_version: "[UNAVAILABLE: app not booted]", schema: { tables: {} }, models: {}
+        })
+      end
+
+      it "falls back to the loaded Rails rather than emitting the marker" do
+        loaded = Rails::VERSION::STRING.split(".").first(2).join(".")
+
+        expect(text_for(action: "add_index", table: "accounts", column: "domain"))
+          .to include("ActiveRecord::Migration[#{loaded}]")
+      end
+    end
+
+    context "when nothing names a Rails version" do
+      before do
+        hide_const("Rails")
+        allow(described_class).to receive(:cached_context).and_return({
+          rails_version: "[UNAVAILABLE: app not booted]", schema: { tables: {} }, models: {}
+        })
+      end
+
+      it "stamps the supported floor and says so, so the code still parses" do
+        text = text_for(action: "add_index", table: "accounts", column: "domain")
+        expect(text).to include("ActiveRecord::Migration[7.0]")
+        expect(text).to include("Could not determine this app's Rails version")
+      end
+
+      # The version is unknown for three reasons; here it is the unavailable
+      # marker, not a lockfile with no rails in it.
+      it "states what it observed, not a cause it never checked" do
+        text = text_for(action: "add_index", table: "accounts", column: "domain")
+        expect(text).not_to include("Gemfile.lock")
+      end
+    end
+
+    context "rendered against the static fixture app" do
+      before do
+        described_class.reset_cache!
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(IntrospectedFixture::ROOT))
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+      end
+
+      after { described_class.reset_cache! }
+
+      it "reads the version the fixture's Gemfile.lock pins" do
+        expect(text_for(action: "add_index", table: "users", column: "email"))
+          .to include("ActiveRecord::Migration[7.2]")
       end
     end
   end

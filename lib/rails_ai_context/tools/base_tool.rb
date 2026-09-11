@@ -293,16 +293,21 @@ module RailsAiContext
 
         # Standardized pagination: slice items with offset/limit and produce a consistent hint.
         # Returns { items:, hint:, total:, offset:, limit: }
-        def paginate(items, offset:, limit:, default_limit: 50)
+        # `noun` names what is being counted and `truncated` marks a total that
+        # is itself a cap, so the hint cannot restate a cut list as a whole one.
+        def paginate(items, offset:, limit:, default_limit: 50, noun: nil, truncated: false)
           offset = [ offset.to_i, 0 ].max
           limit  = limit.nil? ? default_limit : [ limit.to_i, 1 ].max
           total  = items.size
           sliced = items.drop(offset).first(limit)
 
+          counted = noun ? count_phrase(total, noun) : total.to_s
+          counted = floor_phrase(counted) if truncated
+
           hint = if sliced.empty? && total > 0
-            "_No items at offset #{offset}. Total: #{total}._"
+            "_No items at offset #{offset}. Total: #{counted}._"
           elsif offset + limit < total
-            "_Showing #{offset + 1}-#{offset + sliced.size} of #{total}. Use offset:#{offset + limit} for next page._"
+            "_Showing #{offset + 1}-#{offset + sliced.size} of #{counted}. Use offset:#{offset + limit} for next page._"
           else
             ""
           end
@@ -391,7 +396,17 @@ module RailsAiContext
         def unavailable_note(section_data)
           return nil unless section_data.is_a?(Hash) && section_data[:unavailable]
 
-          "[UNAVAILABLE: #{section_data[:unavailable]}]"
+          Confidence.unavailable(section_data[:unavailable])
+        end
+
+        # A key the introspector named as unanswered has no finding behind it,
+        # so a negative or empty rendering would state a fact nobody checked.
+        def unanswered?(data, key)
+          Array(data[:unavailable_sections]).map(&:to_s).include?(key.to_s)
+        end
+
+        def unavailable_text
+          unavailable_note(unavailable: Introspectors::StaticTier.unavailable_reason)
         end
 
         # API-only apps legitimately have no views, partials, Stimulus, or
@@ -429,6 +444,16 @@ module RailsAiContext
         # mistake static analysis for runtime-confirmed data. Rides the
         # suffix mechanism so it survives truncation.
         def static_tier_banner
+          note = static_tier_note
+          return nil unless note
+
+          "\n\n---\n_#{note}_"
+        end
+
+        # The banner without its markdown wrapper, so a JSON body can carry
+        # the same sentence under a key instead of a footer that would stop it
+        # parsing.
+        def static_tier_note
           return nil unless RailsAiContext.static_tier?
 
           reason = RailsAiContext.static_reason
@@ -438,8 +463,8 @@ module RailsAiContext
           when :requested, :source_only then "Static mode (#{reason})"
           else reason ? "App boot failed (#{reason})" : "Static mode"
           end
-          "\n\n---\n_[STATIC] #{headline}. Serving static analysis; runtime-only data is marked " \
-            "[UNAVAILABLE]. Run `rails-ai-context doctor` for details._"
+          "[STATIC] #{headline}. Serving static analysis; runtime-only data is marked " \
+            "[UNAVAILABLE]. Run `rails-ai-context doctor` for details."
         end
 
         # Tools that only make sense against a booted app must refuse in the
@@ -459,6 +484,13 @@ module RailsAiContext
             "[UNAVAILABLE: static tier] #{capability} requires a booted Rails app" \
             "#{reason ? " (static tier active: #{reason})" : ""}. #{remedy}"
           )
+        end
+
+        # The params a caller sent that this tool does not declare. The CLI and
+        # the MCP wrapper both refuse them, in their own words, off this one
+        # answer. server_context is the SDK's, not the caller's.
+        def unknown_param_names(keys, properties)
+          keys.map(&:to_s) - (properties || {}).keys.map(&:to_s) - [ "server_context" ]
         end
 
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
@@ -508,17 +540,24 @@ module RailsAiContext
             keys.find { |k| k.to_s.downcase == q.classify.downcase }
         end
 
+        # `\b` is a word/non-word transition, so it cannot fire beside a pattern
+        # edge that is already non-word: `reblog?\b` never matches `def reblog?`
+        # and `\b@user` never matches `@user = 1`. Escape the pattern, then add
+        # each boundary only on the side whose edge is a word character.
+        def leading_boundary(pattern)
+          pattern.match?(/\A\w/) ? "\\b" : ""
+        end
+
+        def trailing_boundary(pattern)
+          pattern.match?(/\w\z/) ? "\\b" : ""
+        end
+
         # Extract method source from a source string via indentation-based matching.
         # Returns { code:, start_line:, end_line: } or nil. Shared by get_callbacks, get_concern.
         def extract_method_source_from_string(source, method_name)
           source_lines = source.lines
-          escaped = Regexp.escape(method_name.to_s)
-          # ? and ! ARE word boundaries, so skip \b after them
-          pattern = if method_name.to_s.end_with?("?", "!")
-            /\A\s*def\s+#{escaped}/
-          else
-            /\A\s*def\s+#{escaped}\b/
-          end
+          name = method_name.to_s
+          pattern = /\A\s*def\s+#{Regexp.escape(name)}#{trailing_boundary(name)}/
           start_idx = source_lines.index { |l| l.match?(pattern) }
           return nil unless start_idx
 
@@ -540,10 +579,76 @@ module RailsAiContext
 
         # Extract method source from a file path. Reads file safely. Returns hash or nil.
         def extract_method_source_from_file(path, method_name)
-          return nil unless File.exist?(path)
+          return nil unless path && File.exist?(path)
           return nil if File.size(path) > RailsAiContext.configuration.max_file_size
           source = RailsAiContext::SafeFile.read(path) || ""
           extract_method_source_from_string(source, method_name)
+        end
+
+        # First fixture key for a table (reading the fixture file when the
+        # cached fixture names miss it), or nil when no fixture exists. Every
+        # surface that writes a fixture call asks here, so none of them can
+        # invent a key the app does not have.
+        def fixture_key_for(table, tests_data)
+          fixture_names = tests_data[:fixture_names] || {}
+          keys = fixture_names[table] || fixture_names[table.to_sym]
+          if keys.is_a?(Array)
+            named = keys.map(&:to_s).find { |key| RailsAiContext::FixtureKeys.name?(key) }
+            return named if named
+          end
+
+          fixture_file = File.join(rails_app.root, "test", "fixtures", "#{table}.yml")
+          return nil unless File.exist?(fixture_file)
+
+          # The disk read keeps its own filter: it reads raw YAML that no
+          # introspector has been through.
+          content = RailsAiContext::SafeFile.read(fixture_file)
+          content&.scan(/^([a-z_]\w*):/i)
+                 &.flatten
+                 &.find { |key| RailsAiContext::FixtureKeys.name?(key) }
+        end
+
+        # A callback target is a method name, an inline block, or a callback
+        # object. Only the first is a symbol, so only the first takes a colon.
+        # A block has no name, so it keeps the payload's marker wherever a
+        # name is what the line lists.
+        def callback_target(method)
+          method = method.to_s
+          return method if inline_block_callback?(method)
+
+          method_name?(method) ? ":#{method}" : method
+        end
+
+        def inline_block_callback?(method)
+          method.to_s == RailsAiContext::Introspectors::Listeners::CallbacksListener::INLINE_BLOCK
+        end
+
+        def method_name?(method)
+          method.to_s.match?(/\A\w+[?!=]?\z/)
+        end
+
+        # One callback record rendered as the line the file declares. The
+        # declared macro, not the resolved type: `after_commit_on_create` is
+        # a key this gem synthesizes, not something the source says.
+        def callback_declaration(callback)
+          name = callback[:name] || callback[:type]
+          method = callback[:method].to_s
+          target = inline_block_callback?(method) ? "do" : callback_target(method)
+          "#{name} #{target}#{callback_options_tail(callback[:options])}"
+        end
+
+        # Without the tail, four `after_commit` lines that differ only in
+        # `on:` read as the same declaration four times.
+        def callback_options_tail(options)
+          return "" unless options.is_a?(Hash) && options.any?
+
+          ", " + options.map { |key, value| "#{key}: #{callback_option_value(value)}" }.join(", ")
+        end
+
+        # A value the walk could not resolve is a marker, not a string the
+        # app wrote, so it is printed bare the way every other marker is.
+        def callback_option_value(value)
+          value == RailsAiContext::Confidence::INFERRED ? value : value.inspect
         end
 
         # What the session record should remember about this call. SafeCall
@@ -603,13 +708,7 @@ module RailsAiContext
           suffix = [ suffix, static_tier_banner ].compact.join
           suffix = nil if suffix.empty?
 
-          # Auto-track: record this tool call in session context (skip SessionContext itself to avoid recursion)
-          if respond_to?(:tool_name) && tool_name != "rails_session_context"
-            summary = text.lines.first&.strip&.truncate(80)
-            params = Thread.current[:rails_ai_context_call_params] || {}
-            session_record(tool_name, params, summary)
-            Thread.current[:rails_ai_context_call_params] = nil
-          end
+          record_call(text)
 
           max = RailsAiContext.configuration.max_tool_response_chars
           if max && text.length > max
@@ -623,11 +722,29 @@ module RailsAiContext
           end
         end
 
+        # Key the static-tier note rides under in a JSON body. Underscored the
+        # way JsonBudget's own report key is, so a reader tells it from data.
+        STATIC_TIER_KEY = "_static_tier"
+
+        # A JSON body has to parse, so it cannot take the markdown banner and
+        # cannot be sliced at the response cap: JsonBudget drops whole
+        # elements instead, and the tier note rides under a reserved key.
+        def json_response(data)
+          note = static_tier_note
+          data = data.merge(STATIC_TIER_KEY => note) if note && data.is_a?(Hash)
+
+          text = JsonBudget.generate(data, RailsAiContext.configuration.max_tool_response_chars)
+          record_call(text)
+          MCP::Tool::Response.new([ { type: "text", text: text } ])
+        end
+
         # Helper: wrap text in an MCP::Tool::Response flagged as an error
         # (isError: true) so MCP clients and the CLI treat the call as failed
-        # (non-zero exit). Mirrors the SafeCall rescue wrapper. Use for genuine
-        # execution failures only - policy blocks and guidance messages stay
-        # informational via text_response.
+        # (non-zero exit). Mirrors the SafeCall rescue wrapper. Use for an
+        # execution failure, and for a path refused on policy - outside the
+        # app, a traversal, a sensitive file - which is a request the tool
+        # would not answer. Guidance and "found nothing" stay informational
+        # via text_response and empty_response.
         def error_response(text)
           # A failed call must not leak its recorded params into the next
           # call's session entry.
@@ -638,6 +755,17 @@ module RailsAiContext
         end
 
         private
+
+        # Every answered call is recorded so session_context(action:"status")
+        # can list it. SessionContext itself is skipped to avoid recursion.
+        def record_call(text)
+          return unless respond_to?(:tool_name) && tool_name != "rails_session_context"
+
+          summary = text.lines.first&.strip&.truncate(80)
+          params = Thread.current[:rails_ai_context_call_params] || {}
+          session_record(tool_name, params, summary)
+          Thread.current[:rails_ai_context_call_params] = nil
+        end
 
         def session_key(tool_name, params)
           normalized = tool_name.to_s.sub(/\Arails_/, "")
@@ -658,6 +786,24 @@ module RailsAiContext
         # Shared utility: check if a relative path matches sensitive file patterns.
         def sensitive_file?(relative_path)
           RailsAiContext::SafePath.sensitive?(relative_path)
+        end
+
+        # The refusal every tool that takes a path from the caller answers
+        # with, so a script reading the exit status can tell a refusal from an
+        # answer. A path that is simply not there is not refused: that is an
+        # ordinary empty answer, and each tool words its own.
+        #
+        # @return [MCP::Tool::Response, nil] the error result, or nil to carry on
+        def refuse_unsafe_paths(paths)
+          refused = Array(paths).compact.reject { |path| path.to_s.strip.empty? }.filter_map do |path|
+            refusal = RailsAiContext::SafePath.locate(path.to_s, under: rails_app.root.to_s).refusal
+            [ path, refusal ] if %i[sensitive traversal outside].include?(refusal)
+          end
+          return nil if refused.empty?
+
+          error_response(refused.map { |path, refusal|
+            refusal == :sensitive ? "Path not allowed: #{path} (sensitive file)" : "Path not allowed: #{path}"
+          }.join("\n"))
         end
 
         # Resolve a Dir.glob result to a realpath that is:

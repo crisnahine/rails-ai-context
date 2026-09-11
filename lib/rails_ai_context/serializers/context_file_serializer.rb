@@ -31,6 +31,21 @@ module RailsAiContext
 
       ALL_FORMATS = (FORMAT_MAP.keys + SPLIT_ONLY_FORMATS).freeze
 
+      # Which serializer writes each format's root file, and which writes its
+      # rules directory. Tables rather than two case statements, so a spec
+      # asking "does every generated file carry X" reads the same list the
+      # generator runs. Codex reuses OpenCode's files.
+      ROOT_SERIALIZERS = {
+        json: JsonSerializer, claude: ClaudeSerializer, opencode: OpencodeSerializer,
+        codex: OpencodeSerializer, copilot: CopilotSerializer
+      }.freeze
+
+      RULES_SERIALIZERS = {
+        claude: ClaudeRulesSerializer, cursor: CursorRulesSerializer,
+        opencode: OpencodeRulesSerializer, codex: OpencodeRulesSerializer,
+        copilot: CopilotInstructionsSerializer
+      }.freeze
+
       # Section markers live exclusively on SectionMarkerWriter - anyone
       # who needs them references SectionMarkerWriter::BEGIN_MARKER /
       # END_MARKER directly. (Re-exports were considered for back-compat
@@ -40,8 +55,19 @@ module RailsAiContext
         @format  = format
       end
 
+      # Callers that pay for an introspection before writing check the format
+      # first, so a name nothing can write is refused before the work.
+      def self.validate_format!(format)
+        return if format.nil? || format == :all
+
+        unknown = Array(format).reject { |fmt| ALL_FORMATS.include?(fmt) }
+        return if unknown.empty?
+
+        raise ArgumentError, "Unknown format: #{unknown.first}. Valid formats: #{ALL_FORMATS.map(&:to_s).join(', ')}"
+      end
+
       # Write context files, skipping unchanged ones.
-      # @return [Hash] { written: [paths], skipped: [paths] }
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call
         # `.ai-context.json` is the machine artifact, not an AI tool, so no
         # install menu can offer it. A recorded tool selection arrives here as
@@ -53,6 +79,7 @@ module RailsAiContext
         when Array            then format.empty? ? [] : format | [ :json ]
         else Array(format)
         end
+        self.class.validate_format!(formats)
         # `default_app` is the tier-aware handle: the booted application, or the
         # filesystem-rooted stand-in. Reaching for `Rails.application` directly
         # raises NameError under `--no-boot`, where Rails is never loaded at all
@@ -61,6 +88,7 @@ module RailsAiContext
         generate_root = RailsAiContext.configuration.generate_root_files
         written = []
         skipped = []
+        not_applicable = {}
 
         seen_root_files = Set.new
 
@@ -68,19 +96,20 @@ module RailsAiContext
           next if SPLIT_ONLY_FORMATS.include?(fmt)
 
           filename = FORMAT_MAP[fmt]
-          unless filename
-            valid = ALL_FORMATS.map(&:to_s).join(", ")
-            raise ArgumentError, "Unknown format: #{fmt}. Valid formats: #{valid}"
-          end
-
-          # Skip root files when generate_root_files is false
-          next unless generate_root
 
           # Deduplicate: skip if this root file was already written (e.g. AGENTS.md for both :opencode and :codex)
           next if seen_root_files.include?(filename)
           seen_root_files << filename
 
           filepath = File.join(output_dir, filename)
+
+          # generate_root_files = false is a deliberate omission, so it is
+          # reported rather than dropped.
+          unless generate_root
+            not_applicable[filepath] = "root files disabled"
+            next
+          end
+
           FileUtils.mkdir_p(File.dirname(filepath))
           content = serialize(fmt)
 
@@ -92,21 +121,15 @@ module RailsAiContext
         end
 
         # Split rules are always generated regardless of generate_root_files
-        generate_split_rules(formats, output_dir, written, skipped)
+        generate_split_rules(formats, output_dir, written, skipped, not_applicable)
 
-        { written: written, skipped: skipped }
+        { written: written, skipped: skipped, not_applicable: not_applicable }
       end
 
       private
 
       def serialize(fmt)
-        case fmt
-        when :json             then JsonSerializer.new(context).call
-        when :claude           then ClaudeSerializer.new(context).call
-        when :opencode, :codex then OpencodeSerializer.new(context).call
-        when :copilot          then CopilotSerializer.new(context).call
-        else MarkdownSerializer.new(context).call
-        end
+        (ROOT_SERIALIZERS[fmt] || MarkdownSerializer).new(context).call
       end
 
       # JSON and other formats that don't support HTML comments
@@ -143,36 +166,14 @@ module RailsAiContext
         end
       end
 
-      def generate_split_rules(formats, output_dir, written, skipped)
-        if formats.include?(:claude)
-          result = ClaudeRulesSerializer.new(context).call(output_dir)
-          written.concat(result[:written])
-          skipped.concat(result[:skipped])
-        end
+      def generate_split_rules(formats, output_dir, written, skipped, not_applicable)
+        serializers = formats.filter_map { |fmt| RULES_SERIALIZERS[fmt] }.uniq
 
-        if formats.include?(:cursor)
-          result = CursorRulesSerializer.new(context).call(output_dir)
+        serializers.each do |serializer|
+          result = serializer.new(context).call(output_dir)
           written.concat(result[:written])
           skipped.concat(result[:skipped])
-        end
-
-        if formats.include?(:opencode)
-          result = OpencodeRulesSerializer.new(context).call(output_dir)
-          written.concat(result[:written])
-          skipped.concat(result[:skipped])
-        end
-
-        if formats.include?(:copilot)
-          result = CopilotInstructionsSerializer.new(context).call(output_dir)
-          written.concat(result[:written])
-          skipped.concat(result[:skipped])
-        end
-
-        # Codex reuses OpenCode's directory-level AGENTS.md split rules
-        if formats.include?(:codex) && !formats.include?(:opencode)
-          result = OpencodeRulesSerializer.new(context).call(output_dir)
-          written.concat(result[:written])
-          skipped.concat(result[:skipped])
+          not_applicable.merge!(result[:not_applicable] || {})
         end
       end
     end

@@ -113,4 +113,20 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       end
     end
   end
+
+  it "names the files it did not generate and why" do
+    context[:models] = {}
+    context[:schema] = { tables: {} }
+    Dir.mktmpdir do |dir|
+      result = described_class.new(context).call(dir)
+      rules = File.join(dir, ".claude", "rules")
+
+      expect(result[:not_applicable]).to eq(
+        File.join(rules, "rails-schema.md") => "no schema dump",
+        File.join(rules, "rails-models.md") => "no models",
+        File.join(rules, "rails-components.md") => "no view components"
+      )
+      expect(File.exist?(File.join(rules, "rails-models.md"))).to be false
+    end
+  end
 end

@@ -5,6 +5,30 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetControllers do
+  # A group of top-level controllers shares no namespace, so the heading was
+  # the bare count - and two such groups in one document carried the same
+  # heading, naming nothing and repeating.
+  describe "a compressed group with no namespace of its own" do
+    before { described_class.reset_cache! }
+
+    it "heads the group with a member, not with a count alone" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: {
+          "PostsController" => { parent_class: "AdminController", actions: %w[index] },
+          "PagesController" => { parent_class: "AdminController", actions: %w[index] },
+          "SitesController" => { parent_class: "AdminController", actions: %w[index] },
+          "AdminController" => { parent_class: "ApplicationController", actions: [] }
+        } }
+      )
+
+      text = described_class.call(detail: "full").content.first[:text]
+      headings = text.lines.select { |line| line.start_with?("## ") }.map(&:strip)
+
+      expect(headings).to include("## PagesController and 2 like it (3 controllers)")
+      expect(headings.uniq.size).to eq(headings.size)
+    end
+  end
+
   before { described_class.reset_cache! }
 
   let(:controllers) do
@@ -15,7 +39,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
           { kind: "before_action", name: "set_post", only: %w[show edit update destroy] },
           { kind: "before_action", name: "authenticate_user!" }
         ],
-        strong_params: %w[post_params],
+        strong_params: [ { name: "post_params", permits: %w[title body] } ],
         parent_class: "ApplicationController"
       },
       "UsersController" => {
@@ -27,7 +51,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       "CommentsController" => {
         actions: %w[create destroy],
         filters: [],
-        strong_params: %w[comment_params],
+        strong_params: [ { name: "comment_params", permits: %w[body] } ],
         parent_class: "ApplicationController"
       }
     }
@@ -170,13 +194,13 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
         "UsersController" => {
           actions: %w[index show create],
           filters: [ { kind: "before_action", name: "authenticate_user!" } ],
-          strong_params: %w[name email],
+          strong_params: [ { name: "user_params", permits: %w[name email] } ],
           parent_class: "ApplicationController"
         },
         "PostsController" => {
           actions: %w[index show],
           filters: [],
-          strong_params: %w[title body]
+          strong_params: [ { name: "post_params", permits: %w[title body] } ]
         }
       }
       allow(described_class).to receive(:cached_context).and_return({
@@ -197,6 +221,358 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("## UsersController")
       expect(text).to include("Filters:")
       expect(text).to include("authenticate_user!")
+    end
+  end
+
+  describe "detail:full over the shape the introspector really records" do
+    def stub_controllers(controllers)
+      allow(described_class).to receive(:cached_context).and_return({
+        controllers: { controllers: controllers }
+      })
+    end
+
+    # A base controller with no public actions rendered as a name, a dash and
+    # nothing, which reads as a truncated line rather than an answer.
+    it "says so when a controller has no public actions" do
+      stub_controllers({
+        "Admin::BaseController" => { actions: [], filters: [], strong_params: [], parent_class: "ApplicationController" }
+      })
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("- **Admin::BaseController** - (no public actions)")
+    end
+
+    # A file the walk could not read is not a controller with nothing in it,
+    # and the single-controller answer already says so.
+    it "says a controller could not be read in every listing detail" do
+      stub_controllers({
+        "HugeController" => { error: "unreadable" }
+      })
+
+      summary = described_class.call(detail: "summary").content.first[:text]
+      standard = described_class.call(detail: "standard").content.first[:text]
+      full = described_class.call(detail: "full").content.first[:text]
+
+      expect(summary).to include("- **HugeController** - [UNAVAILABLE: unreadable]")
+      expect(standard).to include("- **HugeController** - [UNAVAILABLE: unreadable]")
+      expect(full).to include("- [UNAVAILABLE: unreadable]")
+    end
+
+    it "names both strong params methods of a controller under an app parent" do
+      stub_controllers({
+        "Admin::AccountsController" => {
+          actions: %w[index show],
+          filters: [ { kind: "before_action", name: "set_account" } ],
+          strong_params: [
+            { name: "filter_params", permits: %w[origin status] },
+            { name: "form_account_batch_params", requires: "form_account_batch", permits: %w[action account_ids] }
+          ],
+          parent_class: "Admin::BaseController"
+        }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Admin::AccountsController")
+      expect(text).to include("- Strong params: filter_params, form_account_batch_params")
+    end
+
+    it "names them on a compressed sibling group too" do
+      entry = {
+        actions: %w[index],
+        filters: [],
+        strong_params: [ { name: "filter_params", permits: %w[origin] } ],
+        parent_class: "Admin::BaseController"
+      }
+      stub_controllers({
+        "Admin::OneController" => entry.dup,
+        "Admin::TwoController" => entry.dup,
+        "Admin::ThreeController" => entry.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Admin::* (3 controllers)")
+      expect(text).to include("- Members: Admin::OneController, Admin::ThreeController, Admin::TwoController")
+      expect(text).to include("- Strong params: filter_params")
+    end
+
+    # The heading was built from the first member's own class name, so five
+    # top-level controllers were filed under a namespace no controller is in.
+    # A bare count is not the answer either: it names nothing, and a second
+    # such group in the same document repeats it.
+    it "heads a group of top-level controllers with a member and a count" do
+      entry = { actions: %w[show], filters: [], strong_params: [], parent_class: "ActionController::Base" }
+      stub_controllers({
+        "CustomCssController" => entry.dup,
+        "HealthController" => entry.dup,
+        "ManifestsController" => entry.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).not_to include("CustomCssController::*")
+      expect(text).to include("## CustomCssController and 2 like it (3 controllers)")
+      expect(text).to include("- Members: CustomCssController, HealthController, ManifestsController")
+    end
+
+    # A group heads under the namespace every member is really in, not the
+    # first segment of the first member's name.
+    it "heads a group with the namespace all its members share" do
+      entry = { actions: %w[show], filters: [], strong_params: [], parent_class: "Admin::BaseController" }
+      stub_controllers({
+        "Admin::EmailSubscriptions::FooterTextsController" => entry.dup,
+        "Admin::Settings::AboutController" => entry.dup,
+        "Admin::Settings::AppearanceController" => entry.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Admin::* (3 controllers)")
+      expect(text).to include(
+        "- Members: Admin::EmailSubscriptions::FooterTextsController, " \
+          "Admin::Settings::AboutController, Admin::Settings::AppearanceController"
+      )
+    end
+
+    # Every controller the plain listing names has to be findable in the full
+    # answer by the constant it really has.
+    it "names every controller by its real constant in the full listing" do
+      entry = { actions: %w[show], filters: [], strong_params: [], parent_class: "Api::BaseController" }
+      names = [ "Api::SearchController", "Api::AsyncRefreshesController", "OAuth::UserinfoController" ]
+      stub_controllers(names.to_h { |n| [ n, entry.dup ] })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      names.each { |name| expect(text).to include(name) }
+      expect(text).not_to include("Api::* ")
+    end
+
+    # The booted tier renders a skipped filter struck through. The listing
+    # printed it as one the action runs, so the two tiers said the opposite.
+    it "strikes through a filter the controller skips" do
+      stub_controllers({
+        "ActivityPub::InboxesController" => {
+          actions: %w[create],
+          filters: [
+            { kind: "before", name: "authenticate_user!", skipped: true },
+            { kind: "before", name: "require_actor_signature!" }
+          ],
+          strong_params: [],
+          parent_class: "ActivityPub::BaseController"
+        }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- Filters: before require_actor_signature!, ~~authenticate_user!~~ _(skipped)_")
+      expect(text).not_to include("before authenticate_user!")
+    end
+
+    # The compressed group renders one member's filters for all of them, so a
+    # skip has to keep the skipper out of a group of declarers.
+    it "does not group a controller that skips a filter with the ones that declare it" do
+      declarer = {
+        actions: %w[index show],
+        filters: [ { kind: "before", name: "authenticate" } ],
+        strong_params: [],
+        parent_class: "Admin::BaseController"
+      }
+      stub_controllers({
+        "Admin::PostsController" => declarer.merge(
+          filters: [ { kind: "before", name: "authenticate", skipped: true } ]
+        ),
+        "Admin::TagsController" => declarer.dup,
+        "Admin::UsersController" => declarer.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Admin::PostsController")
+      expect(text).to include("- Filters: ~~authenticate~~ _(skipped)_")
+      expect(text).not_to include("## Admin::* (Posts, Tags, Users)")
+    end
+
+    # The static walk records the superclass as written, so two namespaces
+    # that each define their own BaseController arrive spelled the same. The
+    # group key read that raw spelling while the rendered filter chain
+    # resolved it, so unrelated controllers shared one group and were given a
+    # chain that is not theirs.
+    it "groups by the parent the chain walk resolves, not the source spelling" do
+      member = { actions: %w[index], filters: [], strong_params: [], parent_class: "BaseController" }
+      stub_controllers({
+        "Admin::BaseController" => {
+          actions: [], strong_params: [], parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "set_referrer_policy_header" } ]
+        },
+        "Settings::BaseController" => {
+          actions: [], strong_params: [], parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "authenticate_user!" } ]
+        },
+        "Admin::DashboardController" => member.dup,
+        "Settings::Exports::BookmarksController" => member.dup,
+        "Settings::Exports::ListsController" => member.dup,
+        "Settings::Exports::MutedAccountsController" => member.dup
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- Inherits: Settings::BaseController")
+      expect(text).not_to include("- Inherits: BaseController")
+      expect(text).to include("## Admin::DashboardController")
+      expect(text).not_to include("- Members: Admin::DashboardController")
+      expect(text).to include("- Filters: before authenticate_user!")
+    end
+
+    # The listing resolves the parent and the single-controller answer read
+    # the raw spelling, so one tool named two parents for one controller.
+    it "heads both answers with the same parent for one controller" do
+      member = { actions: %w[index], filters: [], strong_params: [], parent_class: "BaseController" }
+      stub_controllers({
+        "Settings::BaseController" => {
+          actions: [], strong_params: [], parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "authenticate_user!" } ]
+        },
+        "Settings::Exports::BookmarksController" => member.dup,
+        "Settings::Exports::ListsController" => member.dup,
+        "Settings::Exports::MutedAccountsController" => member.dup
+      })
+
+      listing = described_class.call(detail: "full").content.first[:text]
+      single = described_class.call(controller: "Settings::Exports::BookmarksController").content.first[:text]
+
+      expect(listing).to include("- Inherits: Settings::BaseController")
+      expect(single).to include("**Parent:** `Settings::BaseController`")
+    end
+
+    # Nothing in the payload can qualify a framework or gem base, and
+    # inventing a namespace for it would be a guess.
+    it "keeps the raw spelling of a parent no entry resolves" do
+      stub_controllers({
+        "Api::WidgetsController" => {
+          actions: %w[index], filters: [], strong_params: [], parent_class: "ActionController::Metal"
+        },
+        "WidgetsController" => {
+          actions: %w[index], filters: [], strong_params: [], parent_class: "Grape::API"
+        }
+      })
+
+      namespaced = described_class.call(controller: "Api::WidgetsController").content.first[:text]
+      plain = described_class.call(controller: "WidgetsController").content.first[:text]
+
+      expect(namespaced).to include("**Parent:** `ActionController::Metal`")
+      expect(plain).to include("**Parent:** `Grape::API`")
+    end
+
+    # A controller that defines no action of its own is an answer. Omitting
+    # the line left a reader unable to tell it from a walk that did not look,
+    # which is the reason the other listings say "(no public actions)".
+    it "says a controller has no public actions in every detail level" do
+      stub_controllers({
+        "Admin::BaseController" => { actions: [], filters: [], strong_params: [], parent_class: "ApplicationController" }
+      })
+
+      standard = described_class.call(detail: "standard").content.first[:text]
+      full = described_class.call(detail: "full").content.first[:text]
+      single = described_class.call(controller: "Admin::BaseController").content.first[:text]
+
+      expect(standard).to include("- **Admin::BaseController** - (no public actions)")
+      expect(full).to include("- Actions: (no public actions)")
+      expect(single).to include("## Actions\n(no public actions)")
+    end
+
+    # A skip's constraint decides whether the filter is struck through, so
+    # two controllers whose skips differ only in the constraint must not
+    # share a group and one rendered chain.
+    it "tells a conditional skip apart from an outright one in the group key" do
+      sibling = {
+        actions: %w[index], strong_params: [], parent_class: "Api::BaseController",
+        filters: [ { kind: "before", name: "require_user!", skipped: true } ]
+      }
+      stub_controllers({
+        "Api::BaseController" => {
+          actions: [], strong_params: [], parent_class: "ApplicationController",
+          filters: [ { kind: "before", name: "require_user!" } ]
+        },
+        "Api::AController" => sibling.dup,
+        "Api::BController" => sibling.dup,
+        "Api::CController" => sibling.merge(
+          filters: [ { kind: "before", name: "require_user!", skipped: true, unless: "public_fetch_mode?" } ]
+        )
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("## Api::CController")
+      expect(text).to include("- Filters: before require_user! (skipped unless: public_fetch_mode?)")
+      expect(text).not_to include("- Members: Api::AController, Api::BController, Api::CController")
+    end
+
+    it "pairs each rescued exception with its handler" do
+      stub_controllers({
+        "MediaProxyController" => {
+          actions: %w[show],
+          filters: [],
+          strong_params: [],
+          rescue_from: [
+            { exception: "ActiveRecord::RecordInvalid", handler: "not_found" },
+            { exception: "Mastodon::NotPermittedError" }
+          ],
+          parent_class: "ApplicationController"
+        }
+      })
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("- Rescue from: ActiveRecord::RecordInvalid -> not_found, Mastodon::NotPermittedError")
+    end
+
+    it "pairs them on the single-controller answer as well" do
+      stub_controllers({
+        "MediaProxyController" => {
+          actions: %w[show],
+          filters: [],
+          strong_params: [],
+          rescue_from: [ { exception: "ActiveRecord::RecordInvalid", handler: "not_found" } ],
+          parent_class: "ApplicationController"
+        }
+      })
+
+      text = described_class.call(controller: "MediaProxyController").content.first[:text]
+
+      expect(text).to include("- `rescue_from` ActiveRecord::RecordInvalid -> not_found")
+    end
+
+    # The listing rendered the class's own filter records while the
+    # single-controller answer resolved the chain, so one tool gave two
+    # answers to one question about the same controller. A skip carrying
+    # `unless:` does not take the filter out on every request, so neither
+    # answer strikes it through.
+    it "says the same thing about a conditional skip in both answers" do
+      stub_controllers({
+        "ApplicationController" => {
+          actions: [],
+          filters: [ { kind: "before", name: "require_functional!" } ],
+          strong_params: []
+        },
+        "AccountsController" => {
+          actions: %w[show],
+          parent_class: "ApplicationController",
+          filters: [
+            { kind: "before", name: "require_functional!", skipped: true, unless: "limited_federation_mode?" }
+          ],
+          strong_params: []
+        }
+      })
+
+      listing = described_class.call(detail: "full").content.first[:text]
+      single = described_class.call(controller: "AccountsController").content.first[:text]
+
+      expect(listing).to include("- Filters: before require_functional! (skipped unless: limited_federation_mode?)")
+      expect(listing).not_to include("~~require_functional!~~")
+      expect(single).to include("**require_functional!** _(from ApplicationController)_ (skipped unless: limited_federation_mode?)")
+      expect(single).not_to include("~~require_functional!~~")
     end
   end
 
@@ -278,6 +654,68 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
 
       expect(text).to include("_(from ApplicationController)_")
       expect(text).not_to include("_(from Admin::BaseController)_")
+    end
+  end
+
+  # Every read of the shared cache is a deep copy of the whole payload, so a
+  # listing that reads it once per controller pays for the app twice over.
+  describe "shared context reads in the full listing" do
+    def context_with(count)
+      entries = (1...(count + 1)).to_h do |i|
+        [ "Admin::Group#{i}Controller", {
+          actions: %w[index show], filters: [], strong_params: [],
+          parent_class: "Admin::BaseController"
+        } ]
+      end
+      entries["Admin::BaseController"] = { actions: [], filters: [], parent_class: "ApplicationController" }
+      { controllers: { controllers: entries } }
+    end
+
+    def reads_for(count)
+      described_class.reset_cache!
+      reads = 0
+      ctx = context_with(count)
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(detail: "full", limit: 400)
+      reads
+    end
+
+    it "reads the shared context the same number of times for 3 controllers as for 40" do
+      expect(reads_for(40)).to eq(reads_for(3))
+    end
+  end
+
+  # One controller is one invocation, not a loop, but the reads were still one
+  # per fact rendered, so a controller with a parent and a source file paid
+  # more than a bare one.
+  describe "shared context reads for a single controller" do
+    def reads_for(entries, name)
+      described_class.reset_cache!
+      reads = 0
+      ctx = { controllers: { controllers: entries } }
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(controller: name)
+      reads
+    end
+
+    it "reads the shared context as many times for a bare controller as for one with a parent" do
+      bare = { "BareController" => { actions: %w[index], filters: [] } }
+      rich = {
+        "RichController" => {
+          actions: %w[index], parent_class: "Admin::BaseController",
+          filters: [ { kind: "before", name: "authenticate!" } ],
+          file: "app/controllers/rich_controller.rb"
+        },
+        "Admin::BaseController" => { actions: [], filters: [] }
+      }
+
+      expect(reads_for(rich, "RichController")).to eq(reads_for(bare, "BareController"))
     end
   end
 end

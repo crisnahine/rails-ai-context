@@ -60,8 +60,12 @@ module RailsAiContext
           lines << "- **Default locale:** #{i18n[:default_locale]}"
           # The backend class is a runtime fact. Printing the I18n gem's own
           # default when no app booted states it as the app's choice.
-          lines << "- **Backend:** #{i18n[:backend]}" if i18n[:backend]
-          lines << "- **Available locales:** #{available_list(i18n)}"
+          if unanswered?(i18n, :backend)
+            lines << "- **Backend:** #{runtime_only_note}"
+          elsif i18n[:backend]
+            lines << "- **Backend:** #{i18n[:backend]}"
+          end
+          lines << "- **#{Serializers::SectionFacts.available_locales_label(i18n)}:** #{available_list(i18n)}"
           lines << "- **Locale files:** #{i18n[:total_locale_files] || files.size}"
 
           # A language-name table under config/locales makes Rails list a
@@ -88,7 +92,9 @@ module RailsAiContext
           end
 
           fallbacks = i18n[:fallbacks] || {}
-          if fallbacks.any?
+          if unanswered?(i18n, :fallbacks)
+            lines << "" << "## Fallbacks" << runtime_only_note
+          elsif fallbacks.any?
             lines << "" << "## Fallbacks"
             fallbacks.sort.each do |from, to|
               lines << "- **#{from}** → #{Array(to).join(', ')}"
@@ -117,10 +123,21 @@ module RailsAiContext
           end
 
           fallbacks = i18n[:fallbacks] || {}
-          lines << "- **Fallbacks:** #{Array(fallbacks[locale.to_sym] || fallbacks[locale]).join(', ')}" if fallbacks[locale.to_sym] || fallbacks[locale]
+          if unanswered?(i18n, :fallbacks)
+            lines << "- **Fallbacks:** #{runtime_only_note}"
+          elsif fallbacks[locale.to_sym] || fallbacks[locale]
+            lines << "- **Fallbacks:** #{Array(fallbacks[locale.to_sym] || fallbacks[locale]).join(', ')}"
+          end
 
           render_file_list(lines, page, "Files for #{locale}", "_No locale files found for '#{locale}'._")
           text_response(lines.join("\n"))
+        end
+
+        # The section is not missing because the tool refused: the whole answer
+        # is here and these two fields describe whichever process asked. The
+        # tier's own refusal sentence would read as the tool declining.
+        def runtime_only_note
+          Confidence.unavailable("belongs to the process that answers, and no app booted in this one")
         end
 
         # A language-name table gives every locale in it the same key count,

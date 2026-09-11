@@ -10,9 +10,18 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
   after { FileUtils.remove_entry(tmpdir) }
 
   describe "#call" do
-    it "returns error when Gemfile.lock is missing" do
+    # An absent lockfile is a source the app never wrote, which every other
+    # section reports as unavailable; a lockfile it could not read is a
+    # failure and stays one.
+    it "reports a missing Gemfile.lock as unavailable, not as a failure" do
       result = introspector.call
-      expect(result).to eq({ error: "No Gemfile.lock found" })
+      expect(result).to eq({ unavailable: "No Gemfile.lock found" })
+    end
+
+    it "says why rather than reporting no gems when the lockfile has no gem entries" do
+      File.write(File.join(tmpdir, "Gemfile.lock"), "not a lockfile\n")
+
+      expect(introspector.call).to eq({ error: "Gemfile.lock has no specs section" })
     end
 
     context "with a Gemfile.lock" do
@@ -149,8 +158,32 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
         expect(names).to include("devise")
       end
 
+      # Named for its source: the context's own ruby_version is the Ruby the
+      # app runs on, and a reader seeing both needs to know which is which.
       it "reads the ruby version from the RUBY VERSION section" do
-        expect(introspector.call[:ruby_version]).to eq("3.3.4p94")
+        result = introspector.call
+
+        expect(result[:declared_ruby_version]).to eq("3.3.4p94")
+        expect(result).not_to have_key(:ruby_version)
+      end
+    end
+
+    context "with a lockfile Bundler indented by two spaces" do
+      before do
+        content = <<~LOCK
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rails (8.0.0)
+
+          RUBY VERSION
+            ruby 4.0.6
+        LOCK
+        File.write(File.join(tmpdir, "Gemfile.lock"), content)
+      end
+
+      it "still names the ruby version" do
+        expect(introspector.call[:declared_ruby_version]).to eq("4.0.6")
       end
     end
 

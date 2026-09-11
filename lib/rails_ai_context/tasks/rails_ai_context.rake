@@ -20,8 +20,8 @@ ASSISTANT_TABLE = begin
 end unless defined?(ASSISTANT_TABLE)
 
 def print_result(result)
-  result[:written].each { |f| puts "  ✅ #{f}" }
-  result[:skipped].each { |f| puts "  ⏭️  #{f} (unchanged)" }
+  style = RailsAiContext::ContextFileReport.style(:emoji)
+  RailsAiContext::ContextFileReport.each_line(result, style) { |_bucket, text| puts "  #{text}" }
 end unless defined?(print_result)
 
 def abort_boot_failure(result, timeout)
@@ -29,8 +29,9 @@ def abort_boot_failure(result, timeout)
   if result.error.is_a?(RailsAiContext::BootManager::BootTimeoutError)
     $stderr.puts "  If the app is healthy but slow, raise RAILS_AI_CONTEXT_BOOT_TIMEOUT (seconds, current: #{timeout})."
   end
+  result.configure_hint.each { |line| $stderr.puts "  #{line}" }
   exit 1
-end
+end unless defined?(abort_boot_failure)
 
 def apply_context_mode_override
   if ENV["CONTEXT_MODE"]
@@ -170,15 +171,13 @@ namespace :ai do
     runner = RailsAiContext::CLI::ToolRunner.new(name, params, json_mode: json_mode)
     puts runner.run
     exit 1 if runner.error
-  rescue RailsAiContext::CLI::ToolRunner::ToolNotFoundError => e
-    $stderr.puts "Error: #{e.message}"
-    exit 1
-  rescue RailsAiContext::CLI::ToolRunner::InvalidArgumentError => e
-    $stderr.puts "Error: #{e.message}"
-    exit 3
+  # One status for a question that went unanswered, whichever surface asked
+  # it: docs/CLI.md states it as the rule and the binary has always answered
+  # it. This task answered 3 for a bad argument and 2 for anything else, so a
+  # wrapper keying on the status got two answers to one typo.
   rescue => e
     $stderr.puts "Error: #{e.message}"
-    exit 2
+    exit 1
   end
 
   desc "Generate AI context files for configured AI tools (prompts on first run)"
@@ -358,7 +357,11 @@ namespace :ai do
     end
 
     if (routes = RailsAiContext::Payload.section(context, :routes))
-      puts "🛤️  Routes: #{routes[:total_routes]}#{RailsAiContext::RouteCoverage.suffix(routes)}"
+      app_ctrls = RailsAiContext::RouteCoverage.app_controllers(routes)
+      puts "🛤️  Routes: " \
+           "#{RailsAiContext::CountPhrase.call(RailsAiContext::RouteCoverage.app_route_count(routes), "app route")} " \
+           "across #{RailsAiContext::CountPhrase.call(app_ctrls.size, "controller")} " \
+           "(#{routes[:total_routes]} total incl. framework#{RailsAiContext::RouteCoverage.suffix(routes)})"
     end
 
     if context[:jobs]
@@ -386,10 +389,10 @@ namespace :ai do
   task :preset, [ :name ] => :environment do |_t, args|
     require "rails_ai_context"
 
-    name = args[:name]&.strip&.downcase
-    next if name && RailsAiContext::Presets.run(name)
-
-    puts RailsAiContext::Presets.listing(invocation: ->(k) { "rails 'ai:preset[#{k}]'" })
+    outcome = RailsAiContext::Presets.dispatch(
+      args[:name], invocation: ->(k) { "rails 'ai:preset[#{k}]'" }
+    )
+    exit 1 unless RailsAiContext::Presets.ok?(outcome)
   end
 
   desc "Print a concise schema facts summary (tables, columns, indexes, associations, dependencies)"
@@ -409,15 +412,7 @@ namespace :ai do
 
     result = RailsAiContext::Doctor.new.run
 
-    result[:checks].each do |check|
-      icon = case check.status
-      when :pass then "✅"
-      when :warn then "⚠️ "
-      when :fail then "❌"
-      end
-      puts "  #{icon} #{check.name}: #{check.message}"
-      puts "     Fix: #{check.fix}" if check.fix
-    end
+    puts RailsAiContext::Doctor.report_lines(result, icons: RailsAiContext::Doctor::EMOJI_ICONS)
 
     puts ""
     puts "AI Readiness Score: #{result[:score]}/100"

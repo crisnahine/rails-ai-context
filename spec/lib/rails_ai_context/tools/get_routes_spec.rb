@@ -252,4 +252,71 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(text).not_to include("not expanded")
     end
   end
+
+  # The header read the payload straight, so it named a filter the controller
+  # skips, and it cut at three with nothing said about the rest.
+  describe "the per-controller filter hint" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 6, by_controller: { "posts" => by_controller["posts"] }, api_namespaces: [] },
+        controllers: { controllers: {
+          "PostsController" => {
+            parent_class: "ApplicationController",
+            filters: [
+              { kind: "before", name: "authenticate!" },
+              { kind: "before", name: "set_locale", skipped: true },
+              { kind: "after", name: "audit" },
+              { kind: "before", name: "set_post", only: %w[show edit update destroy] },
+              { kind: "before", name: "track" }
+            ]
+          }
+        } }
+      })
+    end
+
+    it "leaves out a filter the controller skips" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("filters: authenticate!, audit, set_post")
+      expect(text).not_to include("set_locale")
+    end
+
+    it "says how many it did not show" do
+      expect(described_class.call.content.first[:text]).to include("+1 more")
+    end
+  end
+
+  # Every read of the shared cache is a deep copy of the whole payload, so a
+  # listing that reads it once per controller heading pays for the app twice
+  # over.
+  describe "shared context reads in the route listing" do
+    def context_with(count)
+      routes = (1..count).to_h do |i|
+        [ "group#{i}", [ { verb: "GET", path: "/group#{i}", action: "index", name: "group#{i}" } ] ]
+      end
+      controllers = (1..count).to_h do |i|
+        [ "Group#{i}Controller", { actions: %w[index], filters: [ { kind: "before", name: "authenticate!" } ] } ]
+      end
+      {
+        routes: { total_routes: count, by_controller: routes, api_namespaces: [] },
+        controllers: { controllers: controllers }
+      }
+    end
+
+    def reads_for(count)
+      described_class.reset_cache!
+      reads = 0
+      ctx = context_with(count)
+      allow(described_class).to receive(:cached_context) do
+        reads += 1
+        ctx
+      end
+      described_class.call(detail: "standard", limit: 400)
+      reads
+    end
+
+    it "reads the shared context the same number of times for 3 controllers as for 40" do
+      expect(reads_for(40)).to eq(reads_for(3))
+    end
+  end
 end

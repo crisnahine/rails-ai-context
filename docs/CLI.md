@@ -61,6 +61,36 @@ rails-ai-context tool model_details --model User
 | `--json` | Output as JSON |
 | `--no-boot` | Skip booting the app; answer from source alone |
 
+Global options may be typed before or after the command name:
+`rails-ai-context --app-path /srv/app doctor` and
+`rails-ai-context doctor --app-path /srv/app` run the same check.
+
+`--app-path` names the Rails root, and defaults to the working directory.
+`--environment` names the `RAILS_ENV` to boot under. Left out, it resolves the
+way Rails resolves its own environment: the ambient `RAILS_ENV`, then
+`RACK_ENV`, then `development`, reading an empty value as unset. So an app
+whose `config/boot.rb` refuses to run without the variable still gets booted
+rather than answering nothing. Name it explicitly on a machine that runs more
+than one environment, because the environment decides which database
+configuration the booted tier reads.
+
+#### Exit status
+
+`tool` exits 0 when the tool answered and 1 when it could not. A required
+parameter you did not pass, a flag with no value after it, a bare word where a
+flag belongs, and an unknown parameter all exit 1 and say which one. So does a
+refusal on policy - a path outside the app root, a sensitive file, a SQL
+statement the read-only validator blocks - because the question went
+unanswered.
+
+A thing that is simply not there is an ordinary answer and exits 0: a file the
+tool looked for and did not find, a search with no matches, a directory the
+`--path` names that does not exist.
+
+A value the schema cannot hold - `--detail bogus` where the parameter takes
+`summary`, `standard` or `full`, or `--limit abc` where it takes an integer -
+is warned about on stderr and the tool's own default is used.
+
 ### The static tier and `--no-boot`
 
 Every command that reads the app takes `--no-boot`: `tool`, `serve`, `context`,
@@ -78,7 +108,7 @@ in which tier.
 `--no-boot` and still exits 1 when the app cannot start.
 
 ```bash
-rails-ai-context tool models --no-boot        # no boot, no database, no Gemfile
+rails-ai-context tool model_details --no-boot # no boot, no database, no Gemfile
 rails-ai-context context --no-boot            # writes CLAUDE.md from source
 ```
 
@@ -160,6 +190,33 @@ Print introspection summary as JSON.
 
 ```bash
 rails-ai-context inspect
+```
+
+### `facts`
+
+Print a schema facts summary: tables, associations and dependencies.
+
+```bash
+rails-ai-context facts
+rails-ai-context facts --no-boot
+```
+
+### `preset`
+
+Run a named group of tools in one pass. With no name it lists the presets.
+
+```bash
+rails-ai-context preset
+rails-ai-context preset architecture
+```
+
+### `tree`
+
+Print a tree of every command. `rails-ai-context help <command>` lists that
+command's options.
+
+```bash
+rails-ai-context tree
 ```
 
 ---

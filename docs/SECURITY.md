@@ -147,6 +147,12 @@ raise unless real_path.start_with?(Rails.root.to_s)
 
 The VFS (`rails-ai-context://views/{path}`) applies the same protection for view template reads.
 
+### How a refusal is reported
+
+A path refused on policy - outside the app, a traversal, a sensitive file - comes back as an
+error result: `isError: true` over MCP, exit 1 from the CLI. A path that is simply not there
+is an ordinary answer and exits 0, so a script can tell the two apart.
+
 ---
 
 ## Command injection prevention

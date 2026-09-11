@@ -29,6 +29,8 @@ module RailsAiContext
         @raw_args = raw_args
         @json_mode = json_mode
         @error = false
+        @missing_required = false
+        @out_of_type = {}
       end
 
       def run
@@ -188,7 +190,7 @@ module RailsAiContext
         kwargs.each do |key, value|
           prop = properties[key]
           next unless prop
-          kwargs[key] = coerce_value(value, prop)
+          kwargs[key] = coerce_value(value, prop, key)
         end
 
         kwargs
@@ -217,11 +219,11 @@ module RailsAiContext
                 # honouring only one of the two spellings docs/CLI.md teaches
                 # left the other still dropping every file after the first.
                 trailing = collect_array_values(args, i + 1)
-                result[key] = Array(coerce_value(value, prop)) + trailing
+                result[key] = Array(coerce_value(value, prop, key)) + trailing
                 i += 1 + values_consumed(args, i + 1)
                 next
               end
-              result[key] = coerce_value(value, prop)
+              result[key] = coerce_value(value, prop, key)
             else
               key = arg.sub("--", "").tr("-", "_").to_sym
               prop = properties[key] || {}
@@ -262,28 +264,71 @@ module RailsAiContext
 
               value = (i + 1 < args.size) ? args[i + 1] : nil
               if value && !value.start_with?("--")
-                result[key] = coerce_value(value, prop)
+                result[key] = coerce_value(value, prop, key)
                 i += 2
                 next
-              else
-                result[key] = true
-                i += 1
-                next
               end
+
+              # A value-taking flag with nothing after it would reach the tool
+              # as the Boolean true, a type it never accepts. An unknown flag
+              # still passes through, so the unknown-param message names it.
+              raise InvalidArgumentError, missing_value_message(key, prop) if prop[:type]
+
+              result[key] = true
+              i += 1
+              next
             end
             i += 1
           elsif arg.include?("=")
             # key=value style (rake)
             key, value = arg.split("=", 2)
             key = key.tr("-", "_").to_sym
-            result[key] = coerce_value(value, properties[key] || {})
+            result[key] = coerce_value(value, properties[key] || {}, key)
             i += 1
           else
-            i += 1
+            # Every parameter takes a flag, so a bare word is a mistype of
+            # one. Dropping it answered a different question than the one
+            # asked, and said nothing about it.
+            raise InvalidArgumentError, stray_argument_message(arg)
           end
         end
 
         result
+      end
+
+      # The flag a stray word was most likely meant for: a required param
+      # first, since that is the one a caller must supply.
+      def suggested_flag
+        schema = tool_schema
+        properties = (schema[:properties] || {})
+        return nil if properties.empty?
+
+        required = (schema[:required] || []).map(&:to_s)
+        name = properties.keys.find { |k| required.include?(k.to_s) } || properties.keys.first
+        "--#{name.to_s.tr('_', '-')}"
+      end
+
+      def valid_params_line
+        keys = (tool_schema[:properties] || {}).keys.map(&:to_s)
+        keys.any? ? "Valid params: #{keys.join(', ')}" : "This tool takes no params."
+      end
+
+      def stray_argument_message(arg)
+        flag = suggested_flag
+        hint = flag ? " - did you mean '#{flag} #{arg}'?" : ""
+        "Unexpected argument:\n  '#{arg}' is not a flag#{hint}\n#{valid_params_line}"
+      end
+
+      def missing_value_message(key, prop)
+        flag = "--#{key.to_s.tr('_', '-')}"
+        expected = prop[:enum] ? "one of #{prop[:enum].join(', ')}" : "#{article(prop[:type])} #{prop[:type]} value"
+        "Missing value:\n  '#{flag}' takes #{expected}\n#{valid_params_line}"
+      end
+
+      # The JSON Schema type names are a closed set, and array, integer and
+      # object are the vowel-initial three.
+      def article(type)
+        type.to_s.start_with?("a", "e", "i", "o", "u") ? "an" : "a"
       end
 
       # Tokens belonging to an array flag: everything up to the next flag,
@@ -302,10 +347,18 @@ module RailsAiContext
       end
 
       # Coerce a string value to the type specified in the JSON Schema property.
-      def coerce_value(raw, property_schema)
+      def coerce_value(raw, property_schema, key = nil)
         case property_schema[:type]
         when "integer"
-          raw.to_i
+          # `--limit abc` is 0 through `to_i`, which answers a question
+          # nobody asked. Record it instead, so validation refuses it the way
+          # an out-of-enum value is refused.
+          if raw.is_a?(Integer) || raw.to_s.strip.match?(/\A[-+]?\d+\z/)
+            raw.to_i
+          else
+            @out_of_type[key] = raw if key
+            nil
+          end
         when "boolean"
           TRUTHY_WORDS.include?(raw.to_s.downcase)
         when "array"
@@ -327,26 +380,35 @@ module RailsAiContext
 
         # Check for unknown params and raise a helpful error with suggestions.
         # server_context is always allowed (internal MCP param).
-        unknown = kwargs.keys.map(&:to_s) - known_keys - [ "server_context" ]
+        unknown = Tools::BaseTool.unknown_param_names(kwargs.keys, properties)
         if unknown.any?
           msgs = unknown.map do |k|
             suggestion = Tools::BaseTool.find_closest_match(k, known_keys)
             suggestion ? "  '#{k}' - did you mean '#{suggestion}='?" : "  '#{k}'"
           end
-          valid_str = known_keys.any? ? "Valid params: #{known_keys.join(', ')}" : "This tool takes no params."
-          raise InvalidArgumentError, "Unknown param#{unknown.size > 1 ? 's' : ''}:\n#{msgs.join("\n")}\n#{valid_str}"
+          raise InvalidArgumentError, "Unknown param#{unknown.size > 1 ? 's' : ''}:\n#{msgs.join("\n")}\n#{valid_params_line}"
+        end
+
+        # A value the schema's type cannot hold is dropped with a warning, the
+        # same treatment an out-of-enum value gets, so the tool applies its own
+        # default rather than the zero `to_i` would invent.
+        @out_of_type.each do |key, raw|
+          prop = properties[key] || {}
+          $stderr.puts "Warning: '#{raw}' is not a valid value for #{key}. Expected #{prop[:type]}. Using default."
+          kwargs.delete(key)
         end
 
         # For required params with empty-string values, keep the key but set to nil
         # so the tool's own guards can return friendly "parameter is required" messages
         # (matching MCP behavior). We keep the key to avoid Ruby ArgumentError on
-        # required keyword arguments.
+        # required keyword arguments. The tool's own wording is the best one, so
+        # the call is only marked failed - the exit status a script reads was
+        # saying success while the text said the parameter was required.
         required.each do |param|
-          if kwargs.key?(param.to_sym) && kwargs[param.to_sym].to_s.strip == ""
-            kwargs[param.to_sym] = nil
-          elsif !kwargs.key?(param.to_sym)
-            kwargs[param.to_sym] = nil
-          end
+          next unless blank?(kwargs[param.to_sym])
+
+          kwargs[param.to_sym] = nil
+          @missing_required = true
         end
 
         # Check enum constraints - downcase before comparing for case-insensitive match.
@@ -354,6 +416,9 @@ module RailsAiContext
         kwargs.each do |key, value|
           prop = properties[key]
           next unless prop&.dig(:enum)
+          # A required param nobody supplied is nil here; the tool's own
+          # "required" message says it better than a warning about ''.
+          next if value.nil?
 
           # Try case-insensitive match first
           matched = prop[:enum].find { |e| e.to_s.downcase == value.to_s.downcase }
@@ -366,11 +431,19 @@ module RailsAiContext
         end
       end
 
+      def blank?(value)
+        return true if value.nil?
+        return value.strip.empty? if value.is_a?(String)
+        return value.empty? if value.respond_to?(:empty?)
+
+        false
+      end
+
       # Extract text from MCP::Tool::Response and record whether the tool
       # reported failure (isError), so callers can set a non-zero exit code.
       def extract_output(response)
         text = response.content.first&.dig(:text) || ""
-        @error = response.respond_to?(:error?) && response.error?
+        @error = @missing_required || (response.respond_to?(:error?) && response.error?)
         if json_mode
           require "json"
           JSON.pretty_generate(tool: tool_class.tool_name, output: text, error: @error)

@@ -21,6 +21,92 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
     end
   end
 
+  describe "the Controllers section" do
+    it "names the strong params methods rather than dumping their permit detail" do
+      context = {
+        controllers: {
+          controllers: {
+            "PostsController" => {
+              actions: %w[index],
+              filters: [],
+              strong_params: [ { name: "post_params", permits: %w[title body] } ],
+              parent_class: "ApplicationController"
+            }
+          }
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- Strong params: post_params")
+    end
+
+    # The Filters line is resolved through the chain now, so the generated
+    # file carries an inherited filter and marks the child's skip.
+    it "writes the resolved chain, inherited filters included" do
+      context = {
+        controllers: {
+          controllers: {
+            "AdminController" => {
+              actions: %w[index],
+              filters: [ { kind: "before", name: "authenticate" } ],
+              strong_params: [],
+              parent_class: "ApplicationController"
+            },
+            "ReportsController" => {
+              actions: %w[index],
+              filters: [],
+              strong_params: [],
+              parent_class: "AdminController"
+            },
+            "AuditsController" => {
+              actions: %w[index],
+              filters: [ { kind: "before", name: "authenticate", skipped: true } ],
+              strong_params: [],
+              parent_class: "AdminController"
+            }
+          }
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("### ReportsController\n- Parent: `AdminController`\n- Actions: index\n- Filters: before authenticate")
+      expect(output).to include("### AuditsController\n- Parent: `AdminController`\n- Actions: index\n- Filters: ~~authenticate~~ _(skipped)_")
+    end
+  end
+
+  describe "the Views section" do
+    # The introspector answers layouts as records; joining them printed a
+    # Ruby hash into a file the app commits.
+    it "names each layout file" do
+      context = {
+        views: {
+          layouts: [ { name: "application.html.erb", yields: %w[content] }, { name: "mailer.html.erb" } ]
+        }
+      }
+
+      output = described_class.new(context).call
+
+      expect(output).to include("- Layouts: application.html.erb, mailer.html.erb")
+      expect(output).not_to include("{name:")
+    end
+  end
+
+  describe "the Internationalization section" do
+    def i18n_output(source)
+      described_class.new({ i18n: { default_locale: "en", available_locales: %w[en fr], available_locales_source: source } }).call
+    end
+
+    it "says a list read off the locale files is not the app's enabled list" do
+      expect(i18n_output("locale_files")).to include("- Available locales (from locale files): en, fr")
+    end
+
+    it "states a configured list plainly" do
+      expect(i18n_output("config")).to include("- Available locales: en, fr")
+    end
+  end
+
   describe "the Hotwire section against the static fixture" do
     it "names each model's broadcast macros" do
       output = described_class.new(IntrospectedFixture.context).call

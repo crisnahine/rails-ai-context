@@ -85,4 +85,53 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       expect(response.to_h[:content]).to eq([ { type: "text", text: "x" } ])
     end
   end
+
+  describe ".paginate" do
+    it "keeps the plain hint when the caller names no unit" do
+      hint = described_class.paginate((1..10).to_a, offset: 0, limit: 3)[:hint]
+
+      expect(hint).to eq("_Showing 1-3 of 10. Use offset:3 for next page._")
+    end
+
+    it "names the unit and marks a total that was cut short" do
+      hint = described_class.paginate((1..10).to_a, offset: 0, limit: 3, noun: "line", truncated: true)[:hint]
+
+      expect(hint).to eq("_Showing 1-3 of 10+ lines. Use offset:3 for next page._")
+    end
+  end
+
+  describe ".leading_boundary and .trailing_boundary" do
+    it "adds a boundary only where the pattern edge is a word character" do
+      expect(described_class.leading_boundary("user")).to eq("\\b")
+      expect(described_class.leading_boundary("@user")).to eq("")
+      expect(described_class.trailing_boundary("user")).to eq("\\b")
+      expect(described_class.trailing_boundary("reblog?")).to eq("")
+    end
+  end
+
+  describe ".extract_method_source_from_string" do
+    let(:source) do
+      <<~RB
+        class Store
+          def [](key)
+            @data[key]
+          end
+
+          def name=(value)
+            @name = value
+          end
+
+          def save!
+            true
+          end
+        end
+      RB
+    end
+
+    it "finds a method whose name ends in a non-word character" do
+      expect(described_class.extract_method_source_from_string(source, "[]")[:start_line]).to eq(2)
+      expect(described_class.extract_method_source_from_string(source, "name=")[:start_line]).to eq(6)
+      expect(described_class.extract_method_source_from_string(source, "save!")[:start_line]).to eq(10)
+    end
+  end
 end

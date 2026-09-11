@@ -161,13 +161,19 @@ module RailsAiContext
       # @return [Hash] gem analysis
       def call
         lock = RailsAiContext::GemLock.for(app.root)
-        return { error: "No Gemfile.lock found" } if lock.missing?
+        if lock.missing?
+          # A lockfile the app never wrote is an absent source, the way every
+          # other section reports one; a lockfile this could not read failed.
+          return lock.absent? ? { unavailable: lock.reason } : { error: lock.reason }
+        end
 
         notable = detect_notable_gems(lock)
 
         {
           total_gems: lock.names.size,
-          ruby_version: lock.ruby_version,
+          # Named for its source: the context's own ruby_version is the Ruby
+          # the app runs on, and both are served from the same run.
+          declared_ruby_version: lock.ruby_version,
           notable_gems: notable,
           categories: categorize_gems(notable),
           local_gems: detect_local_gems,

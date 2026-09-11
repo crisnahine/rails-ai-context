@@ -19,9 +19,10 @@ module RailsAiContext
     def call
       context = {
         app_name: app_name,
-        ruby_version: RUBY_VERSION,
+        ruby_version: ruby_version,
         rails_version: rails_version,
         environment: environment_name,
+        tier: RailsAiContext.static_tier? ? "static" : "booted",
         generated_at: Time.now.utc.iso8601,
         generator: "rails-ai-context v#{RailsAiContext::VERSION}"
       }
@@ -177,6 +178,16 @@ module RailsAiContext
 
     def unavailable_reason
       Introspectors::StaticTier.unavailable_reason
+    end
+
+    # Booted, the interpreter running this is the app's own. Statically it is
+    # whatever the binary was installed under, which says nothing about the
+    # app, so the app's declared Ruby answers instead, and an app declaring
+    # none gets the refusal the Rails version below already gives.
+    def ruby_version
+      return RUBY_VERSION unless RailsAiContext.static_tier?
+
+      GemLock.for(app.root).ruby_version || Confidence.unavailable("app declares none")
     end
 
     def rails_version

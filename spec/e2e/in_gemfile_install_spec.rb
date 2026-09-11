@@ -130,6 +130,16 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
       expect(cli_steps).not_to be_empty
     end
 
+    it "both surfaces reject an unknown preset by name and exit non-zero" do
+      cli_result = @cli.cli("preset", "bogus")
+      expect(cli_result.success?).to be(false), cli_result.to_s
+      expect(cli_result.stderr).to include("Unknown preset: bogus")
+
+      rake_result = @cli.run([ "bin/rails", "ai:preset[bogus]" ])
+      expect(rake_result.success?).to be(false), rake_result.to_s
+      expect(rake_result.stderr).to include("Unknown preset: bogus")
+    end
+
     it "`rails-ai-context doctor` exits 0 and emits a readiness score" do
       result = @cli.cli("doctor")
       expect(result.success?).to be(true), result.to_s
@@ -194,15 +204,22 @@ RSpec.describe "E2E: in-Gemfile install", type: :e2e do
     # via subprocess per describe block would push wall-clock past 5
     # minutes; the in-process ToolRunner smoke spec covers complete
     # coverage (spec/cli_smoke_spec.rb, 45 tools in 0.15s).
-    %w[schema routes model_details controllers conventions context get_gems].each do |short|
+    # `context` answers about one thing, so it is asked about one: called bare
+    # it refuses, which is the documented exit 1 and not what this block is
+    # for. The scaffolded Post is the app's own model.
+    {
+      "schema" => {}, "routes" => {}, "model_details" => {}, "controllers" => {},
+      "conventions" => {}, "context" => { model: "Post" }, "get_gems" => {}
+    }.each do |short, params|
       it "rake `ai:tool[#{short}]` exits 0" do
-        result = @cli.rake_tool(short)
+        result = @cli.rake_tool(short, params)
         expect(result.success?).to be(true), "#{short} failed:\n#{result}"
         expect(result.stdout).not_to be_empty
       end
 
       it "`rails-ai-context tool #{short}` exits 0" do
-        result = @cli.cli_tool(short)
+        args = params.flat_map { |k, v| [ "--#{k.to_s.tr('_', '-')}", v.to_s ] }
+        result = @cli.cli_tool(short, args)
         expect(result.success?).to be(true), "#{short} failed:\n#{result}"
         expect(result.stdout).not_to be_empty
       end

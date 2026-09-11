@@ -53,8 +53,16 @@ module RailsAiContext
           app = ctx[:app_name] || "This Rails app"
           purpose = infer_app_purpose(ctx)
 
-          parts = [ "**#{app}** is a Rails #{ctx[:rails_version]} / Ruby #{ctx[:ruby_version]}" ]
-          parts << purpose if purpose
+          # The inferred purpose is this sentence's noun ("a news aggregation
+          # app with ..."), so the head supplies one only when there is none.
+          version = named_ruby_version(ctx)
+          rails = named_rails_version(ctx)
+          head = "**#{app}** is a Rails#{" #{rails}" if rails}"
+          # The slash pairs two versions; with no Rails version to pair, the
+          # Ruby one follows the noun instead of sitting in front of it.
+          head += " / Ruby #{version}" if version && rails
+          parts = [ head, purpose || "app" ]
+          parts << "running Ruby #{version}" if version && !rails
 
           # Stats: tables, models, jobs
           stats = []
@@ -139,7 +147,8 @@ module RailsAiContext
           else
             db = "unknown"
           end
-          lines << "#{ctx[:app_name]} is a Rails #{ctx[:rails_version]} application running Ruby #{ctx[:ruby_version]} on #{db}."
+          rails = named_rails_version(ctx)
+          lines << "#{ctx[:app_name]} is a Rails#{" #{rails}" if rails} application#{ruby_clause(ctx)} on #{db}."
 
           notable = Payload.notable_gems(ctx)
           if notable.any?
@@ -295,6 +304,9 @@ module RailsAiContext
           end
           lines << "#{count_phrase(mailers.size, 'mailer')}." if mailers.any?
           lines << "#{count_phrase(channels.size, 'Action Cable channel')}." if channels.any?
+          # An app that runs its async work through Sidekiq workers has an
+          # empty app/jobs, and the section would read as no background work.
+          lines << GetJobPattern::NOT_COVERED if job_list.empty?
           lines << ""
           lines
         end
@@ -580,6 +592,40 @@ module RailsAiContext
         # generated files. One seam, one answer.
         def resolve_db_adapter(ctx, _schema = nil)
           RailsAiContext::SchemaAdapter.label(ctx)
+        end
+
+        # Statically the Ruby version is the one the app declares, not one
+        # anything is running - and with nothing declaring one, ruby_version
+        # is the interpreter running this tool, which says nothing about the
+        # app. Then the sentence names no Ruby at all.
+        def ruby_clause(ctx)
+          version = named_ruby_version(ctx)
+          return "" unless version
+
+          ctx[:tier].to_s == "static" ? " declaring Ruby #{version}" : " running Ruby #{version}"
+        end
+
+        # The version a sentence may name, or nil. Statically that is the one
+        # the app declares; with nothing declared, the value is the interpreter
+        # running this tool and says nothing about the app.
+        # Keyed on the value the sentence would print, not on a sibling
+        # section: an app with a Gemfile and no lockfile declares a Ruby
+        # version that the gems section cannot answer for.
+        def named_ruby_version(ctx)
+          named_version(ctx[:ruby_version])
+        end
+
+        # Same rule for the Rails version: a lockfile naming no rails answers
+        # a marker, and these sentences go into files the user commits.
+        def named_rails_version(ctx)
+          named_version(ctx[:rails_version])
+        end
+
+        def named_version(value)
+          version = value.to_s
+          return nil if version.empty? || version.start_with?("[UNAVAILABLE")
+
+          version
         end
 
         def central_models(models, limit = 5)

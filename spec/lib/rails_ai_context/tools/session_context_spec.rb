@@ -15,6 +15,7 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("action")
+      expect(result.error?).to be(true)
     end
 
     it "marks a tool as queried" do

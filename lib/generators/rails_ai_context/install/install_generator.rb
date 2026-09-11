@@ -522,8 +522,10 @@ module RailsAiContext
 
         begin
           result = RailsAiContext.generate_context(format: @selected_formats)
-          (result[:written] || []).each { |f| say "  ✅ #{f}", :green }
-          (result[:skipped] || []).each { |f| say "  ⏭️  #{f} (unchanged)", :yellow }
+          style = RailsAiContext::ContextFileReport.style(:emoji)
+          RailsAiContext::ContextFileReport.each_line(result, style) do |bucket, text|
+            say "  #{text}", RailsAiContext::ContextFileReport.color(bucket)
+          end
         rescue => e
           say "  ❌ #{@selected_formats.join(', ')}: #{e.message}", :red
         end

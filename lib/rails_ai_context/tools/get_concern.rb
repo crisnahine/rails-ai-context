@@ -70,8 +70,8 @@ module RailsAiContext
 
         located = RailsAiContext::SafePath.locate(concern_relative(name), under: root, root: root)
         case located.refusal
-        when :traversal then text_response("Path not allowed: #{name}")
-        when :sensitive then text_response("Path not allowed: #{name} (sensitive file)")
+        when :traversal then error_response("Path not allowed: #{name}")
+        when :sensitive then error_response("Path not allowed: #{name} (sensitive file)")
         end
       end
 
@@ -108,7 +108,7 @@ module RailsAiContext
           case located.refusal
           when :too_large
             return text_response("Concern file too large: #{located.realpath} (#{File.size(located.realpath)} bytes, max: #{max_size})")
-          when :sensitive then return text_response("Path not allowed: #{name} (sensitive file)")
+          when :sensitive then return error_response("Path not allowed: #{name} (sensitive file)")
           when :missing, :outside then next
           end
 
@@ -227,6 +227,7 @@ module RailsAiContext
 
       private_class_method def self.list_concerns(concern_dirs, root, max_size)
         all_concerns = []
+        excluded_count = 0
         real_root = File.realpath(root).to_s
 
         concern_dirs.each do |dir|
@@ -251,7 +252,10 @@ module RailsAiContext
 
             relative = real.sub("#{real_root}/", "")
             concern_name = real.sub("#{real_dir}/", "").sub(/\.rb$/, "").camelize
-            next if ConcernMembership.excluded?(concern_name)
+            if ConcernMembership.excluded?(concern_name)
+              excluded_count += 1
+              next
+            end
 
             method_count = 0
             if File.size(real) <= max_size
@@ -273,10 +277,20 @@ module RailsAiContext
         end
 
         if all_concerns.empty?
-          return text_response("No concerns found in #{concern_dirs.map { |d| d.sub("#{root}/", "") }.join(', ')}.")
+          dirs = concern_dirs.map { |d| d.sub("#{root}/", "") }.join(", ")
+          if excluded_count > 0
+            return text_response("No concerns to list in #{dirs}: " \
+              "#{count_phrase(excluded_count, "concern")} hidden by `excluded_concerns`.")
+          end
+
+          return text_response("No concerns found in #{dirs}.")
         end
 
         lines = [ "# Concerns (#{all_concerns.size})", "" ]
+        if excluded_count > 0
+          lines << "_#{count_phrase(excluded_count, "concern")} hidden by `excluded_concerns`._"
+          lines << ""
+        end
 
         # Grouped by whatever types the app actually has. Rendering a fixed
         # pair of sections meant a concern outside them counted toward the
@@ -339,17 +353,15 @@ module RailsAiContext
         []
       end
 
+      # The listener knows every callback macro Rails has, so the section no
+      # longer spells its own list and drops the ones it forgot. One
+      # declaration resolves to one record per `on:` event, so the rendered
+      # lines are deduped back down to the lines the file holds.
       private_class_method def self.parse_concern_callbacks(source)
-        callbacks = []
-        callback_pattern = /\A\s*(before_validation|after_validation|before_save|after_save|before_create|after_create|before_update|after_update|before_destroy|after_destroy|around_save|around_create|around_update|around_destroy)\s+(.+)/
-
-        source.each_line do |line|
-          if (match = line.match(callback_pattern))
-            callbacks << "#{match[1]} #{match[2].strip}"
-          end
-        end
-
-        callbacks
+        Introspectors::SourceIntrospector
+          .walk_source(source, { callbacks: Introspectors::Listeners::CallbacksListener })[:callbacks]
+          .map { |cb| callback_declaration(cb) }
+          .uniq
       rescue => e
         $stderr.puts "[rails-ai-context] parse_concern_callbacks failed: #{e.message}" if ENV["DEBUG"]
         []

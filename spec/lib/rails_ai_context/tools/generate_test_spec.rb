@@ -15,6 +15,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).to include("Provide at least one")
+      expect(result.error?).to be(true)
     end
 
     it "returns not-found for unknown model" do
@@ -45,6 +46,31 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).to include("validate_presence_of(:email)")
       expect(text).to include("have_many(:posts)")
       expect(text).to include(".active")
+    end
+
+    # The marker is this gem's word for "a block lives here", not something
+    # the user can paste into an example name.
+    it "names a block callback as a block rather than by the marker" do
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "rspec", factories: { count: 1 }, factory_names: {} },
+        models: {
+          "Status" => {
+            associations: [], validations: [], scopes: [], enums: {},
+            callbacks: {
+              "around_create" => %w[Mastodon::Snowflake::Callbacks],
+              "after_create" => [ "[inline_block]" ],
+              "before_save" => %w[normalize]
+            }
+          }
+        }
+      })
+
+      text = described_class.call(model: "Status").content.first[:text]
+
+      expect(text).to include(%(it "around_create calls Mastodon::Snowflake::Callbacks" do))
+      expect(text).to include(%(it "after_create runs its inline block" do))
+      expect(text).to include(%(it "before_save calls :normalize" do))
+      expect(text).not_to include("[inline_block]")
     end
 
     it "generates minitest-style output when framework is minitest" do
@@ -249,6 +275,42 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       expect(text).to include("params: { article: { title: @article.title } }")
     end
 
+    it "builds the placeholder record from the model's columns, not every permitted param" do
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "rspec", factories: nil, factory_names: nil },
+        models: { "Account" => { table_name: "accounts" } },
+        schema: {
+          tables: {
+            "accounts" => {
+              columns: [
+                { name: "id", type: "integer" },
+                { name: "username", type: "string" },
+                { name: "note", type: "text" }
+              ]
+            }
+          }
+        },
+        controllers: {
+          controllers: {
+            "AccountsController" => {
+              strong_params: [ { name: "account_params", requires: "account", permits: %w[username email password agreement] } ]
+            }
+          }
+        },
+        routes: {
+          by_controller: {
+            "accounts" => [ { verb: "GET", path: "/accounts/:id", action: "show", name: "account" } ]
+          }
+        }
+      })
+
+      text = described_class.call(controller: "AccountsController").content.first[:text]
+
+      expect(text).to include("Account.create!({ username: \"MyString\" })")
+      expect(text).to include("agreement, email, password")
+      expect(text).to include("not columns of accounts")
+    end
+
     it "detects file type from path" do
       allow(described_class).to receive(:cached_context).and_return({
         tests: { framework: "rspec" },
@@ -266,6 +328,204 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       result = described_class.call(file: "app/models/post.rb")
       text = result.content.first[:text]
       expect(text).to include("RSpec.describe Post")
+    end
+  end
+
+  describe "authentication setup for a Devise app" do
+    def devise_context(framework:, tests: {}, controllers: {})
+      {
+        tests: {
+          framework: framework,
+          test_helper_setup: [ "Devise::Test::IntegrationHelpers" ]
+        }.merge(tests),
+        models: {},
+        controllers: { controllers: controllers },
+        routes: { by_controller: { "posts" => [ { verb: "GET", path: "/posts", action: "index" } ] } }
+      }
+    end
+
+    def generated(context)
+      allow(described_class).to receive(:cached_context).and_return(context)
+      described_class.call(controller: "PostsController").content.first[:text]
+    end
+
+    it "does not call a user factory the app does not have" do
+      text = generated(devise_context(framework: "rspec", tests: { factories: nil, factory_names: nil }))
+      expect(text).to include("include Devise::Test::IntegrationHelpers")
+      expect(text).not_to include("create(:user)")
+      expect(text).not_to include("before { sign_in user }")
+      expect(text).to include("# TODO: these examples run unauthenticated")
+    end
+
+    it "keeps the sign_in block when a user factory exists" do
+      text = generated(devise_context(
+        framework: "rspec",
+        tests: { factories: { location: "spec/factories", count: 1 }, factory_names: { "users.rb" => [ :user ] } }
+      ))
+      expect(text).to include("let(:user) { create(:user) }")
+      expect(text).to include("before { sign_in user }")
+    end
+
+    it "does not name a users fixture the app does not have" do
+      text = generated(devise_context(framework: "minitest", tests: { fixtures: nil, fixture_names: nil }))
+      expect(text).to include("include Devise::Test::IntegrationHelpers")
+      expect(text).not_to include("users(:one)")
+      expect(text).not_to include("setup do")
+      expect(text).to include("# TODO: these tests run unauthenticated")
+    end
+
+    # The fixtures guide's shared-attribute idiom opens the file with
+    # "DEFAULTS: &DEFAULTS", and Rails' own "_fixture:" key can be first too.
+    # Neither is a fixture name.
+    it "does not read a shared-attribute anchor off the fixture file as a name" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "test", "fixtures"))
+        File.write(File.join(dir, "test", "fixtures", "users.yml"), <<~YAML)
+          DEFAULTS: &DEFAULTS
+            confirmed_at: <%= Time.current %>
+
+          alice:
+            <<: *DEFAULTS
+            email: alice@example.com
+        YAML
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+        text = generated(devise_context(framework: "minitest", tests: { fixture_names: nil }))
+
+        expect(text).not_to include("users(:DEFAULTS)")
+        expect(text).to include("users(:alice)")
+      end
+    end
+
+    it "does not name an anchor a cached context carries as a fixture name" do
+      text = generated(devise_context(
+        framework: "minitest",
+        tests: { fixture_names: { "users" => [ "DEFAULTS", "alice" ] } }
+      ))
+
+      expect(text).not_to include("users(:DEFAULTS)")
+      expect(text).to include("users(:alice)")
+    end
+
+    it "does not name a cached _fixture key as a fixture name" do
+      text = generated(devise_context(
+        framework: "minitest",
+        tests: { fixture_names: { "users" => [ "_fixture", "alice" ] } }
+      ))
+
+      expect(text).not_to include("users(:_fixture)")
+      expect(text).to include("users(:alice)")
+    end
+
+    it "keeps the fixture sign_in when a users fixture exists" do
+      text = generated(devise_context(framework: "minitest", tests: { fixture_names: { "users" => [ "alice" ] } }))
+      expect(text).to include("@user = users(:alice)")
+      expect(text).to include("sign_in @user")
+    end
+
+    it "skips sign_in for a controller whose ancestry authorizes with Doorkeeper" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "api_base_controller.rb"), <<~RUBY)
+          class ApiBaseController < ActionController::API
+            before_action -> { doorkeeper_authorize! :read }
+          end
+        RUBY
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(dir))
+
+        text = generated(devise_context(
+          framework: "rspec",
+          tests: { factories: { location: "spec/factories", count: 1 }, factory_names: { "users.rb" => [ :user ] } },
+          controllers: {
+            "PostsController" => { parent_class: "ApiBaseController", file: "app/controllers/posts_controller.rb" },
+            "ApiBaseController" => { file: "app/controllers/api_base_controller.rb" }
+          }
+        ))
+
+        expect(text).not_to include("sign_in")
+        expect(text).to include("Doorkeeper")
+      end
+    end
+
+    it "skips the fixture sign_in for a Doorkeeper controller in the minitest generator" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        File.write(File.join(dir, "app", "controllers", "api_base_controller.rb"), <<~RUBY)
+          class ApiBaseController < ActionController::API
+            before_action -> { doorkeeper_authorize! :read }
+          end
+        RUBY
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(dir))
+
+        text = generated(devise_context(
+          framework: "minitest",
+          tests: { fixture_names: { "users" => [ "alice" ] } },
+          controllers: {
+            "PostsController" => { parent_class: "ApiBaseController", file: "app/controllers/posts_controller.rb" },
+            "ApiBaseController" => { file: "app/controllers/api_base_controller.rb" }
+          }
+        ))
+
+        expect(text).not_to include("sign_in")
+        expect(text).not_to include("users(:alice)")
+        expect(text).to include("Doorkeeper")
+      end
+    end
+  end
+
+  # The rspec branch matched the macro against Strings while the static walk
+  # reported Symbols, so every row was dropped and the block came out empty.
+  describe "a model parsed without booting" do
+    it "fills the rspec associations and validations blocks" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "account.rb"), <<~RUBY)
+          class Account < ApplicationRecord
+            belongs_to :owner
+            has_many :statuses, dependent: :destroy
+            has_one :profile
+            validates :username, presence: true
+            validates :followers_url, absence: true
+          end
+        RUBY
+
+        app = RailsAiContext::StaticApp.new(dir)
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(app).static_call
+        allow(described_class).to receive(:cached_context)
+          .and_return({ tests: { framework: "rspec" }, models: models })
+        allow(described_class).to receive(:rails_app).and_return(app)
+
+        text = described_class.call(model: "Account").content.first[:text]
+
+        expect(text).to include("it { is_expected.to belong_to(:owner) }")
+        expect(text).to include("it { is_expected.to have_many(:statuses).dependent(:destroy) }")
+        expect(text).to include("it { is_expected.to have_one(:profile) }")
+        expect(text).to include("it { is_expected.to validate_presence_of(:username) }")
+        expect(text).to include("validates absence of followers_url")
+        expect(text).not_to include(%(describe "associations" do\n  end))
+      end
+    end
+
+    it "renders a habtm row rather than an empty associations block" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "account.rb"), <<~RUBY)
+          class Account < ApplicationRecord
+            has_and_belongs_to_many :tags
+          end
+        RUBY
+
+        app = RailsAiContext::StaticApp.new(dir)
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(app).static_call
+        allow(described_class).to receive(:cached_context)
+          .and_return({ tests: { framework: "rspec" }, models: models })
+        allow(described_class).to receive(:rails_app).and_return(app)
+
+        text = described_class.call(model: "Account").content.first[:text]
+
+        expect(text).to include("it { is_expected.to have_and_belong_to_many(:tags) }")
+        expect(text).not_to include(%(describe "associations" do\n  end))
+      end
     end
   end
 end

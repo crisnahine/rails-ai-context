@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "yaml"
+require "date"
 
 module RailsAiContext
   class Configuration
@@ -18,6 +19,7 @@ module RailsAiContext
       live_reload live_reload_debounce auto_mount http_path http_bind http_port
       output_dir skip_tools excluded_models excluded_controllers
       excluded_route_prefixes excluded_filters excluded_middleware excluded_association_names excluded_paths
+      excluded_concerns
       sensitive_patterns search_extensions concern_paths frontend_paths extra_app_paths
       max_file_size max_test_file_size max_schema_file_size max_view_total_size
       max_view_file_size max_search_results max_validate_files
@@ -27,17 +29,43 @@ module RailsAiContext
       instrumentation_include_arguments
     ].freeze
 
+    # Dates and times because a hand-added `generated_at:` is ordinary in a
+    # config file, and a class outside this list costs the whole file, not the
+    # one key.
+    PERMITTED_YAML_CLASSES = [ Symbol, Date, Time ].freeze
+
+    # Not config, and not a typo either: an annotation the installer round-trips.
+    IGNORED_YAML_KEYS = %i[generated_at].freeze
+
+    # Real options a YAML file cannot carry, because their value is a Ruby
+    # object. Reported as such, so nobody hunts for a misspelling.
+    RUBY_ONLY_KEYS = %i[custom_tools].freeze
+
     # Load configuration from a YAML file, applying values to the current config instance.
     # Only keys present in the YAML are set; absent keys keep their defaults.
     def self.load_from_yaml(path)
       return unless File.exist?(path)
 
-      data = YAML.safe_load_file(path, permitted_classes: [ Symbol ]) || {}
+      data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML_CLASSES) || {}
       config = RailsAiContext.configuration
 
       data.each do |key, value|
-        key_sym = key.to_sym
-        next unless YAML_KEYS.include?(key_sym)
+        # A permitted Date or Time key has no `to_sym`, and a NoMethodError
+        # here escapes into app boot.
+        key_sym = key.to_s.to_sym
+        next if IGNORED_YAML_KEYS.include?(key_sym)
+        if RUBY_ONLY_KEYS.include?(key_sym)
+          $stderr.puts "[rails-ai-context] WARNING: #{path}: `#{key}` can only be set in the initializer, " \
+                       "not in YAML. Ignored."
+          next
+        end
+        unless YAML_KEYS.include?(key_sym)
+          # Without this line a dropped key reads exactly like an applied one.
+          nearest = nearest_yaml_key(key_sym)
+          hint = nearest ? " (did you mean `#{nearest}`?)" : ""
+          $stderr.puts "[rails-ai-context] WARNING: #{path}: unknown key `#{key}`#{hint}. Ignored."
+          next
+        end
         next if value.nil?
         next if config.block_assigned_keys.include?(key_sym)
 
@@ -86,6 +114,18 @@ module RailsAiContext
     def self.auto_load!(dir = nil)
       load_config_file!(dir)
     end
+
+    # Only an obvious near miss - a singular/plural slip, or a truncation that
+    # still covers half the key. A short prefix like `max` matches several
+    # unrelated keys, so it earns no guess.
+    def self.nearest_yaml_key(key)
+      name = key.to_s.downcase
+      return nil if name.length < 3
+
+      YAML_KEYS.find { |k| k.to_s == "#{name}s" || "#{k}s" == name } ||
+        YAML_KEYS.find { |k| k.to_s.start_with?(name) && name.length * 2 >= k.to_s.length }
+    end
+    private_class_method :nearest_yaml_key
 
     def self.coerce_value(key, value)
       if SYMBOL_KEYS.include?(key)
@@ -302,7 +342,9 @@ module RailsAiContext
     # Filtering - customize what's hidden from AI output
     attr_accessor :excluded_controllers   # Controller classes hidden from listings (e.g. DeviseController)
     attr_accessor :excluded_route_prefixes # Route controller prefixes hidden with app_only (e.g. action_mailbox/)
-    attr_accessor :excluded_concerns      # Regex patterns for concerns to hide (e.g. /Devise::Models/)
+    # Regex patterns for concerns to hide (e.g. /Devise::Models/).
+    # Written through a coercing setter - see #excluded_concerns=.
+    attr_reader :excluded_concerns
     attr_accessor :excluded_filters       # Framework filter names hidden from controller output
     attr_accessor :excluded_middleware     # Default middleware hidden from config output
     attr_accessor :excluded_association_names # Framework association names hidden from model output
@@ -416,6 +458,21 @@ module RailsAiContext
     # meant a configured skip silently kept the tool.
     def skip_tools=(value)
       @skip_tools = Array(value).map(&:to_s)
+    end
+
+    # A YAML file can only carry strings, and an invalid one would otherwise
+    # raise RegexpError inside an introspector, far from the file that named
+    # it. Compile at load, and report a bad pattern the way a bad value is.
+    def excluded_concerns=(value)
+      @excluded_concerns = Array(value).map do |pattern|
+        next pattern if pattern.is_a?(Regexp)
+
+        begin
+          Regexp.new(pattern.to_s)
+        rescue RegexpError => e
+          raise ArgumentError, "invalid pattern #{pattern.to_s.inspect} (#{e.message})"
+        end
+      end
     end
 
     def output_dir_for(app)

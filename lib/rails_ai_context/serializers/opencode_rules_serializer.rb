@@ -18,24 +18,28 @@ module RailsAiContext
         @context = context
       end
 
-      # @param output_dir [String] Rails root path
-      # @return [Hash] { written: [paths], skipped: [paths] }
-      RENDERERS = {
-        "app/models/AGENTS.md" => :render_models_reference,
-        "app/controllers/AGENTS.md" => :render_controllers_reference
+      RULE_FILES = {
+        "app/models/AGENTS.md" => { renderer: :render_models_reference, reason: "no models" },
+        "app/controllers/AGENTS.md" => { renderer: :render_controllers_reference, reason: "no controllers" }
       }.freeze
 
+      # @param output_dir [String] Rails root path
+      # @return [Hash] { written: [paths], skipped: [paths], not_applicable: { path => reason } }
       def call(output_dir)
-        files = {}
-
         # The split targets after the root file, per the table's convention.
-        Install::AiTool.find(:opencode).context_paths.drop(1).each do |relative|
+        entries = Install::AiTool.find(:opencode).context_paths.drop(1).map do |relative|
+          rule = RULE_FILES.fetch(relative)
           filepath = File.join(output_dir, relative)
-          next unless Dir.exist?(File.dirname(filepath))
-          files[filepath] = send(RENDERERS.fetch(relative))
+          # A directory the app does not have is reported, not dropped, and
+          # nothing renders for it so the directory is never created.
+          if Dir.exist?(File.dirname(filepath))
+            RuleFile.new(filepath, send(rule[:renderer]), rule[:reason])
+          else
+            RuleFile.new(filepath, nil, "#{File.dirname(relative)} not present")
+          end
         end
 
-        write_rule_files(files)
+        write_rule_files(entries)
       end
 
       private
@@ -51,9 +55,17 @@ module RailsAiContext
           "> Check here first for scopes, constants, associations. Read model files for business logic/methods.",
           ""
         ]
+        if (notice = SectionFacts.static_notice(context))
+          lines.insert(-2, "> #{notice}")
+        end
 
         models.keys.sort.first(30).each do |name|
           data = models[name]
+          if (unread = SectionFacts.unread_row("- **#{name}**", data))
+            lines << unread
+            next
+          end
+
           assocs = SectionFacts.associations_list(data).join(", ")
           vals = (data[:validations] || []).size
           line = "- **#{name}**"
@@ -85,6 +97,9 @@ module RailsAiContext
           "> Read controller files directly when editing. Use MCP tools for reference only.",
           ""
         ]
+        if (notice = SectionFacts.static_notice(context))
+          lines.insert(-2, "> #{notice}")
+        end
 
         # ApplicationController before_actions
         before_actions = detect_before_actions

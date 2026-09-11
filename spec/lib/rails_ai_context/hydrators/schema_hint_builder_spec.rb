@@ -82,6 +82,19 @@ RSpec.describe RailsAiContext::Hydrators::SchemaHintBuilder do
       expect(described_class.build("Post", context: { models: context[:models] })).to be_nil
     end
 
+    it "keeps the STATIC tag a static-tier model record already carries" do
+      ctx = context.merge(models: context[:models].merge(
+        "Post" => context[:models]["Post"].merge(confidence: "[STATIC]")
+      ))
+      hint = described_class.build("Post", context: ctx)
+      expect(hint.confidence).to eq("[STATIC]")
+    end
+
+    it "sets VERIFIED confidence for a booted record, which carries no confidence key" do
+      hint = described_class.build("Post", context: context)
+      expect(hint.confidence).to eq("[VERIFIED]")
+    end
+
     it "sets INFERRED confidence when table is not in schema" do
       ctx = context.dup
       ctx[:schema] = { tables: {} }

@@ -483,4 +483,89 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).not_to include("npm_abc")
     end
   end
+
+  describe "Dockerfile ENV written across continuation lines" do
+    around do |example|
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app"))
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "Dockerfile"), <<~DOCKER)
+          FROM ruby:3.3
+          ARG TZ="Etc/UTC"
+          # Runtime environment
+          ENV \\
+            BIND="0.0.0.0" \\
+            NODE_ENV="production" \\
+            MALLOC_CONF="narenas:2,background_thread:true" \\
+            SIDEKIQ_READY_FILENAME=sidekiq_started
+          ENV RAILS_ENV=production TZ="${TZ}"
+          ENV LEGACY_FORM legacy value
+        DOCKER
+        @root = dir
+        example.run
+      end
+    end
+
+    before do
+      allow(described_class).to receive(:scan_env_vars).and_call_original
+      allow(described_class).to receive(:scan_dockerfile).and_call_original
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(@root)))
+    end
+
+    it "lists every variable of a continued ENV instruction with its value" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("`ENV` `BIND` = `0.0.0.0`")
+      expect(text).to include("`ENV` `NODE_ENV` = `production`")
+      expect(text).to include("`ENV` `MALLOC_CONF` = `narenas:2,background_thread:true`")
+      expect(text).to include("`ENV` `SIDEKIQ_READY_FILENAME` = `sidekiq_started`")
+    end
+
+    it "splits a multi-assignment ENV into one row per variable" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("`ENV` `RAILS_ENV` = `production`")
+      expect(text).to include("`ENV` `TZ` = `${TZ}`")
+    end
+
+    it "still reads the legacy space-separated ENV form" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("`ENV` `LEGACY_FORM` = `legacy value`")
+    end
+
+    it "counts continued ENV names among the app's environment variables" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("`BIND`")
+      expect(text).to include("`MALLOC_CONF`")
+    end
+  end
+
+  # The static model builder never mapped `encrypts`, so this section was
+  # silently absent from every --no-boot answer with no marker.
+  describe "encrypted model columns from a static payload" do
+    it "lists them for a model parsed without booting" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "keypair.rb"), <<~RUBY)
+          class Keypair < ApplicationRecord
+            encrypts :private_key
+          end
+        RUBY
+        File.write(File.join(dir, ".env.example"), "SECRET_KEY_BASE=\n")
+
+        app = RailsAiContext::StaticApp.new(dir)
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(app).static_call
+        allow(described_class).to receive(:detect_encrypted_columns).and_call_original
+        allow(described_class).to receive(:cached_context).and_return({ models: models })
+        allow(described_class).to receive(:rails_app).and_return(app)
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("## Encrypted Model Columns")
+        expect(text).to include("**Keypair:** private_key")
+      end
+    end
+  end
 end

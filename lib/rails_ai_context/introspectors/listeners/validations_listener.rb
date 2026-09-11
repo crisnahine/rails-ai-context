@@ -14,6 +14,12 @@ module RailsAiContext
           validates_acceptance_of validates_associated
         ].to_set.freeze
 
+        # Every key `validates` does not treat as a validator of its own:
+        # Rails' own default keys, plus `message`, which Rails rejects at this
+        # level and apps still write. What is left names a validator, which is
+        # why an app's own validator can be written as an option key at all.
+        SHARED_OPTIONS = %i[if unless on allow_nil allow_blank strict message].to_set.freeze
+
         def on_call_node_enter(node)
           return unless node.receiver.nil?
 
@@ -32,30 +38,17 @@ module RailsAiContext
 
           # For `validates :email, presence: true, uniqueness: true`
           # split into per-validator-kind entries
-          validation_options = options.select { |k, _| validation_kind?(k) }
-          other_options      = options.reject { |k, _| validation_kind?(k) }
+          kinds  = node.name == :validates ? options.reject { |k, _| SHARED_OPTIONS.include?(k) } : {}
+          shared = options.select { |k, _| SHARED_OPTIONS.include?(k) }
 
-          if validation_options.any?
-            validation_options.each do |kind, kind_opts|
-              opts = kind_opts.is_a?(Hash) ? other_options.merge(kind_opts) : other_options
-              @results << {
-                kind:       kind,
-                attributes: attributes.map(&:to_s),
-                options:    opts,
-                location:   node.location.start_line,
-                confidence: confidence_for(node)
-              }
+          if kinds.any?
+            kinds.each do |kind, kind_opts|
+              opts = kind_opts.is_a?(Hash) ? shared.merge(kind_opts) : shared
+              record(node, kind, attributes, opts)
             end
           else
             # Legacy-style: validates_presence_of :email
-            kind = node.name.to_s.sub(/\Avalidates_/, "").sub(/_of\z/, "").to_sym
-            @results << {
-              kind:       kind,
-              attributes: attributes.map(&:to_s),
-              options:    other_options,
-              location:   node.location.start_line,
-              confidence: confidence_for(node)
-            }
+            record(node, node.name.to_s.sub(/\Avalidates_/, "").sub(/_of\z/, ""), attributes, options)
           end
         end
 
@@ -63,23 +56,20 @@ module RailsAiContext
           methods = extract_symbol_args(node)
           options = extract_keyword_options(node)
 
-          methods.each do |method_name|
-            @results << {
-              kind:       :custom,
-              attributes: [ method_name.to_s ],
-              options:    options,
-              location:   node.location.start_line,
-              confidence: confidence_for(node)
-            }
-          end
+          methods.each { |method_name| record(node, "custom", [ method_name ], options) }
         end
 
-        def validation_kind?(key)
-          %i[
-            presence uniqueness format length numericality
-            inclusion exclusion confirmation acceptance
-            comparison associated
-          ].include?(key)
+        # The booted tier reads the kind off `validator.kind.to_s`, so a
+        # static record spells it the same way or no consumer can compare the
+        # two.
+        def record(node, kind, attributes, options)
+          @results << {
+            kind:       kind.to_s,
+            attributes: attributes.map(&:to_s),
+            options:    options,
+            location:   node.location.start_line,
+            confidence: confidence_for(node)
+          }
         end
       end
     end

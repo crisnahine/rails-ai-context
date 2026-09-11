@@ -264,4 +264,94 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
         .to eq(code: "  def show\n    @a = 1\n  end", start_line: 2, end_line: 4)
     end
   end
+
+  describe ".app_base_name?" do
+    it "names the conventional base, plain and namespaced" do
+      expect(described_class.app_base_name?("ApplicationController", kind: :controller)).to be(true)
+      expect(described_class.app_base_name?("Api::ApplicationController", kind: :controller)).to be(true)
+      expect(described_class.app_base_name?("Admin::BaseController", kind: :controller)).to be(false)
+    end
+  end
+
+  describe ".inherited_actions_by_name" do
+    let(:entries) do
+      {
+        "ApplicationController" => { actions: %w[helper_from_base], parent_class: nil },
+        "Admin::BaseController" => { actions: [], parent_class: "ApplicationController" },
+        "Disputes::StrikesController" => { actions: %w[index show], parent_class: "ApplicationController" },
+        "Middle::StrikesController" => { actions: [], parent_class: "Disputes::StrikesController" }
+      }
+    end
+
+    it "answers the nearest named ancestor that defines actions" do
+      expect(described_class.inherited_actions_by_name(entries, "Middle::StrikesController", kind: :controller))
+        .to eq(%w[index show])
+    end
+
+    it "answers nothing when the walk reaches the app base" do
+      expect(described_class.inherited_actions_by_name(entries, "Admin::BaseController", kind: :controller))
+        .to eq([])
+    end
+
+    it "answers nothing for a name the listing does not hold" do
+      expect(described_class.inherited_actions_by_name(entries, "Doorkeeper::AuthorizationsController", kind: :controller))
+        .to eq([])
+    end
+
+    it "answers nothing for an entry the introspector could not read" do
+      failed = { "Broken::BaseController" => { error: "unreadable" } }
+
+      expect(described_class.inherited_actions_by_name(failed, "Broken::BaseController", kind: :controller)).to eq([])
+    end
+
+    # A parent spelled relatively inside a module body keys the listing under
+    # the enclosing namespace, which is where Ruby resolves it.
+    it "resolves a relative parent name against the enclosing namespace" do
+      relative = {
+        "Settings::BaseController" => { actions: %w[show], parent_class: "ApplicationController" },
+        "Settings::ProfileController" => { actions: [], parent_class: "BaseController" }
+      }
+
+      expect(described_class.inherited_actions_by_name(relative, "BaseController", kind: :controller,
+                                                       within: "Settings::ProfileController"))
+        .to eq(%w[show])
+    end
+
+    # openfoodnetwork ships both a top-level BaseController and an
+    # Api::V0::BaseController, and Api::V0::ShopsController inherits the
+    # namespaced one. Bare-name-first bound it to the top-level class.
+    it "prefers the namespaced parent over a top-level class of the same name" do
+      both = {
+        "BaseController" => { actions: %w[top_level_show], parent_class: "ApplicationController" },
+        "Settings::BaseController" => { actions: %w[settings_show], parent_class: "ApplicationController" },
+        "Settings::ProfileController" => { actions: [], parent_class: "BaseController" }
+      }
+
+      expect(described_class.inherited_actions_by_name(both, "BaseController", kind: :controller,
+                                                       within: "Settings::ProfileController"))
+        .to eq(%w[settings_show])
+    end
+
+    # A parent already spelled with a namespace is taken as written, or it
+    # would be re-prefixed onto the child's own namespace.
+    it "leaves a qualified parent name as written" do
+      qualified = {
+        "Disputes::StrikesController" => { actions: %w[index], parent_class: "ApplicationController" },
+        "Admin::Disputes::StrikesController" => { actions: [], parent_class: "Disputes::StrikesController" }
+      }
+
+      expect(described_class.inherited_actions_by_name(qualified, "Disputes::StrikesController", kind: :controller,
+                                                       within: "Admin::Disputes::StrikesController"))
+        .to eq(%w[index])
+    end
+
+    it "ends a cycle rather than walking it" do
+      cyclic = {
+        "A" => { actions: [], parent_class: "B" },
+        "B" => { actions: [], parent_class: "A" }
+      }
+
+      expect(described_class.inherited_actions_by_name(cyclic, "A", kind: :controller)).to eq([])
+    end
+  end
 end

@@ -51,6 +51,10 @@ module RailsAiContext
         classes.find { |c| c[:superclass] == "ApplicationRecord" }&.fetch(:name)
       end
 
+      def declared_name(record)
+        DeclaredConstant.resolve(record.source, record.path_name)
+      end
+
       def load_model_data
         SourceScan.each(root, kind: "app/models").filter_map do |record|
           ast = SourceIntrospector.walk_source(record.source, {
@@ -59,17 +63,19 @@ module RailsAiContext
             includes: -> { Listeners::ChainedCallListener.new(:includes) }
           })
 
-          class_name = active_record_class_name(ast[:classes])
-          next unless class_name
+          # The listener names the class node alone, so the qualified name is
+          # the one the app can resolve; the superclass check stays the guard
+          # that this file holds a model at all.
+          next unless active_record_class_name(ast[:classes])
 
-          has_many = ast[:associations].select { |a| a[:type] == :has_many }.map do |a|
-            opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
-            { name: a[:name].to_s, options: opts.empty? ? nil : opts }
+          class_name = declared_name(record)
+
+          has_many = ast[:associations].select { |a| a[:type] == "has_many" }.map do |a|
+            { name: a[:name].to_s, options: a[:options] || {} }
           end
 
-          belongs_to = ast[:associations].select { |a| a[:type] == :belongs_to }.map do |a|
-            opts = a[:options].map { |k, v| "#{k}: #{v.inspect}" }.join(", ")
-            { name: a[:name].to_s, options: opts.empty? ? nil : opts }
+          belongs_to = ast[:associations].select { |a| a[:type] == "belongs_to" }.map do |a|
+            { name: a[:name].to_s, options: a[:options] || {} }
           end
 
           includes_calls = ast[:includes].map { |h| h[:args].map(&:to_s).join(", ") }
@@ -77,6 +83,12 @@ module RailsAiContext
           {
             name: class_name,
             file: record.file,
+            # This walk keeps no view of the other model files, so a
+            # table_name_prefix declared by an enclosing module is out of
+            # reach here and the stem stands alone. The declaration is looked
+            # up by the qualified name the file writes, which is what a model
+            # nested inside a module body is called.
+            table_name: TableName.explicit(record.source, class_name) || TableName.stem(record.path),
             has_many: has_many,
             belongs_to: belongs_to,
             includes_calls: includes_calls
@@ -95,7 +107,9 @@ module RailsAiContext
       def detect_n_plus_one(model_data)
         risks = []
         view_contents = preload_view_contents
-        model_lookup = model_data.each_with_object({}) { |m, h| h[m[:name]] = m }
+        # The scan captures a single word, and a controller inside the model's
+        # own namespace writes the bare name, so the lookup is keyed on it.
+        model_lookup = model_data.group_by { |m| m[:name].demodulize }
 
         SourceScan.each(root, kind: "app/controllers").each do |record|
           analyze_controller_n_plus_one(record.source, record.file, model_lookup, view_contents, risks)
@@ -126,7 +140,7 @@ module RailsAiContext
             chain = Regexp.last_match[0]
             query_re = /\.(#{QUERY_METHODS.map { |m| Regexp.escape(m) }.join("|")})\b/
             next unless chain.match?(query_re)
-            model = model_lookup[model_name]
+            model = resolve_bare_model(model_lookup[model_name], controller_path)
             next unless model
 
             full_chain = extract_query_chain(action_body, ivar)
@@ -135,13 +149,13 @@ module RailsAiContext
             all_assocs.each do |assoc|
               assoc_name = assoc[:name]
               # Skip polymorphic belongs_to - can't preload generically
-              next if assoc[:options]&.match?(/polymorphic/)
+              next if assoc[:options].key?(:polymorphic)
               next unless association_accessed?(ivar, assoc_name, action_body, view_contents)
 
               risk = classify_n_plus_one_risk(full_chain, action_body, assoc_name)
 
               risks << {
-                model: model_name,
+                model: model[:name],
                 association: assoc_name,
                 controller: controller_path,
                 action: action_name,
@@ -151,6 +165,30 @@ module RailsAiContext
             end
           end
         end
+      end
+
+      # The scan captures a bare word, and two models can demodulize to it.
+      # Rails would resolve it against the controller's own lexical scope,
+      # outermost module last, so the file's directory breaks the tie. When
+      # nothing there picks one, the row would name a model at random, so it
+      # is not written at all.
+      def resolve_bare_model(candidates, controller_path)
+        candidates = Array(candidates)
+        return candidates.first if candidates.size <= 1
+
+        controller_scopes(controller_path).each do |scope|
+          match = candidates.find { |m| m[:name].deconstantize == scope }
+          return match if match
+        end
+        nil
+      end
+
+      # "app/controllers/admin/billing/invoices_controller.rb" reads as
+      # ["Admin::Billing", "Admin", ""], the lexical scopes of the class in it.
+      def controller_scopes(controller_path)
+        parts = File.dirname(controller_path.to_s).split(File::SEPARATOR)
+        parts = parts.drop(2) if parts.first(2) == %w[app controllers]
+        parts.length.downto(0).map { |n| parts.first(n).join("/").camelize }
       end
 
       # Extract public action methods from controller source.
@@ -254,34 +292,47 @@ module RailsAiContext
 
         model_data.each do |model|
           model[:has_many].each do |assoc|
+            options = assoc[:options]
+            # A :through association reads its records over another one, so
+            # there is no belongs_to on the far side to carry the counter.
+            next if options.key?(:through)
+
             assoc_name = assoc[:name]
-            # Check if a counter_cache column exists but counter_cache isn't declared
-            table_name = model[:name].underscore.pluralize
             count_col = "#{assoc_name}_count"
 
-            table = schema_data[table_name]
+            table = schema_data[model[:table_name]]
             next unless table
+            next unless table[:columns].any? { |c| c[:name] == count_col }
+            next if options.key?(:counter_cache)
 
-            has_count_column = table[:columns].any? { |c| c[:name] == count_col }
-            has_counter_cache = assoc[:options]&.include?("counter_cache")
-            belongs_to_model = model_data.find { |m| m[:name] == assoc_name.classify }
-            belongs_to_has_counter = belongs_to_model&.dig(:belongs_to)&.any? { |b|
-              b[:options]&.include?("counter_cache")
+            belongs_to_model = association_model(model_data, assoc)
+            next unless belongs_to_model
+            next if belongs_to_model[:belongs_to].any? { |b| b[:options].key?(:counter_cache) }
+
+            inverse_name = options[:as] || model[:name].demodulize.underscore
+
+            missing << {
+              model: model[:name],
+              association: assoc_name,
+              column: count_col,
+              suggestion: "Add counter_cache: true to belongs_to " \
+                          ":#{inverse_name} in #{belongs_to_model[:name]}"
             }
-
-            # Flag: count column exists but counter_cache not declared on belongs_to side
-            if has_count_column && !has_counter_cache && !belongs_to_has_counter
-              missing << {
-                model: model[:name],
-                association: assoc_name,
-                column: count_col,
-                suggestion: "Add counter_cache: true to belongs_to :#{model[:name].underscore} in #{assoc_name.classify}"
-              }
-            end
           end
         end
 
         missing
+      end
+
+      # The class an association declares is the one the app has;
+      # `has_many :remarks, class_name: "Comment"` is answered by Comment, and
+      # never by the Remark the name implies. When no model in the app answers
+      # either, the row would name a file the reader cannot open, so it is not
+      # written at all.
+      def association_model(model_data, assoc)
+        wanted = (assoc[:options][:class_name] || assoc[:name].classify).to_s
+        model_data.find { |m| m[:name] == wanted } ||
+          model_data.find { |m| m[:name].demodulize == wanted.demodulize }
       end
 
       def detect_missing_fk_indexes(schema_data)
@@ -368,9 +419,11 @@ module RailsAiContext
             associations: Listeners::AssociationsListener
           })
 
-          class_name = active_record_class_name(ast[:classes]) or next
+          next unless active_record_class_name(ast[:classes])
+
+          class_name = declared_name(record)
           has_many_assocs = ast[:associations]
-            .select { |a| a[:type] == :has_many }
+            .select { |a| a[:type] == "has_many" }
             .map { |a| a[:name].to_s }
 
           next unless has_many_assocs.size >= 2

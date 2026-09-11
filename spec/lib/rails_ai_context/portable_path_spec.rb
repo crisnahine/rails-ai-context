@@ -29,6 +29,51 @@ RSpec.describe RailsAiContext::PortablePath do
     end
   end
 
+  describe ".relativize_marked" do
+    it "marks a gem path, which no app root resolves" do
+      path = File.join(gem_root, "doorkeeper-5.9.5", "app", "models", "access_grant.rb")
+
+      expect(described_class.relativize_marked(path, "/srv/blog"))
+        .to eq("gem:doorkeeper-5.9.5/app/models/access_grant.rb")
+    end
+
+    it "leaves an app path unmarked" do
+      expect(described_class.relativize_marked("/srv/blog/app/models/user.rb", "/srv/blog"))
+        .to eq("app/models/user.rb")
+    end
+
+    it "leaves a path that belongs to neither unmarked" do
+      expect(described_class.relativize_marked("/opt/shared/lib/thing.rb", "/srv/blog"))
+        .to eq("/opt/shared/lib/thing.rb")
+    end
+  end
+
+  # The marker existed with a writer and no reader, so every consumer joined a
+  # gem-owned path to the app root and opened nothing.
+  describe ".resolve" do
+    it "sends a marked path back to the gem it names, not to the app root" do
+      path = File.join(gem_root, "doorkeeper-5.9.5", "app", "models", "access_grant.rb")
+      marked = described_class.relativize_marked(path, "/srv/blog")
+
+      expect(described_class.resolve(marked, "/srv/blog")).to eq(path)
+    end
+
+    it "resolves an app path against the app root" do
+      expect(described_class.resolve("app/models/user.rb", "/srv/blog"))
+        .to eq("/srv/blog/app/models/user.rb")
+    end
+
+    it "leaves an absolute path alone" do
+      expect(described_class.resolve("/opt/shared/lib/thing.rb", "/srv/blog"))
+        .to eq("/opt/shared/lib/thing.rb")
+    end
+
+    it "answers nothing for nothing" do
+      expect(described_class.resolve(nil, "/srv/blog")).to be_nil
+      expect(described_class.resolve("", "/srv/blog")).to be_nil
+    end
+  end
+
   describe ".gem_checkouts" do
     # The gem under test is loaded from this checkout rather than unpacked
     # under a gem root, which is the shape a Gemfile `path:` entry produces.

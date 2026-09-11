@@ -22,6 +22,18 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:controllers]).to have_key("PostsController")
     end
 
+    # A class that answers a name no constant carries stays in
+    # ActionController::Base.descendants for the life of the process, and
+    # keyed by that name it would overwrite the real controller's entry.
+    it "ignores a descendant whose name is not the constant it lives at" do
+      Class.new(ActionController::Base) do
+        def self.name = "GhostsController"
+      end
+
+      expect(result[:controllers]).not_to have_key("GhostsController")
+      expect(result[:controllers]["PostsController"][:parent_class]).to eq("ApplicationController")
+    end
+
     # The consumers read :file through Payload in both tiers, so a booted app
     # that answered without it would send them all back to guessing the path.
     it "carries the file each controller was read from" do
@@ -111,7 +123,14 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         RUBY
       end
 
-      after { FileUtils.rm_f(fixture_ctrl) }
+      # A loaded controller stays in ActionController::Base.descendants,
+      # and so in every later booted payload, until its constant is gone
+      # and it is collected.
+      after do
+        FileUtils.rm_f(fixture_ctrl)
+        Object.send(:remove_const, :WidgetsController) if defined?(WidgetsController)
+        GC.start
+      end
 
       it "extracts rescue_from declarations" do
         load fixture_ctrl
@@ -167,7 +186,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         RUBY
       end
 
-      after { FileUtils.rm_f(fixture_ctrl) }
+      after do
+        FileUtils.rm_f(fixture_ctrl)
+        Object.send(:remove_const, :ItemsController) if defined?(ItemsController)
+        GC.start
+      end
 
       it "extracts all formats including those after nested end" do
         # Force controller discovery by loading the class
@@ -306,6 +329,218 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
       expect(result[:permits]).to eq([ "total" ])
       expect(result[:arrays]).to eq([ "item_ids" ])
       expect(result[:nested]).to eq({ "address" => %w[line1 line2] })
+    end
+  end
+
+  # Reflection that yields nothing but excluded names falls through to the
+  # source parser, which is the same producer the static tier uses.
+  describe "excluded_filters on the booted source fallback" do
+    it "does not hand back the names reflection already dropped" do
+      allow(RailsAiContext.configuration).to receive(:excluded_filters).and_return(%w[set_post])
+      ctrl = Class.new(ActionController::Base) do
+        before_action :set_post
+      end
+      source = <<~RUBY
+        class PostsController < ApplicationController
+          before_action :set_post
+
+          def show; end
+        end
+      RUBY
+
+      expect(introspector.send(:extract_filters, ctrl, source)).to eq([])
+    end
+  end
+
+  # Folding skip_before_action into a plain "before" kind lost the skip, and
+  # the listing then printed the filter as one the action runs.
+  describe "a skipped filter in source" do
+    it "keeps the skip on the record" do
+      source = <<~RUBY
+        class InboxesController < ApplicationController
+          skip_before_action :authenticate_user!
+          before_action :require_actor_signature!
+        end
+      RUBY
+
+      filters = introspector.send(:extract_filters_from_source, source)
+
+      expect(filters).to include(a_hash_including(name: "authenticate_user!", kind: "before", skipped: true))
+      expect(filters.find { |f| f[:name] == "require_actor_signature!" }).not_to have_key(:skipped)
+    end
+  end
+
+  # A skip states what does not run, so its only:/except: is the opposite of
+  # the filter's own. Copying it onto the reflection record inverted the
+  # per-action answer: an authentication filter was named on the one action
+  # where the skip applies and dropped from every action where it runs.
+  describe "a class whose body skips an inherited filter for some actions" do
+    let(:base_source) do
+      <<~RUBY
+        module Admin
+          class BaseController < ApplicationController
+            skip_before_action :authenticate!, only: [ :index ]
+            before_action :require_admin
+            after_action :audit
+          end
+        end
+      RUBY
+    end
+
+    let(:reports_source) do
+      <<~RUBY
+        module Admin
+          class ReportsController < BaseController
+            before_action :load_report, except: :index
+            skip_before_action :set_locale
+
+            def index; end
+            def show; end
+          end
+        end
+      RUBY
+    end
+
+    # Named after construction: the inherited hook resolves a helper module
+    # from the class name, and these names carry no constant.
+    def build_chain
+      app_ctrl = Class.new(ActionController::Base) do
+        before_action :authenticate!
+        before_action :set_locale
+      end
+      base = Class.new(app_ctrl) do
+        skip_before_action :authenticate!, only: [ :index ]
+        before_action :require_admin
+        after_action :audit
+      end
+      reports = Class.new(base) do
+        before_action :load_report, except: :index
+        skip_before_action :set_locale
+      end
+      app_ctrl.define_singleton_method(:name) { "ApplicationController" }
+      base.define_singleton_method(:name) { "Admin::BaseController" }
+      reports.define_singleton_method(:name) { "Admin::ReportsController" }
+      [ app_ctrl, base, reports ]
+    end
+
+    before do
+      sources = {
+        "ApplicationController" => "class ApplicationController < ActionController::Base\n" \
+                                   "  before_action :authenticate!\n  before_action :set_locale\nend\n",
+        "Admin::BaseController" => base_source,
+        "Admin::ReportsController" => reports_source
+      }
+      allow(introspector).to receive(:read_source) { |k| sources[k.name] }
+    end
+
+    it "does not give the filter the skip's own constraint" do
+      _app, base, = build_chain
+
+      authenticate = introspector.send(:extract_filters, base, base_source).find { |f| f[:name] == "authenticate!" }
+
+      expect(authenticate).not_to have_key(:only)
+      expect(authenticate).not_to have_key(:except)
+    end
+
+    it "marks the records the class declares in its own body" do
+      _app, base, = build_chain
+
+      filters = introspector.send(:extract_filters, base, base_source)
+
+      expect(filters.find { |f| f[:name] == "require_admin" }[:declared]).to be(true)
+      expect(filters.find { |f| f[:name] == "set_locale" }).not_to have_key(:declared)
+    end
+
+    it "carries the class's own skip records the way the static tier does" do
+      _app, base, reports = build_chain
+
+      expect(introspector.send(:extract_filters, base, base_source))
+        .to include(a_hash_including(name: "authenticate!", skipped: true, only: %w[index]))
+      expect(introspector.send(:extract_filters, reports, reports_source))
+        .to include(a_hash_including(name: "set_locale", skipped: true))
+    end
+
+    # A skip and a later re-declaration of the same name are decided by the
+    # order the body wrote them, which the callback chain does not preserve.
+    it "keeps a re-declared filter after the skip it undoes" do
+      ctrl = Class.new(ActionController::Base) do
+        before_action :authenticate!
+      end
+      child = Class.new(ctrl) do
+        skip_before_action :authenticate!
+        before_action :authenticate!, only: [ :admin ]
+      end
+      ctrl.define_singleton_method(:name) { "ApplicationController" }
+      child.define_singleton_method(:name) { "PublicController" }
+      source = <<~RUBY
+        class PublicController < ApplicationController
+          skip_before_action :authenticate!
+          before_action :authenticate!, only: [ :admin ]
+        end
+      RUBY
+      allow(introspector).to receive(:read_source) { |k| k == child ? source : nil }
+
+      records = introspector.send(:extract_filters, child, source).select { |f| f[:name] == "authenticate!" }
+
+      expect(records.map { |f| f[:skipped] }).to eq([ true, nil ])
+      expect(records.last[:only]).to eq(%w[admin])
+    end
+
+    # Rebuilding the list put every name the body declares behind every name
+    # it only inherits, so a prepended filter was reported last, and only
+    # when the body also carried a skip. The routes hint shows the first
+    # three, so the prepend was the one cut.
+    it "keeps the chain's order whether or not the body carries a skip" do
+      ctrl = Class.new(ActionController::Base) do
+        before_action :audit
+        before_action :load_thing
+      end
+      child = Class.new(ctrl) do
+        prepend_before_action :set_locale
+        skip_before_action :require_login, raise: false
+      end
+      ctrl.define_singleton_method(:name) { "ApplicationController" }
+      child.define_singleton_method(:name) { "PostsController" }
+      with_skip = <<~RUBY
+        class PostsController < ApplicationController
+          prepend_before_action :set_locale
+          skip_before_action :require_login, raise: false
+        end
+      RUBY
+      without_skip = with_skip.lines.reject { |l| l.include?("skip_before_action") }.join
+
+      names = ->(source) { introspector.send(:extract_filters, child, source).map { |f| f[:name] } }
+
+      expect(child._process_action_callbacks.map(&:filter)).to eq(%i[set_locale audit load_thing])
+      expect(names.call(without_skip)).to eq(%w[set_locale audit load_thing])
+      expect(names.call(with_skip)).to eq(%w[set_locale audit load_thing require_login])
+    end
+
+    # A body that skips a name and then declares it again writes the skip
+    # first, and the pair has to read in that order for the skip to be
+    # recognised as undone.
+    it "puts a skip ahead of the re-declaration the body writes after it" do
+      ctrl = Class.new(ActionController::Base) do
+        before_action :authenticate!
+        before_action :audit
+      end
+      child = Class.new(ctrl) do
+        skip_before_action :authenticate!
+        before_action :authenticate!, only: [ :admin ]
+      end
+      ctrl.define_singleton_method(:name) { "ApplicationController" }
+      child.define_singleton_method(:name) { "PublicController" }
+      source = <<~RUBY
+        class PublicController < ApplicationController
+          skip_before_action :authenticate!
+          before_action :authenticate!, only: [ :admin ]
+        end
+      RUBY
+
+      records = introspector.send(:extract_filters, child, source)
+
+      expect(records.map { |f| [ f[:name], f[:skipped] ] })
+        .to eq([ [ "audit", nil ], [ "authenticate!", true ], [ "authenticate!", nil ] ])
     end
   end
 
@@ -464,6 +699,137 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
         expect(result[:controllers].keys).to contain_exactly("UsersController", "InvoicesController")
         expect(result[:controllers]["InvoicesController"][:actions]).to eq([ "show" ])
+      end
+    end
+
+    it "lists a parent's actions on a subclass that defines none of its own" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "admin", "disputes"))
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "disputes"))
+        File.write(File.join(dir, "app", "controllers", "disputes", "strikes_controller.rb"), <<~RUBY)
+          class Disputes::StrikesController < ApplicationController
+            def index; end
+
+            def show; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "admin", "disputes", "strikes_controller.rb"),
+                   "class Admin::Disputes::StrikesController < Disputes::StrikesController\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["Admin::Disputes::StrikesController"][:actions]).to eq(%w[index show])
+      end
+    end
+
+    it "walks past an empty middle class to the grandparent that defines the actions" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api", "v1"))
+        File.write(File.join(dir, "app", "controllers", "api", "accounts_controller.rb"), <<~RUBY)
+          class Api::AccountsController < ApplicationController
+            def index; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "api", "v1", "accounts_controller.rb"),
+                   "class Api::V1::AccountsController < Api::AccountsController\nend\n")
+        File.write(File.join(dir, "app", "controllers", "api", "v1", "public_accounts_controller.rb"),
+                   "class Api::V1::PublicAccountsController < Api::V1::AccountsController\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["Api::V1::PublicAccountsController"][:actions]).to eq([ "index" ])
+      end
+    end
+
+    it "does not carry a namespaced app base class's helpers in as actions" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "api", "v1"))
+        File.write(File.join(dir, "app", "controllers", "api", "application_controller.rb"), <<~RUBY)
+          class Api::ApplicationController < ActionController::API
+            def doorkeeper_helper; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "api", "v1", "posts_controller.rb"),
+                   "class Api::V1::PostsController < Api::ApplicationController\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["Api::V1::PostsController"][:actions]).to eq([])
+      end
+    end
+
+    describe "excluded_filters" do
+      before { allow(RailsAiContext.configuration).to receive(:excluded_filters).and_return(%w[set_post]) }
+
+      def static_filters(dir)
+        File.write(File.join(dir, "app", "controllers", "posts_controller.rb"), <<~RUBY)
+          class PostsController < ApplicationController
+            before_action :set_post, only: %i[show]
+            before_action :authenticate_user!
+
+            def show; end
+          end
+        RUBY
+
+        described_class.new(RailsAiContext::StaticApp.new(dir))
+          .static_call[:controllers]["PostsController"][:filters].map { |f| f[:name] }
+      end
+
+      it "drops an excluded filter and keeps the rest" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+
+          expect(static_filters(dir)).to eq(%w[authenticate_user!])
+        end
+      end
+    end
+
+    # An excluded name is framework noise while it runs; a skip of it is the
+    # app's own decision, and the per-action answer states it either way.
+    describe "a skip of an excluded filter, under the default config" do
+      it "keeps the skip in the listing and still drops the plain filter" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+          File.write(File.join(dir, "app", "controllers", "webhooks_controller.rb"), <<~RUBY)
+            class WebhooksController < ApplicationController
+              skip_before_action :verify_authenticity_token
+              before_action :verify_same_origin_request
+              before_action :require_sig
+
+              def create; end
+            end
+          RUBY
+
+          ctx = { controllers: described_class.new(RailsAiContext::StaticApp.new(dir)).static_call }
+
+          expect(RailsAiContext::Serializers::SectionFacts.filters_line(ctx, "WebhooksController", root: dir))
+            .to eq("- Filters: before require_sig, ~~verify_authenticity_token~~ _(skipped)_")
+        end
+      end
+    end
+
+    # Ruby resolves a bare superclass from the enclosing namespace outward,
+    # so the listing key is the qualified name, not the spelling in the file.
+    it "resolves a relatively spelled superclass against the enclosing namespace" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers", "settings"))
+        File.write(File.join(dir, "app", "controllers", "settings", "base_controller.rb"), <<~RUBY)
+          module Settings
+            class BaseController < ApplicationController
+              def show; end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "controllers", "settings", "profile_controller.rb"), <<~RUBY)
+          module Settings
+            class ProfileController < BaseController
+            end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:controllers]["Settings::ProfileController"][:actions]).to eq(%w[show])
       end
     end
   end

@@ -47,7 +47,10 @@ module RailsAiContext
         fetch_section(:controllers, subject: "Controller introspection") do |data|
           controllers = data[:controllers] || {}
 
-          app_controller_names = Payload.app_controllers(cached_context).keys.sort
+          # Every read of the shared cache deep-copies the whole payload, so
+          # the listing reads it once and hands the copy down.
+          ctx = cached_context
+          app_controller_names = Payload.app_controllers(ctx).keys.sort
 
           # Specific controller - always full detail (searches ALL controllers including framework)
           # Flexible matching: "posts", "PostsController", "postscontroller" all work
@@ -74,10 +77,10 @@ module RailsAiContext
               return format_action_source(key, info, action)
             end
 
-            return text_response(format_controller(key, info))
+            return text_response(format_controller(key, info, ctx))
           end
 
-          app_controllers = Payload.app_controllers(cached_context)
+          app_controllers = Payload.app_controllers(ctx)
 
           # Pagination
           all_names = app_controllers.keys.sort
@@ -97,7 +100,8 @@ module RailsAiContext
             paginated_names.each do |name|
               info = app_controllers[name]
               action_count = info[:actions]&.size || 0
-              lines << "- **#{name}** - #{count_phrase(action_count, "action")}"
+              phrase = Serializers::SectionFacts.unread_marker(info) || count_phrase(action_count, "action")
+              lines << "- **#{name}** - #{phrase}"
             end
             lines << "" << "_Use `controller:\"Name\"` for full detail._#{pagination_hint}"
             text_response(lines.join("\n"))
@@ -106,8 +110,7 @@ module RailsAiContext
             lines = [ "# Controllers (#{page[:total]})", "" ]
             paginated_names.each do |name|
               info = app_controllers[name]
-              actions = info[:actions]&.join(", ") || "none"
-              lines << "- **#{name}** - #{actions}"
+              lines << "- **#{name}** - #{Serializers::SectionFacts.actions_phrase(info)}"
             end
             lines << "" << "_Use `controller:\"Name\"` for filters and strong params, or `detail:\"full\"` for everything._#{pagination_hint}"
             text_response(lines.join("\n"))
@@ -119,12 +122,17 @@ module RailsAiContext
             paginated_ctrl = app_controllers.select { |k, _| paginated_names.include?(k) }
             grouped = paginated_ctrl.keys.sort.group_by do |name|
               info = app_controllers[name]
-              parent = info[:parent_class]
+              parent = resolved_parent(name, info, ctx)
               # Group by parent + actions + filters + params fingerprint
               if parent && parent != "ApplicationController"
                 actions_sig = info[:actions]&.sort&.join(",")
-                filters_sig = info[:filters]&.map { |f| "#{f[:kind]}:#{f[:name]}" }&.sort&.join(",")
-                params_sig = info[:strong_params]&.sort&.join(",")
+                # The group renders one member's filter line for all of them,
+                # so a skip and its constraints have to tell the fingerprints
+                # apart: the constraint is what decides the rendered tail.
+                filters_sig = info[:filters]&.map { |f|
+                  "#{f[:kind]}:#{f[:name]}#{skip_sig(f)}"
+                }&.sort&.join(",")
+                params_sig = Serializers::SectionFacts.strong_param_names(info).sort.join(",")
                 "#{parent}|#{actions_sig}|#{filters_sig}|#{params_sig}"
               else
                 name # unique key = no grouping
@@ -132,29 +140,28 @@ module RailsAiContext
             end
 
             grouped.each do |_key, names|
-              if names.size > 2 && app_controllers[names.first][:parent_class] != "ApplicationController"
+              if names.size > 2 &&
+                  resolved_parent(names.first, app_controllers[names.first], ctx) != "ApplicationController"
                 # Compress group: show once with all names
                 info = app_controllers[names.first]
-                short_names = names.map { |n| n.sub(/Controller$/, "").split("::").last }
-                parent = info[:parent_class] || "ApplicationController"
-                lines << "## #{names.first.split('::').first}::* (#{short_names.join(', ')})"
+                parent = resolved_parent(names.first, info, ctx) || "ApplicationController"
+                lines << "## #{group_heading(names)}"
+                lines << "- Members: #{names.join(', ')}"
                 lines << "- Inherits: #{parent}"
-                lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-                if info[:filters]&.any?
-                  lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
-                end
-                lines << "- Strong params: #{info[:strong_params].join(', ')}" if info[:strong_params]&.any?
+                lines.concat(actions_lines(info))
+                lines.concat(Serializers::SectionFacts.controller_summary_lines(
+                  info, ctx: ctx, name: names.first, root: rails_app&.root&.to_s
+                ))
                 lines << ""
               else
                 names.each do |name|
                   info = app_controllers[name]
                   lines << "## #{name}"
-                  lines << "- Actions: #{info[:actions]&.join(', ')}" if info[:actions]&.any?
-                  if info[:filters]&.any?
-                    lines << "- Filters: #{info[:filters].map { |f| "#{f[:kind]} #{f[:name]}" }.join(', ')}"
-                  end
-                  lines << "- Strong params: #{info[:strong_params].join(', ')}" if info[:strong_params]&.any?
-                  lines << "- Rescue from: #{info[:rescue_from].join(', ')}" if info[:rescue_from]&.any?
+                  lines.concat(actions_lines(info))
+                  lines.concat(Serializers::SectionFacts.controller_summary_lines(
+                    info, rescue_handlers: true,
+                    ctx: ctx, name: name, root: rails_app&.root&.to_s
+                  ))
                   lines << "- Rate limit: #{info[:rate_limit]}" if info[:rate_limit]
                   lines << "- Turbo Stream actions: #{info[:turbo_stream_actions].join(', ')}" if info[:turbo_stream_actions]&.any?
                   lines << ""
@@ -168,6 +175,53 @@ module RailsAiContext
             list = paginated_names.map { |c| "- #{c}" }.join("\n")
             text_response("# Controllers (#{page[:total]})\n\n#{list}#{pagination_hint}")
           end
+        end
+      end
+
+      # The static walk stores the superclass as the source spells it, so two
+      # namespaces that each define a BaseController arrive spelled the same.
+      # The rendered chain resolves it, so the key has to resolve it too, and
+      # against the full set the chain walk uses: an excluded base class is
+      # still an ancestor.
+      private_class_method def self.resolved_parent(name, info, ctx)
+        Introspectors::ActionResolver.resolve_entry_name(
+          Payload.controllers(ctx), info[:parent_class], name
+        )
+      end
+
+      # A class that defines no action of its own is an answer, and dropping
+      # the line left it reading as a walk that did not look. An unread entry
+      # already gets a line of its own, so it is not said twice.
+      private_class_method def self.actions_lines(info)
+        return [] if Serializers::SectionFacts.unread_marker(info)
+
+        [ "- Actions: #{Serializers::SectionFacts.actions_phrase(info)}" ]
+      end
+
+      # Only a skip's constraints reach the group's filter line: `only:` and
+      # `except:` on an active filter are never rendered there.
+      private_class_method def self.skip_sig(filter)
+        return "" unless filter[:skipped]
+
+        ":skipped:#{filter[:if]}:#{filter[:unless]}:#{filter[:only]}:#{filter[:except]}"
+      end
+
+      # A compressed group is headed by the namespace every member is really
+      # in, and never by one taken from a single member's own class name. With
+      # no namespace to name - a group of top-level controllers has none - the
+      # heading names a member, because a count alone identifies nothing and
+      # two such groups in one document would carry the same heading.
+      private_class_method def self.group_heading(names)
+        shared = shared_namespace(names)
+        count = count_phrase(names.size, "controller")
+        return "#{shared.join('::')}::* (#{count})" unless shared.empty?
+
+        "#{names.first} and #{count_phrase(names.size - 1, "like it", plural: "like it")} (#{count})"
+      end
+
+      private_class_method def self.shared_namespace(names)
+        names.map { |name| name.split("::")[0..-2] }.reduce do |common, segments|
+          common.zip(segments).take_while { |a, b| a == b }.map(&:first)
         end
       end
 
@@ -296,7 +350,7 @@ module RailsAiContext
         line += " _(from #{filter[:from]})_" if filter[:from]
         line += " (only: #{filter[:only].join(', ')})" if filter[:only]&.any?
         line += " (except: #{filter[:except].join(', ')})" if filter[:except]&.any?
-        line
+        line + Serializers::SectionFacts.skip_condition_tail(filter)
       end
 
       # Extract render map from action source: redirects, renders, and side effects
@@ -369,18 +423,20 @@ module RailsAiContext
         nil
       end
 
-      private_class_method def self.format_controller(name, info)
+      private_class_method def self.format_controller(name, info, ctx)
         lines = [ "# #{name}", "" ]
-        lines << "**Parent:** `#{info[:parent_class]}`" if info[:parent_class]
+        lines << "**Parent:** `#{resolved_parent(name, info, ctx)}`" if info[:parent_class]
         lines << "**API controller:** yes" if info[:api_controller]
         lines << "**Formats:** #{info[:respond_to_formats].join(', ')}" if info[:respond_to_formats]&.any?
 
-        if info[:actions]&.any?
-          lines << "" << "## Actions"
-          lines << info[:actions].map { |a| "- `#{a}`" }.join("\n")
+        lines << "" << "## Actions"
+        lines << if info[:actions]&.any?
+          info[:actions].map { |a| "- `#{a}`" }.join("\n")
+        else
+          Serializers::SectionFacts.actions_phrase(info)
         end
 
-        chain = RailsAiContext::ActionFilters.for_controller(cached_context, name, root: rails_app.root.to_s)
+        chain = RailsAiContext::ActionFilters.for_controller(ctx, name, root: rails_app.root.to_s)
         if chain.values.any?(&:any?)
           lines << "" << "## Filters"
           chain[:inherited].each { |f| lines << filter_line(f) }
@@ -403,7 +459,7 @@ module RailsAiContext
         # Rescue handlers
         if info[:rescue_from]&.any?
           lines << "" << "## Rescue Handlers"
-          info[:rescue_from].each { |r| lines << "- `rescue_from` #{r}" }
+          Serializers::SectionFacts.rescue_handler_lines(info).each { |r| lines << "- `rescue_from` #{r}" }
         end
 
         # Rate limiting
@@ -416,16 +472,16 @@ module RailsAiContext
         end
 
         # Hydrate with schema hints for models referenced in this controller
-        carried = RailsAiContext::Payload.controller_file(cached_context, name)
+        carried = RailsAiContext::Payload.controller_file(ctx, name)
         if RailsAiContext.configuration.hydration_enabled && carried
-          hydration = Hydrators::ControllerHydrator.call(rails_app.root.join(carried).to_s, context: cached_context)
+          hydration = Hydrators::ControllerHydrator.call(rails_app.root.join(carried).to_s, context: ctx)
           hydration_text = Hydrators::HydrationFormatter.format(hydration)
           lines << "" << hydration_text unless hydration_text.empty?
         end
 
         # Cross-reference hints. The route key is the controller's path, which
         # the class name does not reproduce wherever an inflection is in play.
-        ctrl_path = RailsAiContext::Payload.controller_route_key(cached_context, name)
+        ctrl_path = RailsAiContext::Payload.controller_route_key(ctx, name)
         model_name = ctrl_path.split("/").last.singularize.camelize
         lines << ""
         lines << "_Next: `rails_get_routes(controller:\"#{ctrl_path}\")` for routes"

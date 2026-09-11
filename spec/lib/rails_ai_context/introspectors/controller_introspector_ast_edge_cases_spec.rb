@@ -38,7 +38,14 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
     end
 
-    after { FileUtils.rm_f(fixture) }
+    # A loaded controller stays in ActionController::Base.descendants,
+    # and so in every later booted payload, until its constant is gone
+    # and it is collected.
+    after do
+      FileUtils.rm_f(fixture)
+      Object.send(:remove_const, :InlineBlockController) if defined?(InlineBlockController)
+      GC.start
+    end
 
     it "skips the inline block filter and captures the symbol filter" do
       load fixture
@@ -92,7 +99,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
     end
 
-    after { FileUtils.rm_f(fixture) }
+    after do
+      FileUtils.rm_f(fixture)
+      Object.send(:remove_const, :MultilineFilterController) if defined?(MultilineFilterController)
+      GC.start
+    end
 
     it "extracts the filter with its only constraint across lines" do
       load fixture
@@ -137,7 +148,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
     end
 
-    after { FileUtils.rm_f(fixture) }
+    after do
+      FileUtils.rm_f(fixture)
+      Object.send(:remove_const, :MultiParamsController) if defined?(MultiParamsController)
+      GC.start
+    end
 
     it "extracts both params methods" do
       load fixture
@@ -180,7 +195,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
     end
 
-    after { FileUtils.rm_f(fixture) }
+    after do
+      FileUtils.rm_f(fixture)
+      Object.send(:remove_const, :NamespacedRescueController) if defined?(NamespacedRescueController)
+      GC.start
+    end
 
     it "extracts fully qualified constant names" do
       load fixture
@@ -221,7 +240,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
     end
 
-    after { FileUtils.rm_f(fixture) }
+    after do
+      FileUtils.rm_f(fixture)
+      Object.send(:remove_const, :EmptyController) if defined?(EmptyController)
+      GC.start
+    end
 
     it "returns an empty actions array" do
       load fixture
@@ -259,7 +282,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
     end
 
-    after { FileUtils.rm_f(fixture) }
+    after do
+      FileUtils.rm_f(fixture)
+      Api.send(:remove_const, :V2) if defined?(Api::V2)
+      GC.start
+    end
 
     it "detects api_controller as true" do
       load fixture
@@ -468,7 +495,11 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
       RUBY
     end
 
-    after { FileUtils.rm_f(fixture) }
+    after do
+      FileUtils.rm_f(fixture)
+      Object.send(:remove_const, :BlockRescueController) if defined?(BlockRescueController)
+      GC.start
+    end
 
     it "extracts the exception class with nil handler" do
       load fixture

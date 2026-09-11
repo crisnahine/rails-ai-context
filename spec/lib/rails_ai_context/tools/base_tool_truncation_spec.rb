@@ -325,6 +325,17 @@ RSpec.describe RailsAiContext::Tools::BaseTool do
       note = described_class.unavailable_note({ unavailable: "requires a booted Rails app (RuntimeError: boom)" })
       expect(note).to eq("[UNAVAILABLE: requires a booted Rails app (RuntimeError: boom)]")
     end
+
+    # The bracket text is Confidence's to build, so a raised message with a
+    # backtrace under it collapses here the way it does everywhere else.
+    it "collapses a multi-line reason to its first line" do
+      note = described_class.unavailable_note({ unavailable: "boom\n  from somewhere.rb:1" })
+      expect(note).to eq("[UNAVAILABLE: boom]")
+    end
+
+    it "spells the static refusal the same way" do
+      expect(described_class.unavailable_text).to eq("[UNAVAILABLE: requires a booted Rails app]")
+    end
   end
 
   describe ".error_response" do

@@ -51,4 +51,33 @@ RSpec.describe "docs/COMPATIBILITY.md operating tiers" do
       expect(section).not_to include("`#{key}`"), "#{key} answers statically but is listed as runtime-only"
     end
   end
+
+  # The page called [STATIC] a whole-response tag while a static model entry's
+  # own records claimed [VERIFIED]. Both halves are pinned here so the claim
+  # and the code cannot part company again.
+  it "says a record is capped at the tier that carries it, and it is" do
+    expect(flat).to include("no record can claim more than the tier carrying it")
+    expect(flat).not_to include("`[STATIC]`/`[UNAVAILABLE]` are whole-response tags")
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+        class Post < ApplicationRecord
+          belongs_to :author
+          validates :title, presence: true
+          scope :recent, -> { order(id: :desc) }
+        end
+      RUBY
+
+      entry = RailsAiContext::Introspectors::ModelIntrospector
+        .new(RailsAiContext::StaticApp.new(dir)).static_call["Post"]
+
+      expect(entry[:confidence]).to eq(RailsAiContext::Confidence::STATIC)
+      %i[associations validations scopes].each do |key|
+        marks = Array(entry[key]).map { |record| record[:confidence] }.compact.uniq
+        expect(marks).to all(eq(RailsAiContext::Confidence::STATIC)),
+          "#{key} carries #{marks.inspect} inside an entry marked STATIC"
+      end
+    end
+  end
 end

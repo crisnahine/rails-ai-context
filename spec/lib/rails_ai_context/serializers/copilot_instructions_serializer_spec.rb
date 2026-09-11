@@ -61,4 +61,17 @@ RSpec.describe RailsAiContext::Serializers::CopilotInstructionsSerializer do
       expect(second[:skipped].size).to eq(first[:written].size)
     end
   end
+
+  it "names the files it did not generate and why" do
+    Dir.mktmpdir do |dir|
+      empty = context.merge(models: {}, controllers: { controllers: {} })
+      result = described_class.new(empty).call(dir)
+      instructions = File.join(dir, ".github", "instructions")
+
+      expect(result[:not_applicable]).to eq(
+        File.join(instructions, "rails-models.instructions.md") => "no models",
+        File.join(instructions, "rails-controllers.instructions.md") => "no controllers"
+      )
+    end
+  end
 end

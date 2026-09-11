@@ -39,7 +39,7 @@ preset: full
 ### Precedence
 
 > [!IMPORTANT]
-> `configure` block > YAML > Defaults, merged key by key. The file is read once, at boot, before `config/initializers`, so an initializer may assign a key or edit it in place (`config.skip_tools << "rails_query"`) and both survive. A block that runs *before* the file - in `config/application.rb` or an environment file - must assign a key to keep it (`config.skip_tools = ["rails_query"]`), because an in-place edit there is replaced when the file loads. A key no block assigns keeps the YAML value. Corrupted YAML degrades gracefully with a warning.
+> `configure` block > YAML > Defaults, merged key by key. The file is read once, at boot, before `config/initializers`, so an initializer may assign a key or edit it in place (`config.skip_tools << "rails_query"`) and both survive. A block that runs *before* the file - in `config/application.rb` or an environment file - must assign a key to keep it (`config.skip_tools = ["rails_query"]`), because an in-place edit there is replaced when the file loads. A key no block assigns keeps the YAML value. Corrupted YAML degrades gracefully with a warning, and a key the gem does not know warns on stderr and is ignored while the rest of the file applies.
 
 ---
 
@@ -95,7 +95,38 @@ preset: full
 | `excluded_middleware` | Array | 25 framework middleware | Middleware to skip in listing |
 | `excluded_paths` | Array | `["node_modules", "tmp", "log", "vendor", ".git", "doc", "docs"]` | Paths excluded from search |
 | `excluded_association_names` | Array | 7 framework associations | Association names to hide from model output |
-| `excluded_concerns` | Array of Regex | Framework concerns | Concerns to skip (supports regex) |
+| `excluded_concerns` | Array of Regex or String | Framework concerns | Concerns to hide everywhere they are listed |
+
+A hidden concern's associations, scopes, callbacks and macros are hidden with
+it: both tiers merge what a concern declared into the model, and the walk
+never reads a concern the key hides. Model output says how many went, as
+"1 concern hidden by `excluded_concerns`", without naming them.
+
+> [!NOTE]
+> A YAML `excluded_concerns` list replaces the framework defaults, so `ActionText`, `ActiveStorage`, `Devise::Models`, `Turbo::` and `DEBUGGER__::` concerns come back into model and controller output. Use the initializer's `config.excluded_concerns += [...]` to add to them instead. Each string is compiled to an unanchored pattern, so `Post` also hides `Postable`; write `^Post$` when you mean the one concern.
+
+`excluded_filters` hides a name from a controller's filter list in both
+tiers. A filter the controller explicitly skips is still shown, as a
+struck-through `~~name~~ _(skipped)_` line, because a skip is a fact about
+the class rather than a filter that runs. A skip carrying `if:` or `unless:`
+takes the filter out on some requests only, so the filter keeps its place in
+the chain and the line names the condition instead:
+
+```
+- `before` **require_functional!** (skipped unless: limited_federation_mode?)
+```
+
+A condition written as a lambda has no name to print and reads `[INFERRED]`,
+the same way a filter's own `if:` does. A skip carrying `only:` or `except:`
+takes the filter out on those actions only, so a whole-controller answer
+keeps the filter and names them:
+
+```
+- `before` **authenticate!** (skipped on: index)
+```
+
+Ask about one action and the answer is absolute again: on that action the
+filter either runs or is struck through.
 
 ### File Size Limits
 
@@ -111,7 +142,7 @@ preset: full
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `max_search_results` | Integer | `200` | Maximum search results |
+| `max_search_results` | Integer | `200` | Maximum lines a search may emit, matches and context together |
 | `max_validate_files` | Integer | `50` | Maximum files for validation |
 | `search_extensions` | Array | `["rb", "js", "erb", "yml", "yaml", "json", "ts", "tsx", "vue", "svelte", "haml", "slim"]` | File extensions the Ruby fallback searches (ripgrep, when installed, searches every file) |
 | `concern_paths` | Array | `nil` (discovers `app/*/concerns`) | Paths to scan for concerns. Setting it replaces discovery, so it can narrow as well as widen |
@@ -153,7 +184,7 @@ preset: full
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register |
+| `custom_tools` | Array | `[]` | Additional MCP::Tool classes to register (initializer only - a class reference cannot be written in YAML) |
 | `skip_tools` | Array | `[]` | Built-in tool names to exclude (e.g., `%w[rails_security_scan]`) |
 
 ### Output
