@@ -1678,6 +1678,123 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    # Keyed on the record, the line number went into the key, so the same
+    # declaration read from two files never compared equal and the answer
+    # printed it twice.
+    it "reports a macro the base and the child both declare once" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+
+            encrypts :secret
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "analytics_record.rb"), <<~RUBY)
+          class AnalyticsRecord < ApplicationRecord
+            self.abstract_class = true
+            encrypts :secret
+            encrypts :token
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "visit.rb"), "class Visit < AnalyticsRecord\nend\n")
+
+        visit = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Visit"]
+
+        expect(visit[:encrypts]).to eq(%w[secret token])
+        expect(visit[:encryption_details].map { |e| e[:field] }).to eq(%w[secret token])
+      end
+    end
+
+    # The static tier can only walk files under the app root, so a booted walk
+    # that read a gem's base would answer a scope the other tier can never see.
+    # Reflection still carries that base's associations, validations and enums.
+    it "reads no file the static walk could not read" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        # Outside the app entirely, the way an installed gem is.
+        FileUtils.mkdir_p(File.join(dir, "..", "gemmy"))
+        gem_base = File.expand_path(File.join(dir, "..", "gemmy_base.rb"))
+        File.write(gem_base, <<~RUBY)
+          class GemmyBase < ActiveRecord::Base
+            self.abstract_class = true
+            scope :from_the_gem, -> { all }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "widget.rb"), <<~RUBY)
+          class Widget < GemmyBase
+            scope :from_the_app, -> { all }
+          end
+        RUBY
+        load gem_base
+        model = Class.new(GemmyBase) do
+          self.table_name = "posts"
+          def self.name = "Widget"
+        end
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)
+
+        expect(booted[:scopes].map { |s| s[:name] }).to eq([ "from_the_app" ])
+        # And the static tier says nothing about this model at all, rather than
+        # guessing: nothing under the model directories says GemmyBase is one.
+        expect(introspector.static_call).not_to have_key("Widget")
+      ensure
+        Object.send(:remove_const, :GemmyBase) if defined?(GemmyBase)
+        File.delete(gem_base) if gem_base && File.exist?(gem_base)
+      end
+    end
+
+    # Rails keeps one entry for a symbol callback declared twice and two
+    # validators for a validation declared twice, so the answer says one and
+    # two. Checked against a real ActiveRecord class rather than assumed.
+    it "reports a repeated callback once and a repeated validation twice" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "analytics_record.rb"), <<~RUBY)
+          class AnalyticsRecord < ApplicationRecord
+            self.abstract_class = true
+            before_save :stamp
+            validates :title, presence: true
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "visit.rb"), <<~RUBY)
+          class Visit < AnalyticsRecord
+            before_save :stamp
+            validates :title, presence: true
+          end
+        RUBY
+
+        visit = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Visit"]
+
+        expect(visit[:callbacks]["before_save"]).to eq([ "stamp" ])
+        expect(visit[:validations].size).to eq(2)
+      end
+    end
+
+    # A name rule stood in for a fact the source states. The app's own base
+    # says `primary_abstract_class`, and a concrete model whose name happens to
+    # end the same way is still a model.
+    it "keeps a concrete model whose name ends in ApplicationRecord" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "application_record.rb"),
+                   "class ApplicationRecord < ActiveRecord::Base\n  primary_abstract_class\nend\n")
+        File.write(File.join(dir, "app", "models", "sec_application_record.rb"), <<~RUBY)
+          class SecApplicationRecord < ApplicationRecord
+            scope :secure, -> { where(secure: true) }
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to contain_exactly("Post", "SecApplicationRecord")
+        expect(result["SecApplicationRecord"][:table_name]).to eq("sec_application_records")
+      end
+    end
+
     it "answers the same concerns on both tiers" do
       Dir.mktmpdir do |dir|
         analytics_app(dir)

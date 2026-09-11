@@ -505,9 +505,13 @@ module RailsAiContext
 
       # Reflection inherits associations, validations and enums onto the child,
       # so an unread base costs the same keys an unread concern does.
+      # The link to the next class up is written in the file the walk could not
+      # open, so the static tier ends the chain there. The booted tier has the
+      # class object and steps over it.
       private_class_method def self.unread_bases_line(unread)
+        tail = RailsAiContext.static_tier? ? ". The static tier cannot follow the chain past a file it could not read" : ""
         "#{RailsAiContext::Confidence::UNAVAILABLE} #{count_phrase(unread.size, "base class")} " \
-          "not read#{unread_gap_label}: #{unread.join(', ')}"
+          "not read#{unread_gap_label}: #{unread.join(', ')}#{tail}"
       end
 
       private_class_method def self.unread_gap_label

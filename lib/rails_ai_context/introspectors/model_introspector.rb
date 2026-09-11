@@ -69,11 +69,6 @@ module RailsAiContext
         sti_parents = candidates.keys.to_h { |name| [ name, sti_parent(name, candidates, []) ] }
         bases = declared_bases(candidates)
         candidates.each_with_object({}) do |(class_name, candidate), result|
-          # A base is dropped from the result and kept in the walk: it is not a
-          # model of the app, and it is how its children reach what it declares.
-          # `primary_abstract_class` is why the app's own base needs this line -
-          # the abstract check below reads the assignment form.
-          next if model_base?(class_name)
           # Hidden from the listing, kept in the walk: its children still
           # inherit its table and its declarations.
           next if config.excluded_models.include?(class_name)
@@ -93,6 +88,9 @@ module RailsAiContext
             next
           end
 
+          # An abstract base is dropped from the result and kept in the walk:
+          # it is not a model of the app, and it is how its children reach what
+          # it declares.
           next if candidate[:abstract]
           next unless model_class?(class_name, candidates)
 
@@ -328,14 +326,24 @@ module RailsAiContext
       def booted_declaring_bases(model)
         return [] unless defined?(ActiveRecord::Base)
 
+        dirs = PathResolver.model_dirs(app.root.to_s).map { |dir| "#{File.expand_path(dir)}/" }
         bases = []
         parent = model.superclass
         while parent.is_a?(Class) && parent < ActiveRecord::Base
           path = parent.name && model_source_path(parent)
-          bases << [ parent.name, path ] if path && File.exist?(path)
+          # The files the static walk reads, and no others. A gem's base is a
+          # file that walk can never reach, so reading it here would answer a
+          # scope the other tier cannot. Reflection still carries that base's
+          # associations, validations and enums onto the child.
+          bases << [ parent.name, path ] if path && File.exist?(path) && within?(path, dirs)
           parent = parent.superclass
         end
         bases
+      end
+
+      def within?(path, dirs)
+        expanded = File.expand_path(path)
+        dirs.any? { |dir| expanded.start_with?(dir) }
       end
 
       # The model this one inherits its table from. A model base ends the
@@ -380,8 +388,12 @@ module RailsAiContext
       # or the same app gets two model counts. A namespaced base is one of
       # these - GitLab has Ci::ApplicationRecord and SecApplicationRecord - and
       # the root application_record is not the only one to leave out.
+      # Both forms Rails accepts. A generated ApplicationRecord says
+      # `primary_abstract_class`, so reading the assignment alone left the app's
+      # own base looking like a model with a table.
       def abstract_class?(source)
-        source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/)
+        source.match?(/^[^\S\n]*self\.abstract_class\s*=\s*true/) ||
+          source.match?(/^[^\S\n]*primary_abstract_class\b/)
       end
 
       # `concerns/` under app/models is the Zeitwerk root for mixins: it does
@@ -1041,9 +1053,14 @@ module RailsAiContext
         merged[:scopes] = dedup(merged[:scopes]) { |s| s[:name] }
         merged[:enums] = dedup(merged[:enums]) { |e| e[:name].to_s }
         # `encrypts :secret` on a base and again on the child is one macro, and
-        # the consumers read it as a list of attributes. The concern tag is out
-        # of the key so the same declaration reached two ways collapses.
-        merged[:macros] = dedup(merged[:macros]) { |m| m.except(:from_concern) }
+        # the consumers read it as a list of attributes. The key is the
+        # declaration: the line it was read at differs between two files, and
+        # the concern tag differs between two ways of reaching one file.
+        merged[:macros] = dedup(merged[:macros]) { |m| m.except(:from_concern, :location) }
+        # Rails keeps one entry for a symbol callback declared on a base and
+        # again on the child, and two validators for a validation declared
+        # twice, so these two are not deduped alike.
+        merged[:callbacks] = dedup(merged[:callbacks]) { |c| [ c[:type], c[:method].to_s ] }
         merged
       end
 

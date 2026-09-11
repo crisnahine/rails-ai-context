@@ -240,8 +240,12 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   `ApplicationRecord`, pass their concerns, scopes, callbacks and macros down
   the way Rails does. Only the table stops at an abstract base, because a child
   of one has its own. A concern's macro is tagged with the concern that
-  declared it. What is still not walked is a superclass the app has no file for,
-  a gem-owned base for example. The validations Rails generates at boot
+  declared it. Both tiers stop at the same place: a superclass whose file is not
+  under one of the app's model directories, a gem-owned base for example. The
+  booted tier could read that file and deliberately does not, because an answer
+  the static tier can never match is two answers to one question. Reflection
+  still carries such a base's associations, validations and enums onto the
+  child. The validations Rails generates at boot
   (implicit `belongs_to` presence, attachment validations) are runtime-only and
   stay marked `[UNAVAILABLE]`. A concern whose file cannot be found, a gem's
   module for example, is named under `Concerns` as not read.

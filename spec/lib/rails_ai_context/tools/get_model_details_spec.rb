@@ -520,6 +520,9 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       text = described_class.call(model: "Article", detail: "full").content.first[:text]
 
       expect(text).to include("[UNAVAILABLE] 1 base class not read: Post")
+      # The chain link is written in the file the walk could not open, so the
+      # classes above it are out of reach too, and the line says so.
+      expect(text).to include("cannot follow the chain past a file it could not read")
       expect(text).not_to include("## Concerns")
     end
 

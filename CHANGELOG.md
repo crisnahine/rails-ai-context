@@ -1055,9 +1055,16 @@ Changed.
   listing is built now, the way `excluded_concerns` is, and so is the app's own
   base. An unreadable base is a gap for its children either way, so they name it
   under `bases_unread` rather than losing its declarations silently.
-- **A macro declared by both a base and its child was reported twice.**
-  Associations, scopes and enums were deduped on merge and macros were not, so
-  `encrypts :secret` on both sides answered `["secret", "secret"]`.
+- **A macro or a callback declared by both a base and its child was reported
+  twice.** Associations, scopes and enums were deduped on merge and these two
+  were not, so `encrypts :secret` on both sides answered `["secret", "secret"]`.
+  Rails keeps one entry for a symbol callback declared twice and two validators
+  for a validation declared twice, so the answer now says one and two.
+- **A concrete model named like a base was dropped from the static listing.**
+  The rule was the name, and the fact is in the source: `abstract_class?` reads
+  `primary_abstract_class` as well as the assignment, which is the form a
+  generated `ApplicationRecord` uses, so the name rule is gone and a real model
+  called `SecApplicationRecord` is listed again.
 - **A filter a controller declares itself was reported as inherited.** The
   chain moved any filter whose name an ancestor also declares into `inherited`,
   which is right for the booted tier - its list carries names it only inherits -
