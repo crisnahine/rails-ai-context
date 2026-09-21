@@ -178,11 +178,16 @@ module RailsAiContext
       attributed = Set.new
       conditions = {}
       declares = Set.new
+      # Where in the walk each entry was first seen, so the list can be
+      # emitted root first while the order inside one class is kept.
+      positions = {}
+      depth = 0
       dropped = skipped.map(&:to_s).to_set
       name = Introspectors::ActionResolver.resolve_entry_name(controllers, parent_class, within)
 
       while name && !seen.include?(name)
         seen << name
+        depth += 1
         info = controllers[name]
         source = info.is_a?(Hash) ? nil : base_controller_source(name, root)
         info ||= { filters: Introspectors::ControllerFilters.from_source(source) } if source
@@ -203,25 +208,42 @@ module RailsAiContext
         declares.merge(carried.map { |f| f[:name].to_s })
         carried.select { |f| applies?(f, action) }
           .reject { |f| dropped.include?(f[:name].to_s) }
-          .each { |f| record_attribution(found, attributed, f, name) }
+          .each { |f| record_attribution(found, attributed, f, name, positions, depth) }
 
         name = Introspectors::ActionResolver.resolve_entry_name(controllers, info[:parent_class], name)
       end
 
-      [ found.values, dropped, conditions, declares ]
+      [ run_order(found, attributed, positions), dropped, conditions, declares ]
     end
 
     # The closest ancestor carrying a filter keeps its constraints, but a
     # booted ancestor carries names it only inherits, so `from:` moves on to
     # the first ancestor whose own body declared it.
-    def record_attribution(found, attributed, filter, ancestor)
+    def record_attribution(found, attributed, filter, ancestor, positions = {}, depth = 0)
       key = entry_key(filter)
       if found.key?(key)
         found[key] = found[key].merge(from: ancestor) if filter[:declared] && !attributed.include?(key)
       else
         found[key] = filter.merge(from: ancestor)
+        positions[key] = depth
       end
       attributed << key if filter[:declared]
+    end
+
+    # Rails runs the root's callbacks first, so the inherited list reads that
+    # way: the walk's class order reversed, each class's own order kept. A
+    # filter no ancestor's body declares is installed from somewhere else -
+    # a gem's `on_load :action_controller` block, the framework, a concern -
+    # and crediting it to the nearest app class sent an agent to a file that
+    # never mentions it.
+    def run_order(found, attributed, positions)
+      found.keys
+        .each_with_index
+        .sort_by { |key, index| [ -positions.fetch(key, 0), index ] }
+        .map do |key, _|
+          entry = found[key]
+          attributed.include?(key) ? entry : entry.merge(from: nil, provenance: "not declared in the controller chain").compact
+        end
     end
 
     # One entry in the chain. A skip names a filter by name, and a chain entry

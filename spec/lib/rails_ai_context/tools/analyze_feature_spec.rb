@@ -333,7 +333,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
           controllers: {
             "ApplicationController" => {
               actions: [],
-              filters: [ { kind: "before", name: "authenticate_widget" } ]
+              filters: [ { kind: "before", name: "authenticate_widget", declared: true } ]
             },
             "WidgetsController" => {
               actions: [ "index" ],
@@ -362,7 +362,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
           controllers: {
             "ApplicationController" => {
               actions: [],
-              filters: [ { kind: "before", name: "authenticate_widget", only: [ "index" ] } ]
+              filters: [ { kind: "before", name: "authenticate_widget", only: [ "index" ], declared: true } ]
             },
             "WidgetsController" => {
               actions: [ "index" ],
@@ -428,7 +428,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
           controllers: {
             "ApplicationController" => {
               actions: [],
-              filters: [ { kind: "before", name: "authenticate_widget" } ]
+              filters: [ { kind: "before", name: "authenticate_widget", declared: true } ]
             },
             "WidgetsController" => {
               actions: [ "index" ],

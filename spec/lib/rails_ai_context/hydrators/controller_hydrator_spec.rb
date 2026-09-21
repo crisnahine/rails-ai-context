@@ -93,19 +93,24 @@ RSpec.describe RailsAiContext::Hydrators::ControllerHydrator do
       expect(result.any?).to be false
     end
 
-    it "includes warnings for unresolved models" do
+    # A controller names services, serializers and plain constants. Each one
+    # read as a model the introspection data had lost, next to the models it
+    # had found.
+    it "says nothing about a constant that is not a model" do
       path = write_controller(<<~RUBY)
         class PostsController < ApplicationController
           def show
             @post = Post.find(params[:id])
-            @widget = Widget.first
+            render json: Serializers::Api::V1::Post.show(@post)
+          rescue ActiveRecord::RecordNotFound
+            render_error(ERROR_MESSAGES.posts.not_found, :not_found)
           end
         end
       RUBY
 
       result = described_class.call(path, context: context)
       expect(result.hints.map(&:model_name)).to include("Post")
-      expect(result.warnings).to include(match(/Widget.*not found/))
+      expect(result.warnings).to be_empty
     end
 
     it "detects models from params.require" do

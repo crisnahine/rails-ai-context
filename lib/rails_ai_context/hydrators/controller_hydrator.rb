@@ -14,8 +14,7 @@ module RailsAiContext
         model_names = detect_model_references(source_path)
         return HydrationResult.new if model_names.empty?
 
-        ModelHints.resolve(model_names, context: context,
-          describe: ->(name) { "Model '#{name}' referenced but not found in introspection data" })
+        ModelHints.resolve(model_names, context: context)
       rescue => e
         $stderr.puts "[rails-ai-context] ControllerHydrator failed: #{e.message}" if ENV["DEBUG"]
         HydrationResult.new

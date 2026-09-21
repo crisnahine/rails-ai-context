@@ -62,6 +62,96 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
     end
   end
 
+  # `deactivate` calls neither params method, and a permit list next to an
+  # action reads as the fields that action accepts.
+  describe "the strong params block of one action" do
+    around do |example|
+      Dir.mktmpdir("get-controllers-params") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/controllers/admin"))
+        File.write(File.join(dir, "app/controllers/admin/users_controller.rb"), <<~RUBY)
+          class Admin::UsersController < ApplicationController
+            before_action :load_user, only: %i[deactivate]
+
+            def edit
+              @user.update(edit_params)
+            end
+
+            def create
+              Users::Create.run(params: create_params)
+            end
+
+            def deactivate
+              Users::Deactivate.run(user: @user, reason: params[:reason])
+            end
+
+            private
+
+            def load_user
+              @user = User.find(params[:id])
+            end
+
+            def edit_params
+              params.require(:user).permit(:name)
+            end
+
+            def create_params
+              params.require(:user).permit(:name, :email, :role)
+            end
+          end
+        RUBY
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({
+        controllers: { controllers: {
+          "Admin::UsersController" => {
+            actions: %w[edit create deactivate],
+            filters: [ { kind: "before", name: "load_user", only: %w[deactivate], declared: true } ],
+            strong_params: [
+              { name: "edit_params", requires: "user", permits: %w[name] },
+              { name: "create_params", requires: "user", permits: %w[name email role] }
+            ],
+            file: "app/controllers/admin/users_controller.rb"
+          }
+        } }
+      })
+    end
+
+    def text_for(action)
+      described_class.call(controller: "Admin::UsersController", action: action).content.first[:text]
+    end
+
+    it "keeps only the params method the action calls" do
+      text = text_for("edit")
+
+      expect(text).to include("edit_params")
+      expect(text).not_to include("create_params")
+    end
+
+    it "leaves the section out for an action that calls neither" do
+      expect(text_for("deactivate")).not_to include("## Strong Params")
+    end
+
+    it "keeps a method only a filter the action runs calls" do
+      allow(described_class).to receive(:cached_context).and_return({
+        controllers: { controllers: {
+          "Admin::UsersController" => {
+            actions: %w[deactivate],
+            filters: [ { kind: "before", name: "edit_params", only: %w[deactivate], declared: true } ],
+            strong_params: [ { name: "edit_params", requires: "user", permits: %w[name] } ],
+            file: "app/controllers/admin/users_controller.rb"
+          }
+        } }
+      })
+
+      expect(text_for("deactivate")).to include("edit_params")
+    end
+  end
+
   describe "the applicable filters block" do
     around do |example|
       Dir.mktmpdir("get-controllers-filters") do |dir|
@@ -88,9 +178,9 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
         controllers: { controllers: {
           "ApplicationController" => {
             filters: [
-              { kind: "before", name: "authenticate" },
-              { kind: "before", name: "set_locale", except: %w[health] },
-              { kind: "after", name: "track" }
+              { kind: "before", name: "authenticate", declared: true },
+              { kind: "before", name: "set_locale", except: %w[health], declared: true },
+              { kind: "after", name: "track", declared: true }
             ],
             file: "app/controllers/application_controller.rb"
           },
