@@ -3,6 +3,13 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Tools::GenerateTest do
+  # Every `is_expected.to belong_to(...)` line is a shoulda-matchers matcher,
+  # so the generator only writes them for an app that bundles it.
+  def bundling_shoulda
+    allow(RailsAiContext::GemLock).to receive(:for)
+      .and_return(RailsAiContext::GemLock::Spec.new({ "shoulda-matchers" => "6.4.0" }))
+  end
+
   before { described_class.reset_cache! }
 
   describe ".call" do
@@ -25,6 +32,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     end
 
     it "generates rspec-style output when framework is rspec" do
+      bundling_shoulda
       allow(described_class).to receive(:cached_context).and_return({
         tests: { framework: "rspec", factories: { count: 1 }, factory_names: {} },
         models: {
@@ -477,6 +485,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
   # reported Symbols, so every row was dropped and the block came out empty.
   describe "a model parsed without booting" do
     it "fills the rspec associations and validations blocks" do
+      bundling_shoulda
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "app", "models", "account.rb"), <<~RUBY)
@@ -507,6 +516,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     end
 
     it "renders a habtm row rather than an empty associations block" do
+      bundling_shoulda
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "app", "models", "account.rb"), <<~RUBY)
@@ -525,6 +535,124 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
         expect(text).to include("it { is_expected.to have_and_belong_to_many(:tags) }")
         expect(text).not_to include(%(describe "associations" do\n  end))
+      end
+    end
+  end
+
+  # Every generated one-liner is a shoulda-matchers matcher, and without the
+  # gem each one fails with NoMethodError the first time the spec runs.
+  describe "an app that does not bundle shoulda-matchers" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "rspec", factories: { count: 1 }, factory_names: { "orders" => [ :order ] } },
+        models: {
+          "Order" => {
+            associations: [ { type: "belongs_to", name: "account" } ],
+            validations: [ { kind: "presence", attributes: %w[number] } ],
+            enums: { "status" => { "draft" => 0, "sent" => 1 } },
+            scopes: [], callbacks: {}
+          }
+        }
+      })
+    end
+
+    it "writes examples that need no matcher gem" do
+      text = described_class.call(model: "Order").content.first[:text]
+
+      expect(text).not_to include("belong_to(")
+      expect(text).not_to include("validate_presence_of(")
+      expect(text).to include("reflect_on_association(:account).macro).to eq(:belongs_to)")
+      expect(text).to include("validators_on(:number)")
+      expect(text).to include("defined_enums")
+    end
+  end
+
+  describe "an inclusion validation" do
+    def generated_for(options)
+      bundling_shoulda
+      allow(described_class).to receive(:cached_context).and_return({
+        tests: { framework: "rspec", factory_names: {} },
+        models: { "Order" => { validations: [ { kind: "inclusion", attributes: %w[status], options: options } ] } }
+      })
+      described_class.call(model: "Order").content.first[:text]
+    end
+
+    it "passes an Array literal to in_array, not a quoted String" do
+      expect(generated_for({ in: %w[draft sent paid] }))
+        .to include(%(in_array(["draft", "sent", "paid"])))
+    end
+
+    it "passes a constant as code" do
+      expect(generated_for({ in: "Orders::Constants::STATUSES" }))
+        .to include("in_array(Orders::Constants::STATUSES)")
+    end
+
+    it "carries allow_nil through" do
+      expect(generated_for({ in: [ 0, 7 ], allow_nil: true })).to include("in_array([0, 7]).allow_nil")
+    end
+  end
+
+  describe "a namespaced controller" do
+    let(:context) do
+      {
+        tests: { framework: "rspec", test_helper_setup: [], factories: { count: 1 },
+                 factory_names: { "orders" => [ :order ] } },
+        models: { "Order" => { table_name: "orders" } },
+        controllers: { controllers: { "Api::V1::Admin::OrdersController" => { actions: %w[edit] } } },
+        routes: {
+          by_controller: {
+            "api/v1/admin/orders" => [
+              { verb: "POST", path: "/api/v1/admin/orders/edit", action: "edit", name: "api_v1_admin_orders_edit" }
+            ]
+          }
+        }
+      }
+    end
+
+    before { allow(described_class).to receive(:cached_context).and_return(context) }
+
+    it "names the factory after the model, not after the route key" do
+      text = described_class.call(controller: "Api::V1::Admin::OrdersController").content.first[:text]
+
+      expect(text).to include("create(:order)")
+      expect(text).not_to include("create(:api/v1/admin/order)")
+    end
+
+    it "sends the verb the route declares" do
+      text = described_class.call(controller: "Api::V1::Admin::OrdersController").content.first[:text]
+
+      expect(text).to include("post api_v1_admin_orders_edit")
+      expect(text).not_to include("get api_v1_admin_orders_edit")
+    end
+
+    it "says a controller the app does not have is not there" do
+      text = described_class.call(controller: "Api::V1::OrdersController").content.first[:text]
+
+      expect(text).to include("not found")
+      expect(text).to include("Api::V1::Admin::OrdersController")
+    end
+  end
+
+  describe "an ActiveInteraction service" do
+    it "runs it the way the base class does" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "services", "orders"))
+        File.write(File.join(dir, "app", "services", "orders", "auto_approve.rb"), <<~RUBY)
+          class Orders::AutoApprove < ActiveInteraction::Base
+            object :order
+            string :reason, default: nil
+
+            def execute; end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({ tests: { framework: "rspec" } })
+
+        text = described_class.call(file: "app/services/orders/auto_approve.rb").content.first[:text]
+
+        expect(text).to include("describe \".run\"")
+        expect(text).to include("described_class.run(order: nil, reason: nil)")
+        expect(text).not_to include("described_class.call")
       end
     end
   end

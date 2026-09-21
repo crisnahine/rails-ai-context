@@ -954,9 +954,22 @@ module RailsAiContext
         end
       end
 
+      # A value that survives as itself: `in: %w[draft sent]` reached
+      # `generate_test` as the String '["draft", "sent"]', which inspected
+      # again gave shoulda's `in_array` one quoted String where it wants an
+      # Array. Anything else is text, because a payload has to serialize.
+      SANITIZED_SCALARS = [ Array, Numeric, TrueClass, FalseClass, NilClass, Symbol, String ].freeze
+
       def sanitize_options(options)
         options.reject { |_k, v| v.is_a?(Proc) || v.is_a?(Regexp) }
-               .transform_values(&:to_s)
+               .transform_values { |value| sanitize_option_value(value) }
+      end
+
+      def sanitize_option_value(value)
+        return value.map { |element| sanitize_option_value(element) } if value.is_a?(Array)
+        return value if SANITIZED_SCALARS.any? { |type| value.is_a?(type) }
+
+        value.to_s
       end
 
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],

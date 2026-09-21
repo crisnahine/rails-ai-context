@@ -105,6 +105,9 @@ module RailsAiContext
           patterns[:expect_style] = expect_count >= should_count
           patterns[:factory_style] = create_count >= build_count ? :create : :build
           patterns[:let_style] = let_count > instance_var_count
+          # Every one-liner below is a shoulda-matchers matcher. Written into
+          # an app that does not bundle it, each one fails with NoMethodError.
+          patterns[:shoulda] = RailsAiContext::GemLock.for(root).present?("shoulda-matchers")
           patterns
         end
 
@@ -171,6 +174,8 @@ module RailsAiContext
           # An association type with no matcher renders nothing, so the block
           # opens on the rows rather than on the association count.
           rows = (data[:associations] || []).filter_map do |a|
+            next reflection_example(a) unless patterns[:shoulda]
+
             case a[:type]
             when "belongs_to"
               "    it { is_expected.to belong_to(:#{a[:name]}) }"
@@ -206,6 +211,11 @@ module RailsAiContext
                 next if seen.include?(key)
                 seen << key
 
+                unless patterns[:shoulda]
+                  lines.concat(plain_validation_example(v, attr))
+                  next
+                end
+
                 case v[:kind]
                 when "presence"
                   lines << "    it { is_expected.to validate_presence_of(:#{attr}) }"
@@ -220,11 +230,12 @@ module RailsAiContext
                 when "numericality"
                   lines << "    it { is_expected.to validate_numericality_of(:#{attr}) }"
                 when "inclusion"
-                  vals = v.dig(:options, :in)
+                  vals = inclusion_list(v)
+                  allow_nil = v.dig(:options, :allow_nil) ? ".allow_nil" : ""
                   if vals
-                    lines << "    it { is_expected.to validate_inclusion_of(:#{attr}).in_array(#{vals.inspect}) }"
+                    lines << "    it { is_expected.to validate_inclusion_of(:#{attr}).in_array(#{vals})#{allow_nil} }"
                   else
-                    lines << "    it { is_expected.to validate_inclusion_of(:#{attr}) }"
+                    lines << "    it { is_expected.to validate_inclusion_of(:#{attr})#{allow_nil} }"
                   end
                 else
                   lines << "    it \"validates #{v[:kind]} of #{attr}\" do"
@@ -259,7 +270,11 @@ module RailsAiContext
             lines << "  describe \"enums\" do"
             enums.each do |attr, values|
               vals = values.is_a?(Hash) ? values.keys : Array(values)
-              lines << "    it { is_expected.to define_enum_for(:#{attr}).with_values(#{vals.inspect}) }"
+              lines << if patterns[:shoulda]
+                "    it { is_expected.to define_enum_for(:#{attr}).with_values(#{vals.inspect}) }"
+              else
+                "    it { expect(described_class.defined_enums[\"#{attr}\"].keys).to match_array(#{vals.map(&:to_s).inspect}) }"
+              end
             end
             lines << "  end"
           end
@@ -430,6 +445,16 @@ module RailsAiContext
           ctrl_name = ctrl_name.strip
           # Normalize: "posts" → "PostsController", "PostsController" stays
           ctrl_class = ctrl_name.end_with?("Controller") ? ctrl_name : "#{ctrl_name.camelize}Controller"
+
+          # A spec for a controller the app does not have is a file nothing
+          # can run. "No routes found" read as "add routes", not "this class
+          # does not exist".
+          known = RailsAiContext::Payload.controllers(cached_context)
+          if known.any? && !known.key?(ctrl_class)
+            return not_found_response("Controller", ctrl_name, known.keys.sort,
+              recovery_tool: "Call rails_get_controllers(detail:\"summary\") to see all controllers")
+          end
+
           snake = RailsAiContext::Payload.controller_route_key(cached_context, ctrl_class)
 
           routes = cached_context[:routes] || {}
@@ -823,6 +848,8 @@ module RailsAiContext
           out
         end
 
+        # The route's own verb: `post 'orders/edit' => 'orders#edit'` is an
+        # edit action reached with POST, and the example sent a GET.
         def rspec_get_body(route, name_by_path, res, tests_data, subject_expr, label)
           resolved = url_expression(route, name_by_path, subject_expr, res, tests_data, rspec: true)
           return rspec_skip_body(label, unresolved_reason(route)) unless resolved
@@ -830,7 +857,7 @@ module RailsAiContext
           json = res[:json_api] ? ", as: :json" : ""
           out = [ "  it \"#{label}\" do" ]
           resolved[:prelude].each { |l| out << "    #{l}" }
-          out << "    get #{resolved[:url]}#{json}"
+          out << "    #{verb_for(route)} #{resolved[:url]}#{json}"
           out << "    expect(response).to have_http_status(:success)"
           out << "  end"
           out
@@ -1050,15 +1077,17 @@ module RailsAiContext
         end
 
         def generate_service_test(class_name, file, framework)
+          entry = service_entry_point(file)
+
           if framework == "rspec"
             path = "spec/services/#{class_name.underscore}_spec.rb"
             lines = [ "# #{path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
             lines << "RSpec.describe #{class_name} do"
-            lines << "  describe \".call\" do"
+            lines << "  describe \".#{entry[:method]}\" do"
             lines << "    it \"performs the expected action\" do"
             lines << "      # TODO: set up input and verify output"
-            lines << "      result = described_class.call"
-            lines << "      expect(result).to be_truthy"
+            lines << "      result = described_class.#{entry[:call]}"
+            lines << "      expect(result).to #{entry[:expectation]}"
             lines << "    end"
             lines << "  end"
             lines << "end"
@@ -1078,15 +1107,82 @@ module RailsAiContext
 
         # ── Helpers ──────────────────────────────────────────────────────
 
+        # `ActiveInteraction::Base` defines `.run` and `.run!`, never `.call`,
+        # and its inputs are the filters the class declares.
+        INTERACTION_FILTERS = %w[
+          array boolean date date_time decimal file float hash integer
+          interface object record string symbol time
+        ].freeze
+
+        def service_entry_point(file)
+          source = read_app_file(file)
+          declarations = source ? Introspectors::DeclaredConstant.declarations(source) : []
+          return { method: "call", call: "call", expectation: "be_truthy" } unless
+            declarations.any? { |d| d.superclass == "ActiveInteraction::Base" }
+
+          inputs = interaction_inputs(source)
+          args = inputs.map { |name| "#{name}: nil" }.join(", ")
+          { method: "run", call: args.empty? ? "run" : "run(#{args})", expectation: "be_valid" }
+        end
+
+        def interaction_inputs(source)
+          walked = Introspectors::SourceIntrospector.walk_source(
+            source, { filters: -> { Introspectors::Listeners::GenericMacroListener.new(INTERACTION_FILTERS) } }
+          )
+          (walked[:filters] || []).flat_map { |record| Array(record[:args]).map(&:to_s) }
+        end
+
+        def read_app_file(file)
+          path = File.join(rails_app.root.to_s, file.to_s.sub(/\A#{Regexp.escape(rails_app.root.to_s)}\/?/, ""))
+          return nil unless File.file?(path)
+          return nil if File.size(path) > config.max_file_size
+
+          RailsAiContext::SafeFile.read(path)
+        rescue StandardError => e
+          $stderr.puts "[rails-ai-context] generate_test could not read #{file}: #{e.message}" if ENV["DEBUG"]
+          nil
+        end
+
+        # FactoryBot names a factory after the model, not after the
+        # controller's route key: `:order`, never `:"api/v1/admin/order"`,
+        # which Ruby reads as a division. A name no factory carries is nil,
+        # because `create(:nothing)` raises where a skipped block does not.
         def find_factory_name(model_name, tests_data)
           factory_names = tests_data[:factory_names] || {}
-          underscore = model_name.underscore
-          # Look for a factory matching the model name
-          factory_names.each_value do |names|
-            return underscore.to_sym if names.include?(underscore.to_sym) || names.include?(underscore)
+          candidates = [ model_name.to_s.underscore, model_name.to_s.demodulize.underscore ].uniq
+          candidates.each do |candidate|
+            factory_names.each_value do |names|
+              return candidate.to_sym if names.include?(candidate.to_sym) || names.include?(candidate)
+            end
           end
-          # Check if factories directory exists at all
-          tests_data[:factories] ? underscore.to_sym : nil
+          nil
+        end
+
+        # Without shoulda-matchers, a reflection check needs no gem at all.
+        def reflection_example(assoc)
+          "    it { expect(described_class.reflect_on_association(:#{assoc[:name]}).macro).to eq(:#{assoc[:type]}) }"
+        end
+
+        def plain_validation_example(validation, attr)
+          [
+            "    it \"validates #{validation[:kind]} of #{attr}\" do",
+            "      # TODO: set up a record that fails this validation",
+            "      expect(described_class.validators_on(:#{attr}).map(&:kind)).to include(:#{validation[:kind]})",
+            "    end"
+          ]
+        end
+
+        # The value an app wrote: an Array literal stays one, and a constant
+        # stays code rather than becoming a quoted string.
+        def inclusion_list(validation)
+          value = validation.dig(:options, :in)
+          return nil if value.nil?
+          return value.inspect if value.is_a?(Array)
+
+          text = value.to_s
+          return text if text.match?(/\A[A-Z][\w:]*\z/) || text.start_with?("[", "%w", "%i")
+
+          text.inspect
         end
       end
     end
