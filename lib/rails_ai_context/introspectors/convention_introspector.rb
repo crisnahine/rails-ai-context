@@ -200,12 +200,28 @@ module RailsAiContext
           spec test
         ]
 
-        important_dirs.each_with_object({}) do |dir, hash|
+        # Plus whatever else the app keeps under app/. A fixed list left
+        # `app/workers` - 516 files on one app - out of the only section that
+        # carries file counts, so the biggest code area had no number anywhere.
+        (important_dirs | app_child_dirs).each_with_object({}) do |dir, hash|
           count = SourceScan.paths(root, kind: dir, skip_concerns: false).count
           count += Dir.glob(File.join(root, dir, "**/*.js")).size if dir.include?("javascript")
 
           hash[dir] = count if count > 0
         end
+      end
+
+      def app_child_dirs
+        app_dir = File.join(root, "app")
+        return [] unless Dir.exist?(app_dir)
+
+        Dir.children(app_dir)
+          .select { |child| File.directory?(File.join(app_dir, child)) }
+          .map { |child| "app/#{child}" }
+          .sort
+      rescue StandardError => e
+        $stderr.puts "[rails-ai-context] app_child_dirs failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
       def detect_config_files

@@ -374,7 +374,9 @@ Service object interface, dependencies, side effects, callers.
 
 ### `rails_get_job_pattern`
 
-Background job queue, retries, guard clauses, broadcasts, schedules.
+Background job queue, retries, guard clauses, broadcasts, schedules. Sidekiq
+workers under `app/workers` are listed alongside the ActiveJob jobs, with
+their `sidekiq_options` and `perform` signature.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

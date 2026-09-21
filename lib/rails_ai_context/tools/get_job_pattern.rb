@@ -30,7 +30,7 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      NOT_COVERED = "Workers the introspector did not see (Sidekiq::Worker in app/workers/, for example) are not covered by this tool."
+      NOT_COVERED = "Workers the introspector did not see (a Sidekiq worker outside app/workers/, for example) are not covered by this tool."
 
       def self.call(job: nil, detail: "standard", server_context: nil)
         real_root = File.realpath(rails_app.root.to_s).to_s
@@ -47,19 +47,24 @@ module RailsAiContext
         channels_note = unavailable_note(jobs_data)
 
         sidekiq_line = sidekiq_queues_line(jobs_data)
+        workers = (jobs_data.is_a?(Hash) ? jobs_data[:workers] : nil) || []
 
         return format_single_job(job, jobs, real_root, sidekiq_line) if job
 
         # No jobs and no channels - bail out. Channel absence is only a real
         # negative when the :jobs section actually ran - if it's unavailable
         # (static tier), say so instead of claiming "no channels detected".
-        if jobs.empty? && channels.empty?
+        if jobs.empty? && channels.empty? && workers.empty?
           return text_response(no_jobs_or_channels_message(channels_note, sidekiq_line))
         end
 
-        # Compose: jobs section (if any) + channels section (if any).
+        # Compose: jobs section (if any) + workers + channels section (if any).
         lines = []
         lines.concat(format_job_listing_lines(jobs, real_root, detail)) if jobs.any?
+        if workers.any?
+          lines << "" if lines.any?
+          lines.concat(format_workers_section(workers, detail))
+        end
         if channels.any?
           lines << "" if lines.any?
           lines.concat(format_channels_section(channels))
@@ -73,6 +78,23 @@ module RailsAiContext
           lines << "_#{sidekiq_line} Workers the introspector did not see are not covered by this tool._"
         end
         text_response(lines.join("\n"))
+      end
+
+      # A Sidekiq worker is not an ActiveJob job, and on an app that runs its
+      # background work this way it is the only async code there is.
+      private_class_method def self.format_workers_section(workers, detail)
+        lines = [ "## Sidekiq Workers (#{workers.size})", "" ]
+        workers.each do |worker|
+          options = worker[:options] || {}
+          bits = options.map { |key, value| "#{key}: #{value}" }
+          label = bits.any? ? " [#{bits.join(', ')}]" : ""
+          lines << "- **#{worker[:name]}**#{label}"
+          next unless RailsAiContext::DetailLevel.full?(detail) || detail == "standard"
+
+          lines << "  - `perform(#{worker[:perform_signature]})`" if worker[:perform_signature]
+          lines << "  - `#{worker[:file]}`" if worker[:file]
+        end
+        lines
       end
 
       private_class_method def self.no_job_files_message(sidekiq_line = nil)
