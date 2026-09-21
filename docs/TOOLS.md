@@ -450,9 +450,13 @@ Model/service dependency graph in Mermaid or text format.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `root` | string | - | Starting node |
-| `format` | enum | `text` | `text`, `mermaid` |
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `model` | string | - | Center the graph on this model |
+| `depth` | integer | `2` | Hops from the centre model (1-3) |
+| `format` | enum | `mermaid` | `mermaid`, `text` |
+| `show_cycles` | boolean | `false` | Detect and list circular dependencies |
+| `show_sti` | boolean | `false` | Show Single Table Inheritance hierarchies |
+
+Without `model` the graph is capped at 50 nodes, and says so when it cuts.
 
 ### `rails_migration_advisor`
 

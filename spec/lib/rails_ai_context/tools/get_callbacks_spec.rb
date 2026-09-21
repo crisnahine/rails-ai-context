@@ -453,9 +453,26 @@ RSpec.describe RailsAiContext::Tools::GetCallbacks do
       })
 
       lines = described_class.call(model: "Status").content.first[:text].lines
-      order = lines.filter_map { |l| l[/^- \*\*(\w+)\*\*/, 1] }
+      order = lines.filter_map { |l| l[/^- \*\*(.+?)\*\*/, 1] }
 
-      expect(order).to eq(%w[after_create_commit after_commit_on_create after_rollback])
+      expect(order).to eq([ "after_create_commit", "after_commit (on: :create)", "after_rollback" ])
+    end
+
+    # Rails has no `after_commit_on_create`; the key exists to order the two
+    # events of one `after_commit on: %i[create update]`.
+    it "never prints the synthesized key as a macro name" do
+      allow(described_class).to receive(:cached_context).and_return({
+        models: { "Task" => { name: "Task", callbacks: {
+          "after_commit_on_create" => [ "[inline_block]" ],
+          "after_commit_on_update" => [ "[inline_block]" ]
+        } } }
+      })
+
+      text = described_class.call(model: "Task").content.first[:text]
+
+      expect(text).to include("after_commit (on: :create)")
+      expect(text).to include("after_commit (on: :update)")
+      expect(text).not_to include("after_commit_on_")
     end
   end
 end

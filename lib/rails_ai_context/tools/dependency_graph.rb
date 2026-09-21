@@ -9,11 +9,13 @@ module RailsAiContext
         "Use when: understanding feature architecture, tracing data flow, planning refactors. " \
         "Key params: model (center graph on model), depth (1-3), format (mermaid/text)."
 
+      MAX_NODES = 50
+
       input_schema(
         properties: {
           model: {
             type: "string",
-            description: "Center the graph on this model (e.g., 'User'). Without this, shows all models."
+            description: "Center the graph on this model (e.g., 'User'). Without this, shows every model up to a cap of #{MAX_NODES} nodes."
           },
           depth: {
             type: "integer",
@@ -44,8 +46,6 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      MAX_NODES = 50
-
       def self.call(model: nil, depth: 2, format: "mermaid", show_cycles: false, show_sti: false, server_context: nil)
         note = unavailable_note(cached_context[:models])
         return text_response(note) if note
@@ -72,20 +72,23 @@ module RailsAiContext
           subgraph = graph
         end
 
-        # Limit nodes
-        if subgraph.size > MAX_NODES
-          subgraph = subgraph.first(MAX_NODES).to_h
-        end
+        # Limit nodes. The cut used to be silent, so a 133-model app read as a
+        # 50-model app with no edges to the other 83.
+        total_nodes = subgraph.size
+        subgraph = subgraph.first(MAX_NODES).to_h if subgraph.size > MAX_NODES
 
         # Optional analyses
         cycles = show_cycles ? detect_cycles(graph) : []
         sti_groups = show_sti ? extract_sti_groups(models_data) : []
+        skipped = models_data.select { |_, data| data.is_a?(Hash) && data[:error] }.keys.map(&:to_s)
 
         case format
         when "mermaid"
-          text_response(render_mermaid(subgraph, model, cycles: cycles, sti_groups: sti_groups))
+          text_response(render_mermaid(subgraph, model, cycles: cycles, sti_groups: sti_groups,
+            total_nodes: total_nodes, skipped: skipped))
         else
-          text_response(render_text(subgraph, model, cycles: cycles, sti_groups: sti_groups))
+          text_response(render_text(subgraph, model, cycles: cycles, sti_groups: sti_groups,
+            total_nodes: total_nodes, skipped: skipped))
         end
       end
 
@@ -122,20 +125,33 @@ module RailsAiContext
             end
           end
 
+          # The declared model names, so a derived one can be corrected to the
+          # spelling the app uses. Camelizing in this process knows none of the
+          # app's acronyms, so `ai_match_result` comes out `AiMatchResult`
+          # while the node the graph draws is `AIMatchResult`.
+          declared = models_data.each_with_object({}) do |(model_name, model_data), acc|
+            acc[model_name.to_s.downcase] = { name: model_name.to_s, data: model_data }
+          end
+
           # Build edges
           models_data.each do |model_name, data|
             next unless data.is_a?(Hash) && !data[:error]
             name = model_name.to_s
 
             associations = data[:associations] || []
+            by_name = associations.each_with_object({}) { |a, acc| acc[a[:name].to_s] = a }
+
             edges = associations.filter_map do |assoc|
-              target = assoc[:class_name] || assoc[:name]&.to_s&.classify
+              next if assoc[:unavailable]
+
+              target = resolve_target(assoc, models_data, by_name, declared)
               next unless target
 
               edge = {
                 type: assoc[:macro] || assoc[:type],
                 target: target,
                 through: assoc[:through],
+                through_class: assoc[:through] && through_class(assoc, by_name, declared),
                 polymorphic: assoc[:polymorphic]
               }
 
@@ -156,6 +172,54 @@ module RailsAiContext
 
         def find_model_key(query, keys)
           fuzzy_find_key(keys, query)
+        end
+
+        COLLECTION_MACROS = %w[has_many has_and_belongs_to_many].freeze
+
+        # Rails singularizes an association name only for a collection
+        # (`derive_class_name`), so `belongs_to :search_criteria` is
+        # `SearchCriteria` and never `SearchCriterium`.
+        def derive_class(assoc, declared)
+          name = assoc[:name].to_s
+          return nil if name.empty?
+
+          base = COLLECTION_MACROS.include?((assoc[:macro] || assoc[:type]).to_s) ? name.singularize : name
+          declared_spelling(base.camelize, declared)
+        end
+
+        def declared_spelling(candidate, declared)
+          declared.dig(candidate.to_s.downcase, :name) || candidate
+        end
+
+        # The class the `through:` association points at - its own
+        # `class_name` when one is declared, never the association name
+        # camelized, which drew `PrimaryBuyer` and `InvoicePdfAttachment` as
+        # nodes no app defines.
+        def through_class(assoc, by_name, declared)
+          hop = by_name[assoc[:through].to_s]
+          return declared_spelling(assoc[:through].to_s.singularize.camelize, declared) unless hop
+
+          hop[:class_name] ? declared_spelling(hop[:class_name], declared) : derive_class(hop, declared)
+        end
+
+        # Booted, a through reflection's `class_name` already follows
+        # `source:`. Static records none, so the far side is read off the
+        # source association on the class the through hop lands on.
+        def resolve_target(assoc, _models_data, by_name, declared)
+          return declared_spelling(assoc[:class_name], declared) if assoc[:class_name]
+          return derive_class(assoc, declared) unless assoc[:through]
+
+          middle = through_class(assoc, by_name, declared)
+          source_name = (assoc.dig(:options, :source) || assoc[:source] || assoc[:name]).to_s
+          middle_data = declared.dig(middle.to_s.downcase, :data)
+          source_assoc = Array(middle_data.is_a?(Hash) ? middle_data[:associations] : nil)
+                           .find { |a| a[:name].to_s == source_name }
+
+          if source_assoc
+            source_assoc[:class_name] ? declared_spelling(source_assoc[:class_name], declared) : derive_class(source_assoc, declared)
+          else
+            derive_class(assoc, declared)
+          end
         end
 
         def extract_subgraph(graph, center, depth)
@@ -242,7 +306,7 @@ module RailsAiContext
           groups
         end
 
-        def render_mermaid(graph, center, cycles: [], sti_groups: [])
+        def render_mermaid(graph, center, cycles: [], sti_groups: [], total_nodes: nil, skipped: [])
           lines = [ "# Dependency Graph", "" ]
           lines << "```mermaid"
           lines << "graph LR"
@@ -260,7 +324,7 @@ module RailsAiContext
 
               if edge[:through]
                 # Through: two edges with double arrow
-                intermediate = edge[:through].to_s.classify
+                intermediate = edge[:through_class] || edge[:through].to_s.classify
                 through_key1 = "#{model}->#{intermediate}:through"
                 through_key2 = "#{intermediate}->#{edge[:target]}:through"
                 unless rendered.include?(through_key1)
@@ -307,10 +371,11 @@ module RailsAiContext
           lines << "```"
           lines << ""
 
-          stats = [ "**Models:** #{graph.keys.size}", "**Associations:** #{graph.values.sum(&:size)}" ]
+          stats = [ "**Models:** #{total_nodes || graph.keys.size}", "**Associations:** #{graph.values.sum(&:size)}" ]
           stats << "**Cycles:** #{cycles.size}" if cycles.any?
           stats << "**STI hierarchies:** #{sti_groups.size}" if sti_groups.any?
           lines << stats.join(" | ")
+          lines.concat(truncation_notes(graph, total_nodes, skipped))
 
           # Cycles section
           if cycles.any?
@@ -322,7 +387,7 @@ module RailsAiContext
           lines.join("\n")
         end
 
-        def render_text(graph, center, cycles: [], sti_groups: [])
+        def render_text(graph, center, cycles: [], sti_groups: [], total_nodes: nil, skipped: [])
           lines = [ "# Dependency Graph", "" ]
 
           if center
@@ -367,12 +432,28 @@ module RailsAiContext
             lines << ""
           end
 
-          stats = [ "**Models:** #{graph.keys.size}", "**Associations:** #{graph.values.sum(&:size)}" ]
+          stats = [ "**Models:** #{total_nodes || graph.keys.size}", "**Associations:** #{graph.values.sum(&:size)}" ]
           stats << "**Cycles:** #{cycles.size}" if cycles.any?
           stats << "**STI hierarchies:** #{sti_groups.size}" if sti_groups.any?
           lines << stats.join(" | ")
+          lines.concat(truncation_notes(graph, total_nodes, skipped))
 
           lines.join("\n")
+        end
+
+        # Both a node cap and a model whose reflections could not be read
+        # used to leave the graph looking complete.
+        def truncation_notes(graph, total_nodes, skipped)
+          notes = []
+          if total_nodes && total_nodes > graph.keys.size
+            notes << ""
+            notes << "_Showing #{graph.keys.size} of #{total_nodes} models; pass `model:` to focus the graph._"
+          end
+          if skipped.any?
+            notes << ""
+            notes << "_#{count_phrase(skipped.size, "model")} left out, introspection failed: #{skipped.sort.join(", ")}._"
+          end
+          notes
         end
 
         def sanitize(name)

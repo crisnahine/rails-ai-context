@@ -324,5 +324,117 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
         expect(text).to include("Dependency Graph")
       end
     end
+
+    context "with through associations and app acronyms" do
+      let(:models_data) do
+        {
+          "Order" => {
+            table_name: "orders",
+            associations: [
+              { type: "belongs_to", name: "primary_buyer", class_name: "User", foreign_key: "primary_buyer_id" },
+              { type: "has_many", name: "buyer_emails", through: "primary_buyer", options: { source: :emails } },
+              { type: "has_many", name: "watched_orders", foreign_key: "order_id" },
+              { type: "has_many", name: "watched_by", through: "watched_orders", options: { source: :user } }
+            ]
+          },
+          "User" => {
+            table_name: "users",
+            associations: [
+              { type: "has_many", name: "emails", foreign_key: "user_id" },
+              { type: "has_many", name: "watched_orders", foreign_key: "user_id" }
+            ]
+          },
+          "Email" => { table_name: "emails", associations: [ { type: "belongs_to", name: "user" } ] },
+          "WatchedOrder" => {
+            table_name: "watched_orders",
+            associations: [ { type: "belongs_to", name: "order" }, { type: "belongs_to", name: "user" } ]
+          },
+          "AIMatchResult" => {
+            table_name: "ai_match_results",
+            associations: [ { type: "has_many", name: "ai_match_items", foreign_key: "ai_match_result_id" } ]
+          },
+          "AIMatchItem" => {
+            table_name: "ai_match_items",
+            associations: [ { type: "belongs_to", name: "ai_match_result" } ]
+          },
+          "SearchCriteria" => {
+            table_name: "search_criteria",
+            associations: [ { type: "has_many", name: "search_criteria_embeddings" } ]
+          },
+          "SearchCriteriaEmbedding" => {
+            table_name: "search_criteria_embeddings",
+            associations: [ { type: "belongs_to", name: "search_criteria" } ]
+          }
+        }
+      end
+
+      it "routes a through edge via the class the hop points at" do
+        text = described_class.call(format: "mermaid").content.first[:text]
+        expect(text).to include("Order ==>|through| User")
+        expect(text).to include("User ==>|through| Email")
+        expect(text).not_to include("PrimaryBuyer")
+        expect(text).not_to include("BuyerEmail")
+      end
+
+      it "reads a static through target off the source association" do
+        text = described_class.call(format: "mermaid").content.first[:text]
+        expect(text).to include("WatchedOrder ==>|through| User")
+        expect(text).not_to include("WatchedBy")
+      end
+
+      it "names targets the way the app declares them" do
+        text = described_class.call(format: "mermaid").content.first[:text]
+        expect(text).to include("AIMatchItem -->|belongs_to| AIMatchResult")
+        expect(text).to include("AIMatchResult -->|has_many| AIMatchItem")
+        expect(text).not_to include("AiMatch")
+      end
+
+      it "does not singularize a belongs_to name" do
+        text = described_class.call(format: "mermaid").content.first[:text]
+        expect(text).to include("SearchCriteriaEmbedding -->|belongs_to| SearchCriteria")
+        expect(text).not_to include("SearchCriterium")
+      end
+    end
+
+    context "when the graph is capped or a model failed" do
+      let(:models_data) do
+        data = {}
+        60.times { |i| data["Widget#{i}"] = { table_name: "widgets", associations: [] } }
+        data["Broken"] = { error: "undefined method 'klass' for nil" }
+        data
+      end
+
+      it "says how many models the cap left out" do
+        text = described_class.call(format: "mermaid").content.first[:text]
+        expect(text).to include("**Models:** 60")
+        expect(text).to include("Showing 50 of 60 models")
+      end
+
+      it "names the model it could not read" do
+        text = described_class.call(format: "text").content.first[:text]
+        expect(text).to include("1 model left out, introspection failed: Broken")
+      end
+    end
+
+    context "with an association that cannot resolve" do
+      let(:models_data) do
+        {
+          "Post" => {
+            table_name: "posts",
+            associations: [
+              { type: "has_many", name: "comments", class_name: "Comment" },
+              { type: "has_many", name: "reader_emails", through: "reader", unavailable: "through :reader is not an association" }
+            ]
+          },
+          "Comment" => { table_name: "comments", associations: [ { type: "belongs_to", name: "post" } ] }
+        }
+      end
+
+      it "keeps the model and drops only the dangling edge" do
+        text = described_class.call(format: "mermaid").content.first[:text]
+        expect(text).to include("Post -->|has_many| Comment")
+        expect(text).not_to include("reader")
+      end
+    end
   end
 end

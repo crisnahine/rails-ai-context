@@ -304,7 +304,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       it "keeps the entry point of a module-namespaced service" do
         result = described_class.call(detail: "standard")
         text = result.content.first[:text]
-        expect(text).to match(/\*\*SuspendService\*\*[^\n]*call\(account\)/)
+        expect(text).to match(/\*\*Admin::SuspendService\*\*[^\n]*call\(account\)/)
       end
 
       it "reports nested-class methods for a single service too" do
@@ -337,6 +337,133 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         text = result.content.first[:text]
         expect(text).to include("**Initialize:** `initialize`")
         expect(text).not_to include("initialize(message, accounts)")
+      end
+    end
+
+    context "with namespaced ActiveInteraction services" do
+      let(:tmpdir) { Dir.mktmpdir }
+      let(:services_dir) { File.join(tmpdir, "app", "services") }
+
+      before do
+        FileUtils.mkdir_p(File.join(services_dir, "api", "v1", "addresses"))
+        FileUtils.mkdir_p(File.join(services_dir, "billing", "invoices"))
+        FileUtils.mkdir_p(File.join(services_dir, "users"))
+        FileUtils.mkdir_p(File.join(services_dir, "reports", "export"))
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "workers", "billing", "invoices"))
+
+        File.write(File.join(services_dir, "api", "v1", "addresses", "create.rb"), <<~RUBY)
+          class Api::V1::Addresses::Create < ActiveInteraction::Base
+            hash :params, strip: false
+
+            def execute; end
+          end
+        RUBY
+
+        File.write(File.join(services_dir, "billing", "invoices", "create.rb"), <<~RUBY)
+          class Billing::Invoices::Create < ActiveInteraction::Base
+            object :account
+
+            def execute; end
+          end
+        RUBY
+
+        File.write(File.join(services_dir, "billing", "invoices", "finalize.rb"), <<~RUBY)
+          class Billing::Invoices::Finalize < ActiveInteraction::Base
+            object :account
+
+            def execute
+              Workers::Billing::Invoices::CreateOrUpdateSheetWorker.perform_in(60)
+            end
+          end
+        RUBY
+
+        File.write(File.join(services_dir, "users", "deactivate.rb"), <<~RUBY)
+          class Users::Deactivate < ActiveInteraction::Base
+            object :user
+            string :reason, default: nil
+
+            def execute; end
+          end
+        RUBY
+
+        File.write(File.join(services_dir, "reports", "export", "profit_section.rb"), <<~RUBY)
+          # This class contains the core code for the profit section.
+          class Reports::Export::ProfitSection < ActiveInteraction::Base
+            string :title
+
+            def execute; end
+          end
+        RUBY
+
+        File.write(File.join(services_dir, "reports", "constants.rb"), <<~RUBY)
+          module Reports::Constants
+            STATUSES = %w[draft sent].freeze
+          end
+        RUBY
+
+        File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "create_worker.rb"), <<~RUBY)
+          class Billing::Invoices::CreateWorker
+            include Sidekiq::Job
+
+            def perform(account_id)
+              Billing::Invoices::Create.run(account: Account.find(account_id))
+            end
+          end
+        RUBY
+
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000_000)
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names a service by what it declares, not by a word in a comment" do
+        text = described_class.call(detail: "standard").content.first[:text]
+        expect(text).to include("**Reports::Export::ProfitSection**")
+        expect(text).not_to include("**contains**")
+      end
+
+      it "keeps the namespace of a file that declares only a module" do
+        text = described_class.call(detail: "standard").content.first[:text]
+        expect(text).to include("**Reports::Constants**")
+        expect(text).not_to match(/^- \*\*Constants\*\*/)
+      end
+
+      it "resolves a namespaced name to its own file, not the first basename match" do
+        text = described_class.call(service: "Users::Deactivate").content.first[:text]
+        expect(text).to include("# Users::Deactivate")
+        expect(text).to include("app/services/users/deactivate.rb")
+      end
+
+      it "lists the candidates for an ambiguous bare name" do
+        text = described_class.call(service: "Create").content.first[:text]
+        expect(text).to include("matches 2 files")
+        expect(text).to include("app/services/api/v1/addresses/create.rb")
+        expect(text).to include("app/services/billing/invoices/create.rb")
+      end
+
+      it "answers not found for a name no file declares" do
+        text = described_class.call(service: "Nope::Create").content.first[:text]
+        expect(text).to include("not found")
+      end
+
+      it "finds the worker that calls the service and drops the substring match" do
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+        expect(text).to include("app/workers/billing/invoices/create_worker.rb")
+        expect(text).not_to include("finalize.rb")
+        expect(text).not_to include("- `app/services/billing/invoices/create.rb`")
+      end
+
+      it "reports the declared ActiveInteraction inputs" do
+        text = described_class.call(service: "Users::Deactivate").content.first[:text]
+        expect(text).to include("## Inputs (ActiveInteraction)")
+        expect(text).to include("`object :user`")
+        expect(text).to include("`string :reason` (default: nil)")
+      end
+
+      it "names ActiveInteraction as the dominant pattern" do
+        text = described_class.call(detail: "standard").content.first[:text]
+        expect(text).to include("ActiveInteraction::Base, run with `.run` / `.run!`")
       end
     end
 
