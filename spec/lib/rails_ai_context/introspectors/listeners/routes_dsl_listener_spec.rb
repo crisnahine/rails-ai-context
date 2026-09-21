@@ -30,6 +30,48 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     expect(records).to all(include(controller: "posts", restful: true))
   end
 
+  # Ruby reads `api_v1_gift-cards_redeem_path` as a subtraction, and Rails
+  # names that route `api_v1_gift_cards_redeem`.
+  it "writes a path-derived name the way Rails does" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        namespace :api do
+          namespace :v1 do
+            post 'gift-cards/redeem' => 'gift_cards#redeem'
+          end
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| r[:name] }).to eq([ "api_v1_gift_cards_redeem" ])
+  end
+
+  # A path with a character outside [\w\-/] contributes nothing to the name,
+  # so a top-level one gets no name at all.
+  it "leaves a dotted path out of the name" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        get '/.well-known/oauth-authorization-server' => 'oauth#authorization_server'
+        namespace :api do
+          get '.well-known/jwks' => 'keys#jwks'
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| r[:name] }).to eq([ nil, "api" ])
+  end
+
+  it "drops a generated name another route already took" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        get 'health' => 'health#show'
+        post 'health' => 'health#create'
+      end
+    RUBY
+
+    expect(records.map { |r| r[:name] }).to eq([ "health", nil ])
+  end
+
   it "honors only: and except:" do
     records = route_records('resources :posts, only: [:index, :show]')
     expect(records.map { |r| r[:action] }).to contain_exactly("index", "show")

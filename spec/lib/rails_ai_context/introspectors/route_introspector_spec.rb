@@ -33,6 +33,29 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
     end
   end
 
+  # `get "/", to: redirect("https://example.com")` is routable and has no
+  # controller#action, so no row and no count mentioned it while
+  # `bin/rails routes` listed it.
+  describe "a booted route with no controller" do
+    let(:redirect) do
+      require "action_dispatch/routing/redirection"
+      ActionDispatch::Routing::Redirect.new(301, ->(*) { "https://example.com" })
+    end
+
+    let(:app_double) do
+      route = double("route", internal: false, defaults: { controller: nil, action: nil }, app: redirect)
+      routes = double("routes", routes: [ route ], named_routes: {})
+      double("app", routes: routes, routes_reloader: nil, root: Rails.root)
+    end
+
+    it "counts it as a construct the route list does not expand" do
+      result = described_class.new(app_double).call
+
+      expect(result[:dynamic_routes]).to eq(1)
+      expect(result[:unrouted_mounts]).to eq(0)
+    end
+  end
+
   describe "#static_call" do
     it "builds the runtime output shape from config/routes.rb without booting" do
       Dir.mktmpdir do |dir|

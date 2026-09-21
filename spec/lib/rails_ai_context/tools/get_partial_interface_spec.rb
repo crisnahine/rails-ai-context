@@ -5,6 +5,43 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::GetPartialInterface do
   before { described_class.reset_cache! }
 
+  # Two of the app's three partials are `.text.erb`, and the resolver's fixed
+  # extension list refused the name its own Available list had just printed.
+  describe "a partial outside the html.erb extension list" do
+    around do |example|
+      Dir.mktmpdir("partial-interface") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/views/reports/ai_data"))
+        FileUtils.mkdir_p(File.join(dir, "app/views/pdfs"))
+        File.write(File.join(dir, "app/views/reports/ai_data/_header.text.erb"),
+                   "<%= title %> for order <%= order.number %>\n")
+        File.write(File.join(dir, "app/views/reports/ai_data/summary.text.erb"),
+                   "<%= render partial: 'reports/ai_data/header', locals: { order: @order, title: 'summary' } -%>\n")
+        File.write(File.join(dir, "app/views/pdfs/_summary_fields.html.erb"),
+                   (1..18).map { |i| "<p><%= prediction.field_#{format('%02d', i)} %></p>" }.join("\n") + "\n")
+        example.run
+      end
+    end
+
+    before do
+      allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+      allow(described_class).to receive(:cached_context).and_return({})
+    end
+
+    it "resolves a .text.erb partial by its Rails name" do
+      text = described_class.call(partial: "reports/ai_data/header").content.first[:text]
+
+      expect(text).not_to include("not found")
+      expect(text).to include("reports/ai_data/_header.text.erb")
+    end
+
+    it "says how many calls the list left out" do
+      text = described_class.call(partial: "pdfs/summary_fields").content.first[:text]
+
+      expect(text).to include("...and 8 more")
+    end
+  end
+
   describe ".call" do
     it "analyzes a partial with magic comment locals" do
       result = described_class.call(partial: "posts/form")

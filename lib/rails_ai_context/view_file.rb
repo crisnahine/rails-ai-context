@@ -12,7 +12,42 @@ module RailsAiContext
 
     LOGICAL_PATH = %r{\A[\w\-]+(?:/[\w\-]+)*\z}
 
+    # What Rails registers when nothing else is bundled, for the static tier
+    # and for a booted app whose handlers cannot be read. A file under
+    # app/views whose last extension is none of these is not a template the
+    # tools can read: an image counted as a template, and the ivar regex ran
+    # over its bytes.
+    # `rb` is here for Phlex views, which are Ruby classes under app/views
+    # rather than ActionView templates.
+    DEFAULT_HANDLER_EXTENSIONS = %w[raw erb html builder ruby rb jbuilder haml slim].freeze
+
     module_function
+
+    # @return [Array<String>] the template handler extensions this app has
+    def handler_extensions
+      return @handler_extensions if defined?(@handler_extensions) && @handler_extensions
+
+      registered = if defined?(ActionView::Template::Handlers) &&
+                      ActionView::Template::Handlers.respond_to?(:extensions)
+        ActionView::Template::Handlers.extensions.map(&:to_s)
+      else
+        []
+      end
+      @handler_extensions = registered | DEFAULT_HANDLER_EXTENSIONS
+    end
+
+    def reset_handler_extensions!
+      @handler_extensions = nil
+    end
+
+    # @param path [String] any path under app/views
+    # @return [Boolean] whether its last extension names a template handler
+    def template?(path)
+      ext = File.extname(path.to_s).delete_prefix(".").downcase
+      return false if ext.empty?
+
+      handler_extensions.include?(ext)
+    end
 
     # path: relative to app/views, or spelled from the app root.
     def locate(root, path)

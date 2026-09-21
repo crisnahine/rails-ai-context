@@ -47,6 +47,9 @@ module RailsAiContext
           next if File.directory?(path)
           next if File.basename(path).start_with?("_") # skip partials
           next if path.include?("/layouts/")
+          # An asset that happens to sit under app/views is not a template:
+          # counted as one, and the ivar regex read names out of its bytes.
+          next unless RailsAiContext::ViewFile.template?(path)
 
           relative = path.sub("#{views_dir}/", "")
           content = RailsAiContext::SafeFile.read(path) or next
@@ -56,7 +59,7 @@ module RailsAiContext
           if phlex_view?(path, content)
             entry = {
               lines: content.lines.count,
-              ivars: extract_ivars(content),
+              ivars: extract_ivars(content, path),
               partials: extract_partial_refs(content),
               stimulus: extract_stimulus_refs(content),
               components: extract_phlex_component_renders(content),
@@ -68,7 +71,7 @@ module RailsAiContext
           else
             entry = {
               lines: content.lines.count,
-              ivars: extract_ivars(content),
+              ivars: extract_ivars(content, path),
               partials: extract_partial_refs(content),
               stimulus: extract_stimulus_refs(content)
             }
@@ -79,20 +82,28 @@ module RailsAiContext
         templates
       end
 
+      # Only the Ruby inside ERB tags. Over the whole file the regex read the
+      # CSS rule `@page` as an ivar the controller assigns.
+      ERB_TAG = /<%={0,2}-?(.*?)-?%>/m
+
       # The one reader of a template's ivars, so `get_view` and this
       # introspector cannot disagree about what a template uses.
-      def self.ivars_in(content)
-        content.to_s.scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
+      def self.ivars_in(content, path: nil)
+        text = content.to_s
+        erb = path ? path.to_s.end_with?(".erb") : text.include?("<%")
+        ruby = erb ? text.scan(ERB_TAG).flatten.join("\n") : text
+        ruby.scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
       end
 
-      def extract_ivars(content)
-        self.class.ivars_in(content)
+      def extract_ivars(content, path = nil)
+        self.class.ivars_in(content, path: path)
       end
 
       def scan_partials(views_dir)
         partials = {}
         Dir.glob(File.join(views_dir, "**", "_*")).each do |path|
           next if File.directory?(path)
+          next unless RailsAiContext::ViewFile.template?(path)
           relative = path.sub("#{views_dir}/", "")
           content = RailsAiContext::SafeFile.read(path) or next
           partials[relative] = {
