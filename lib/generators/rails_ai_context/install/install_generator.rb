@@ -57,7 +57,7 @@ module RailsAiContext
         )
       end
 
-      def select_tool_mode
+      def select_setup
         if options[:mcp_only]
           @tool_mode = :mcp
           @context_files = false
@@ -329,7 +329,7 @@ module RailsAiContext
         existing, changed = update_config_line(existing, "config.context_files", build_context_files_line)
         changes << "context_files" if changed
 
-        # 3. Add any missing config sections
+        # 4. Add any missing config sections
         CONFIG_SECTIONS.each do |name, section_content|
           marker = "── #{name}"
           next if existing.include?(marker)

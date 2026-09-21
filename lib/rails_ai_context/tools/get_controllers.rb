@@ -365,7 +365,7 @@ module RailsAiContext
           reachable << "\n" << body[:code] if body
         end
 
-        named = entries.select do |sp|
+        entries.select do |sp|
           name = sp.is_a?(Hash) ? sp[:name].to_s : sp.to_s
           name.empty? || reachable.match?(/(?<![\w:])#{Regexp.escape(name)}(?![\w])/)
         end

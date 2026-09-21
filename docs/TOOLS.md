@@ -349,7 +349,7 @@ Notable gems with versions, categories, and config file locations.
 
 ### `rails_get_env`
 
-Environment variables + credentials keys (values are never exposed).
+Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -432,7 +432,7 @@ ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEn
 
 ### `rails_get_env_config`
 
-Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets.
+Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

@@ -46,13 +46,21 @@ RSpec.describe RailsAiContext::OutputGuard do
         require #{File.expand_path("lib/rails_ai_context/output_guard.rb").inspect}
 
         if ENV["RAC_SECOND_IMAGE"]
+          carried = ENV["RAILS_AI_CONTEXT_STDOUT_FD"].to_i
           RailsAiContext::OutputGuard.quarantine_stdout { $stdout.puts "boot noise" }
           $stdout.puts "jsonrpc response"
+          $stdout.puts "pointer=\#{ENV['RAILS_AI_CONTEXT_STDOUT_FD'].inspect}"
+          open = begin
+            IO.new(carried, "w", autoclose: false).stat && true
+          rescue StandardError
+            false
+          end
+          $stdout.puts "carried_fd_open=\#{open}"
           $stdout.flush
         else
           RailsAiContext::OutputGuard.quarantine_stdout do
             ENV["RAC_SECOND_IMAGE"] = "1"
-            exec(RbConfig.ruby, #{"__FILE__".inspect}.then { |_| __FILE__ })
+            exec(RbConfig.ruby, __FILE__)
           end
         end
       RUBY
@@ -63,6 +71,12 @@ RSpec.describe RailsAiContext::OutputGuard do
       expect(out).to include("jsonrpc response")
       expect(err).to include("boot noise")
       expect(err).not_to include("jsonrpc response")
+
+      # The descriptor exists to survive one exec: left open with
+      # close-on-exec cleared, every subprocess the app spawns afterwards
+      # inherits a copy of the MCP channel.
+      expect(out).to include("pointer=nil")
+      expect(out).to include("carried_fd_open=false")
     end
   end
 end

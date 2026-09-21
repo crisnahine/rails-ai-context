@@ -432,8 +432,11 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
 
       it "keeps the model and drops only the dangling edge" do
         text = described_class.call(format: "mermaid").content.first[:text]
+
         expect(text).to include("Post -->|has_many| Comment")
-        expect(text).not_to include("reader")
+        # Without the guard the record still becomes an edge, through a
+        # `Reader` node and on to a `ReaderEmail` neither of which is a class.
+        expect(text).not_to match(/reader/i)
       end
     end
   end

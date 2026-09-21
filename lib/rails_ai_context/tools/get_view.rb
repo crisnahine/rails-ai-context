@@ -291,8 +291,11 @@ module RailsAiContext
         end
         return text_response("Could not read file: #{path}") unless content
 
+        # A file the caller named by path is shown either way; only a
+        # template is fenced as erb, because fencing a JPEG's bytes as ERB
+        # said it was one.
         unless RailsAiContext::ViewFile.template?(result.relative)
-          return text_response("# #{result.relative}\n\n_Not a template: no handler extension. #{count_phrase(content.lines.count, "line")}, #{content.bytesize} bytes._")
+          return text_response("# #{result.relative}\n\n_No template handler renders this file._\n\n```\n#{content}\n```")
         end
 
         content = compress_tailwind(strip_svg(content))

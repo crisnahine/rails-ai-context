@@ -429,10 +429,15 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).not_to match(/^- \*\*Constants\*\*/)
       end
 
+      # `billing/invoices/create.rb` shares its basename with
+      # `api/v1/addresses/create.rb`, which sorts first, so the basename
+      # alternative used to win over the exact path.
       it "resolves a namespaced name to its own file, not the first basename match" do
-        text = described_class.call(service: "Users::Deactivate").content.first[:text]
-        expect(text).to include("# Users::Deactivate")
-        expect(text).to include("app/services/users/deactivate.rb")
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("# Billing::Invoices::Create")
+        expect(text).to include("app/services/billing/invoices/create.rb")
+        expect(text).not_to include("app/services/api/v1/addresses/create.rb")
       end
 
       it "lists the candidates for an ambiguous bare name" do

@@ -55,7 +55,11 @@ module RailsAiContext
         .reject { |f| inherited_skips.include?(f[:name].to_s) && !f[:declared] }
       # Keyed by kind and name: `after_action :audit` and `before_action :audit`
       # are two entries in the chain and Rails runs both.
-      declared_on = parent.to_h { |f| [ entry_key(f), f[:from] ] }
+      # The whole ancestor entry, not only its `from:`: an entry the walk
+      # could not attribute carries `provenance` instead, and merging only
+      # `from` dropped that on the tier the label exists for.
+      attribution_of = parent.to_h { |f| [ entry_key(f), f.slice(:from, :provenance) ] }
+      declared_on = attribution_of
       declared_names = declared.map { |f| entry_key(f) }.to_set
 
       # A filter this body declares is its own, whatever an ancestor declares
@@ -66,7 +70,7 @@ module RailsAiContext
       inherited = mark_conditional_skips(
         parent.reject { |f| declared_names.include?(entry_key(f)) } +
           applicable.select(&inherited_here)
-            .map { |f| f.merge(from: declared_on[entry_key(f)]) }, conditions, action
+            .map { |f| f.except(:from, :provenance).merge(attribution_of[entry_key(f)]) }, conditions, action
       )
 
       { own: own,
@@ -181,6 +185,7 @@ module RailsAiContext
       # Where in the walk each entry was first seen, so the list can be
       # emitted root first while the order inside one class is kept.
       positions = {}
+      evidence = {}
       depth = 0
       dropped = skipped.map(&:to_s).to_set
       name = Introspectors::ActionResolver.resolve_entry_name(controllers, parent_class, within)
@@ -206,26 +211,34 @@ module RailsAiContext
         # the walk did see is never mistaken for a skip of a declaration it
         # could not. A skip record is not a sighting, hence the reject above.
         declares.merge(carried.map { |f| f[:name].to_s })
+        # Whether this class's own body was read at all. Without that, an
+        # unmarked filter is a filter nobody could check, not one a gem
+        # installed - an engine's ApplicationController and a concern-only
+        # payload both land there, and dropping their attribution would lose
+        # the answer rather than correct it.
+        body_known = carried.any? { |f| f[:declared] }
         carried.select { |f| applies?(f, action) }
           .reject { |f| dropped.include?(f[:name].to_s) }
-          .each { |f| record_attribution(found, attributed, f, name, positions, depth) }
+          .each { |f| record_attribution(found, attributed, f, name, positions, depth, evidence, body_known) }
 
         name = Introspectors::ActionResolver.resolve_entry_name(controllers, info[:parent_class], name)
       end
 
-      [ run_order(found, attributed, positions), dropped, conditions, declares ]
+      [ run_order(found, attributed, positions, evidence), dropped, conditions, declares ]
     end
 
     # The closest ancestor carrying a filter keeps its constraints, but a
     # booted ancestor carries names it only inherits, so `from:` moves on to
     # the first ancestor whose own body declared it.
-    def record_attribution(found, attributed, filter, ancestor, positions = {}, depth = 0)
+    def record_attribution(found, attributed, filter, ancestor, positions = {}, depth = 0,
+                           evidence = {}, body_known = false)
       key = entry_key(filter)
       if found.key?(key)
         found[key] = found[key].merge(from: ancestor) if filter[:declared] && !attributed.include?(key)
       else
         found[key] = filter.merge(from: ancestor)
         positions[key] = depth
+        evidence[key] = body_known
       end
       attributed << key if filter[:declared]
     end
@@ -236,13 +249,15 @@ module RailsAiContext
     # a gem's `on_load :action_controller` block, the framework, a concern -
     # and crediting it to the nearest app class sent an agent to a file that
     # never mentions it.
-    def run_order(found, attributed, positions)
+    def run_order(found, attributed, positions, evidence = {})
       found.keys
         .each_with_index
         .sort_by { |key, index| [ -positions.fetch(key, 0), index ] }
         .map do |key, _|
           entry = found[key]
-          attributed.include?(key) ? entry : entry.merge(from: nil, provenance: "not declared in the controller chain").compact
+          next entry if attributed.include?(key) || !evidence[key]
+
+          entry.merge(from: nil, provenance: "not declared in the controller chain").compact
         end
     end
 

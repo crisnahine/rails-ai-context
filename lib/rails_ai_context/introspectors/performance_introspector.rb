@@ -298,15 +298,11 @@ module RailsAiContext
         return @app_written_counter_columns if defined?(@app_written_counter_columns)
 
         writers = Set.new
-        %w[app lib].each do |dir|
-          base = File.join(root, dir)
-          next unless Dir.exist?(base)
+        %w[app lib].each do |kind|
+          SourceScan.each(root, kind: kind, skip_concerns: false) do |record|
+            next unless record.source.include?("_count")
 
-          Dir.glob(File.join(base, "**", "*.rb")).each do |path|
-            source = RailsAiContext::SafeFile.read(path) or next
-            next unless source.include?("_count")
-
-            source.scan(/(\w+_count)\s*[:=]/).each { |match| writers << match[0] }
+            record.source.scan(/(\w+_count)\s*[:=]/).each { |match| writers << match[0] }
           end
         end
         @app_written_counter_columns = writers

@@ -28,7 +28,6 @@ module RailsAiContext
     def self.quarantine_stdout
       original = $stdout
       saved_stdout = reopenable_target? ? saved_stdout_io : nil
-      inherited_env = ENV[STDOUT_FD_ENV]
       if saved_stdout
         # `exec` closes a dup'd descriptor unless close-on-exec is cleared,
         # and the new image would then save fd 1 - by then pointing at
@@ -45,8 +44,12 @@ module RailsAiContext
     ensure
       if saved_stdout
         STDOUT.reopen(saved_stdout)
-        saved_stdout.close
-        inherited_env ? ENV[STDOUT_FD_ENV] = inherited_env : ENV.delete(STDOUT_FD_ENV)
+        # Closed for real, and the pointer goes with it: the descriptor
+        # exists to survive one exec, and leaving it open with close-on-exec
+        # cleared hands a copy of the MCP channel to every subprocess the app
+        # spawns afterwards.
+        saved_stdout.close unless saved_stdout.closed?
+        ENV.delete(STDOUT_FD_ENV)
       end
       $stdout = original
     end
@@ -59,10 +62,12 @@ module RailsAiContext
     end
     private_class_method :saved_stdout_io
 
+    # Autoclose, so the ensure block's `close` releases the descriptor the
+    # exec carried over rather than leaking it for the process's life.
     def self.io_for_fd(fd)
       return nil unless fd.positive?
 
-      io = IO.new(fd, "w", autoclose: false)
+      io = IO.new(fd, "w")
       io.stat
       io
     rescue StandardError

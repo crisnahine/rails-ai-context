@@ -17,9 +17,16 @@ module RailsAiContext
     # app/views whose last extension is none of these is not a template the
     # tools can read: an image counted as a template, and the ivar regex ran
     # over its bytes.
-    # `rb` is here for Phlex views, which are Ruby classes under app/views
-    # rather than ActionView templates.
-    DEFAULT_HANDLER_EXTENSIONS = %w[raw erb html builder ruby rb jbuilder haml slim].freeze
+    # Rails registers only erb/html/builder/ruby/raw itself; every other
+    # handler here comes from a gem. Booted, the registry answers and this
+    # list is a floor. Unbooted there is no registry, so a template a gem
+    # renders has to be on it or the app reads as having fewer views than it
+    # has. `rb` is Phlex, a Ruby class under app/views rather than a
+    # template.
+    DEFAULT_HANDLER_EXTENSIONS = %w[
+      raw erb html builder ruby rb jbuilder haml slim
+      rabl liquid arb md markdown prawn csv atom rss
+    ].freeze
 
     module_function
 
@@ -34,10 +41,6 @@ module RailsAiContext
         []
       end
       @handler_extensions = registered | DEFAULT_HANDLER_EXTENSIONS
-    end
-
-    def reset_handler_extensions!
-      @handler_extensions = nil
     end
 
     # @param path [String] any path under app/views

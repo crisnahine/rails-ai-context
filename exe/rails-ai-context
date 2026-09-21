@@ -191,6 +191,16 @@ class RailsAiContextCLI < Thor
       end
       ::RailsAiContext::LegacyCleanup.prompt_legacy_files(cleanup_tools, root: Dir.pwd)
 
+      # An explicit --format names a file, so it is written either way. With
+      # no format and an MCP-only install there is nothing to write, and the
+      # rake surface says the same thing in the same words.
+      if options[:format].nil? && !::RailsAiContext.configuration.context_files
+        $stderr.puts "MCP-only install (config.context_files = false): no context files written."
+        $stderr.puts "Run `rails-ai-context context --format claude` to write one anyway, " \
+                     "or set config.context_files = true."
+        return
+      end
+
       $stderr.puts "Introspecting Rails app..."
 
       # An explicit --format overrides the recorded selection.

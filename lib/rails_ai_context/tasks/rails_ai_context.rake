@@ -66,10 +66,6 @@ def prompt_setup
   RailsAiContext::Install::Program.select_setup(install_surface)
 end unless defined?(prompt_setup)
 
-def prompt_tool_mode
-  RailsAiContext::Install::Program.select_tool_mode(install_surface)
-end unless defined?(prompt_tool_mode)
-
 def save_tool_mode_to_initializer(mode)
   RailsAiContext::Install::SelectionRecord.write_tool_mode(mode, root: Rails.root)
 rescue => e

@@ -644,6 +644,40 @@ RSpec.describe RailsAiContext::ActionFilters do
       expect(entry[:provenance]).to eq("not declared in the controller chain")
     end
 
+    # Reflection hands every class the whole chain, so the gem callback is on
+    # the child's own list too. The child's copy used to win and arrive with
+    # neither an attribution nor the label that explains its absence.
+    it "carries the label through to the booted tier's own copy" do
+      chain = [ { kind: "around", name: "sentry_around_action" },
+                { kind: "before", name: "authenticate" } ]
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ chain.first, chain.last.merge(declared: true) ] },
+        "Admin::PostsController" => { parent_class: "ApplicationController", filters: chain }
+      } } }
+
+      entry = described_class.for_controller(ctx, "Admin::PostsController")[:inherited]
+        .find { |f| f[:name] == "sentry_around_action" }
+
+      expect(entry).not_to have_key(:from)
+      expect(entry[:provenance]).to eq("not declared in the controller chain")
+    end
+
+    # A controller whose file the walk cannot read - an engine's, a gem's -
+    # marks nothing as declared. That is "unknown", not "a gem installed it",
+    # and dropping the attribution there loses the answer.
+    it "keeps the attribution when no ancestor's body could be read" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "authenticate" } ] },
+        "Admin::PostsController" => { parent_class: "ApplicationController",
+                                      filters: [ { kind: "before", name: "authenticate" } ] }
+      } } }
+
+      entry = described_class.for_controller(ctx, "Admin::PostsController")[:inherited].first
+
+      expect(entry[:from]).to eq("ApplicationController")
+      expect(entry).not_to have_key(:provenance)
+    end
+
     it "stops at the first ancestor the payload does not carry" do
       deep_context[:controllers][:controllers].delete("ApplicationController")
 

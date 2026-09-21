@@ -58,9 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key this gem synthesizes to order the events of one `after_commit on: [...]`;
   copying it got a `NoMethodError`. Every renderer prints
   `after_commit (on: :create)`.
-- **`sanitize_options` keeps Array, numeric and boolean option values.** They
-  were stringified, so `in: %w[draft sent]` reached `generate_test` as one
-  String and `in_array` got a quoted list.
+- **`sanitize_options` keeps Array, numeric, boolean, nil and Symbol option
+  values.** They were stringified, so `in: %w[draft sent]` reached
+  `generate_test` as one String and `in_array` got a quoted list. A consumer
+  reading `validations[].options`, `.ai-context.json` included, sees the
+  change: `dependent: :destroy` is the Symbol `:destroy` rather than
+  `"destroy"`, and `allow_nil: false` is `false` rather than the truthy String
+  `"false"`.
 - **Only a handler extension counts as a template.** A JPEG or a seed file under
   `app/views` was counted as a template and had ivar names read out of its
   bytes.

@@ -198,6 +198,16 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(result[:partials].keys).to eq([ "pdfs/_fields.html.erb" ])
     end
 
+    # Unbooted there is no handler registry to ask, so a template a gem
+    # renders has to be on the static floor or the app reads as having fewer
+    # views than it has.
+    it "keeps a template whose handler comes from a gem" do
+      File.write(File.join(@root, "app/views/pdfs/index.rabl"), "object @post\n")
+
+      expect(described_class.new(RailsAiContext::StaticApp.new(@root)).call[:templates].keys)
+        .to include("pdfs/index.rabl")
+    end
+
     it "reads no ivars out of an image" do
       expect(result[:templates]["pdfs/summary.html.erb"][:ivars]).to eq([])
     end

@@ -277,25 +277,11 @@ module RailsAiContext
         end.uniq
       end
 
-      # ERB tags carry the Ruby of a `.yml` or `.erb` file. Everything outside
-      # them is blanked rather than dropped, so a reported line number is
-      # still the line in the file.
-      ERB_TAG = /<%={0,2}-?(.*?)-?%>/m
-
+      # ERB tags carry the Ruby of a `.yml` or `.erb` file.
       private_class_method def self.ruby_source(file, source)
         return source if file.end_with?(".rb", ".rake")
 
-        out = +""
-        last = 0
-        source.to_enum(:scan, ERB_TAG).each do
-          match = Regexp.last_match
-          out << source[last...match.begin(0)].gsub(/[^\n]/, " ")
-          body = match[1].to_s
-          out << (body.lstrip.start_with?("#") ? body.gsub(/[^\n]/, " ") : body)
-          last = match.end(0)
-        end
-        out << source[last..].to_s.gsub(/[^\n]/, " ")
-        out
+        RailsAiContext::ErbSource.ruby_in_place(source)
       end
 
       private_class_method def self.scan_env_vars(root)
@@ -690,11 +676,12 @@ module RailsAiContext
       end
 
       # Matched on whole `_`-delimited segments: unanchored, PORT matched
-      # inside PORTAL and SUPPORT, MAIL inside VOICEMAIL, and TOKEN inside
-      # OAUTH_ACCESS_TOKEN_TTL_DAYS, which also redacted its `nil` default.
+      # inside PORTAL and SUPPORT, and MAIL inside VOICEMAIL. The mail keys
+      # carry their own spellings, because MAILER_SENDER and MAILGUN_DOMAIN
+      # are mail settings whose segment is not the bare word.
       CATEGORY_SEGMENTS = [
         [ "API Keys & Secrets", %w[API_KEY SECRET TOKEN] ],
-        [ "Mail", %w[MAIL IMAP SMTP] ],
+        [ "Mail", %w[MAIL MAILER MAILGUN SENDGRID POSTMARK IMAP SMTP] ],
         [ "Database", %w[DATABASE DB REDIS] ],
         [ "Monitoring", %w[OTEL SENTRY DATADOG NEWRELIC APPSIGNAL] ],
         [ "Push Notifications", %w[PUSH VAPID FCM] ],

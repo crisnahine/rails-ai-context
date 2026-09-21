@@ -241,11 +241,11 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     end
   end
 
-  describe "#select_tool_mode" do
+  describe "#select_setup" do
     it "defaults to :mcp instead of raising when stdin hits EOF (ask returns nil)" do
       allow(generator).to receive(:ask).and_return(nil)
 
-      expect { generator.select_tool_mode }.not_to raise_error
+      expect { generator.select_setup }.not_to raise_error
       expect(generator.instance_variable_get(:@tool_mode)).to eq(:mcp)
     end
   end
@@ -321,28 +321,28 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
     end
 
     it "records the mode without asking" do
-      generator.select_tool_mode
+      generator.select_setup
 
       expect(generator.instance_variable_get(:@tool_mode)).to eq(:mcp)
       expect(generator.instance_variable_get(:@context_files)).to be(false)
     end
 
     it "writes config.context_files = false into a fresh initializer" do
-      generator.select_tool_mode
+      generator.select_setup
       generator.create_initializer
 
       expect(File.read(initializer_path)).to include("config.context_files = false")
     end
 
     it "records the choice in the YAML too" do
-      generator.select_tool_mode
+      generator.select_setup
       silence_output { generator.create_yaml_config }
 
       expect(File.read(File.join(tmpdir, ".rails-ai-context.yml"))).to include("context_files: false")
     end
 
     it "writes no context files and says so" do
-      generator.select_tool_mode
+      generator.select_setup
 
       expect(RailsAiContext).not_to receive(:generate_context)
       expect { generator.generate_context_files }.to output(/MCP-only install/).to_stdout
@@ -350,7 +350,7 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
 
     it "leaves the JSON cache out of .gitignore" do
       File.write(File.join(tmpdir, ".gitignore"), "*.log\n")
-      generator.select_tool_mode
+      generator.select_setup
       silence_output { generator.add_to_gitignore }
 
       expect(File.read(File.join(tmpdir, ".gitignore"))).not_to include(".ai-context.json")

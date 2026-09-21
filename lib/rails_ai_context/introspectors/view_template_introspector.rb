@@ -82,16 +82,14 @@ module RailsAiContext
         templates
       end
 
-      # Only the Ruby inside ERB tags. Over the whole file the regex read the
-      # CSS rule `@page` as an ivar the controller assigns.
-      ERB_TAG = /<%={0,2}-?(.*?)-?%>/m
-
       # The one reader of a template's ivars, so `get_view` and this
-      # introspector cannot disagree about what a template uses.
+      # introspector cannot disagree about what a template uses. Only the Ruby
+      # inside ERB tags: over the whole file the regex read the CSS rule
+      # `@page` as an ivar the controller assigns.
       def self.ivars_in(content, path: nil)
         text = content.to_s
-        erb = path ? path.to_s.end_with?(".erb") : text.include?("<%")
-        ruby = erb ? text.scan(ERB_TAG).flatten.join("\n") : text
+        erb = path ? path.to_s.end_with?(".erb") : RailsAiContext::ErbSource.tagged?(text)
+        ruby = erb ? RailsAiContext::ErbSource.tag_bodies(text) : text
         ruby.scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
       end
 
