@@ -65,7 +65,28 @@ module RailsAiContext
           .map { |record| DeclaredConstant.resolve(record.source, record.path_name) }.uniq.sort
         result[:serializer_classes] = names if names.any?
 
+        # An app that keeps its own serializer layer somewhere else still has
+        # one, and "none detected" pushed an agent to add jbuilder or a second
+        # layer under app/serializers.
+        other = other_serializer_dirs
+        result[:serializer_dirs] = other if other.any?
+
         result
+      end
+
+      # Any `serializers` directory under app/ other than app/serializers
+      # itself: `app/services/serializers/...` is the shape this missed.
+      def other_serializer_dirs
+        Dir.glob(File.join(root, "app", "**", "serializers"))
+          .select { |path| File.directory?(path) }
+          .map { |path| path.sub("#{root}/", "") }
+          .reject { |relative| relative == "app/serializers" }
+          .sort
+          .map { |relative| { path: relative, files: Dir.glob(File.join(root, relative, "**", "*.rb")).size } }
+          .reject { |entry| entry[:files].zero? }
+      rescue StandardError => e
+        $stderr.puts "[rails-ai-context] other_serializer_dirs failed: #{e.message}" if ENV["DEBUG"]
+        []
       end
 
       def detect_graphql
@@ -103,23 +124,81 @@ module RailsAiContext
         []
       end
 
+      # Per `allow` block, because that is the unit rack-cors applies: one
+      # flat origin list read as though every origin reached every resource,
+      # and an environment branch read as though all of its arms were live at
+      # once.
       def detect_cors_config
         cors_path = File.join(root, "config/initializers/cors.rb")
         return nil unless File.exist?(cors_path)
 
-        ast_data = SourceIntrospector.walk(cors_path, {
-          origins: -> { Listeners::GenericMacroListener.new(:origins) }
-        })
+        source = RailsAiContext::SafeFile.read(cors_path)
+        node = source && AstCache.parse_string(source)&.value
+        return nil unless node
 
-        origin_calls = ast_data[:origins]
-        return nil if origin_calls.empty?
+        allows = []
+        collect_allow_blocks(node, allows)
+        origins = allows.flat_map { |allow| allow[:origins].map { |o| o[:value] } }.uniq
+        return nil if origins.empty?
 
-        origins = origin_calls.flat_map { |macro| macro[:values].flatten.map(&:to_s) }
-
-        { file: "config/initializers/cors.rb", origins: origins }
+        { file: "config/initializers/cors.rb", origins: origins, allows: allows }
       rescue => e
         $stderr.puts "[rails-ai-context] detect_cors_config failed: #{e.message}" if ENV["DEBUG"]
         nil
+      end
+
+      def collect_allow_blocks(node, found)
+        return unless node.is_a?(Prism::Node)
+
+        if node.is_a?(Prism::CallNode) && node.name == :allow && node.block
+          entry = { origins: [], resources: [] }
+          collect_cors_calls(node.block, entry, nil)
+          found << entry if entry[:origins].any? || entry[:resources].any?
+          return
+        end
+
+        node.compact_child_nodes.each { |child| collect_allow_blocks(child, found) }
+      end
+
+      def collect_cors_calls(node, entry, condition)
+        return unless node.is_a?(Prism::Node)
+
+        case node
+        when Prism::IfNode
+          predicate = one_line_source(node.predicate)
+          collect_cors_calls(node.statements, entry, predicate)
+          collect_cors_calls(node.subsequent, entry, "else #{predicate}")
+          return
+        when Prism::UnlessNode
+          predicate = "not #{one_line_source(node.predicate)}"
+          collect_cors_calls(node.statements, entry, predicate)
+          collect_cors_calls(node.else_clause, entry, "else #{predicate}")
+          return
+        when Prism::CallNode
+          if node.receiver.nil? && %i[origins resource].include?(node.name)
+            values = Array(node.arguments&.arguments).flat_map { |arg| literal_strings(arg) }
+            if node.name == :origins
+              values.each { |value| entry[:origins] << { value: value, condition: condition }.compact }
+            else
+              entry[:resources] << values.first if values.first
+            end
+          end
+        end
+
+        node.compact_child_nodes.each { |child| collect_cors_calls(child, entry, condition) }
+      end
+
+      def literal_strings(node)
+        case node
+        when Prism::StringNode then [ node.unescaped ]
+        when Prism::SymbolNode then [ node.value.to_s ]
+        when Prism::ArrayNode  then node.elements.flat_map { |element| literal_strings(element) }
+        else []
+        end
+      end
+
+      def one_line_source(node)
+        node ? node.slice.gsub(/\s+/, " ").strip : nil
       end
 
       def detect_api_client_generation

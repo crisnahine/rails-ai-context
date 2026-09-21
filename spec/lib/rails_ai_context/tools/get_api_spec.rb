@@ -297,4 +297,19 @@ RSpec.describe RailsAiContext::Tools::GetApi do
       end
     end
   end
+
+  # 91 hand-rolled serializer modules under app/services/serializers, and the
+  # headline pushed an agent toward jbuilder or a new app/serializers class.
+  describe "an app with its own serializer layer" do
+    it "names the directory instead of reporting none" do
+      allow(described_class).to receive(:cached_context).and_return({
+        api: { serializers: { serializer_dirs: [ { path: "app/services/serializers", files: 91 } ] } }
+      })
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("no serializer framework detected")
+      expect(text).to include("app/services/serializers (91 files)")
+    end
+  end
 end

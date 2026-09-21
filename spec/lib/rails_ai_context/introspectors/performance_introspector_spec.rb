@@ -76,6 +76,56 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
 
         expect(missing).to be_empty
       end
+
+      # On an app with uuid primary keys, a string `stripe_customer_id` and an
+      # integer `calendar_app_id` cannot reference any row in the database.
+      it "leaves an external id alone when no table has a key of that type" do
+        missing = missing_for(<<~RUBY)
+          create_table "users", id: :uuid do |t|
+            t.string "stripe_customer_id"
+            t.integer "calendar_app_id"
+          end
+        RUBY
+
+        expect(missing).to be_empty
+      end
+
+      it "still reports one a foreign key declares" do
+        missing = missing_for(<<~RUBY)
+          create_table "users", id: :uuid do |t|
+            t.string "stripe_customer_id"
+          end
+
+          create_table "orders", id: :uuid do |t|
+            t.string "owner_id"
+          end
+
+          add_foreign_key "orders", "users", column: "owner_id"
+        RUBY
+
+        expect(missing).to contain_exactly(a_hash_including(table: "orders", column: "owner_id"))
+      end
+
+      it "still reports one a belongs_to names" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "app", "models", "order.rb"), <<~RUBY)
+            class Order < ApplicationRecord
+              belongs_to :owner, class_name: "User", foreign_key: "owner_id"
+            end
+          RUBY
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            create_table "orders", id: :uuid do |t|
+              t.string "owner_id"
+            end
+          RUBY
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_fk_indexes]
+
+          expect(missing).to contain_exactly(a_hash_including(table: "orders", column: "owner_id"))
+        end
+      end
     end
 
     # This check reads the table off the model itself, and underscoring the
@@ -125,6 +175,41 @@ RSpec.describe RailsAiContext::Introspectors::PerformanceIntrospector do
         )
 
         expect(missing).to contain_exactly(a_hash_including(association: "tokens"))
+      end
+
+      # Following the hint on a counter the app maintains itself double-counts
+      # every create and makes a reset stick only until the next destroy.
+      it "says nothing about a counter the app writes itself" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app", "models"))
+          FileUtils.mkdir_p(File.join(dir, "app", "services", "notifications"))
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "app", "models", "user.rb"),
+                     "class User < ApplicationRecord
+  has_many :notifications
+end
+")
+          File.write(File.join(dir, "app", "models", "notification.rb"),
+                     "class Notification < ApplicationRecord
+  belongs_to :user
+end
+")
+          File.write(File.join(dir, "app", "services", "notifications", "increment.rb"), <<~RUBY)
+            class Notifications::Increment < ActiveInteraction::Base
+              object :user
+
+              def execute
+                user.update_columns(notifications_count: user.notifications_count + 1)
+              end
+            end
+          RUBY
+          File.write(File.join(dir, "db", "schema.rb"),
+                     "create_table \"users\" do |t|\n  t.integer \"notifications_count\"\nend\n")
+
+          missing = described_class.new(RailsAiContext::StaticApp.new(dir)).call[:missing_counter_cache]
+
+          expect(missing).to be_empty
+        end
       end
 
       # The row is keyed by the constant the app has, or the same tool then

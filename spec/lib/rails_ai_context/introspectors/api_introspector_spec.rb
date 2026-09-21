@@ -136,6 +136,48 @@ RSpec.describe RailsAiContext::Introspectors::ApiIntrospector do
           expect(cors[:origins]).to include("localhost:3000", "example.com")
         end
       end
+
+      # One flat list read as though every origin, `*` included, reached
+      # every resource, in every environment.
+      context "with several allow blocks and an environment branch" do
+        let(:cors_path) { File.join(Rails.root, "config/initializers/cors.rb") }
+
+        before do
+          FileUtils.mkdir_p(File.dirname(cors_path))
+          File.write(cors_path, <<~RUBY)
+            Rails.application.config.middleware.insert_before 0, Rack::Cors do
+              allow do
+                if Rails.env.production?
+                  origins 'https://app.example.com'
+                else
+                  origins '*'
+                end
+                resource '*', headers: :any, methods: %i[get post]
+              end
+
+              allow do
+                origins '*'
+                resource '/api/v1/public/items', headers: :any, methods: %i[get]
+              end
+            end
+          RUBY
+        end
+
+        after { FileUtils.rm_f(cors_path) }
+
+        it "keeps each allow block's resources and its origins together" do
+          allows = result[:cors_config][:allows]
+
+          expect(allows.size).to eq(2)
+          expect(allows.first[:resources]).to eq([ "*" ])
+          expect(allows.first[:origins]).to contain_exactly(
+            { value: "https://app.example.com", condition: "Rails.env.production?" },
+            { value: "*", condition: "else Rails.env.production?" }
+          )
+          expect(allows.last[:resources]).to eq([ "/api/v1/public/items" ])
+          expect(allows.last[:origins]).to eq([ { value: "*" } ])
+        end
+      end
     end
 
     describe "api_client_generation" do

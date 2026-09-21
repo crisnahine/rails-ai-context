@@ -200,6 +200,13 @@ module RailsAiContext
 
         def serialization_line(data)
           return serialization_label(data[:serializers]) if serializers?(data)
+
+          dirs = Array(data.dig(:serializers, :serializer_dirs))
+          if dirs.any?
+            return "no serializer framework detected; the app has its own layer in " +
+                   dirs.map { |dir| "#{dir[:path]} (#{count_phrase(dir[:files], "file")})" }.join(", ")
+          end
+
           "none detected (no .jbuilder templates, no app/serializers classes)"
         end
 
@@ -220,8 +227,25 @@ module RailsAiContext
         def cors_line(cors)
           return "not detected (no CORS initializer with active origins)" unless cors.is_a?(Hash)
 
+          allows = Array(cors[:allows])
+          return cors_allow_lines(cors, allows) if allows.any?
+
           origins = Array(cors[:origins]).map(&:to_s)
           origins.any? ? "#{cors[:file]} (origins: #{origins.join(', ')})" : cors[:file].to_s
+        end
+
+        # One line per `allow` block: a flat origin list read as though every
+        # origin reached every resource, `*` included.
+        def cors_allow_lines(cors, allows)
+          rows = allows.map do |allow|
+            resources = Array(allow[:resources])
+            origins = Array(allow[:origins]).map do |origin|
+              origin[:condition] ? "#{origin[:value]} if #{origin[:condition]}" : origin[:value].to_s
+            end
+            scope = resources.any? ? resources.join(", ") : "(no resource)"
+            "  - `#{scope}` → #{origins.any? ? origins.join(', ') : '(no origins)'}"
+          end
+          ([ "#{cors[:file]} (#{count_phrase(allows.size, "allow block")})" ] + rows).join("\n")
         end
 
         def missing_areas(data)
