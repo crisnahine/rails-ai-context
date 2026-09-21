@@ -27,7 +27,12 @@ module RailsAiContext
         "clearance"       => { category: :auth, note: "Authentication via Clearance." },
 
         # Background jobs
-        "sidekiq"         => { category: :jobs, note: "Background jobs via Sidekiq. Check config/sidekiq.yml." },
+        "sidekiq"         => { category: :jobs, note: "Background jobs via Sidekiq." },
+        "sidekiq-pro"     => { category: :jobs, note: "Sidekiq Pro: batches, reliable fetch, `Sidekiq::Batch`." },
+        "sidekiq-scheduler" => { category: :jobs, note: "Recurring Sidekiq jobs from a schedule YAML." },
+        "sidekiq-cron"    => { category: :jobs, note: "Cron-style recurring Sidekiq jobs." },
+        "sidekiq-unique-jobs" => { category: :jobs, note: "Lock options on Sidekiq workers (`sidekiq_options lock:`)." },
+        "sidekiq-throttled" => { category: :jobs, note: "Per-worker concurrency and rate limits for Sidekiq." },
         "good_job"        => { category: :jobs, note: "Background jobs via GoodJob (Postgres-backed)." },
         "solid_queue"     => { category: :jobs, note: "Background jobs via SolidQueue (Rails 8 default)." },
         "delayed_job"     => { category: :jobs, note: "Background jobs via DelayedJob." },
@@ -74,7 +79,12 @@ module RailsAiContext
         "trilogy"         => { category: :database, note: "MySQL adapter (pure Ruby, Rails 8 default over mysql2)." },
         "sqlite3"         => { category: :database, note: "SQLite adapter." },
         "litestack"       => { category: :database, note: "All-in-one SQLite-based backend (cache, jobs, cable, search)." },
-        "redis"           => { category: :database, note: "Redis client. Used for caching/sessions/Action Cable." },
+        "redis"           => { category: :database, note: "Redis client." },
+        "neighbor"        => { category: :database, note: "Vector columns and nearest-neighbour search on ActiveRecord." },
+        "pgvector"        => { category: :database, note: "pgvector types for PostgreSQL vector columns." },
+        "lockbox"         => { category: :database, note: "Application-level column encryption via Lockbox." },
+        "blind_index"     => { category: :database, note: "Queryable hashes for Lockbox-encrypted columns." },
+        "paper_trail"     => { category: :database, note: "Model versioning. Adds controller callbacks and a `versions` table." },
         "kredis"          => { category: :database, note: "Higher-level Redis data structures via Kredis." },
         "solid_cache"     => { category: :database, note: "Database-backed cache (Rails 8)." },
         "solid_cable"     => { category: :database, note: "Database-backed Action Cable (Rails 8)." },
@@ -151,7 +161,22 @@ module RailsAiContext
         "rest-client"     => { category: :utilities, note: "HTTP client via RestClient." },
         "flipper"         => { category: :utilities, note: "Feature flags via Flipper." },
         "bullet"          => { category: :utilities, note: "N+1 query detection via Bullet." },
-        "rack-attack"     => { category: :utilities, note: "Rate limiting and throttling via Rack::Attack." }
+        "rack-attack"     => { category: :utilities, note: "Rate limiting and throttling via Rack::Attack." },
+        "rack-cors"       => { category: :utilities, note: "CORS middleware. Origins and resources in config/initializers/cors.rb." },
+        "figaro"          => { category: :utilities, note: "ENV from config/application.yml via Figaro." },
+
+        # Service objects
+        "active_interaction" => { category: :services, note: "Service objects as ActiveInteraction::Base filters, run with .run / .run!." },
+        "interactor"      => { category: :services, note: "Service objects via Interactor, run with .call." },
+        "trailblazer-operation" => { category: :services, note: "Service objects as Trailblazer operations." },
+
+        # Payments and external APIs
+        "stripe"          => { category: :payments, note: "Stripe API client. Webhooks usually mount their own controller." },
+        "plaid"           => { category: :payments, note: "Plaid API client for bank data." },
+        "braintree"       => { category: :payments, note: "Braintree payments client." },
+
+        # Auth (hardware)
+        "webauthn"        => { category: :auth, note: "WebAuthn/passkey registration and authentication." }
       }.freeze
 
       def initialize(app)
@@ -220,17 +245,46 @@ module RailsAiContext
         {}
       end
 
+      # Every Rails app resolves minitest through activesupport, so presence
+      # in the lockfile said nothing about the app's own test suite.
+      INDIRECT_BY_DEFAULT = %w[minitest].freeze
+
       def detect_notable_gems(lock)
         NOTABLE_GEMS.filter_map do |gem_name, info|
           next unless lock.present?(gem_name)
+          next if INDIRECT_BY_DEFAULT.include?(gem_name) && !app_uses_indirect?(gem_name, lock)
 
           {
             name: gem_name,
             version: lock.version(gem_name),
             category: info[:category].to_s,
-            note: info[:note]
+            note: refine_note(gem_name, info[:note])
           }
         end
+      end
+
+      def app_uses_indirect?(gem_name, lock)
+        return true if lock.direct?(gem_name)
+
+        gem_name == "minitest" ? Dir.exist?(File.join(app.root.to_s, "test")) : false
+      end
+
+      # What the app does with Redis is a question the app answers. The fixed
+      # sentence named caching, sessions and Action Cable on an app that used
+      # Solid Cache and cookie sessions.
+      def refine_note(gem_name, note)
+        return note unless gem_name == "redis"
+
+        store = cache_store_name
+        store&.include?("redis") ? "#{note} Cache store: #{store}." : note
+      end
+
+      def cache_store_name
+        return nil unless defined?(Rails) && Rails.respond_to?(:application) && Rails.application
+
+        Array(Rails.application.config.cache_store).first.to_s.downcase.presence
+      rescue StandardError
+        nil
       end
 
       def categorize_gems(notable)

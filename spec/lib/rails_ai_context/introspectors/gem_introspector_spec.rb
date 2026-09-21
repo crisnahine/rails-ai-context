@@ -209,6 +209,44 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
     end
   end
 
+  # Every Rails app resolves minitest through activesupport, so an RSpec-only
+  # app was told it had a Minitest suite in a test/ directory it does not have.
+  describe "a notable gem that arrives as someone else's dependency" do
+    def write_lockfile(dependencies)
+      File.write(File.join(tmpdir, "Gemfile.lock"), <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            activesupport (8.0.5.1)
+              minitest (>= 5.1)
+            minitest (5.25.4)
+            rspec-rails (8.0.4)
+
+        DEPENDENCIES
+        #{dependencies.map { |d| "  #{d}" }.join("\n")}
+      LOCK
+    end
+
+    it "leaves minitest out when nothing in the app points at it" do
+      write_lockfile([ "rspec-rails (= 8.0.4)" ])
+
+      expect(introspector.call[:notable_gems].map { |g| g[:name] }).not_to include("minitest")
+    end
+
+    it "keeps it when the Gemfile names it" do
+      write_lockfile([ "minitest", "rspec-rails (= 8.0.4)" ])
+
+      expect(introspector.call[:notable_gems].map { |g| g[:name] }).to include("minitest")
+    end
+
+    it "keeps it when the app has a test directory" do
+      write_lockfile([ "rspec-rails (= 8.0.4)" ])
+      FileUtils.mkdir_p(File.join(tmpdir, "test"))
+
+      expect(introspector.call[:notable_gems].map { |g| g[:name] }).to include("minitest")
+    end
+  end
+
   describe "NOTABLE_GEMS" do
     it "covers all expected categories" do
       categories = described_class::NOTABLE_GEMS.values.map { |v| v[:category] }.uniq
@@ -226,6 +264,15 @@ RSpec.describe RailsAiContext::Introspectors::GemIntrospector do
       entry = described_class::NOTABLE_GEMS["solid_errors"]
       expect(entry).not_to be_nil
       expect(entry[:category]).to eq(:monitoring)
+    end
+
+    # Each of these changes how code in an app is written, and an app built
+    # on them read as an app with none of them.
+    it "covers the gems that shape an app's architecture" do
+      %w[active_interaction paper_trail rack-cors sidekiq-scheduler sidekiq-unique-jobs
+         lockbox blind_index neighbor stripe webauthn figaro].each do |name|
+        expect(described_class::NOTABLE_GEMS).to have_key(name)
+      end
     end
 
     it "ends every note with terminal punctuation" do

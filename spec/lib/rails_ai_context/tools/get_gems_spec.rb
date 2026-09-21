@@ -56,8 +56,23 @@ RSpec.describe RailsAiContext::Tools::GetGems do
         result = described_class.call
         text = result.content.first[:text]
         expect(text).to include("config/initializers/devise.rb")
-        expect(text).to include("config/sidekiq.yml")
         expect(text).to include("config/storage.yml")
+      end
+
+      # The app names its file sidekiq_production.yml, and the hint pointed
+      # at a config/sidekiq.yml that does not exist.
+      it "names the Sidekiq config files the app has, and none when it has none" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+
+          expect(described_class.call.content.first[:text]).not_to include("config/sidekiq")
+
+          File.write(File.join(dir, "config", "sidekiq_production.yml"), ":concurrency: 5\n")
+          described_class.reset_cache!
+
+          expect(described_class.call.content.first[:text]).to include("config/sidekiq_production.yml")
+        end
       end
     end
 
