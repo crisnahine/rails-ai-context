@@ -21,19 +21,54 @@ module RailsAiContext
   # Dependency-free on purpose: standalone mode loads this file before the
   # host app's Bundler.setup runs, so it must not pull in the rest of the gem.
   module OutputGuard
+    # The descriptor the real stdout lives on, handed to a process that
+    # re-execs itself while the quarantine is up.
+    STDOUT_FD_ENV = "RAILS_AI_CONTEXT_STDOUT_FD"
+
     def self.quarantine_stdout
       original = $stdout
-      saved_stdout = reopenable_target? ? STDOUT.dup : nil
-      STDOUT.reopen($stderr) if saved_stdout
+      saved_stdout = reopenable_target? ? saved_stdout_io : nil
+      inherited_env = ENV[STDOUT_FD_ENV]
+      if saved_stdout
+        # `exec` closes a dup'd descriptor unless close-on-exec is cleared,
+        # and the new image would then save fd 1 - by then pointing at
+        # stderr - as its "stdout" and write every MCP response there.
+        # Bundler re-execs exactly here: `require "bundler/setup"` runs
+        # inside this block, and auto_switch re-execs when the lockfile
+        # names a different Bundler than the one running.
+        saved_stdout.close_on_exec = false
+        ENV[STDOUT_FD_ENV] = saved_stdout.fileno.to_s
+        STDOUT.reopen($stderr)
+      end
       $stdout = $stderr
       yield
     ensure
       if saved_stdout
         STDOUT.reopen(saved_stdout)
         saved_stdout.close
+        inherited_env ? ENV[STDOUT_FD_ENV] = inherited_env : ENV.delete(STDOUT_FD_ENV)
       end
       $stdout = original
     end
+
+    # The descriptor an earlier image of this process saved, when there is
+    # one and it is still open; a fresh dup of fd 1 otherwise.
+    def self.saved_stdout_io
+      inherited = ENV[STDOUT_FD_ENV]
+      (inherited && io_for_fd(inherited.to_i)) || STDOUT.dup
+    end
+    private_class_method :saved_stdout_io
+
+    def self.io_for_fd(fd)
+      return nil unless fd.positive?
+
+      io = IO.new(fd, "w", autoclose: false)
+      io.stat
+      io
+    rescue StandardError
+      nil
+    end
+    private_class_method :io_for_fd
 
     # True when $stderr has a real file descriptor STDOUT.reopen can target -
     # false for StringIO and other fd-less doubles, and false if $stderr has
