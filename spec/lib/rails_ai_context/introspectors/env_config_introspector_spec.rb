@@ -246,6 +246,42 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
     end
   end
 
+  # Rails' own generated development.rb assigns perform_caching in both
+  # halves of one `if`. Reporting the first made this tool say `true` where
+  # the running app, and `rails_get_config`, said `false`.
+  describe "a key assigned in more than one branch" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:app) { double("app", root: tmpdir) }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "config", "environments"))
+      File.write(File.join(tmpdir, "config", "environments", "development.rb"), <<~RUBY)
+        Rails.application.configure do
+          if Rails.root.join('tmp', 'caching-dev.txt').exist?
+            config.action_controller.perform_caching = true
+            config.cache_store = :memory_store
+          else
+            config.action_controller.perform_caching = false
+            config.cache_store = :null_store
+          end
+          config.eager_load = false
+        end
+      RUBY
+    end
+
+    after { FileUtils.rm_rf(tmpdir) }
+
+    let(:notable) { introspector.call[:environments].first[:notable] }
+
+    it "names every value with the branch it belongs to" do
+      expect(notable["cache_store"]).to eq(":memory_store if Rails.root.join('tmp', 'caching-dev.txt').exist?, else :null_store")
+    end
+
+    it "leaves an unconditional assignment alone" do
+      expect(notable["eager_load"]).to eq("false")
+    end
+  end
+
   describe "static tier" do
     it "is declared files-only, so call serves the same data unbooted" do
       expect(described_class.static_tier).to eq(:files_only)

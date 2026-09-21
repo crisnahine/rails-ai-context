@@ -41,6 +41,16 @@ RSpec.describe "Listener registration properties" do
             @state = 1
             scope.where(id: 1).order(:id)
 
+            if @state == 1
+              config.cache_store = :memory_store
+            else
+              config.cache_store = :null_store
+            end
+
+            unless @state.nil?
+              config.eager_load = false
+            end
+
             case @state
             when 1 then :one
             else :other

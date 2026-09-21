@@ -56,11 +56,12 @@ module RailsAiContext
       def summarize(path)
         relative = path.sub("#{root}/", "")
         assignments = config_assignments(path)
+        name = File.basename(path, ".rb")
         {
-          name: File.basename(path, ".rb"),
+          name: name,
           file: relative,
           config_keys: assignments.keys.sort,
-          notable: extract_notable(assignments)
+          notable: extract_notable(assignments, environment: name)
         }
       rescue => e
         $stderr.puts "[rails-ai-context] summarize environment #{path} failed: #{e.message}" if ENV["DEBUG"]
@@ -72,22 +73,61 @@ module RailsAiContext
       # `config.active_record.encryption.primary_key`. The listener matches the
       # root anywhere in the chain, so the `Rails.application.config.x` form
       # resolves to the same path as the bare `config.x` inside `configure`.
+      # Every assignment of a path, not the first: Rails' own development
+      # template assigns `perform_caching` in both halves of one `if`, and
+      # the first one is the branch that is not running.
       def config_assignments(path)
         walked = SourceIntrospector.walk(path, { config: Listeners::ConfigAssignmentListener })
         walked[:config].each_with_object({}) do |entry, acc|
           next unless entry[:assignment]
 
-          acc[entry[:path].join(".")] ||= entry[:source]
+          (acc[entry[:path].join(".")] ||= []) << entry
         end
       end
 
-      def extract_notable(assignments)
+      def extract_notable(assignments, environment:)
         NOTABLE_KEYS.each_with_object({}) do |key, notable|
-          source = assignments[key]
-          next unless source
+          entries = assignments[key]
+          next unless entries&.any?
 
-          notable[key] = RailsAiContext::Redaction.redact_and_shorten(one_line(source), 60)
+          live = live_value(key, environment)
+          rendered = live.nil? ? branch_values(entries) : one_line(live.inspect)
+          # A branch-by-branch value carries a condition as well as a value,
+          # and 60 characters cut it mid-predicate.
+          limit = live.nil? && entries.size > 1 ? 140 : 60
+          notable[key] = RailsAiContext::Redaction.redact_and_shorten(rendered, limit)
         end
+      end
+
+      # `:memory_store if Rails.root.join(...).exist?, else :null_store`.
+      def branch_values(entries)
+        return one_line(entries.first[:source].to_s) if entries.size == 1
+
+        entries.map do |entry|
+          value = one_line(entry[:source].to_s)
+          case entry[:condition]
+          when nil then value
+          when "else" then "else #{value}"
+          else "#{value} if #{entry[:condition]}"
+          end
+        end.uniq.join(", ")
+      end
+
+      # The booted app has already resolved the branch, and two tools reading
+      # the same app disagreeing about `cache_store` is the whole complaint.
+      def live_value(key, environment)
+        return nil if RailsAiContext.static_tier?
+        return nil unless defined?(Rails) && Rails.respond_to?(:application) && Rails.application
+        return nil unless environment.to_s == current_environment
+
+        key.split(".").reduce(Rails.application.config) do |target, segment|
+          return nil unless target.respond_to?(segment)
+
+          target.public_send(segment)
+        end
+      rescue StandardError => e
+        $stderr.puts "[rails-ai-context] EnvConfigIntrospector live value for #{key} failed: #{e.message}" if ENV["DEBUG"]
+        nil
       end
 
       # A node slice spans as many lines as the expression did, and the value
