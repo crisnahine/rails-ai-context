@@ -197,6 +197,10 @@ module RailsAiContext
     end
 
     def check_context_freshness
+      # An MCP-only install asked for no context files, so their absence is
+      # the configuration working, not something to fix.
+      return nil unless RailsAiContext.configuration.context_files
+
       ai_tools = configured_ai_tools
 
       # Find the first existing context file or split rule directory for configured tools

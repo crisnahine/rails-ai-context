@@ -21,11 +21,12 @@ module E2E
 
     attr_reader :app_path, :install_path, :gem_home, :database
 
-    def initialize(parent_dir:, name:, install_path:, database: :sqlite3)
+    def initialize(parent_dir:, name:, install_path:, database: :sqlite3, generator_flags: [])
       @app_path     = File.join(parent_dir, name)
       @install_path = install_path
       @gem_home     = File.join(parent_dir, "gemhome-#{name}")
       @database     = database
+      @generator_flags = Array(generator_flags)
     end
 
     def rails_new_flags
@@ -206,7 +207,7 @@ module E2E
     end
 
     def run_install_generator!
-      in_app("bin/rails", "generate", "rails_ai_context:install", "--quiet",
+      in_app("bin/rails", "generate", "rails_ai_context:install", "--quiet", *@generator_flags,
              stdin_input: generator_stdin_input)
     end
 

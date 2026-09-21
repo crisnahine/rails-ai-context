@@ -87,7 +87,9 @@ bundle add rails-ai-context --group development
 rails generate rails_ai_context:install
 ```
 
-The generator asks which AI tools you use and whether you want MCP or CLI mode, then writes the context files, the MCP config for each tool, and `config/initializers/rails_ai_context.rb`. Re-running it is safe; it keeps what you have and adds what is missing.
+The generator asks which AI tools you use and what to write, then creates the context files, the MCP config for each tool, and `config/initializers/rails_ai_context.rb`. Re-running it is safe; it keeps what you have and adds what is missing.
+
+Keeping your own `CLAUDE.md` and `AGENTS.md`? `rails generate rails_ai_context:install --mcp-only` writes the MCP config and leaves every context file alone.
 
 ### Install standalone
 

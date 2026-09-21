@@ -49,18 +49,37 @@ module RailsAiContext
         selected
       end
 
-      def select_tool_mode(surface)
+      # What this install writes. Answers 1 and 2 keep the meaning they have
+      # always had, so anything piping input into the installer still works.
+      Setup = Struct.new(:tool_mode, :context_files)
+
+      def select_setup(surface)
         surface.say ""
-        surface.say "Do you also want MCP server support?", :emph
+        surface.say "What should rails-ai-context write?", :emph
         surface.say ""
-        surface.say "  1. Yes - MCP primary + CLI fallback (generates per-tool MCP config files)"
-        surface.say "  2. No  - CLI only (no server needed)"
+        surface.say "  1. MCP config + context files   (default)"
+        surface.say "  2. Context files only           (CLI mode, no MCP server)"
+        surface.say "  3. MCP config only              (leaves CLAUDE.md, AGENTS.md and rules untouched)"
         surface.say ""
 
         input = surface.ask("Enter number (default: 1):").to_s.strip
-        mode = input == "2" ? :cli : :mcp
-        surface.say "Selected: #{mode == :mcp ? 'MCP + CLI fallback' : 'CLI only'}", :ok
-        mode
+        setup = case input
+        when "2" then Setup.new(:cli, true)
+        when "3" then Setup.new(:mcp, false)
+        else Setup.new(:mcp, true)
+        end
+        surface.say "Selected: #{setup_label(setup)}", :ok
+        setup
+      end
+
+      def select_tool_mode(surface)
+        select_setup(surface).tool_mode
+      end
+
+      def setup_label(setup)
+        return "MCP config only (no context files)" unless setup.context_files
+
+        setup.tool_mode == :mcp ? "MCP + CLI fallback" : "CLI only"
       end
 
       # Offers to remove what a re-run dropped from the selection. `keeping:`
@@ -107,13 +126,15 @@ module RailsAiContext
         end
       end
 
-      def mark_gitignore(surface, root:)
+      # `context_files: false` never produces a .ai-context.json, so there is
+      # nothing to ignore.
+      def mark_gitignore(surface, root:, context_files: true)
         gitignore = File.join(root.to_s, ".gitignore")
         return unless File.exist?(gitignore)
 
         content = File.read(gitignore)
         lines = []
-        unless content.include?(".ai-context.json")
+        if context_files && !content.include?(".ai-context.json")
           lines << "" << "# rails-ai-context (JSON cache - markdown files should be committed)" << ".ai-context.json"
         end
         unless content.include?(".codex/config.toml")

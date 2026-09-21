@@ -264,6 +264,8 @@ class RailsAiContextCLI < Thor
 
     desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml and .mcp.json)"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
+    option :mcp_only, type: :boolean, default: false,
+      desc: "Write the MCP config and nothing else: no CLAUDE.md, AGENTS.md, rules files or .ai-context.json"
     def init
       unless entry_boot.app_present?(Dir.pwd, allow_source_only: true)
         $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
@@ -278,7 +280,9 @@ class RailsAiContextCLI < Thor
 
       # --- Prompts (no Rails needed) ---
       ai_tools = prompt_ai_tools
-      tool_mode = prompt_tool_mode
+      setup = prompt_setup
+      tool_mode = setup.tool_mode
+      context_files = setup.context_files
 
       # --- Cleanup removed tools ---
       cleanup_removed_tools(previous_tools, ai_tools) if previous_tools&.any?
@@ -287,13 +291,13 @@ class RailsAiContextCLI < Thor
       ::RailsAiContext::LegacyCleanup.prompt_legacy_files(ai_tools, root: Dir.pwd)
 
       # --- Record the selection (YAML, plus the initializer line) ---
-      record_selection(ai_tools, tool_mode)
+      record_selection(ai_tools, tool_mode, context_files)
 
       # --- Write per-tool MCP config files (MCP mode only) ---
       write_mcp_configs(ai_tools, tool_mode)
 
       # --- Add .ai-context.json to .gitignore ---
-      add_to_gitignore
+      add_to_gitignore(context_files)
 
       # --- Boot Rails, load config, generate context ---
       # The config files are already on disk by now, so failing here leaves the
@@ -301,12 +305,17 @@ class RailsAiContextCLI < Thor
       # what you run on a repo you have just cloned.
       boot_rails!(command: "init", allow_static: true)
 
-      $stderr.puts ""
-      $stderr.puts "Generating AI context files..."
-      print_context_result(::RailsAiContext.generate_context(format: ai_tools))
+      if context_files
+        $stderr.puts ""
+        $stderr.puts "Generating AI context files..."
+        print_context_result(::RailsAiContext.generate_context(format: ai_tools))
+      else
+        $stderr.puts ""
+        $stderr.puts "MCP-only setup: no context files written."
+      end
 
       # --- Instructions ---
-      show_standalone_instructions(ai_tools, tool_mode)
+      show_standalone_instructions(ai_tools, tool_mode, context_files)
     end
 
     desc "preset NAME", "Run a multi-tool preset (architecture, debugging, migration)"
@@ -367,8 +376,12 @@ class RailsAiContextCLI < Thor
       ::RailsAiContext::Install::Program.select_ai_tools(program_surface)
     end
 
-    def prompt_tool_mode
-      ::RailsAiContext::Install::Program.select_tool_mode(program_surface)
+    def prompt_setup
+      if options[:mcp_only]
+        return ::RailsAiContext::Install::Program::Setup.new(:mcp, false)
+      end
+
+      ::RailsAiContext::Install::Program.select_setup(program_surface)
     end
 
     def read_previous_ai_tools
@@ -381,14 +394,17 @@ class RailsAiContextCLI < Thor
       )
     end
 
-    def add_to_gitignore
-      ::RailsAiContext::Install::Program.mark_gitignore(program_surface, root: Dir.pwd)
+    def add_to_gitignore(context_files = true)
+      ::RailsAiContext::Install::Program.mark_gitignore(program_surface, root: Dir.pwd,
+                                                       context_files: context_files)
     end
 
-    def record_selection(ai_tools, tool_mode)
+    def record_selection(ai_tools, tool_mode, context_files = true)
       result = ::RailsAiContext::Install::SelectionRecord.write(
-        ai_tools, root: Dir.pwd, extra_yaml: { "tool_mode" => tool_mode.to_s }
+        ai_tools, root: Dir.pwd,
+        extra_yaml: { "tool_mode" => tool_mode.to_s, "context_files" => context_files }
       )
+      ::RailsAiContext::Install::SelectionRecord.write_context_files(context_files, root: Dir.pwd)
 
       ::RailsAiContext::Install::SelectionRecord.messages(result).each do |level, text|
         $stderr.puts(level == :warn ? "Warning: #{text}" : text)
@@ -402,7 +418,7 @@ class RailsAiContextCLI < Thor
       )
     end
 
-    def show_standalone_instructions(ai_tools, tool_mode)
+    def show_standalone_instructions(ai_tools, tool_mode, context_files = true)
       $stderr.puts ""
       $stderr.puts "=" * 50
       $stderr.puts " rails-ai-context initialized!"
@@ -411,11 +427,15 @@ class RailsAiContextCLI < Thor
       $stderr.puts "Your setup:"
       ::RailsAiContext::Install::AiTool.all.each do |tool|
         next unless ai_tools.include?(tool.key)
-        $stderr.puts "  #{tool.name.ljust(16)} -> #{tool.files}"
+        $stderr.puts "  #{tool.name.ljust(16)} -> #{context_files ? tool.files : 'MCP config only'}"
+      end
+      unless context_files
+        $stderr.puts ""
+        $stderr.puts "  Left alone on purpose: CLAUDE.md, AGENTS.md, the rules directories and .ai-context.json."
       end
       $stderr.puts ""
       $stderr.puts "Commands:"
-      $stderr.puts "  rails-ai-context context    # Regenerate context files"
+      $stderr.puts "  rails-ai-context context    # Regenerate context files" if context_files
       $stderr.puts "  rails-ai-context tool NAME  # Run any of the #{RailsAiContext::CountPhrase.call(builtin_tool_count, "tool")}"
       if tool_mode == :mcp
         $stderr.puts "  rails-ai-context serve      # Start MCP server"

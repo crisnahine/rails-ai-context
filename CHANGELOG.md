@@ -5,6 +5,142 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **MCP-only install (`--mcp-only`, `config.context_files`).** Some apps keep
+  their own `CLAUDE.md`, `AGENTS.md`, rules files and Copilot instructions and
+  want the server and nothing else. There was no supported way to ask for it:
+  every install entry point ended by generating context files. The install
+  menu now has a third answer, `rails generate rails_ai_context:install
+  --mcp-only` and `rails-ai-context init --mcp-only` take it non-interactively,
+  and the choice is recorded in the initializer and the YAML like the tool
+  mode. With it off, `ai:context` writes nothing and exits 0, `ai:watch` writes
+  nothing, `ai:doctor` raises no context-file warning, and the `.ai-context.json`
+  line is left out of `.gitignore` because nothing writes that file. A command
+  that names a file still writes it: `ai:context:claude` and
+  `context --format claude` both work.
+- **Sidekiq workers in `job_pattern`.** A class that includes `Sidekiq::Job` is
+  not an ActiveJob descendant and does not live in `app/jobs`, so both job
+  passes missed it and no tool in either tier could describe the biggest code
+  area of an app that runs its background work that way. Workers are read from
+  `app/workers` in both tiers, with each one's `sidekiq_options` and `perform`
+  signature. The conventions directory structure counts every directory the app
+  keeps under `app/` rather than a fixed list.
+- **ActiveInteraction services.** `service_pattern` lists a service's declared
+  filters with their types and defaults, names `ActiveInteraction::Base` as the
+  dominant pattern when it is, and `generate_test` writes `.run` with those
+  filters rather than a `.call` the base class does not define.
+- **Notable gems that shape an app.** `active_interaction`, `paper_trail`,
+  `rack-cors`, `figaro`, `webauthn`, `stripe`, `plaid`, `braintree`,
+  `lockbox`, `blind_index`, `neighbor`, `pgvector`, `interactor`,
+  `trailblazer-operation` and the Sidekiq add-ons (`sidekiq-pro`,
+  `sidekiq-scheduler`, `sidekiq-cron`, `sidekiq-unique-jobs`,
+  `sidekiq-throttled`).
+
+### Changed
+
+- **`config.ai_tools = []` writes no context files.** It used to write every
+  tool's files, which is the opposite of what the value says and of what
+  `ContextFileSerializer` has always done with `format: []`. Only an unset
+  selection means "all". The install flow never produced an empty list, so this
+  reaches hand-edited configs only.
+- **The inherited filter list is emitted root first.** Rails runs the root's
+  callbacks first, and the static tier printed the nearest parent's first, so a
+  chain read as authentication running before the current user is loaded.
+- **A filter no ancestor's body declares names no class.** `sentry_around_action`
+  and `set_paper_trail_whodunnit` arrive through a gem's
+  `on_load :action_controller` block; crediting them to the nearest app
+  controller sent an agent to a file that never mentions them. They now carry
+  `provenance` instead of `from`.
+- **Model callbacks print the macro Rails has.** `after_commit_on_create` is a
+  key this gem synthesizes to order the events of one `after_commit on: [...]`;
+  copying it got a `NoMethodError`. Every renderer prints
+  `after_commit (on: :create)`.
+- **`sanitize_options` keeps Array, numeric and boolean option values.** They
+  were stringified, so `in: %w[draft sent]` reached `generate_test` as one
+  String and `in_array` got a quoted list.
+- **Only a handler extension counts as a template.** A JPEG or a seed file under
+  `app/views` was counted as a template and had ivar names read out of its
+  bytes.
+
+### Fixed
+
+Defects found by a tenth QA round of v5.26.0 against a private Rails 8.0.5.1
+API-only app (issues #184 to #222), each rebuilt on a minimal fixture before
+filing.
+
+- **One dangling reflection cost the whole model.** A `has_many :through` naming
+  an association the model does not declare loads fine and only raises when
+  something touches it, so `class_name` ended in `nil.klass` and the per-model
+  rescue replaced the model - its callbacks, its table heading, its graph node -
+  with a single error line. The rescue is per association now, and the
+  reflection is marked `[UNAVAILABLE: through :x is not an association]`.
+- **The MCP transport lost its stdout across a Bundler re-exec.** `exec` closed
+  the saved descriptor, so the new image saved fd 1, by then pointing at stderr,
+  and wrote every JSON-RPC response there. A client launched from outside the
+  app got no answer to `initialize`.
+- **`dependency_graph` drew nodes no app defines.** A `through` hop was the
+  association name camelized (`PrimaryBuyer`, `InvoicePdfAttachment`), the
+  static target ignored `source:`, and a derived name knew none of the app's
+  acronyms. It also cut the graph at 50 models without saying so.
+- **`service_pattern` named a service after a word in a comment.** The regex ran
+  over raw source, never matched `module`, and its basename fallback dropped
+  every namespace. The lookup matched by basename before exact path, so only
+  the alphabetically first `create.rb` could be looked up, and "Called By" was a
+  substring search that listed a non-caller and dropped the real one.
+- **Static route helper names did not exist.** Hyphens were kept
+  (`api_v1_gift-cards_redeem_path` is a subtraction in Ruby), a dotted path was
+  used in the name where Rails uses none, and a name that cannot be one was
+  kept anyway. A booted redirect route appeared in no row and no count.
+- **`get_context` for one action listed every strong-params method in the
+  controller**, so `create_params`' permit list read as the fields `deactivate`
+  accepts.
+- **Controller Schema Hints reported services, serializers and plain constants
+  as missing models.** Only names that resolve to a model are kept now, and the
+  rest are dropped without a line.
+- **`env` read only `.rb` files**, so ENV names in `config/*.yml`, ERB views and
+  rake tasks were missing with nothing saying a file type was skipped. Category
+  matching was unanchored (`PORT` inside `PORTAL`), and a `nil` default printed
+  as `[FILTERED]`.
+- **`env_config` reported the first assignment in a file**, so it printed the
+  branch that is not running and disagreed with `config` on the same app.
+- **`gems` reported a Minitest suite in a `test/` directory that is not there**,
+  from a lockfile entry every Rails app resolves through activesupport, and
+  pointed at a `config/sidekiq.yml` without checking that it exists.
+- **`generate_test` wrote specs that cannot run.** Shoulda matchers were emitted
+  into apps that do not bundle the gem, a namespaced controller produced
+  `create(:api/v1/admin/order)`, the example sent GET whatever the route's verb,
+  and a controller with no file was answered with "no routes found".
+- **`performance_check` suggested indexes and counters the app cannot use.**
+  Every unindexed `*_id` column was a missing foreign key index whatever its
+  type, and a counter the app maintains itself was offered a `counter_cache`
+  that double-counts every create.
+- **`query` answered an unknown column with "Database not found" and exit 0.**
+  Postgres words a missing column, table and database the same way.
+- **`view` counted images and text files as templates**, read ivars out of
+  binary data, and read the CSS rule `@page` as an ivar.
+- **`partial_interface` could not resolve a `.text.erb` partial** by the Rails
+  name its own "Available" list had just printed, and cut a local's method calls
+  at ten with no marker.
+- **`api` merged every CORS allow block and environment branch into one origin
+  list**, so the line read as the API allowing `*` on every resource.
+- **`active_support` listed validator classes as "plain module" concerns.**
+- **`validate` flagged an `acceptance:` virtual attribute as a missing column**
+  and suggested a migration for a column nobody needs.
+- **`search_code --match-type trace` reported no internal calls** for a body
+  whose calls take no parentheses, counted a comment mentioning the method as a
+  call site, and tagged `app/services/models/...` as a Model.
+- **Static answers missed an app's inflections.** A route group found no
+  controller for `api/v1/ai_matches`, and a service file with no `class` line
+  was named by its camelized basename.
+- **The `controllers/{name}` resource refused a short name** the `routes/{name}`
+  resource accepts, and the controller answer pointed at a model that does not
+  exist.
+- **`ai:watch` rewrote every tool's files** whatever the configuration asked
+  for.
+
 ## [5.26.0] - 2026-09-11
 
 ### Added

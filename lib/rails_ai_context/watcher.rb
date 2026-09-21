@@ -68,7 +68,10 @@ module RailsAiContext
 
     def regenerate
       $stderr.puts "[rails-ai-context] Changes detected, regenerating context files..."
-      result = RailsAiContext.generate_context(format: :all)
+      # No format: the configured selection decides, so a watcher no longer
+      # rewrites every tool's files for a user who picked one, and writes
+      # nothing at all under an MCP-only install.
+      result = RailsAiContext.generate_context
       ContextFileReport.each_line(result, RESULT_LINES) { |_bucket, text| $stderr.puts "  #{text}" }
     rescue => e
       $stderr.puts "[rails-ai-context] Error regenerating: #{e.message}"

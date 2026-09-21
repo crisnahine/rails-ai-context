@@ -66,6 +66,10 @@ This creates:
 - `.claude/rules/rails-context.md` - General context rules (always loaded)
 - `.claude/rules/rails-mcp-tools.md` - Tool reference (always loaded)
 
+Keeping your own `CLAUDE.md`? Add `--mcp-only` and only `.mcp.json` is
+written; every context file is left alone. See
+[CONFIGURATION.md](CONFIGURATION.md#mcp-only).
+
 ### Manual MCP config
 
 If you need to configure manually, create `.mcp.json`:

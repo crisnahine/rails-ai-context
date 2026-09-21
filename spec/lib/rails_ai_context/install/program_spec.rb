@@ -75,6 +75,28 @@ RSpec.describe RailsAiContext::Install::Program do
     end
   end
 
+  # A third answer, with 1 and 2 keeping the meaning they have always had so
+  # anything piping input into the installer still works.
+  describe ".select_setup" do
+    it "answers the three shapes an install can take" do
+      expect(described_class.select_setup(surface_class.new("1")).to_a).to eq([ :mcp, true ])
+      expect(described_class.select_setup(surface_class.new("2")).to_a).to eq([ :cli, true ])
+      expect(described_class.select_setup(surface_class.new("3")).to_a).to eq([ :mcp, false ])
+    end
+
+    it "treats an empty answer and EOF as the default" do
+      expect(described_class.select_setup(surface_class.new("")).to_a).to eq([ :mcp, true ])
+      expect(described_class.select_setup(surface_class.new(nil)).to_a).to eq([ :mcp, true ])
+    end
+
+    it "says what MCP-only leaves alone" do
+      surface = surface_class.new("3")
+      described_class.select_setup(surface)
+      expect(surface.text).to include("MCP config only (no context files)")
+      expect(surface.text).to include("leaves CLAUDE.md, AGENTS.md and rules untouched")
+    end
+  end
+
   describe ".cleanup_removed_tools" do
     it "asks nothing when the selection did not shrink" do
       surface = surface_class.new
@@ -107,6 +129,20 @@ RSpec.describe RailsAiContext::Install::Program do
         described_class.mark_gitignore(again, root: root)
         expect(again.lines).to be_empty
         expect(File.read(File.join(root, ".gitignore"))).to eq(content)
+      end
+    end
+
+    # Only the `:json` context format writes .ai-context.json, so an
+    # MCP-only app never produces one.
+    it "leaves the JSON cache out when no context files are written" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".gitignore"), "log/\n")
+
+        described_class.mark_gitignore(surface_class.new, root: root, context_files: false)
+
+        content = File.read(File.join(root, ".gitignore"))
+        expect(content).not_to include(".ai-context.json")
+        expect(content).to include(".codex/config.toml")
       end
     end
   end

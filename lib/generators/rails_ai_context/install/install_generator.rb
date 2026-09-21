@@ -38,6 +38,9 @@ module RailsAiContext
       class_option :defaults, type: :boolean, default: false,
         desc: "Skip all interactive prompts and use each prompt's documented default (for CI/non-interactive use)"
 
+      class_option :mcp_only, type: :boolean, default: false,
+        desc: "Write the MCP config and nothing else: no CLAUDE.md, AGENTS.md, rules files or .ai-context.json"
+
       BARE_GUARD_PATTERN = RailsAiContext::Install::InitializerFile::BARE_GUARD
 
       def select_ai_tools
@@ -55,7 +58,15 @@ module RailsAiContext
       end
 
       def select_tool_mode
-        @tool_mode = RailsAiContext::Install::Program.select_tool_mode(program_surface)
+        if options[:mcp_only]
+          @tool_mode = :mcp
+          @context_files = false
+          return
+        end
+
+        setup = RailsAiContext::Install::Program.select_setup(program_surface)
+        @tool_mode = setup.tool_mode
+        @context_files = setup.context_files
       end
 
       def create_mcp_config
@@ -79,6 +90,11 @@ module RailsAiContext
             #   :mcp - MCP primary + CLI fallback (default, requires `rails ai:serve`)
             #   :cli - CLI only (no MCP server needed, uses `rails 'ai:tool[NAME]'`)
             # config.tool_mode = :mcp
+
+            # Whether this gem writes context files at all. false is MCP-only:
+            # the server and the CLI still answer, and CLAUDE.md, AGENTS.md,
+            # the rules directories and .ai-context.json are left alone.
+            # config.context_files = true
         SECTION
         "Introspection" => <<~SECTION,
             # ── Introspection ─────────────────────────────────────────────────
@@ -261,11 +277,7 @@ module RailsAiContext
         # Always write uncommented so re-install can detect previous selection
         tools_line = RailsAiContext::Install::SelectionRecord.initializer_line(@selected_formats)
 
-        tool_mode_line = if @tool_mode == :cli
-          "  config.tool_mode = :cli    # CLI only (no MCP server needed)"
-        else
-          "  config.tool_mode = :mcp   # MCP primary + CLI fallback"
-        end
+        tool_mode_line = build_tool_mode_line
 
         content = "# frozen_string_literal: true\n\nRailsAiContext.configure do |config|\n"
 
@@ -280,6 +292,7 @@ module RailsAiContext
             #   :mcp - MCP primary + CLI fallback (default, requires `rails ai:serve`)
             #   :cli - CLI only (no MCP server needed, uses `rails 'ai:tool[NAME]'`)
           #{tool_mode_line}
+          #{build_context_files_line}
 
         SECTION
 
@@ -311,6 +324,10 @@ module RailsAiContext
         # 2. Update tool_mode if user picked a new mode
         existing, changed = update_config_line(existing, "config.tool_mode", build_tool_mode_line)
         changes << "tool_mode" if changed
+
+        # 3. Record whether this install writes context files at all
+        existing, changed = update_config_line(existing, "config.context_files", build_context_files_line)
+        changes << "context_files" if changed
 
         # 3. Add any missing config sections
         CONFIG_SECTIONS.each do |name, section_content|
@@ -423,6 +440,20 @@ module RailsAiContext
         end
       end
 
+      # Written uncommented either way, so a re-run reads the same answer the
+      # last one recorded.
+      def build_context_files_line
+        if context_files?
+          "  config.context_files = true   # write CLAUDE.md, AGENTS.md and rules files"
+        else
+          "  config.context_files = false  # MCP only: no context files are written"
+        end
+      end
+
+      def context_files?
+        @context_files.nil? ? true : @context_files
+      end
+
       def read_previous_ai_tools
         RailsAiContext::Install::SelectionRecord.read(root: Rails.root)
       end
@@ -435,7 +466,7 @@ module RailsAiContext
         # comment behind. One writer per file, and it is not this call.
         result = RailsAiContext::Install::SelectionRecord.write(
           @selected_formats, root: Rails.root,
-          extra_yaml: { "tool_mode" => @tool_mode.to_s },
+          extra_yaml: { "tool_mode" => @tool_mode.to_s, "context_files" => context_files? },
           initializer: false
         )
 
@@ -445,7 +476,8 @@ module RailsAiContext
       end
 
       def add_to_gitignore
-        RailsAiContext::Install::Program.mark_gitignore(program_surface, root: Rails.root)
+        RailsAiContext::Install::Program.mark_gitignore(program_surface, root: Rails.root,
+                                                        context_files: context_files?)
       end
 
       def install_validation_hook
@@ -505,6 +537,12 @@ module RailsAiContext
       end
 
       def generate_context_files
+        unless context_files?
+          say ""
+          say "MCP-only install: no context files written.", :yellow
+          return
+        end
+
         say ""
         say "Generating AI context files...", :yellow
 
@@ -540,7 +578,12 @@ module RailsAiContext
         say "Your setup:", :yellow
         RailsAiContext::Install::AiTool.all.each do |tool|
           next unless @selected_formats.include?(tool.key)
-          say "  ✅ #{tool.name.ljust(16)} -> #{tool.files}"
+          files = context_files? ? tool.files : "MCP config only"
+          say "  ✅ #{tool.name.ljust(16)} -> #{files}"
+        end
+        unless context_files?
+          say ""
+          say "  Left alone on purpose: CLAUDE.md, AGENTS.md, the rules directories and .ai-context.json.", :yellow
         end
         say ""
         say "Commands:", :yellow

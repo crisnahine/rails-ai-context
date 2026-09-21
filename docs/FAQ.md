@@ -59,6 +59,19 @@ Yes, freely. Both generate identical context files and provide the same 45 tools
 **Don't commit:**
 - `.ai-context.json` - auto-added to .gitignore by the install generator
 
+### Can I use only the MCP server?
+
+Yes:
+
+```bash
+rails generate rails_ai_context:install --mcp-only   # or: rails-ai-context init --mcp-only
+```
+
+The MCP config is written, `config.context_files = false` is recorded, and no
+`CLAUDE.md`, `AGENTS.md`, rules file or `.ai-context.json` is written or
+touched. Every tool still answers over MCP and over the CLI. See
+[CONFIGURATION.md](CONFIGURATION.md#mcp-only).
+
 ---
 
 ## MCP & Tools

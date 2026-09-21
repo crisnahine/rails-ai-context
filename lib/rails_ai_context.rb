@@ -96,8 +96,14 @@ module RailsAiContext
     # AGENTS.md, and generating one format at a time defeats that dedup.
     def generate_context(app = nil, format: nil)
       app ||= default_app
+      # An explicit format names a file, so `ai:context:claude` still writes
+      # it. Without one, an MCP-only install writes nothing at all.
+      return { written: [], skipped: [] } if format.nil? && !configuration.context_files
+
       selected = configuration.ai_tools
-      format ||= selected.nil? || selected.empty? ? :all : selected
+      # Only an unset selection means "all". An explicit empty list means
+      # none, which is what the serializer has always done with `format: []`.
+      format ||= selected.nil? ? :all : selected
       context = introspect(app)
       Serializers::ContextFileSerializer.new(context, format: format).call
     end

@@ -36,6 +36,10 @@ module RailsAiContext
 
       MODE_LINE = /^[ \t]*config\.tool_mode\s*=\s*:(\w+)/
 
+      # Only an uncommented assignment: the generated initializer ships the
+      # key commented out, and a comment is not a choice.
+      CONTEXT_FILES_LINE = /^[ \t]*config\.context_files\s*=\s*(true|false)/
+
       # Where a selection line goes when the initializer has none yet.
       CONFIGURE_BLOCK = /RailsAiContext\.configure do \|config\|\n/
 
@@ -54,6 +58,23 @@ module RailsAiContext
       # @return [Symbol, nil]
       def tool_mode(root:)
         mode_from_initializer(root) || mode_from_yaml(root)
+      end
+
+      # Whether this install writes context files, initializer first, the
+      # same precedence the tools and the mode keep.
+      #
+      # @return [Boolean, nil] nil when nothing recorded it
+      def context_files(root:)
+        value = context_files_from_initializer(root)
+        return value unless value.nil?
+
+        context_files_from_yaml(root)
+      end
+
+      # @return [Symbol] :updated, :inserted, :unchanged or :absent
+      def write_context_files(value, root:)
+        write_config_line(root, "  config.context_files = #{value ? 'true' : 'false'}",
+                          CONTEXT_FILES_LINE, /^[ \t]*config\.context_files\s*=.*$/)
       end
 
       # Rewrites (or inserts) the tool_mode line, the way `write` handles the
@@ -179,6 +200,57 @@ module RailsAiContext
 
         data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
         presence(normalize(data[YAML_KEY]))
+      rescue StandardError => e
+        RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      # One rewriter for the single-value keys this record owns, because the
+      # three branches (rewrite, insert beside the selection, insert into the
+      # configure block) are the file's shape, not the key's.
+      private_class_method def self.write_config_line(root, line, present, assignment)
+        path = File.join(root.to_s, INITIALIZER)
+        return :absent unless File.exist?(path)
+
+        content = File.read(path)
+        if content.match?(present)
+          updated = content.sub(assignment, line)
+          return :unchanged if updated == content
+
+          File.write(path, updated)
+          :updated
+        elsif content.match?(SELECTION_LINE)
+          File.write(path, content.sub(/^([ \t]*config\.ai_tools\s*=[^\n]*)$/) { "#{Regexp.last_match(1)}\n#{line}" })
+          :inserted
+        elsif content.match?(CONFIGURE_BLOCK)
+          File.write(path, content.sub(CONFIGURE_BLOCK) { "#{Regexp.last_match(0)}#{line}\n" })
+          :inserted
+        else
+          :absent
+        end
+      rescue StandardError => e
+        RailsAiContext.log_warn "[rails-ai-context] could not write #{INITIALIZER}: #{e.message}"
+        :unchanged
+      end
+
+      private_class_method def self.context_files_from_initializer(root)
+        path = File.join(root.to_s, INITIALIZER)
+        return nil unless File.exist?(path)
+
+        match = File.read(path)[CONTEXT_FILES_LINE, 1]
+        match.nil? ? nil : match == "true"
+      rescue StandardError => e
+        RailsAiContext.log_warn "[rails-ai-context] could not read #{INITIALIZER}: #{e.message}" if ENV["DEBUG"]
+        nil
+      end
+
+      private_class_method def self.context_files_from_yaml(root)
+        path = File.join(root.to_s, YAML_FILE)
+        return nil unless File.exist?(path)
+
+        data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
+        value = data["context_files"]
+        value.nil? ? nil : !!value
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
         nil

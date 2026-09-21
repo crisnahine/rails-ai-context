@@ -13,7 +13,7 @@ module RailsAiContext
 
     # All YAML-supported keys (explicit allowlist for safety)
     YAML_KEYS = %i[
-      ai_tools tool_mode preset context_mode generate_root_files claude_max_lines
+      ai_tools tool_mode preset context_mode context_files generate_root_files claude_max_lines
       anti_hallucination_rules
       server_name cache_ttl max_tool_response_chars
       live_reload live_reload_debounce auto_mount http_path http_bind http_port
@@ -256,6 +256,12 @@ module RailsAiContext
     # for the security review that changed the default.
     attr_accessor :instrumentation_include_arguments
 
+    # Whether this gem writes context files at all. False is MCP-only: the
+    # server and the CLI still answer, and no CLAUDE.md, AGENTS.md, rules
+    # file or .ai-context.json is written or touched. Narrower than
+    # `generate_root_files`, which still writes the split rule files.
+    attr_accessor :context_files
+
     # Whether to generate root-level context files (CLAUDE.md, AGENTS.md, etc.)
     # When false, only generates split rule files (.claude/rules/, .cursor/rules/, etc.)
     attr_accessor :generate_root_files
@@ -408,6 +414,7 @@ module RailsAiContext
       @live_reload              = :auto
       @live_reload_debounce     = 1.5
       @instrumentation_include_arguments = false
+      @context_files            = true
       @generate_root_files      = true
       @anti_hallucination_rules = true
       @max_file_size            = 5_000_000

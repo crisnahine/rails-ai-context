@@ -310,4 +310,58 @@ RSpec.describe RailsAiContext::Generators::InstallGenerator do
       expect(content.scan(".codex/config.toml").size).to eq(1)
     end
   end
+
+  # MCP-only: the server and the CLI still answer, and the gem writes to none
+  # of the files a user keeps by hand.
+  describe "--mcp-only" do
+    subject(:generator) do
+      described_class.new([], { mcp_only: true }, destination_root: tmpdir).tap do |instance|
+        instance.instance_variable_set(:@selected_formats, %i[claude])
+      end
+    end
+
+    it "records the mode without asking" do
+      generator.select_tool_mode
+
+      expect(generator.instance_variable_get(:@tool_mode)).to eq(:mcp)
+      expect(generator.instance_variable_get(:@context_files)).to be(false)
+    end
+
+    it "writes config.context_files = false into a fresh initializer" do
+      generator.select_tool_mode
+      generator.create_initializer
+
+      expect(File.read(initializer_path)).to include("config.context_files = false")
+    end
+
+    it "records the choice in the YAML too" do
+      generator.select_tool_mode
+      silence_output { generator.create_yaml_config }
+
+      expect(File.read(File.join(tmpdir, ".rails-ai-context.yml"))).to include("context_files: false")
+    end
+
+    it "writes no context files and says so" do
+      generator.select_tool_mode
+
+      expect(RailsAiContext).not_to receive(:generate_context)
+      expect { generator.generate_context_files }.to output(/MCP-only install/).to_stdout
+    end
+
+    it "leaves the JSON cache out of .gitignore" do
+      File.write(File.join(tmpdir, ".gitignore"), "*.log\n")
+      generator.select_tool_mode
+      silence_output { generator.add_to_gitignore }
+
+      expect(File.read(File.join(tmpdir, ".gitignore"))).not_to include(".ai-context.json")
+    end
+  end
+
+  def silence_output
+    original = $stdout
+    $stdout = StringIO.new
+    yield
+  ensure
+    $stdout = original
+  end
 end
