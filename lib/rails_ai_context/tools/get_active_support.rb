@@ -46,7 +46,11 @@ module RailsAiContext
                 bits = []
                 bits << "included block" if m[:included_blocks].to_i > 0
                 bits << "class_methods" if m[:class_methods_block]
-                bits << "plain module" unless m[:uses_active_support_concern]
+                if m[:kind] == "class"
+                  bits << [ "class", m[:superclass] && "< #{m[:superclass]}" ].compact.join(" ")
+                elsif !m[:uses_active_support_concern]
+                  bits << "plain module"
+                end
                 line = "- **#{m[:name]}**"
                 line += " (#{bits.join(', ')})" if bits.any?
                 lines << line

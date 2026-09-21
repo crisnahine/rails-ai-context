@@ -41,6 +41,64 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       end
     end
 
+    # ActiveModel's AcceptanceValidator defines the reader and the writer
+    # when no column exists, so the suggested migration adds a column nobody
+    # wants.
+    context "a model whose attribute has no column" do
+      let(:context_with_schema) do
+        {
+          routes: { by_controller: {} },
+          schema: { tables: { "subscriptions" => { columns: [ { name: "id" }, { name: "account_id" } ] } } },
+          models: { "Subscription" => { table_name: "subscriptions", file: "app/models/subscription.rb",
+                                        associations: [ { name: "account", foreign_key: "account_id" } ] } }
+        }
+      end
+
+      before { allow(described_class).to receive(:cached_context).and_return(context_with_schema) }
+
+      it "says nothing about an acceptance attribute" do
+        source = <<~RUBY
+          class Subscription < ApplicationRecord
+            belongs_to :account
+            validates :terms_of_use, acceptance: { accept: true }, allow_nil: false, on: :user_create
+          end
+        RUBY
+
+        with_app_file("app/models/subscription.rb", source) do |file, path|
+          expect(described_class.check_rails_semantics(file, path).join).not_to include("terms_of_use")
+        end
+      end
+
+      it "says nothing about an attribute the model declares itself" do
+        source = <<~RUBY
+          class Subscription < ApplicationRecord
+            attr_accessor :confirm_terms
+            attribute :promo_code, :string
+            validates :confirm_terms, presence: true
+            validates :promo_code, presence: true
+          end
+        RUBY
+
+        with_app_file("app/models/subscription.rb", source) do |file, path|
+          warnings = described_class.check_rails_semantics(file, path).join
+          expect(warnings).not_to include("confirm_terms")
+          expect(warnings).not_to include("promo_code")
+        end
+      end
+
+      it "still flags a column the table does not have" do
+        source = <<~RUBY
+          class Subscription < ApplicationRecord
+            validates :nickname, presence: true
+          end
+        RUBY
+
+        with_app_file("app/models/subscription.rb", source) do |file, path|
+          expect(described_class.check_rails_semantics(file, path).join).to include("nickname")
+        end
+      end
+    end
+
     it "flags a scope chain that loads every record into memory" do
       source = <<~RUBY
         class WidgetsController < ApplicationController

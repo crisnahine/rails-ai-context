@@ -71,6 +71,15 @@ module RailsAiContext
             hits = ast[:concern_macros]
 
             entry = { name: mod_name, file: path.sub("#{root}/", "") }
+            # An app/models/concerns directory holds classes too - every
+            # validator in some apps - and a class is not a concern, let
+            # alone a "plain module".
+            declarations = DeclaredConstant.declarations(content)
+            declared = declarations.find { |d| d.name.split("::").last.casecmp?(mod_name) }
+            if declared
+              entry[:kind] = "class"
+              entry[:superclass] = declared.superclass
+            end
             entry[:uses_active_support_concern] = true if content.include?("ActiveSupport::Concern")
             entry[:included_blocks] = hits.count { |h| h[:macro] == :included }
             entry[:class_methods_block] = hits.any? { |h| h[:macro] == :class_methods }

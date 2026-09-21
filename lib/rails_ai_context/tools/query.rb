@@ -206,7 +206,12 @@ module RailsAiContext
       rescue ActiveRecord::StatementInvalid => e
         if e.message.match?(/timeout|statement_timeout|MAX_EXECUTION_TIME/i)
           text_response("Query exceeded #{config.query_timeout} second timeout. Simplify the query or add indexes.")
-        elsif e.message.match?(/could not find|does not exist|Unknown database/i)
+        # Only a missing DATABASE. Postgres words a missing column and a
+        # missing table the same way ("... does not exist"), and matching
+        # that shape answered a real SQL error with `db:create` advice and
+        # exit 0. `ActiveRecord::NoDatabaseError` is rescued above, so this
+        # only catches adapters that raise the plain StatementInvalid.
+        elsif e.message.match?(/database "[^"]*" does not exist|could not find (?:your )?database|Unknown database/i)
           text_response("Database not found: #{clean_error_message(e.message)}\n\n**Troubleshooting:**\n- Run `bin/rails db:create` to create the database\n- Check `config/database.yml` for the correct database name\n- Try `RAILS_ENV=test` if the development DB is remote")
         else
           # Genuine execution failure (unknown column, bad table, syntax

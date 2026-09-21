@@ -465,10 +465,12 @@ module RailsAiContext
               lines << body
               lines << "```"
 
-              # What does this method call?
-              internal_calls = body.scan(/\b([a-z_]\w*[!?]?)(?:\s*[\(])/).flatten.uniq
+              # What does this method call? Read off the AST: the paren regex
+              # this replaced saw only `foo(...)`, so a body of paren-less
+              # predicate calls reported nothing at all.
+              internal_calls = internal_calls_in(body)
               internal_calls += body.scan(/\b([A-Z]\w+(?:::\w+)*)\.(new|call|perform_later|perform_async|find|where|create)/).map { |c| "#{c[0]}.#{c[1]}" }
-              internal_calls.reject! { |c| %w[if else elsif unless return end def class module do begin rescue ensure raise puts print].include?(c) }
+              internal_calls.uniq!
               internal_calls.reject! { |c| c == cleaned }
 
               if internal_calls.any?
@@ -495,7 +497,8 @@ module RailsAiContext
         call_pattern = exact_pattern(cleaned)
         call_rows, = quick_search(call_pattern, search_path, root, max_results_cap + 1, exclude_tests)
         call_results, call_truncated = cap_results(call_rows)
-        callers = call_results.reject { |r| r[:content].match?(/\A\s*def\s/) }
+        # A `#` line mentioning the method is prose about it, not a call site.
+        callers = call_results.reject { |r| r[:content].match?(/\A\s*(def\s|#)/) }
 
         # Exclude the definition file+line to avoid self-reference
         def_locations = def_results.map { |r| "#{r[:file]}:#{r[:line_number]}" }.to_set
@@ -513,11 +516,14 @@ module RailsAiContext
             ctx = cached_context
             grouped = app_callers.group_by { |r| r[:file] }
             grouped.each do |file, matches|
+              # Directory before word: `app/services/models/...` is a
+              # service, whatever the rest of the path says.
               category = case file
-              when /controller/i then "Controller"
-              when /model/i then "Model"
+              when %r{\Aapp/controllers/}, /controller/i then "Controller"
+              when %r{\Aapp/services/} then "Service"
+              when %r{\Aapp/models/}, /model/i then "Model"
               when /view|\.erb/i then "View"
-              when /job/i then "Job"
+              when /job|worker/i then "Job"
               when /service/i then "Service"
               when /\.js$|\.ts$/i then "JavaScript"
               else "Other"
@@ -637,6 +643,31 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] find_routes_for_controller failed: #{e.message}" if ENV["DEBUG"]
         nil
+      end
+
+      # The methods a body calls on itself, off the AST: a receiver-less call
+      # node, or one on `self`. Local variables and keywords are not call
+      # nodes, so nothing has to be filtered back out.
+      private_class_method def self.internal_calls_in(body)
+        result = RailsAiContext::AstCache.parse_string(body)
+        root = result&.value
+        return [] unless root
+
+        calls = []
+        collect_internal_calls(root, calls)
+        calls.uniq
+      rescue StandardError, ScriptError => e
+        $stderr.puts "[rails-ai-context] internal_calls_in failed: #{e.message}" if ENV["DEBUG"]
+        []
+      end
+
+      private_class_method def self.collect_internal_calls(node, found)
+        return unless node.is_a?(Prism::Node)
+
+        if node.is_a?(Prism::CallNode) && (node.receiver.nil? || node.receiver.is_a?(Prism::SelfNode))
+          found << node.name.to_s
+        end
+        node.compact_child_nodes.each { |child| collect_internal_calls(child, found) }
       end
 
       # Extract a method body from a file given the def line number
