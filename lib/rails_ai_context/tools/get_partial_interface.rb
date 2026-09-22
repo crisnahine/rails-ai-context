@@ -382,7 +382,6 @@ module RailsAiContext
         view_files = Dir.glob(File.join(views_dir, "**", "*.{erb,haml,slim}")).sort
 
         view_files.each do |file|
-          next if File.size(file) > max_file_size
           content = safe_read(file)
           next unless content
 

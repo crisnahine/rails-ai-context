@@ -62,7 +62,7 @@ module RailsAiContext
         end
 
         # List all concerns
-        list_concerns(concern_dirs, root, max_size)
+        list_concerns(concern_dirs, root)
       end
 
       private_class_method def self.refuse_name(name, root)
@@ -225,7 +225,7 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.list_concerns(concern_dirs, root, max_size)
+      private_class_method def self.list_concerns(concern_dirs, root)
         all_concerns = []
         excluded_count = 0
         real_root = File.realpath(root).to_s
@@ -242,13 +242,11 @@ module RailsAiContext
             end
 
             method_count = 0
-            if File.size(real) <= max_size
-              source = RailsAiContext::SafeFile.read(real)
-              if source
-                public_methods = Introspectors::ActionResolver.public_methods_from_source(source)
-                class_methods = Introspectors::ActionResolver.class_methods_from_source(source)
-                method_count = public_methods.size + class_methods.size
-              end
+            source = RailsAiContext::SafeFile.read(real)
+            if source
+              public_methods = Introspectors::ActionResolver.public_methods_from_source(source)
+              class_methods = Introspectors::ActionResolver.class_methods_from_source(source)
+              method_count = public_methods.size + class_methods.size
             end
 
             all_concerns << {
@@ -374,7 +372,6 @@ module RailsAiContext
           search_dirs.concat(PathResolver.dirs_for(root, "app/#{concern_type.pluralize}"))
         end
 
-        max_size = RailsAiContext.configuration.max_file_size
         # Build pattern: match `include ConcernName` or `include ModuleName::ConcernName`
         # Handle both simple and namespaced concern names.
         # Use `camelize` (not `classify`) - `classify` singularizes, which drops
@@ -388,7 +385,6 @@ module RailsAiContext
           safe_glob(dir, "**/*.rb", real_root).each do |file_path|
             # Skip concern files themselves
             next if file_path.include?("/concerns/")
-            next if File.size(file_path) > max_size
 
             source = RailsAiContext::SafeFile.read(file_path) or next
             if source.match?(pattern)

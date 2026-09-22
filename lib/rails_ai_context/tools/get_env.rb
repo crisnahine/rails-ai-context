@@ -275,8 +275,6 @@ module RailsAiContext
         real_root = File.realpath(root).to_s
 
         scan_files(root, real_root).each do |file|
-          next if File.size(file) > max_file_size
-
           source = safe_read(file)
           next unless source
           next unless source.include?("ENV")
@@ -326,9 +324,6 @@ module RailsAiContext
 
         candidates.each do |name|
           path = File.join(root, name)
-          next unless File.exist?(path)
-          next if File.size(path) > max_file_size
-
           source = safe_read(path)
           next unless source
 
@@ -368,9 +363,6 @@ module RailsAiContext
 
         candidates.each do |name|
           path = File.join(root, name)
-          next unless File.exist?(path)
-          next if File.size(path) > max_file_size
-
           source = safe_read(path)
           next unless source
 
@@ -468,18 +460,16 @@ module RailsAiContext
           "recaptcha" => { name: "reCAPTCHA", env_prefix: "RECAPTCHA_" }
         }
 
-        if File.exist?(gemfile_path) && File.size(gemfile_path) < max_file_size
-          gemfile = safe_read(gemfile_path)
-          if gemfile
-            service_gems.each do |gem_name, info|
-              next unless gemfile.match?(/gem\s+["']#{Regexp.escape(gem_name)}["']/)
-              services << {
-                name: info[:name],
-                gem: gem_name,
-                detection: "Gemfile",
-                env_vars: env_names.grep(/\A#{Regexp.escape(info[:env_prefix])}/).sort
-              }
-            end
+        gemfile = safe_read(gemfile_path)
+        if gemfile
+          service_gems.each do |gem_name, info|
+            next unless gemfile.match?(/gem\s+["']#{Regexp.escape(gem_name)}["']/)
+            services << {
+              name: info[:name],
+              gem: gem_name,
+              detection: "Gemfile",
+              env_vars: env_names.grep(/\A#{Regexp.escape(info[:env_prefix])}/).sort
+            }
           end
         end
 
@@ -497,7 +487,6 @@ module RailsAiContext
 
         real_root = File.realpath(root).to_s
         safe_glob(app_dir, "**/*.rb", real_root).each do |file|
-          next if File.size(file) > max_file_size
           source = safe_read(file)
           next unless source
 
@@ -603,9 +592,6 @@ module RailsAiContext
 
         candidates.each do |file|
           path = File.join(root, file)
-          next unless File.exist?(path)
-          next if File.size(path) > max_file_size
-
           source = safe_read(path)
           next unless source
 

@@ -579,9 +579,7 @@ module RailsAiContext
 
         # Extract method source from a file path. Reads file safely. Returns hash or nil.
         def extract_method_source_from_file(path, method_name)
-          return nil unless path && File.exist?(path)
-          return nil if File.size(path) > RailsAiContext.configuration.max_file_size
-          source = RailsAiContext::SafeFile.read(path) || ""
+          source = RailsAiContext::SafeFile.read(path) or return nil
           extract_method_source_from_string(source, method_name)
         end
 
@@ -846,8 +844,7 @@ module RailsAiContext
         #
         # Usage:
         #   safe_glob(app_dir, "**/*.rb", real_root).each do |realpath|
-        #     next if File.size(realpath) > max_file_size
-        #     source = safe_read(realpath)
+        #     source = safe_read(realpath) or next
         #     ...
         #   end
         def safe_glob(dir, pattern, real_root)

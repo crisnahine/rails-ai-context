@@ -81,7 +81,7 @@ module RailsAiContext
         end
 
         # List all helpers
-        list_helpers(helper_files, real_helper_dirs, real_root, max_size, detail, offset: offset, limit: limit)
+        list_helpers(helper_files, real_helper_dirs, real_root, detail, offset: offset, limit: limit)
       end
 
       # A helper lives under app/helpers, a pack, an in-repo engine or a
@@ -178,17 +178,13 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.list_helpers(helper_files, helper_dirs, root, max_size, detail, offset: 0, limit: nil)
+      private_class_method def self.list_helpers(helper_files, helper_dirs, root, detail, offset: 0, limit: nil)
         helpers_data = helper_files.filter_map do |file_path|
           relative = file_path.sub("#{root}/", "")
           module_name = module_name_for(file_path, helper_dirs)
 
-          if File.size(file_path) <= max_size
-            source = RailsAiContext::SafeFile.read(file_path)
-            methods = source ? Introspectors::ActionResolver.public_methods_from_source(source) : []
-          else
-            methods = []
-          end
+          source = RailsAiContext::SafeFile.read(file_path)
+          methods = source ? Introspectors::ActionResolver.public_methods_from_source(source) : []
 
           {
             name: module_name,
@@ -223,7 +219,7 @@ module RailsAiContext
 
         when "full"
           # Include framework helpers detection
-          framework = detect_framework_helpers(root, max_size)
+          framework = detect_framework_helpers(root)
 
           page[:items].each do |h|
             lines << "## #{h[:name]} (`#{h[:path]}`)"
@@ -257,7 +253,6 @@ module RailsAiContext
 
         real_views_dir = File.realpath(views_dir).to_s
         references = {}
-        max_size = RailsAiContext.configuration.max_file_size
 
         view_files = Dir.glob(File.join(views_dir, "**", "*.{erb,haml,slim}"))
                         .filter_map { |f| safe_glob_realpath(f, real_views_dir, real_root) }
@@ -266,7 +261,6 @@ module RailsAiContext
           matching_views = []
 
           view_files.each do |view_path|
-            next if File.size(view_path) > max_size
             content = RailsAiContext::SafeFile.read(view_path) or next
 
             if content.include?(method_name)
@@ -284,7 +278,7 @@ module RailsAiContext
         {}
       end
 
-      private_class_method def self.detect_framework_helpers(real_root, max_size)
+      private_class_method def self.detect_framework_helpers(real_root)
         detected = {}
 
         # Check Gemfile for framework gems
@@ -301,7 +295,6 @@ module RailsAiContext
 
         scan_dirs.each do |dir, extensions|
           safe_glob(dir, "**/#{extensions}", real_root).each do |real|
-            next if File.size(real) > max_size
             scan_content += (RailsAiContext::SafeFile.read(real) || "")
           end
         end

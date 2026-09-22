@@ -583,7 +583,6 @@ module RailsAiContext
 
       # Extract class/module context for a line
       private_class_method def self.extract_class_context(file_path, line_num)
-        return nil unless File.exist?(file_path)
         lines = (RailsAiContext::SafeFile.read(file_path) || "").lines
         # Walk backwards from the method to find the enclosing class/module
         (line_num - 2).downto(0) do |i|
@@ -599,8 +598,6 @@ module RailsAiContext
 
       # Extract sibling methods in the same file (other public methods)
       private_class_method def self.extract_sibling_methods(file_path, def_line, exclude_method)
-        return [] unless File.exist?(file_path)
-        return [] if File.size(file_path) > RailsAiContext.configuration.max_file_size
         source = RailsAiContext::SafeFile.read(file_path)
         return [] unless source
         methods = []
@@ -672,9 +669,6 @@ module RailsAiContext
 
       # Extract a method body from a file given the def line number
       private_class_method def self.extract_method_body(file_path, def_line)
-        return nil unless File.exist?(file_path)
-        return nil if File.size(file_path) > RailsAiContext.configuration.max_file_size
-
         source_lines = (RailsAiContext::SafeFile.read(file_path) || "").lines
         start_idx = def_line - 1
         return nil if start_idx >= source_lines.size

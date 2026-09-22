@@ -436,9 +436,6 @@ module RailsAiContext
         schedule_files = %w[config/sidekiq.yml config/sidekiq_cron.yml config/schedule.yml config/recurring.yml]
         schedule_files.each do |file|
           path = File.join(root, file)
-          next unless File.exist?(path)
-          next if File.size(path) > max_file_size
-
           content = safe_read(path)
           next unless content
           next unless content.include?(class_name)
@@ -481,7 +478,6 @@ module RailsAiContext
 
         search_dirs.each do |dir|
           safe_glob(dir, "**/*.rb", real_root).each do |real|
-            next if File.size(real) > max_file_size
             source = safe_read(real)
             next unless source
 

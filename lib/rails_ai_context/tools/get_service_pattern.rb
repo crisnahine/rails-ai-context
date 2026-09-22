@@ -152,7 +152,6 @@ module RailsAiContext
         service_data = []
 
         service_files.each do |file|
-          next if File.size(file) > max_file_size
           source = safe_read(file)
           next unless source
 
@@ -404,7 +403,6 @@ module RailsAiContext
         search_dirs.each do |dir|
           safe_glob(dir, "**/*.rb", real_root).each do |real|
             next if own_file && real == own_file
-            next if File.size(real) > max_file_size
             source = safe_read(real)
             next unless source
             next unless source.match?(reference)

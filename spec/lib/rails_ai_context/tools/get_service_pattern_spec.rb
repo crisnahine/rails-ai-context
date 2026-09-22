@@ -112,6 +112,13 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
       after { FileUtils.remove_entry(tmpdir) }
 
+      it "answers too-large rather than not-found for a service over the cap" do
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(10)
+
+        text = described_class.call(service: "CreateOrder").content.first[:text]
+        expect(text).to include("Service file too large to analyze.")
+      end
+
       it "lists all services with default params" do
         result = described_class.call
         text = result.content.first[:text]

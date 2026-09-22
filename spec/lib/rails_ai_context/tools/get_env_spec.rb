@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Tools::GetEnv do
   before { described_class.reset_cache! }
@@ -669,6 +670,25 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
         text = described_class.call(detail: detail).content.first[:text]
 
         expect(text.index("## Infrastructure")).to be < text.index("## Monitoring")
+      end
+    end
+  end
+
+  describe ".scan_env_example" do
+    before { allow(described_class).to receive(:scan_env_example).and_call_original }
+
+    it "contributes nothing for a file over the size cap" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, ".env.example"), "API_KEY=abc\n")
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(2)
+
+        expect(described_class.send(:scan_env_example, dir)).to be_empty
+      end
+    end
+
+    it "contributes nothing when no example file exists" do
+      Dir.mktmpdir do |dir|
+        expect(described_class.send(:scan_env_example, dir)).to be_empty
       end
     end
   end

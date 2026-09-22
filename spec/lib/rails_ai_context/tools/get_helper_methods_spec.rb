@@ -53,6 +53,13 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       expect(text).to include("post_excerpt")
     end
 
+    it "answers too-large rather than could-not-read for a helper over the cap" do
+      allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(10)
+
+      text = described_class.call(helper: "ApplicationHelper").content.first[:text]
+      expect(text).to include("Helper file too large")
+    end
+
     it "returns not-found for unknown helper" do
       result = described_class.call(helper: "NonexistentHelper")
       text = result.content.first[:text]
