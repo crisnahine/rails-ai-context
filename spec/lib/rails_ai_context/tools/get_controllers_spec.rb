@@ -186,6 +186,34 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       text = result.content.first[:text]
       expect(text).to include("# CommentsController")
     end
+
+    # The tool used to carry its own matcher, weaker than the one the
+    # rails-ai-context://controllers resource reads: a bare `gift_cards` came
+    # back "not found" from the tool and resolved from the same payload as a
+    # resource.
+    it "resolves the bare name of a controller that only exists namespaced" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: {
+          "Admin::GiftCardsController" => { actions: %w[index], file: "app/controllers/admin/gift_cards_controller.rb" }
+        } }
+      )
+
+      text = described_class.call(controller: "gift_cards").content.first[:text]
+
+      expect(text).to include("# Admin::GiftCardsController")
+    end
+
+    it "resolves a controller by the route key Rails serves it under" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: {
+          "ActivityPub::InboxesController" => { actions: %w[create], file: "app/controllers/activitypub/inboxes_controller.rb" }
+        } }
+      )
+
+      text = described_class.call(controller: "activitypub/inboxes").content.first[:text]
+
+      expect(text).to include("# ActivityPub::InboxesController")
+    end
   end
 
   describe "detail levels with filter data" do

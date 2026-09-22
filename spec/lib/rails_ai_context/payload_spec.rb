@@ -169,6 +169,55 @@ RSpec.describe RailsAiContext::Payload do
         .to eq([ "Admin::BadgesController", "OrdersController" ])
     end
   end
+
+  # One rule for the five spellings a controller answers to, so the resource
+  # and the tool cannot disagree about whether an app has one.
+  describe ".find_controller" do
+    let(:context) do
+      {
+        controllers: {
+          controllers: {
+            "Admin::GiftCardsController" => { file: "app/controllers/admin/gift_cards_controller.rb" },
+            "ActivityPub::InboxesController" => { file: "app/controllers/activitypub/inboxes_controller.rb" },
+            "PostsController" => { file: "app/controllers/posts_controller.rb" }
+          }
+        }
+      }
+    end
+
+    it "finds a namespaced controller by the bare name a person types" do
+      expect(described_class.find_controller(context, "gift_cards")).to eq("Admin::GiftCardsController")
+    end
+
+    it "finds a controller by its route key, its class name and its path" do
+      expect(described_class.find_controller(context, "admin/gift_cards")).to eq("Admin::GiftCardsController")
+      expect(described_class.find_controller(context, "Admin::GiftCardsController")).to eq("Admin::GiftCardsController")
+      expect(described_class.find_controller(context, "admin::gift_cards")).to eq("Admin::GiftCardsController")
+      expect(described_class.find_controller(context, "postscontroller")).to eq("PostsController")
+      expect(described_class.find_controller(context, "posts")).to eq("PostsController")
+    end
+
+    # The route key is what Rails serves, and it does not camelize back to the
+    # constant the app declares.
+    it "finds a controller whose declared name does not camelize from its path" do
+      expect(described_class.find_controller(context, "activitypub/inboxes")).to eq("ActivityPub::InboxesController")
+    end
+
+    # Two controllers of the same basename are a question, not a resolution.
+    it "refuses an ambiguous basename and a name nobody declares" do
+      ambiguous = {
+        controllers: { controllers: {
+          "Admin::GiftCardsController" => { file: "app/controllers/admin/gift_cards_controller.rb" },
+          "Shop::GiftCardsController" => { file: "app/controllers/shop/gift_cards_controller.rb" }
+        } }
+      }
+
+      expect(described_class.find_controller(ambiguous, "gift_cards")).to be_nil
+      expect(described_class.find_controller(context, "nope")).to be_nil
+      expect(described_class.find_controller({}, "posts")).to be_nil
+    end
+  end
+
   # The reverse trip: a checker walking app/models/oauth_client_config.rb has
   # to find the model it declares, and camelizing the path gives
   # OauthClientConfig - a constant the app does not have.

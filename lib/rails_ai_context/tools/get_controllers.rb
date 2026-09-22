@@ -53,18 +53,11 @@ module RailsAiContext
           app_controller_names = Payload.app_controllers(ctx).keys.sort
 
           # Specific controller - always full detail (searches ALL controllers including framework)
-          # Flexible matching: "posts", "PostsController", "postscontroller" all work
           if controller
-            # Accept multiple formats: "PostsController", "posts", "admin/posts", "Admin::PostsController"
-            # Use underscore for CamelCase→snake_case: "OmniauthCallbacks" → "omniauth_callbacks"
-            # Also match on plain downcase to handle "userscontroller" → "users"
-            input_snake = controller.gsub("/", "::").underscore.delete_suffix("_controller")
-            input_down = controller.downcase.delete_suffix("controller").tr("/", "::")
-            key = controllers.keys.find { |k|
-              key_snake = k.underscore.delete_suffix("_controller")
-              key_down = k.downcase.delete_suffix("controller")
-              key_snake == input_snake || key_down == input_down
-            } || controller
+            # Payload owns the name-to-key rule, so this tool and the
+            # rails-ai-context://controllers resource answer a name the same
+            # way. The raw string stays the fallback for a key this hash lacks.
+            key = Payload.find_controller(ctx, controller) || controller
             info = controllers[key]
             unless info
               return not_found_response("Controller", controller, app_controller_names,
