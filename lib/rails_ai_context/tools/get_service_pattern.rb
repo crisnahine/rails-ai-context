@@ -43,11 +43,16 @@ module RailsAiContext
           return text_response("A services directory exists but contains no Ruby files.")
         end
 
+        # One lookup for the whole call: it walks the service tree on first
+        # use and only a class whose superclass is not ActiveInteraction::Base
+        # ever asks it anything.
+        lookup = Introspectors::Interaction.lookup_for(root)
+
         if service
-          return format_single_service(service, service_files, real_service_dirs, real_root)
+          return format_single_service(service, service_files, real_service_dirs, real_root, lookup)
         end
 
-        format_service_listing(service_files, real_service_dirs, real_root, detail)
+        format_service_listing(service_files, real_service_dirs, real_root, detail, lookup)
       end
 
       # A service lives under app/services, a pack, an in-repo engine or a
@@ -58,7 +63,7 @@ module RailsAiContext
         dir ? file.delete_prefix("#{dir}#{File::SEPARATOR}") : File.basename(file)
       end
 
-      private_class_method def self.format_single_service(service, service_files, service_dirs, root)
+      private_class_method def self.format_single_service(service, service_files, service_dirs, root, lookup = nil)
         matches = match_service_files(service, service_files, service_dirs)
 
         if matches.size > 1
@@ -106,10 +111,10 @@ module RailsAiContext
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
 
-        inputs = interaction_inputs(source)
+        inputs = interaction_inputs(source, lookup, class_name)
         if inputs.any?
           lines << "" << "## Inputs (ActiveInteraction)"
-          inputs.each { |i| lines << "- #{i}" }
+          lines.concat(inputs)
         end
 
         owned = owned_methods(source, constant_for(file, service_dirs))
@@ -150,7 +155,10 @@ module RailsAiContext
         callers = find_callers(class_name, root, file)
         if callers.any?
           lines << "" << "## Called By"
-          callers.each { |c| lines << "- `#{c}`" }
+          callers.first(CALLER_LIMIT).each { |c| lines << "- `#{c}`" }
+          if callers.size > CALLER_LIMIT
+            lines << "_#{callers.size} callers in all; the #{CALLER_LIMIT} listed are the first by path._"
+          end
         end
 
         # Cross-reference hints
@@ -159,7 +167,7 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail)
+      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup = nil)
         # Detect common pattern across all services
         pattern_stats = { initialize_call: 0, initialize_single_method: 0, class_method_call: 0, result_object: 0, active_interaction: 0, total: 0 }
         service_data = []
@@ -181,7 +189,7 @@ module RailsAiContext
           pattern_stats[:initialize_single_method] += 1 if has_initialize && public_methods.size == 1
           pattern_stats[:class_method_call] += 1 if owned.any? { |m| m[:scope] == :class && m[:name] == "call" }
           pattern_stats[:result_object] += 1 if source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/)
-          pattern_stats[:active_interaction] += 1 if active_interaction?(source)
+          pattern_stats[:active_interaction] += 1 if Introspectors::Interaction.interaction?(source, lookup: lookup)
 
           service_data << {
             file: relative,
@@ -276,27 +284,22 @@ module RailsAiContext
       # ActiveInteraction declares its interface as filter macros rather than
       # an `initialize`, so a service that looks argument-less from its
       # methods alone is documented entirely by these lines.
-      INTERACTION_FILTERS = %w[
-        array boolean date date_time decimal file float hash integer
-        interface object record string symbol time
-      ].freeze
-
-      private_class_method def self.active_interaction?(source)
-        Introspectors::DeclaredConstant.declarations(source)
-          .any? { |d| d.superclass == "ActiveInteraction::Base" }
+      # One line per filter, nested filters indented under the filter whose
+      # block declares them, and an inherited one named with the class that
+      # declares it: it is not in this file, and a reader looking for it
+      # needs somewhere to look.
+      private_class_method def self.interaction_inputs(source, lookup = nil, own_class = nil)
+        Introspectors::Interaction.filters(source, lookup: lookup).flat_map do |filter|
+          [ "- #{input_line(filter, own_class)}" ] +
+            filter.nested.map { |nested| "  - #{input_line(nested, filter.declared_by)}" }
+        end
       end
 
-      private_class_method def self.interaction_inputs(source)
-        return [] unless active_interaction?(source)
-
-        walked = Introspectors::SourceIntrospector.walk_source(
-          source, { filters: -> { Introspectors::Listeners::GenericMacroListener.new(INTERACTION_FILTERS) } }
-        )
-        (walked[:filters] || []).flat_map do |record|
-          options = record[:option_values] || {}
-          suffix = options.any? ? " (#{options.map { |k, v| "#{k}: #{v.nil? ? 'nil' : v}" }.join(', ')})" : ""
-          Array(record[:args]).map { |name| "`#{record[:macro]} :#{name}`#{suffix}" }
-        end
+      private_class_method def self.input_line(filter, own_class)
+        options = filter.options || {}
+        suffix = options.any? ? " (#{options.map { |k, v| "#{k}: #{v.nil? ? 'nil' : v}" }.join(', ')})" : ""
+        origin = own_class && filter.declared_by != own_class ? " - from `#{filter.declared_by}`" : ""
+        "`#{filter.macro} :#{filter.name}`#{suffix}#{origin}"
       end
 
       # The methods the service class defines itself. Nesting a query builder
@@ -407,10 +410,13 @@ module RailsAiContext
         effects.to_a.sort
       end
 
+      # Every caller is capped at CALLER_LIMIT, and the renderer says so: a
+      # list that stops at twenty with no word looks complete.
+      CALLER_LIMIT = 20
+
       private_class_method def self.find_callers(class_name, real_root, own_file = nil)
         callers = Set.new
-        search_dirs = %w[app/controllers app/jobs app/models app/services app/workers app/mailers]
-                        .flat_map { |d| PathResolver.dirs_for(real_root, d) }
+        search_dirs = %w[app lib].flat_map { |d| PathResolver.dirs_for(real_root, d) }
         # A bare `include?` matched `Billing::Invoices::Create` inside
         # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
         # underscored-path skip dropped the one real caller, whose path
@@ -432,7 +438,7 @@ module RailsAiContext
           end
         end
 
-        callers.to_a.sort.first(20)
+        callers.to_a.sort
       end
 
       private_class_method def self.detect_common_pattern(stats)

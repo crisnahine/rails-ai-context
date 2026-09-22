@@ -77,7 +77,9 @@ module RailsAiContext
           jobs = Payload.section(ctx, :jobs)
           if jobs
             job_count = (jobs[:jobs] || []).size
+            worker_count = (jobs[:workers] || []).size
             stats << count_phrase(job_count, "job") if job_count > 0
+            stats << count_phrase(worker_count, "Sidekiq worker") if worker_count > 0
           end
 
           parts << "- #{stats.join(', ')}" if stats.any?
@@ -295,20 +297,27 @@ module RailsAiContext
           return [] unless jobs
 
           job_list = jobs[:jobs] || []
+          workers = jobs[:workers] || []
           mailers = jobs[:mailers] || []
           channels = jobs[:channels] || []
-          return [] if job_list.empty? && mailers.empty? && channels.empty?
+          return [] if job_list.empty? && workers.empty? && mailers.empty? && channels.empty?
 
           lines = [ "## Background Jobs & Async", "" ]
           if job_list.any?
             names = job_list.map { |j| j[:name] || j[:class_name] }.compact.first(8)
             lines << "#{count_phrase(job_list.size, 'background job')}: #{names.join(', ')}#{job_list.size > 8 ? ', ...' : ''}."
           end
+          # The workers are in the same hash, and on an app that runs its
+          # background work through Sidekiq they are all of it.
+          if workers.any?
+            names = workers.map { |w| w[:name] }.compact.first(8)
+            lines << "#{count_phrase(workers.size, 'Sidekiq worker')}: #{names.join(', ')}#{workers.size > 8 ? ', ...' : ''}."
+          end
           lines << "#{count_phrase(mailers.size, 'mailer')}." if mailers.any?
           lines << "#{count_phrase(channels.size, 'Action Cable channel')}." if channels.any?
-          # An app that runs its async work through Sidekiq workers has an
-          # empty app/jobs, and the section would read as no background work.
-          lines << GetJobPattern::NOT_COVERED if job_list.empty?
+          # The caveat points at app/workers, so it cannot stand next to a
+          # list read out of app/workers.
+          lines << GetJobPattern::NOT_COVERED if job_list.empty? && workers.empty?
           lines << ""
           lines
         end

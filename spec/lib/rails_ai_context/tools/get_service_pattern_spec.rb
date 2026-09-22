@@ -669,5 +669,133 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).not_to include("Concerns::Payloadable")
       end
     end
+
+    # `.filters.keys` is [:order_params, :account]: the two inside the block
+    # are keys of the hash filter, and an interaction that is handed them as
+    # keyword arguments drops them.
+    context "an interaction with a nested hash filter" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "orders"))
+        File.write(File.join(tmpdir, "app", "services", "orders", "create_with_params.rb"), <<~RUBY)
+          class Orders::CreateWithParams < ActiveInteraction::Base
+            hash :order_params do
+              string :title, default: nil
+              integer :quantity, default: nil
+            end
+
+            object :account
+
+            def execute; end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "shows the nested filters under the hash they belong to" do
+        text = described_class.call(service: "Orders::CreateWithParams").content.first[:text]
+
+        expect(text).to include("- `hash :order_params`")
+        expect(text).to include("  - `string :title`")
+        expect(text).to include("  - `integer :quantity`")
+        expect(text).to include("- `object :account`")
+      end
+    end
+
+    # A subclass of a subclass of ActiveInteraction::Base is still one, and
+    # the filters it takes are its own plus the ones it inherits.
+    context "an interaction one level down" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "billing", "invoices"))
+        File.write(File.join(tmpdir, "app", "services", "billing", "invoices", "base_request.rb"), <<~RUBY)
+          class Billing::Invoices::BaseRequest < ActiveInteraction::Base
+            string :token
+
+            def execute; end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app", "services", "billing", "invoices", "charge.rb"), <<~RUBY)
+          class Billing::Invoices::Charge < Billing::Invoices::BaseRequest
+            hash :body do
+              integer :amount, default: nil
+            end
+
+            def execute; end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "lists the inherited filter alongside the class's own" do
+        text = described_class.call(service: "Billing::Invoices::Charge").content.first[:text]
+
+        expect(text).to include("## Inputs (ActiveInteraction)")
+        expect(text).to include("`hash :body`")
+        expect(text).to include("`string :token`")
+      end
+
+      it "says which class an inherited filter came from" do
+        text = described_class.call(service: "Billing::Invoices::Charge").content.first[:text]
+
+        expect(text).to include("Billing::Invoices::BaseRequest")
+      end
+    end
+
+    # The six directories the caller scan used to name are not the app's
+    # autoload paths: anything else under app/ is invisible to it.
+    context "a caller outside the conventional service directories" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "billing", "invoices"))
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "tools"))
+        FileUtils.mkdir_p(File.join(tmpdir, "lib", "reporting"))
+        File.write(File.join(tmpdir, "app", "services", "billing", "invoices", "create.rb"), <<~RUBY)
+          class Billing::Invoices::Create < ActiveInteraction::Base
+            object :account
+
+            def execute; end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app", "tools", "invoice_tool.rb"), <<~RUBY)
+          class InvoiceTool
+            def call(account)
+              Billing::Invoices::Create.run(account: account)
+            end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "lib", "reporting", "nightly.rb"), <<~RUBY)
+          module Reporting
+            class Nightly
+              def call(account)
+                Billing::Invoices::Create.run(account: account)
+              end
+            end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names a caller in any app/ directory" do
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("app/tools/invoice_tool.rb")
+      end
+
+      it "names a caller under lib/" do
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("lib/reporting/nightly.rb")
+      end
+    end
   end
 end

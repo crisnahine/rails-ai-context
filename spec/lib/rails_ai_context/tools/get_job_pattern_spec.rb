@@ -464,6 +464,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         class Billing::Invoices::CreateWorker
           include Sidekiq::Job
           sidekiq_options queue: :default, retry: 3
+          sidekiq_throttle(concurrency: { limit: 1 }, threshold: { limit: 10, period: 1.minute })
 
           def perform(account_id)
             Billing::Invoices::Create.run(account: Account.find(account_id))
@@ -485,6 +486,38 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("queue: default")
       expect(text).to include("retry: 3")
       expect(text).to include("perform(account_id)")
+    end
+
+    # The bracket reads as the worker's run constraints, and a throttle is
+    # the constraint that decides how fast it actually runs.
+    it "names the throttle the worker declares" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("throttle: concurrency { limit: 1 }, threshold { limit: 10, period: 1.minute }")
+    end
+
+    # The app names its Sidekiq config config/sidekiq_production.yml, which
+    # is what a multi-environment app tends to do, so there is no
+    # config/sidekiq.yml to hang the caveat on.
+    it "says the listing does not cover workers it never saw, with no config/sidekiq.yml" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("Workers the introspector did not see are not covered by this tool.")
+    end
+
+    it "answers the worker name the listing just printed" do
+      text = described_class.call(job: "Billing::Invoices::CreateWorker").content.first[:text]
+
+      expect(text).to include("# Billing::Invoices::CreateWorker")
+      expect(text).to include("app/workers/billing/invoices/create_worker.rb")
+      expect(text).not_to include("No jobs found")
+    end
+
+    it "lists the worker among the known names when the query matches nothing" do
+      text = described_class.call(job: "NoSuchThing").content.first[:text]
+
+      expect(text).to include("not found")
+      expect(text).to include("Billing::Invoices::CreateWorker")
     end
   end
 end

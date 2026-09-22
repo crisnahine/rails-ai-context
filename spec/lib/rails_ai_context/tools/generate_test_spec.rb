@@ -675,6 +675,89 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
   end
 
   describe "an ActiveInteraction service" do
+    # The app registers `inflect.acronym "AI"`, so the constant the file
+    # declares is AIReports::Build and the path camelizes to AiReports::Build,
+    # which is a constant nothing defines. The static tier never loads the
+    # app's inflections, so only the declaration answers.
+    it "names the constant the file declares, not the one its path camelizes to" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "services", "ai_reports"))
+        File.write(File.join(dir, "app", "services", "ai_reports", "build.rb"), <<~RUBY)
+          class AIReports::Build < ActiveInteraction::Base
+            def execute; end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({ tests: { framework: "rspec" } })
+
+        text = described_class.call(file: "app/services/ai_reports/build.rb").content.first[:text]
+
+        expect(text).to include("RSpec.describe AIReports::Build do")
+        expect(text).not_to include("AiReports::Build")
+      end
+    end
+
+    # A filter declared inside a `hash :x do ... end` block is a key of that
+    # hash, not an input of the interaction: `.filters.keys` is [:order_params,
+    # :account], and run() drops the other two silently.
+    it "passes only the interaction's own filters to run" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "services", "orders"))
+        File.write(File.join(dir, "app", "services", "orders", "create_with_params.rb"), <<~RUBY)
+          class Orders::CreateWithParams < ActiveInteraction::Base
+            hash :order_params do
+              string :title, default: nil
+              integer :quantity, default: nil
+            end
+
+            object :account
+
+            def execute; end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({ tests: { framework: "rspec" } })
+
+        text = described_class.call(file: "app/services/orders/create_with_params.rb").content.first[:text]
+
+        expect(text).to include("described_class.run(order_params: nil, account: nil)")
+        expect(text).not_to include("title: nil")
+        expect(text).not_to include("quantity: nil")
+      end
+    end
+
+    # ActiveInteraction::Base defines .run and .run!, never .call, so a
+    # subclass of a subclass still runs the same way.
+    it "follows the superclass chain through the app's own services" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "services", "billing", "invoices"))
+        File.write(File.join(dir, "app", "services", "billing", "invoices", "base_request.rb"), <<~RUBY)
+          class Billing::Invoices::BaseRequest < ActiveInteraction::Base
+            string :token
+
+            def execute; end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "services", "billing", "invoices", "charge.rb"), <<~RUBY)
+          class Billing::Invoices::Charge < Billing::Invoices::BaseRequest
+            hash :body do
+              integer :amount, default: nil
+            end
+
+            def execute; end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({ tests: { framework: "rspec" } })
+
+        text = described_class.call(file: "app/services/billing/invoices/charge.rb").content.first[:text]
+
+        expect(text).to include("describe \".run\"")
+        expect(text).to include("described_class.run(token: nil, body: nil)")
+        expect(text).not_to include("described_class.call")
+      end
+    end
+
     it "runs it the way the base class does" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "services", "orders"))

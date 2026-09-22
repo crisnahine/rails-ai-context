@@ -244,6 +244,39 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         expect(text).to include(RailsAiContext::Tools::GetJobPattern::NOT_COVERED)
       end
 
+      # The workers sit in the same hash the section reads, and job_pattern
+      # lists them, so a section that names only the mailer points the reader
+      # away from where the app's background work actually is.
+      it "names the Sidekiq workers the same hash carries" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "TestApp",
+          jobs: {
+            jobs: [], mailers: [], channels: [],
+            workers: [ { name: "Billing::Invoices::CreateWorker", file: "app/workers/billing/invoices/create_worker.rb" } ]
+          }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("## Background Jobs & Async")
+        expect(text).to include("1 Sidekiq worker")
+        expect(text).to include("Billing::Invoices::CreateWorker")
+      end
+
+      it "leaves the caveat off when the workers are the background work" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "TestApp",
+          jobs: {
+            jobs: [], mailers: [], channels: [],
+            workers: [ { name: "Billing::Invoices::CreateWorker" } ]
+          }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).not_to include(RailsAiContext::Tools::GetJobPattern::NOT_COVERED)
+      end
+
       it "leaves the caveat off when jobs were found" do
         allow(described_class).to receive(:cached_context).and_return({
           app_name: "TestApp",
