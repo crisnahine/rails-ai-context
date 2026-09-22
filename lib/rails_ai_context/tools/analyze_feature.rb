@@ -365,12 +365,14 @@ module RailsAiContext
         # is every test's own name for itself, so leaving it in made "spec"
         # and "test" match the whole suite.
         def relative_test_name(path, real_root)
-          path.to_s
-              .sub("#{real_root}/", "")
-              .sub(%r{\A(?:spec|test)/}, "")
-              .sub(/\.rb\z/, "")
-              .sub(/_(?:spec|test)\z/, "")
-              .sub(%r{(\A|/)(?:spec|test)_}, "\\1")
+          relative = path.to_s.sub("#{real_root}/", "").sub(%r{\A(?:spec|test)/}, "").sub(/\.rb\z/, "")
+          without_suffix = relative.sub(/_(?:spec|test)\z/, "")
+          # One convention or the other, never both: stripping a `spec_`
+          # prefix from a file already named `..._spec` takes a word out of
+          # the feature's own name (spec_runner_spec.rb).
+          return without_suffix unless without_suffix == relative
+
+          relative.sub(%r{(\A|/)(?:spec|test)_}, "\\1")
         end
 
         def discover_tests(root, pattern, lines)

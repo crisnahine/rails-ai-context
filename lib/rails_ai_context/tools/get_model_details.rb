@@ -114,10 +114,10 @@ module RailsAiContext
       # total separately.
       PAGE_METHOD_CAP = 25
 
-      private_class_method def self.methods_heading(shown, total)
-        return "## Key instance methods" unless total.is_a?(Integer) && total > shown
+      private_class_method def self.methods_heading(shown, total, kind: "Key instance methods")
+        return "## #{kind}" unless total.is_a?(Integer) && total > shown
 
-        "## Key instance methods (#{shown} of #{total})"
+        "## #{kind} (#{shown} of #{total})"
       end
 
       private_class_method def self.unavailable_row(name, data)
@@ -386,14 +386,21 @@ module RailsAiContext
         # Class methods - only show methods defined in the actual model file
         source_class_methods = extract_source_class_methods(name)
         if source_class_methods&.any?
-          lines << "" << "## Class methods"
-          source_class_methods.first(25).each { |m| lines << "- `#{m}`" }
+          listed = source_class_methods.first(PAGE_METHOD_CAP)
+          lines << "" << methods_heading(listed.size, source_class_methods.size, kind: "Class methods")
+          listed.each { |m| lines << "- `#{m}`" }
         elsif data[:class_methods]&.any?
           # Fallback: filter obvious framework methods
           app_class_methods = data[:class_methods].reject { |m| m.match?(/\A(find_for_|find_or_|devise_|new_with_session|http_auth|params_auth|case_insensitive|expire_all|extend_remember|strip_whitespace|email_regexp|omniauth_providers)/) }
           if app_class_methods.any?
-            lines << "" << "## Class methods"
-            lines << app_class_methods.first(25).map { |m| "- `#{m}`" }.join("\n")
+            listed = app_class_methods.first(PAGE_METHOD_CAP)
+            lines << "" << methods_heading(listed.size, app_class_methods.size, kind: "Class methods")
+            listed.each { |m| lines << "- `#{m}`" }
+            total = data[:class_method_count]
+            if total.is_a?(Integer) && total > app_class_methods.size
+              lines << "_Reflection reports #{count_phrase(total, "class method")} on #{name}; " \
+                       "this list is what the payload carries, minus framework ones._"
+            end
           end
         end
 

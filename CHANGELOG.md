@@ -94,7 +94,8 @@ could act on.
   engine mounts, and the booted tier lists every Rack endpoint rather than
   `Rails::Engine` subclasses alone. A mount inside a `namespace` or `scope`
   carries that prefix; one whose enclosing scope is an expression is listed
-  with no path rather than an unprefixed one.
+  with no path rather than an unprefixed one. `engines` heads the same list
+  "Mounted apps", because half of what it holds are not engines.
 - **config calls a zero-byte initializer empty** rather than "all commented
   out".
 - **diagnose stops reading a display cap as a model's whole interface.** A

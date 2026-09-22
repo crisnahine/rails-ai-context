@@ -611,6 +611,24 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
     # The heading's two numbers describe the filtered list; the model's own
     # total is a different set and says so on its own line.
+    it "says the same about the class-method list" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Widget" => {
+            table_name: "widgets", associations: [],
+            class_methods: %w[search_by import_from_csv],
+            class_method_count: 41
+          }
+        },
+        schema: { tables: { "widgets" => { columns: [ { name: "title", type: "string" } ] } } }
+      )
+
+      text = described_class.call(model: "Widget").content.first[:text]
+
+      expect(text).to include("## Class methods")
+      expect(text).to include("41 class methods")
+    end
+
     it "names the model's whole method count apart from the list" do
       text = described_class.call(model: "Widget").content.first[:text]
 

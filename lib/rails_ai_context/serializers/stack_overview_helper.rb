@@ -51,8 +51,10 @@ module RailsAiContext
         assets_line = SectionFacts.assets_line(ctx)
         lines << assets_line if assets_line
 
-        engine_names = Payload.mounted_engines(ctx).map { |e| e[:engine] }.compact.first(5)
-        lines << "- Engines: #{engine_names.join(', ')}" if engine_names.any?
+        # What routes.rb mounts, engine or plain Rack app: the key predates
+        # the widening, the line should not.
+        mounted = Payload.mounted_engines(ctx).map { |e| e[:engine] }.compact.first(5)
+        lines << "- Mounted: #{mounted.join(', ')}" if mounted.any?
 
         raw_databases = Payload.section(ctx, :multi_database)&.dig(:databases)
         db_list = raw_databases.is_a?(Hash) ? raw_databases.keys : Array(raw_databases)

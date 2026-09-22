@@ -280,6 +280,23 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    # A file named by both conventions keeps its own words: stripping the
+    # `spec_` prefix from spec_runner_spec.rb left "runner".
+    it "keeps a feature word that only looks like the suite's prefix" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        spec_dir = File.join(tmp, "spec", "system")
+        FileUtils.mkdir_p(spec_dir)
+        File.write(File.join(spec_dir, "spec_runner_spec.rb"), "require \"rails_helper\"\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "spec_runner").content.first[:text]
+
+        expect(text).to include("spec/system/spec_runner_spec.rb")
+      end
+    end
+
     context "DoS cap (v5.8.1 round 2)" do
       it "caps discover_services at MAX_SCAN_FILES and emits truncation note" do
         Dir.mktmpdir("rac_dos_services") do |tmp|

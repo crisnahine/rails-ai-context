@@ -431,7 +431,7 @@ ActionMailer mailers: every mailer class with its delivery actions and delivery 
 
 ### `rails_get_engines`
 
-Rails engines: engines mounted in `config/routes.rb` (with known-engine descriptions) and loaded engine classes with route/model counts.
+What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on - and loaded engine classes with route/model counts.
 
 *No parameters.*
 

@@ -299,9 +299,11 @@ module RailsAiContext
       # spec set is the app's bundle, which is exactly the set that does not
       # have it.
       private_class_method def self.brakeman_on_machine
+        # `brakeman-*` also matches brakeman-lib, a different gem: a version
+        # starts with a digit.
         versions = Gem.path.flat_map { |dir|
           Dir.glob(File.join(dir, "specifications", "brakeman-*.gemspec"))
-        }.filter_map { |path| File.basename(path)[/\Abrakeman-(.+)\.gemspec\z/, 1] }
+        }.filter_map { |path| File.basename(path)[/\Abrakeman-(\d[^-]*)\.gemspec\z/, 1] }
 
         versions.max_by { |v| Gem::Version.new(v) rescue Gem::Version.new("0") }
       rescue StandardError => e

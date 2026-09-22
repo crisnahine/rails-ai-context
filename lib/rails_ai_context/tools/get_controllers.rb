@@ -506,7 +506,9 @@ module RailsAiContext
         lines << ""
         lines << "_Next: `rails_get_routes(controller:\"#{ctrl_path}\")` for routes"
         lines << " | `rails_get_model_details(model:\"#{model_name}\")` for model" if model_name
-        lines << " | `rails_get_view(controller:\"#{ctrl_path.split('/').last}\")` for views_"
+        # The full path, which is the directory Rails resolves templates in:
+        # the basename reads another component's views on a namespaced app.
+        lines << " | `rails_get_view(controller:\"#{ctrl_path}\")` for views_"
 
         lines.join("\n")
       end
