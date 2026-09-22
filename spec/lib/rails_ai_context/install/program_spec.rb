@@ -61,20 +61,6 @@ RSpec.describe RailsAiContext::Install::Program do
     end
   end
 
-  describe ".select_tool_mode" do
-    it "answers :cli on 2 and :mcp on anything else, EOF included" do
-      expect(described_class.select_tool_mode(surface_class.new("2"))).to eq(:cli)
-      expect(described_class.select_tool_mode(surface_class.new(""))).to eq(:mcp)
-      expect(described_class.select_tool_mode(surface_class.new(nil))).to eq(:mcp)
-    end
-
-    it "uses one label per mode" do
-      surface = surface_class.new("1")
-      described_class.select_tool_mode(surface)
-      expect(surface.text).to include("Selected: MCP + CLI fallback")
-    end
-  end
-
   # A third answer, with 1 and 2 keeping the meaning they have always had so
   # anything piping input into the installer still works.
   describe ".select_setup" do
@@ -87,6 +73,12 @@ RSpec.describe RailsAiContext::Install::Program do
     it "treats an empty answer and EOF as the default" do
       expect(described_class.select_setup(surface_class.new("")).to_a).to eq([ :mcp, true ])
       expect(described_class.select_setup(surface_class.new(nil)).to_a).to eq([ :mcp, true ])
+    end
+
+    it "uses one label per mode" do
+      surface = surface_class.new("1")
+      described_class.select_setup(surface)
+      expect(surface.text).to include("Selected: MCP + CLI fallback")
     end
 
     it "says what MCP-only leaves alone" do

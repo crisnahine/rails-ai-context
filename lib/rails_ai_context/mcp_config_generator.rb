@@ -59,44 +59,19 @@ module RailsAiContext
 
     private
 
-    def generate_for(tool, path, config)
-      case config[:format]
-      when :mcp_json     then write_mcp_json(path, config[:root_key])
-      when :vscode_json  then write_vscode_json(path)
-      when :opencode_json then write_opencode_json(path)
-      when :codex_toml   then write_codex_toml(path)
+    # The root key comes from the AiTool table, the same table self.remove
+    # reads. OpenCode takes the whole command as one array; the other JSON
+    # tools take command plus args, with type left off - stdio is inferred
+    # from command being present.
+    def generate_for(_tool, path, config)
+      return merge_toml(path, build_codex_section) if config[:format] == :codex_toml
+
+      entry = if config[:format] == :opencode_json
+        { "type" => "local", "command" => server_command }
+      else
+        { "command" => server_command.first, "args" => server_command[1..] }
       end
-    end
-
-    # Claude Code (.mcp.json) and Cursor (.cursor/mcp.json)
-    # Format: { "mcpServers": { "rails-ai-context": { "command": "...", "args": [...] } } }
-    def write_mcp_json(path, root_key)
-      entry = mcp_json_entry
-      merge_json(path, root_key, entry)
-    end
-
-    # VS Code / Copilot (.vscode/mcp.json)
-    # Format: { "servers": { "rails-ai-context": { "command": "...", "args": [...] } } }
-    # Type is optional for stdio - VS Code infers from presence of command.
-    def write_vscode_json(path)
-      entry = mcp_json_entry
-      merge_json(path, "servers", entry)
-    end
-
-    # OpenCode (opencode.json)
-    # Format: { "mcp": { "rails-ai-context": { "type": "local", "command": [...] } } }
-    # Note: command is an ARRAY (not separate command/args)
-    def write_opencode_json(path)
-      cmd = server_command
-      entry = { "type" => "local", "command" => cmd }
-      merge_json(path, "mcp", entry)
-    end
-
-    # Codex CLI (.codex/config.toml)
-    # Format: [mcp_servers.rails-ai-context] section with command (string) and args (string array)
-    def write_codex_toml(path)
-      section = build_codex_section
-      merge_toml(path, section)
+      merge_json(path, config[:root_key], entry)
     end
 
     # --- JSON merge logic ---
@@ -165,15 +140,9 @@ module RailsAiContext
       lines = []
       lines << "[mcp_servers.#{SERVER_NAME}]"
 
-      if @standalone
-        lines << 'command = "rails-ai-context"'
-        lines << 'args = ["serve"]'
-      else
-        # Same command shape as mcp_json_entry: the CLI binary quarantines app
-        # boot output away from stdout starting before Bundler.require.
-        lines << 'command = "bundle"'
-        lines << 'args = ["exec", "rails-ai-context", "serve"]'
-      end
+      cmd = server_command
+      lines << "command = #{cmd.first.inspect}"
+      lines << "args = #{cmd[1..].inspect}"
 
       # Codex CLI env_clear()s the process environment. Capture the current Ruby
       # environment so the MCP server can find gems regardless of version manager
@@ -203,18 +172,10 @@ module RailsAiContext
 
     # --- Shared helpers ---
 
-    def mcp_json_entry
-      if @standalone
-        { "command" => "rails-ai-context", "args" => [ "serve" ] }
-      else
-        # The CLI binary quarantines app boot output away from stdout starting
-        # before Bundler.require; the rake task can only quarantine from the
-        # environment task onward. Both paths keep working - this only changes
-        # what new installs write into their MCP configs.
-        { "command" => "bundle", "args" => [ "exec", "rails-ai-context", "serve" ] }
-      end
-    end
-
+    # How the server is invoked, for every config format. In-Gemfile installs
+    # go through the CLI binary because it quarantines app boot output away
+    # from stdout starting before Bundler.require; the rake task can only
+    # quarantine from the environment task onward.
     def server_command
       if @standalone
         [ "rails-ai-context", "serve" ]
