@@ -8,7 +8,16 @@ module RailsAiContext
   # dependencies or devDependencies, so an `overrides` pin for a CVE fix is
   # not the app's bundler. A tool reached through its own scope counts, since
   # `@tailwindcss/vite` is how an app depends on tailwindcss.
+  #
+  # An app's manifest is not always at its root. A Rails app can keep a root
+  # package.json for importmap and a whole Vue app under frontend/, so every
+  # manifest is read and merged, the root one winning a version disagreement.
+  # Callers ask what the app depends on, never which directory holds the file.
   module PackageJson
+    # Where a frontend app lives when it has not been declared through
+    # `frontend_paths`. Same list the frontend introspector falls back to.
+    FRONTEND_DIRS = %w[app/frontend app/javascript frontend client].freeze
+
     MUTEX = Mutex.new
     CACHE = {}
     private_constant :MUTEX, :CACHE
@@ -16,7 +25,41 @@ module RailsAiContext
     module_function
 
     def deps(root)
-      path = File.join(root.to_s, "package.json")
+      manifest_dirs(root).reduce({}) do |merged, dir|
+        merged.merge(read(File.join(dir, "package.json")))
+      end
+    end
+
+    def present?(root, name)
+      all = deps(root)
+      return true if all.key?(name.to_s)
+
+      scope = "@#{name}/"
+      all.any? { |dep, _| dep.start_with?(scope) }
+    end
+
+    # Frontend dirs first, app root last, so the root manifest wins a clash.
+    def manifest_dirs(root)
+      root = root.to_s
+      frontend_dirs(root).select { |dir| Dir.exist?(dir) && contained?(dir, root) } << root
+    end
+
+    def frontend_dirs(root)
+      configured = RailsAiContext.configuration.respond_to?(:frontend_paths) &&
+                   RailsAiContext.configuration.frontend_paths
+      declared = configured.is_a?(Array) && configured.any? ? configured : FRONTEND_DIRS
+      declared.map { |dir| File.join(root, dir.to_s) }
+    end
+    private_class_method :frontend_dirs
+
+    def contained?(dir, root)
+      SafePath.contained?(File.realpath(dir), File.realpath(root))
+    rescue SystemCallError
+      false
+    end
+    private_class_method :contained?
+
+    def read(path)
       stamp = stamp(path)
 
       MUTEX.synchronize do
@@ -28,14 +71,7 @@ module RailsAiContext
         parsed
       end
     end
-
-    def present?(root, name)
-      all = deps(root)
-      return true if all.key?(name.to_s)
-
-      scope = "@#{name}/"
-      all.any? { |dep, _| dep.start_with?(scope) }
-    end
+    private_class_method :read
 
     def stamp(path)
       [ File.mtime(path), File.size(path) ]
