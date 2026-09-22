@@ -47,6 +47,19 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("authenticate_user!")
     end
 
+    it "shows the controller's own action body, not a sibling class's or a class method's" do
+      allow(described_class).to receive(:cached_context).and_return({
+        controllers: { controllers: { "ReportsController" => {
+          actions: %w[index], file: "app/controllers/reports_controller.rb"
+        } } }
+      })
+
+      text = described_class.call(controller: "ReportsController", action: "index").content.first[:text]
+      expect(text).to include("@reports = Report.all")
+      expect(text).not_to include(":row_index")
+      expect(text).not_to include(":class_level_index")
+    end
+
     it "returns error for non-existent action" do
       result = described_class.call(controller: "PostsController", action: "nonexistent")
       text = result.content.first[:text]

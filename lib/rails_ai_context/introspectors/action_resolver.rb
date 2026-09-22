@@ -136,21 +136,28 @@ module RailsAiContext
       # One method's body out of a file's source, with the lines it occupies.
       # The owner decides which `def` answers: a class nested in the file can
       # define the same name earlier, and a whole-file search for the name
-      # would hand back that one instead.
+      # would hand back that one instead. Pass the owner when the caller holds
+      # it - `default_owner` only guesses, and it guesses the wrong sibling
+      # when two classes sit at the same depth in one file.
+      #
+      # `def self.x` is a different method from `def x`, and every caller here
+      # wants the instance one, so the class-method def never answers.
       #
       # The name matches ignoring case, so an action asked for as "Show"
       # reaches `def show` here the way it does in the controller listing.
       #
-      # A name no walked method carries at all falls back to reading lines,
-      # which is what answers for a `def` the walk does not record (`initialize`)
-      # or a file it could not parse. The `end` that closes a `def` sits at the
-      # `def`'s own indentation, which reads more reliably than block depth.
+      # A name the owner does not carry falls back to reading lines, which is
+      # what answers for a `def` the walk does not record (`initialize`), for a
+      # file it could not parse, and for an owner that was guessed wrong. The
+      # `end` that closes a `def` sits at the `def`'s own indentation, which
+      # reads more reliably than block depth.
       def method_body(source, method_name, owner: nil)
         methods = methods_in(source)
-        named = methods.select { |m| m[:name].to_s.casecmp?(method_name.to_s) }
+        named = methods.select do |m|
+          m[:scope] == :instance && m[:name].to_s.casecmp?(method_name.to_s)
+        end
         own = own_methods(named, owner || default_owner(source, methods))
         return body_of(source, own.first) if own.any?
-        return nil if named.any?
 
         scanned_body(source.to_s.lines, method_name)
       rescue => e

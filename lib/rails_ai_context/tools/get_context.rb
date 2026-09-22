@@ -145,7 +145,8 @@ module RailsAiContext
         source = safe_read(File.join(rails_app.root.to_s, carried))
         return nil unless source
 
-        RailsAiContext::Introspectors::ActionResolver.method_body(source, action_name)&.dig(:code)
+        RailsAiContext::Introspectors::ActionResolver.method_body(source, action_name, owner: controller_name)
+          &.dig(:code)
       end
 
       # True when the app runs in API-only mode (no view layer), so ivar
