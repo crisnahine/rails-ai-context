@@ -125,6 +125,46 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       end
     end
 
+    context "when both spec/ and test/ hold the same thing" do
+      after do
+        FileUtils.rm_rf(File.join(Rails.root, "test"))
+        FileUtils.rm_rf(File.join(Rails.root, "spec/fixtures"))
+        FileUtils.rm_rf(File.join(Rails.root, "spec/cassettes"))
+        FileUtils.rm_rf(File.join(Rails.root, "spec/vcr_cassettes"))
+      end
+
+      it "reports the spec/ factories and not the test/ ones" do
+        FileUtils.mkdir_p(File.join(Rails.root, "test/factories"))
+        File.write(File.join(Rails.root, "test/factories/orders.rb"), "factory :order\n")
+
+        expect(result[:factories][:location]).to eq("spec/factories")
+      end
+
+      it "reports the spec/ fixtures and not the test/ ones" do
+        FileUtils.mkdir_p(File.join(Rails.root, "spec/fixtures"))
+        FileUtils.mkdir_p(File.join(Rails.root, "test/fixtures"))
+        File.write(File.join(Rails.root, "spec/fixtures/users.yml"), "one:\n  name: Alice\n")
+        File.write(File.join(Rails.root, "test/fixtures/orders.yml"), "one:\n  ref: A\n")
+
+        expect(result[:fixtures]).to eq(location: "spec/fixtures", count: 1)
+      end
+
+      it "walks past a cassette directory that exists but holds nothing" do
+        FileUtils.mkdir_p(File.join(Rails.root, "spec/cassettes"))
+        FileUtils.mkdir_p(File.join(Rails.root, "spec/vcr_cassettes"))
+        File.write(File.join(Rails.root, "spec/vcr_cassettes/get_user.yml"), "http_interactions: []\n")
+
+        expect(result[:vcr_cassettes]).to eq(location: "spec/vcr_cassettes", count: 1)
+      end
+
+      it "counts cassettes in nested directories" do
+        FileUtils.mkdir_p(File.join(Rails.root, "spec/cassettes/api"))
+        File.write(File.join(Rails.root, "spec/cassettes/api/get_user.yml"), "http_interactions: []\n")
+
+        expect(result[:vcr_cassettes]).to eq(location: "spec/cassettes", count: 1)
+      end
+    end
+
     context "with factory files containing factory definitions" do
       it "extracts factory names from permanent factory files" do
         # Permanent factory fixtures exist in spec/factories/

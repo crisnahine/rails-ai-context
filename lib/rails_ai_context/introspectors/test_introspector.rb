@@ -75,34 +75,26 @@ module RailsAiContext
         nil
       end
 
-      def detect_factories
-        dirs = [
-          File.join(root, "spec/factories"),
-          File.join(root, "test/factories")
-        ]
-
-        dirs.each do |dir|
+      # First listed wins: an app holding the same thing under spec/ and test/
+      # reports one location, not both. `detect_system_tests` deliberately
+      # answers the other way.
+      def first_dir_with(glob, *rels)
+        rels.each do |rel|
+          dir = File.join(root, rel)
           next unless Dir.exist?(dir)
-          count = Dir.glob(File.join(dir, "**/*.rb")).size
-          return { location: dir.sub("#{root}/", ""), count: count } if count > 0
-        end
 
+          count = Dir.glob(File.join(dir, "**", glob)).size
+          return { location: rel, count: count } if count > 0
+        end
         nil
       end
 
+      def detect_factories
+        first_dir_with("*.rb", "spec/factories", "test/factories")
+      end
+
       def detect_fixtures
-        dirs = [
-          File.join(root, "spec/fixtures"),
-          File.join(root, "test/fixtures")
-        ]
-
-        dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          count = Dir.glob(File.join(dir, "**/*.yml")).size
-          return { location: dir.sub("#{root}/", ""), count: count } if count > 0
-        end
-
-        nil
+        first_dir_with("*.yml", "spec/fixtures", "test/fixtures")
       end
 
       # Both bases are summed: an app that keeps system tests under spec/ and
@@ -186,20 +178,7 @@ module RailsAiContext
       end
 
       def detect_vcr
-        dirs = [
-          File.join(root, "spec/cassettes"),
-          File.join(root, "spec/vcr_cassettes"),
-          File.join(root, "test/cassettes"),
-          File.join(root, "test/vcr_cassettes")
-        ]
-
-        dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          count = Dir.glob(File.join(dir, "**/*.yml")).size
-          return { location: dir.sub("#{root}/", ""), count: count } if count > 0
-        end
-
-        nil
+        first_dir_with("*.yml", "spec/cassettes", "spec/vcr_cassettes", "test/cassettes", "test/vcr_cassettes")
       end
 
       def detect_ci
