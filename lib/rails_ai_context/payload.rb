@@ -175,6 +175,21 @@ module RailsAiContext
       file.to_s.sub(%r{\A.*app/controllers/}, "").sub(/(?:_controller)?\.rb\z/, "")
     end
 
+    # Case-insensitive fuzzy key lookup for hashes keyed by class or table
+    # names. Tries exact, underscore, singularize and classify variants.
+    def fuzzy_find_key(keys, query)
+      return nil if query.nil? || keys.nil? || keys.empty?
+      q = query.to_s.strip
+      return nil if q.empty?
+      q_down = q.downcase
+      q_under = q.underscore.downcase
+
+      keys.find { |k| k.to_s.downcase == q_down } ||
+        keys.find { |k| k.to_s.underscore.downcase == q_under } ||
+        keys.find { |k| k.to_s.downcase == q.singularize.downcase } ||
+        keys.find { |k| k.to_s.downcase == q.classify.downcase }
+    end
+
     # The controller a name means: "posts", "PostsController", "admin/posts",
     # "Admin::PostsController", and a route key whose declared constant does
     # not camelize from it. One rule in one place, so the resource and the
@@ -184,9 +199,9 @@ module RailsAiContext
       by_route = controller_for_route_key(ctx, input.to_s.delete_suffix("_controller"))
       return by_route.first if by_route
 
-      Tools::BaseTool.fuzzy_find_key(keys, input) ||
-        Tools::BaseTool.fuzzy_find_key(keys, "#{input}Controller") ||
-        Tools::BaseTool.fuzzy_find_key(keys, "#{input.to_s.camelize}Controller") ||
+      fuzzy_find_key(keys, input) ||
+        fuzzy_find_key(keys, "#{input}Controller") ||
+        fuzzy_find_key(keys, "#{input.to_s.camelize}Controller") ||
         short_name_match(ctx, keys, input)
     end
 

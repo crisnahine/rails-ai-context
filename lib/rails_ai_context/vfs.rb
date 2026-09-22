@@ -39,7 +39,7 @@ module RailsAiContext
         context = RailsAiContext.introspect
         models = context[:models] || {}
 
-        key = Tools::BaseTool.fuzzy_find_key(models.keys, name) || name
+        key = Payload.fuzzy_find_key(models.keys, name) || name
         data = models[key]
 
         unless data

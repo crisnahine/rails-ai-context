@@ -524,20 +524,10 @@ module RailsAiContext
           SHARED_CACHE[:fingerprint]&.digest || "none"
         end
 
-        # Case-insensitive fuzzy key lookup for hashes keyed by class/table names.
-        # Tries exact, underscore, singularize, and classify variants. Returns matching key or nil.
-        # Shared by get_model_details, get_callbacks, get_context, generate_test, dependency_graph.
+        # Payload keys, so the rule lives beside the payload readers that need
+        # it; tools reach it here without qualifying the module.
         def fuzzy_find_key(keys, query)
-          return nil if query.nil? || keys.nil? || keys.empty?
-          q = query.to_s.strip
-          return nil if q.empty?
-          q_down = q.downcase
-          q_under = q.underscore.downcase
-
-          keys.find { |k| k.to_s.downcase == q_down } ||
-            keys.find { |k| k.to_s.underscore.downcase == q_under } ||
-            keys.find { |k| k.to_s.downcase == q.singularize.downcase } ||
-            keys.find { |k| k.to_s.downcase == q.classify.downcase }
+          Payload.fuzzy_find_key(keys, query)
         end
 
         # `\b` is a word/non-word transition, so it cannot fire beside a pattern

@@ -13,7 +13,7 @@ module RailsAiContext
         schema_data = context[:schema]
         return nil unless models_data.is_a?(Hash) && schema_data.is_a?(Hash)
 
-        model_key = Tools::BaseTool.fuzzy_find_key(models_data.keys, model_name)
+        model_key = Payload.fuzzy_find_key(models_data.keys, model_name)
         return nil unless model_key
 
         model_info = models_data[model_key]
