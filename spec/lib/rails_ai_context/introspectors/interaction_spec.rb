@@ -5,8 +5,6 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::Interaction do
-  def source_for(body) = body
-
   describe ".interaction?" do
     it "is true for a direct subclass of ActiveInteraction::Base" do
       source = <<~RUBY
