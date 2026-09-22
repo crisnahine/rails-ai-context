@@ -34,10 +34,6 @@ module RailsAiContext
         interface object record string symbol time
       ].freeze
 
-      # Where an app keeps interactions. Both are conventional, and
-      # PathResolver widens each to packs and in-repo engines.
-      KINDS = %w[app/services app/interactions].freeze
-
       # A chain longer than this is a cycle or a class hierarchy no reader is
       # following either.
       MAX_DEPTH = 8
@@ -65,7 +61,20 @@ module RailsAiContext
       #
       # @return [Array<Filter>] empty when the source declares no interaction
       def filters(source, lookup: nil)
-        chain(source, lookup: lookup).reverse.flat_map { |link| own_filters(link) }
+        interface(source, lookup: lookup) || []
+      end
+
+      # Both answers from one walk of the chain, for a caller that needs to
+      # know whether the class is an interaction and what it takes: nil when
+      # it is not one, the filters when it is - and an interaction with no
+      # filters answers [], which is not nil.
+      #
+      # @return [Array<Filter>, nil]
+      def interface(source, lookup: nil)
+        links = chain(source, lookup: lookup)
+        return nil if links.empty?
+
+        links.reverse.flat_map { |link| own_filters(link) }
       end
 
       # The classes from ActiveInteraction::Base down to this one, nearest
@@ -96,28 +105,38 @@ module RailsAiContext
       end
 
       # A callable from a constant name to the source of the file declaring
-      # it, over the directories an app keeps interactions in. The walk is
-      # deferred to the first call: an app whose interactions all name
-      # ActiveInteraction::Base never pays for it.
+      # it, probed against the app's autoload roots rather than a walk over
+      # the tree: Zeitwerk resolves a constant to one path under one root, and
+      # `underscore` is the half of the inflection that is right with or
+      # without the app's own acronyms. A base class at a path its name does
+      # not underscore to is not found, which is the same thing Zeitwerk would
+      # say about it.
+      #
+      # The roots are resolved on the first question, not when the lookup is
+      # built: an app whose interactions all name ActiveInteraction::Base
+      # never asks one.
       #
       # @return [Proc]
       def lookup_for(root)
-        index = nil
+        roots = nil
         lambda do |name|
-          index ||= build_index(root)
-          index[name]
+          roots ||= autoload_roots(root)
+          relative = "#{name.to_s.underscore}.rb"
+          path = roots.lazy.map { |dir| File.join(dir, relative) }.find { |candidate| File.file?(candidate) }
+          path && SafeFile.read(path)
         end
       end
 
-      def build_index(root)
-        KINDS.each_with_object({}) do |kind, found|
-          SourceScan.each(root, kind: kind) do |record|
-            name = DeclaredConstant.resolve(record.source, record.path_name)
-            found[name] ||= record.source
-          end
-        end
+      # Every directory Rails autoloads constants from: each app/* directory,
+      # the concerns directories inside them (railties globs `{*,*/concerns}`),
+      # and lib. Packs and in-repo engines come with PathResolver.
+      def autoload_roots(root)
+        app_trees = PathResolver.dirs_for(root, "app")
+        app_trees.flat_map { |tree| Dir.glob(File.join(tree, "*")).select { |dir| File.directory?(dir) } } +
+          ConcernPaths.resolve(root) +
+          PathResolver.dirs_for(root, "lib")
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, {}, label: "Interaction.build_index")
+        RailsAiContext.debug_fail(e, [], label: "Interaction.autoload_roots")
       end
 
       # The filters one class declares, nested ones attached to the filter
@@ -151,7 +170,7 @@ module RailsAiContext
 
         top
       end
-      private_class_method :build_index, :own_filters
+      private_class_method :autoload_roots, :own_filters
     end
   end
 end

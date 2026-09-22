@@ -176,7 +176,10 @@ its concerns), not the order Rails registered them in.
 
 ### `rails_get_concern`
 
-Concern methods, source code, and which models include it.
+Concern methods, source code, and which models include it. A class under
+`app/models/concerns` that subclasses `ActiveModel::Validator` is listed as a
+validator rather than a concern, and its users are the models that name it in
+`validates_with`.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -201,7 +204,10 @@ Controller actions with inherited filters, render map, strong params. Includes s
 
 ### `rails_get_routes`
 
-Routes with code-ready helpers (`post_path(@record)`) and required params.
+Routes with code-ready helpers (`post_path(@record)`) and required params. A
+fully qualified controller key answers with its own routes only; a short name
+still matches every controller that carries it. Rack apps attached with `mount`
+or `match ... to:` are named with the path they answer on.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -299,7 +305,9 @@ Brakeman static analysis: SQL injection, XSS, mass assignment, command injection
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
-> Requires the `brakeman` gem. Gracefully reports "not installed" if missing.
+> Requires the `brakeman` gem. When it cannot be loaded, the answer says which
+> case it is: brakeman is nowhere on the machine, or it is installed and the
+> app's bundle does not carry it, which `--no-boot` scans around.
 
 ### `rails_performance_check`
 
@@ -376,7 +384,9 @@ Service object interface, dependencies, side effects, callers.
 
 Background job queue, retries, guard clauses, broadcasts, schedules. Sidekiq
 workers under `app/workers` are listed alongside the ActiveJob jobs, with
-their `sidekiq_options` and `perform` signature.
+their `sidekiq_options`, any `sidekiq_throttle`, and the `perform` signature. A
+worker that inherits its Sidekiq mixin from a base worker is one of them, and
+`job:` answers a worker name as well as a job name.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

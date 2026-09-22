@@ -1121,9 +1121,8 @@ module RailsAiContext
         def service_entry_point(file)
           source = read_app_file(file)
           lookup = Introspectors::Interaction.lookup_for(rails_app.root.to_s)
-          filters = source ? Introspectors::Interaction.filters(source, lookup: lookup) : []
-          return { method: "call", call: "call", expectation: "be_truthy" } unless
-            source && Introspectors::Interaction.interaction?(source, lookup: lookup)
+          filters = source && Introspectors::Interaction.interface(source, lookup: lookup)
+          return { method: "call", call: "call", expectation: "be_truthy" } unless filters
 
           # Nested filters are keys of the filter that declares them, not
           # keyword arguments: active_interaction drops them without a word.

@@ -91,7 +91,11 @@ module RailsAiContext
         text = content.to_s
         erb = path ? path.to_s.end_with?(".erb") : RailsAiContext::ErbSource.tagged?(text)
         ruby = erb ? RailsAiContext::ErbSource.tag_bodies(text) : text
-        strip_string_literals(ruby).scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
+        # Only where what is left is Ruby. A HAML or Slim template is prose
+        # with Ruby lines in it, and its apostrophes are apostrophes: reading
+        # them as string quotes swallows every ivar between two of them.
+        ruby = strip_string_literals(ruby) if erb || path.to_s.end_with?(".rb")
+        ruby.scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
       end
 
       # A string literal inside a tag body is text the template prints, so a

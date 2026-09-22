@@ -344,12 +344,12 @@ module RailsAiContext
 
       # The models that wire a validator: `validates_with TheValidator`, and
       # for an EachValidator the option key its name gives
-      # (EmailValidator -> `validates :x, email: true`).
+      # (EmailValidator -> `validates :x, email: true`). Both are macro calls,
+      # so both are read off the AST - a text match also finds the one in a
+      # comment or a heredoc.
       private_class_method def self.find_validator_users(validator_name, root)
         simple = validator_name.to_s.demodulize.camelize
         option_key = simple.sub(/Validator\z/, "").underscore
-        with = /validates_with\s+(?:::)?(?:\w+::)*#{Regexp.escape(simple)}\b/
-        each = option_key.empty? ? nil : /validates\b[^\n]*\b#{Regexp.escape(option_key)}:\s*(?:true|\{)/
 
         real_root = File.realpath(root).to_s
         PathResolver.dirs_for(root, "app/models").flat_map { |dir|
@@ -357,14 +357,30 @@ module RailsAiContext
             next if file_path.include?("/concerns/")
 
             source = RailsAiContext::SafeFile.read(file_path) or next
-            next unless source.match?(with) || (each && source.match?(each))
+            next unless wires_validator?(source, simple, option_key)
 
-            match = source.match(/^\s*class\s+(\S+)/) || source.match(/^\s*module\s+(\S+)/)
-            match ? match[1] : File.basename(file_path, ".rb").camelize
+            Introspectors::DeclaredConstant.declared_names(source).first ||
+              Introspectors::DeclaredConstant.declared_module_names(source).first ||
+              File.basename(file_path, ".rb").camelize
           end
         }.uniq.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "find_validator_users")
+      end
+
+      private_class_method def self.wires_validator?(source, simple, option_key)
+        macros = Introspectors::SourceIntrospector.walk_source(source, {
+          validations: -> { Introspectors::Listeners::GenericMacroListener.new(:validates_with, :validates) }
+        })[:validations] || []
+
+        macros.any? do |macro|
+          case macro[:macro]
+          when :validates_with
+            Array(macro[:values]).flatten.map(&:to_s).any? { |value| value.split("::").last == simple }
+          when :validates
+            !option_key.empty? && macro[:options].key?(option_key.to_sym)
+          end
+        end
       end
 
       private_class_method def self.collect_concern_names(concern_dirs, real_root)

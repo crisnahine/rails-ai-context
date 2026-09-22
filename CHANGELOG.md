@@ -5,6 +5,106 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Twenty-three QA reports against v5.27.0, each one a wrong answer a reader
+could act on.
+
+### Fixed
+
+- **A Sidekiq worker answers to its own name, and the bracket carries the
+  limit that governs it.** `job:"Billing::Invoices::CreateWorker"` answered
+  "No jobs found" for a worker the same tool had just listed, because the
+  single-job lookup read the ActiveJob list only. It reads both lists now, and
+  a name in neither is a not-found that names what exists. The listing prints
+  its "workers the introspector did not see" caveat whenever it prints
+  workers, rather than only when `config/sidekiq.yml` happens to exist, and a
+  `sidekiq_throttle` prints under the worker it throttles - 438 of 522 workers
+  on one app declared one and none of them showed it.
+- **onboard's async section reads the workers out of the hash it already
+  had.** The section counted jobs, mailers and channels, so an app whose
+  background work is 522 Sidekiq workers read as "4 mailers." and the section
+  disappeared entirely when workers were the only async code. The "not
+  covered" line no longer prints next to a worker list it contradicts.
+- **What an ActiveInteraction declares is read in one place.** A filter
+  declared inside another filter's block (`string :title` inside `hash
+  :order_params do`) is a key of that hash, not an input of the class:
+  `service_pattern` showed four inputs where `.filters` has two, and
+  `generate_test` passed the other two to `.run`, which drops them silently. A
+  subclass of the app's own base interaction is an interaction too, with its
+  parent's filters first, so `generate_test` stops emitting `.call`, which
+  `ActiveInteraction::Base` does not define. `GenericMacroListener` records
+  the macro a nested call sits inside, which is what both tools read.
+- **generate_test names the constant the file declares.** A path camelizes
+  through Ruby's inflector, which has not read the app's
+  `config/initializers/inflections.rb` on the static tier, so
+  `ai_reports/build.rb` gave `AiReports::Build` where the app defines
+  `AIReports::Build` - a constant nothing defines, in a spec that dies on
+  load.
+- **service_pattern looks for callers where the app keeps code.** The scan
+  named six `app/` directories, so a caller in `app/tools` or under `lib/` was
+  invisible. It reads every `app/` and `lib/` tree, and says when the
+  twenty-entry cap left the list partial.
+- **schema tells a missing migration from a typo.** Booted, a table declared
+  in `db/schema.rb` and absent from the connected database answered "Did you
+  mean 'comments'?". The payload carries the declared tables beside the live
+  ones, so the answer names the migration that has not run, and the listing
+  header says the two counts disagree instead of pairing a live table count
+  with the file's version stamp.
+- **A validator under app/models/concerns is not a concern.** The type came
+  from the directory alone, so 37 `ActiveModel::Validator` subclasses on one
+  app were listed as model concerns used by nothing. They are listed as
+  validators and looked up by the `validates_with` that wires them.
+- **dependency_graph counts both header numbers over the same models.** The
+  model count was app-wide and the association count covered the fifty nodes
+  that survived the cap.
+- **get_context reads the views Rails would resolve.** It handed `GetView`
+  the last segment of the controller path, so `Api::V1::Admin::OrdersController`
+  picked up `app/views/orders`, a directory of templates a background service
+  renders. A flat-directory fallback is labelled as one.
+- **analyze_feature finds a test by its path.** A spec whose feature word is a
+  directory (`spec/services/billing/invoices/create_spec.rb`) was dropped,
+  while the gap checker beside it already matched on the path.
+- **routes answers an exact controller key with its own routes.** A substring
+  filter returned a nested sibling's routes too (`api/v1/admin/orders` swept
+  in `api/v1/admin/orders/ai_data`), and `get_context` inherited it. A short
+  name still matches every controller that carries it.
+- **A template at the root of app/views is listed.** Its filename became a
+  directory group that matched nothing, so the header counted a file the body
+  never printed, and the controller-miss hint suggested a directory that does
+  not exist.
+- **A word in a quoted string is not an instance variable.** `view` reported
+  a chat handle inside a Ruby string literal as a template's ivar; the reader
+  strips string literals and keeps interpolation, and `get_view`'s hydrator
+  reads through the same method.
+- **env_config tells a re-assignment from a tuple.** Two unconditional
+  assignments of one key rendered as `:file, :test`, which reads exactly like
+  `:mem_cache_store, { pool_size: 5 }`. The winner is named, with what it
+  overrode.
+- **env keeps one default per call site.** One label for every site said a
+  variable was optional while one of its reads was `ENV.fetch` with no
+  default, which raises `KeyError`.
+- **A Rack app attached with `match ... to:` is found.** `mount` is that call
+  with a name derived, and the exact-path form is what an app writes when an
+  unanchored mount would swallow a sibling path. It reaches `engines` and
+  `routes`, which names the mounted apps it counts instead of calling them
+  engine mounts.
+- **config calls a zero-byte initializer empty** rather than "all commented
+  out".
+- **diagnose stops reading a display cap as a model's whole interface.** A
+  method past the thirtieth was reported as not existing, in the same answer
+  whose Method Trace printed its definition. The payload carries the whole
+  count beside the capped list, `model_details` says how many it is showing,
+  and the static tier carries the same two keys the booted tier does.
+- **The routes MCP resource resolves a CamelCase name** the way the tool
+  does, and answers a name that resolves to nothing with an error naming what
+  exists rather than a zero-route success document.
+- **security_scan says which thing is true.** Booted, the app's bundle
+  narrows the load path, so a machine with brakeman installed was told to add
+  it to the Gemfile while the static tier scanned the same app. The answer
+  distinguishes the two cases and points at `--no-boot`, and the availability
+  answer is keyed by tier rather than decided once per process.
+
 ## [5.28.0] - 2026-09-22
 
 Thirty-six changes an architecture survey of v5.27.0 asked for, nine of them

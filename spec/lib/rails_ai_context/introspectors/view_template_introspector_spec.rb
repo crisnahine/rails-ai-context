@@ -183,6 +183,14 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(described_class.ivars_in(%(<%= "hello #{'#'}{@user.name}" %>))).to eq(%w[user])
     end
 
+    # A HAML or Slim template is not Ruby: its prose carries apostrophes, and
+    # treating those as string quotes swallows everything between them.
+    it "keeps reading ivars in a template whose prose has apostrophes" do
+      template = "%p Don't stop\n= @user.name\n%p We can't win\n= @order.total\n"
+
+      expect(described_class.ivars_in(template, path: "app/views/posts/show.html.haml")).to eq(%w[order user])
+    end
+
     it "still reads ivars that legally start with an underscore or a capital" do
       expect(described_class.ivars_in("<%= @_private %><%= @Thing %>")).to eq(%w[Thing _private])
     end

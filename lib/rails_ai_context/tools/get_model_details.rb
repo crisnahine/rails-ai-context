@@ -114,10 +114,9 @@ module RailsAiContext
       LISTED_METHODS = 25
 
       private_class_method def self.methods_heading(shown, total)
-        listed = [ shown, LISTED_METHODS ].min
-        return "## Key instance methods" unless total.is_a?(Integer) && total > listed
+        return "## Key instance methods" unless total.is_a?(Integer) && total > shown
 
-        "## Key instance methods (#{listed} of #{total})"
+        "## Key instance methods (#{shown} of #{total})"
       end
 
       private_class_method def self.unavailable_row(name, data)
@@ -400,8 +399,12 @@ module RailsAiContext
         # Key instance methods - only from source file, not framework-inherited
         source_instance_methods = extract_method_signatures(name)
         if source_instance_methods&.any?
-          lines << "" << methods_heading(source_instance_methods.size, data[:instance_method_count])
-          source_instance_methods.first(LISTED_METHODS).each { |s| lines << "- `#{s}`" }
+          # Its own total, not the payload's: this branch lists the methods
+          # the file declares, and the payload count includes the ones
+          # reflection found on top of them.
+          listed = source_instance_methods.first(LISTED_METHODS)
+          lines << "" << methods_heading(listed.size, source_instance_methods.size)
+          listed.each { |signature| lines << "- `#{signature}`" }
         elsif data[:instance_methods]&.any?
           # Fallback: filter association-generated and framework methods
           assoc_names = (data[:associations] || []).flat_map do |a|
@@ -411,8 +414,9 @@ module RailsAiContext
           end
           filtered = data[:instance_methods].reject { |m| assoc_names.include?(m) || m.end_with?("=") }
           if filtered.any?
-            lines << "" << methods_heading(filtered.size, data[:instance_method_count])
-            lines << filtered.first(LISTED_METHODS).map { |m| "- `#{m}`" }.join("\n")
+            listed = filtered.first(LISTED_METHODS)
+            lines << "" << methods_heading(listed.size, data[:instance_method_count])
+            lines << listed.map { |m| "- `#{m}`" }.join("\n")
           end
         end
 

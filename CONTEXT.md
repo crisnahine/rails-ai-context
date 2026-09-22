@@ -88,6 +88,28 @@ Three senses inside the gem, and the payload one is wider than either everyday R
 
 The callable interface of a class as this gem reports it: the class's own public instance methods - a class nested in the same file is a separate owner, not part of the interface - minus framework-shaped `_` names, read source-first, with reflection minus the app-owned base as the honest fallback. `ActionResolver` is the one answer; controller and mailer are configurations of it, and a channel's "stream methods" are a narrower selection of the same reading.
 
+## Interaction filter
+
+What an ActiveInteraction service declares as its interface, and not the
+**filter chain** above, which is controllers. `Interaction` is the one answer
+for both tools that read it (`rails_get_service_pattern`,
+`rails_generate_test`), because a static answer that differs from the booted
+one is the divergence the module exists to end.
+
+**A nested filter is not an input.** `string :title` inside `hash
+:order_params do ... end` is a key of that hash: it never reaches `.filters`,
+and handing it to `.run` as a keyword argument is dropped without a word. So
+nesting is kept on the record rather than flattened, and only the top level is
+an input.
+
+**The chain is the class's, not the file's.** An interaction is often a
+subclass of the app's own base interaction rather than of
+`ActiveInteraction::Base`, and its filters are then the parent's first and its
+own after, which is the order `.filters` answers in. Following that chain needs
+the parent's source, which only the caller can find, so it arrives as
+`lookup` - a callable from a constant name to that class's source, and nil to
+stop at the one file.
+
 ## Filter chain
 
 Which filters a controller runs, and which of them a given action runs. `ActionFilters` is the one answer, and every controller surface reads its filter line from there, so no two answers can disagree about what a class inherits or skips. `for_controller` answers about the class; `for` answers about one of its actions. Both return `own`, `inherited` and `skipped`.

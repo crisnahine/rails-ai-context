@@ -167,6 +167,12 @@ module RailsAiContext
         }
 
         data = { filtered_by: controller, total_routes: routes.size, routes: routes }
+        # An empty list from a name that did resolve is a different answer
+        # from one that did not, and only the document can say so.
+        if routes.empty? && key
+          data[:resolved_controller] = key
+          data[:note] = "#{key} resolved, and the route set has no routes for it."
+        end
 
         [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(data) } ]
       end

@@ -255,19 +255,36 @@ module RailsAiContext
         rack_app.is_a?(Proc)
       end
 
+      # Every Rack app the route set carries, engine or not. `mount App => path`
+      # is `match(path, to: app, via: :all, anchor: false)` with a name
+      # derived, so the two forms build the same endpoint, and keeping only
+      # Rails::Engine subclasses left a plain Rack app counted in the header
+      # and named nowhere. A controller route is told apart by its dispatcher
+      # and by the controller its defaults carry.
       def detect_mounted_engines
         app.routes.routes
+          .reject { |r| r.respond_to?(:internal) && r.internal }
           .select { |r| r.app.respond_to?(:app) && r.app.app.is_a?(Class) }
           .filter_map do |r|
-            engine_class = r.app.app
-            next unless engine_class < Rails::Engine
+            next if r.defaults[:controller].present?
+            next if r.app.respond_to?(:dispatcher?) && r.app.dispatcher?
+
+            mounted = r.app.app
+            next if mounted.name.nil?
+
             {
-              engine: engine_class.name,
-              path: r.path.spec.to_s
+              engine: mounted.name,
+              path: mount_path(r)
             }
           rescue => e
             RailsAiContext.debug_fail(e, nil, label: "detect_mounted_engines")
           end
+      end
+
+      # `match` records the format segment the path spec carries; `mount` does
+      # not. The path a reader asks about is the one without it.
+      def mount_path(route)
+        route.path.spec.to_s.sub(/\(\.:format\)\z/, "")
       end
 
       # One rule for both tiers, like total_routes above: a namespace is a

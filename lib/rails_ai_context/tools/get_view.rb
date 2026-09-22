@@ -109,8 +109,7 @@ module RailsAiContext
             ctrl_partials = views_in_group(partials, ctrl)
             file_count = ctrl_templates.size + ctrl_partials.size
             # Skip redundant section header when filtered to a single controller
-            heading = ctrl == ROOT_GROUP ? ctrl : "#{ctrl}/"
-            lines << "## #{heading} (#{count_phrase(file_count, "file")})" unless controller && all_dirs.size == 1
+            lines << "## #{group_heading(ctrl)} (#{count_phrase(file_count, "file")})" unless controller && all_dirs.size == 1
             ctrl_templates.sort.each do |name, meta|
               parts = meta[:partials]&.any? ? " renders: #{meta[:partials].join(', ')}" : ""
               stim = meta[:stimulus]&.any? ? " stimulus: #{meta[:stimulus].join(', ')}" : ""
@@ -144,7 +143,7 @@ module RailsAiContext
             ctrl_partials = views_in_group(partials, ctrl)
             next if ctrl_templates.empty? && ctrl_partials.empty?
 
-            lines << "## #{ctrl == ROOT_GROUP ? ctrl : "#{ctrl}/"}" unless controller && all_dirs.size == 1
+            lines << "## #{group_heading(ctrl)}" unless controller && all_dirs.size == 1
             ctrl_templates.sort.each do |name, meta|
               detail_parts = []
               extra = extract_view_metadata(name)
@@ -244,6 +243,12 @@ module RailsAiContext
       # The directories a reader can filter by. The root group is not one.
       private_class_method def self.view_directories(templates, partials)
         view_groups(templates, partials).reject { |g| g == ROOT_GROUP }
+      end
+
+      # A directory keeps its trailing slash; the root bucket is already
+      # spelled as a phrase.
+      private_class_method def self.group_heading(group)
+        group == ROOT_GROUP ? group : "#{group}/"
       end
 
       private_class_method def self.views_in_group(map, group)

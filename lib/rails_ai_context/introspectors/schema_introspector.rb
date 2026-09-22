@@ -162,17 +162,16 @@ module RailsAiContext
         schema_reader.enums
       end
 
-      # The tables db/schema.rb (or db/structure.sql) declares, or nil when
-      # there is no dump to read - nil is "unknown", which is not the claim
-      # that the dump declares nothing.
+      # The tables db/schema.rb declares, or nil when there is no dump to
+      # read - nil is "unknown", which is not the claim that the dump
+      # declares nothing. A structure.sql app answers nil: reading it costs a
+      # full parse on every booted call, and a missing note is better than a
+      # slow one.
       def declared_table_names
-        return nil unless File.exist?(schema_file_path) || File.exist?(structure_file_path)
+        return nil unless File.exist?(schema_file_path)
 
         names = schema_reader.tables.keys.map(&:to_s)
-        return names if names.any?
-
-        static = static_schema_parse
-        static[:tables].is_a?(Hash) ? static[:tables].keys.map(&:to_s) : nil
+        names.any? ? names : nil
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "declared_table_names")
       end

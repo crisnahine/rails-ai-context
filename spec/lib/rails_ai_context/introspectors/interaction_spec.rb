@@ -106,6 +106,18 @@ RSpec.describe RailsAiContext::Introspectors::Interaction do
     end
   end
 
+  describe ".interface" do
+    it "is nil for a class that is not an interaction" do
+      expect(described_class.interface("class ChargeCard\n  def call; end\nend\n")).to be_nil
+    end
+
+    # An interaction that takes nothing still runs with .run, so the empty
+    # list and the nil have to stay apart.
+    it "is an empty array for an interaction with no filters" do
+      expect(described_class.interface("class Orders::Create < ActiveInteraction::Base\nend\n")).to eq([])
+    end
+  end
+
   describe ".lookup_for" do
     it "answers with the source of the class a service file declares" do
       Dir.mktmpdir do |dir|
@@ -120,6 +132,22 @@ RSpec.describe RailsAiContext::Introspectors::Interaction do
       end
     end
 
+    it "finds a base class in any autoload root, not just the service ones" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        FileUtils.mkdir_p(File.join(dir, "lib", "billing"))
+        File.write(File.join(dir, "app", "models", "concerns", "base_request.rb"),
+                   "class BaseRequest < ActiveInteraction::Base\nend\n")
+        File.write(File.join(dir, "lib", "billing", "legacy_request.rb"),
+                   "class Billing::LegacyRequest < ActiveInteraction::Base\nend\n")
+
+        lookup = described_class.lookup_for(dir)
+
+        expect(lookup.call("BaseRequest")).to include("ActiveInteraction::Base")
+        expect(lookup.call("Billing::LegacyRequest")).to include("ActiveInteraction::Base")
+      end
+    end
+
     it "reads app/interactions as well as app/services" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "interactions"))
@@ -130,13 +158,12 @@ RSpec.describe RailsAiContext::Introspectors::Interaction do
       end
     end
 
-    # The index costs a walk over every service file, and an app whose
-    # interactions all name ActiveInteraction::Base never needs it.
-    it "does not walk the tree until a name is asked for" do
+    # An app whose interactions all name ActiveInteraction::Base never asks,
+    # and the roots are resolved on the first question rather than up front.
+    it "does not touch the filesystem until a name is asked for" do
       Dir.mktmpdir do |dir|
-        lookup = described_class.lookup_for(dir)
-        expect(RailsAiContext::Introspectors::SourceScan).not_to receive(:each)
-        lookup
+        expect(RailsAiContext::PathResolver).not_to receive(:dirs_for)
+        described_class.lookup_for(dir)
       end
     end
   end

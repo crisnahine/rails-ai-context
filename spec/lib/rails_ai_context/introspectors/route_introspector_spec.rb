@@ -62,6 +62,44 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
     end
   end
 
+  # `mount` is `match(path, to: app, via: :all, anchor: false)`, so both forms
+  # build the same endpoint. Keeping only Rails::Engine subclasses left every
+  # plain Rack app counted in the header and named nowhere.
+  describe "a booted route set with Rack apps attached" do
+    before do
+      stub_const("MetricsApp", Class.new { def self.call(_env) = [ 200, {}, [ "ok" ] ] })
+      stub_const("MetricsAdminApp", Class.new { def self.call(_env) = [ 200, {}, [ "ok" ] ] })
+    end
+
+    let(:route_set) do
+      ActionDispatch::Routing::RouteSet.new.tap do |set|
+        set.draw do
+          match "/metrics", to: MetricsApp, via: :all, as: :metrics_app
+          mount MetricsAdminApp => "/metrics-admin"
+          get "orders" => "orders#index"
+        end
+      end
+    end
+
+    let(:app_double) { double("app", routes: route_set, routes_reloader: nil, root: Rails.root) }
+
+    it "names both endpoints and the path each answers on" do
+      result = described_class.new(app_double).call
+
+      expect(result[:mounted_engines]).to contain_exactly(
+        { engine: "MetricsApp", path: "/metrics" },
+        { engine: "MetricsAdminApp", path: "/metrics-admin" }
+      )
+    end
+
+    it "counts them as the mounts they are, and leaves the controller route alone" do
+      result = described_class.new(app_double).call
+
+      expect(result[:unrouted_mounts]).to eq(2)
+      expect(result[:by_controller].keys).to eq([ "orders" ])
+    end
+  end
+
   # Both tiers answer the same question, so they answer it with the same rule.
   describe "api namespaces on both tiers" do
     let(:route_set) do

@@ -245,6 +245,15 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["total_routes"]).to eq(0)
       end
 
+      # Zero because the controller has none, not zero because the name went
+      # nowhere: the document has to say which.
+      it "names the controller it resolved when that controller has no routes" do
+        data = JSON.parse(described_class.resolve("rails-ai-context://routes/Admin::PostsController").first[:text])
+
+        expect(data["resolved_controller"]).to eq("Admin::PostsController")
+        expect(data["note"]).to include("no routes")
+      end
+
       # A zero-route success document for a name that resolved to nothing
       # cannot be told apart from one for a name that does not exist, and the
       # sibling controllers resource already answers that case with an error.

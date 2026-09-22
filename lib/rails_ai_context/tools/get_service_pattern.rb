@@ -411,7 +411,10 @@ module RailsAiContext
       end
 
       # Every caller is capped at CALLER_LIMIT, and the renderer says so: a
-      # list that stops at twenty with no word looks complete.
+      # list that stops at twenty with no word looks complete. The scan reads
+      # every file under app/ and lib/ rather than six named directories,
+      # which is the only way to see a caller in app/tools or lib/ - the cost
+      # is one pass over the tree per named service.
       CALLER_LIMIT = 20
 
       private_class_method def self.find_callers(class_name, real_root, own_file = nil)
