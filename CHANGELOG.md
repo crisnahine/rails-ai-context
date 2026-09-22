@@ -43,8 +43,9 @@ could act on.
   load.
 - **service_pattern looks for callers where the app keeps code.** The scan
   named six `app/` directories, so a caller in `app/tools` or under `lib/` was
-  invisible. It reads every `app/` and `lib/` tree, and says when the
-  twenty-entry cap or its own file ceiling left the list partial.
+  invisible. It reads every `app/` and `lib/` tree, plus whatever else a
+  booted app autoloads from, and says when the twenty-entry cap or its own
+  file ceiling left the list partial.
 - **schema tells a missing migration from a typo.** Booted, a table declared
   in `db/schema.rb` and absent from the connected database answered "Did you
   mean 'comments'?". The payload carries the declared tables beside the live

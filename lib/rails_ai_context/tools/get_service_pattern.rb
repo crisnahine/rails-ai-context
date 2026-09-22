@@ -421,6 +421,18 @@ module RailsAiContext
       # is one pass over the tree per named service.
       CALLER_LIMIT = 20
 
+      # The directories a booted app autoloads from that are not under app/ or
+      # lib/: an app is free to add one, and a caller in it is as real as any
+      # other. Empty on the static tier, where there is no config to ask.
+      private_class_method def self.configured_load_paths(real_root)
+        return [] unless defined?(Rails) && Rails.respond_to?(:application) && Rails.application&.config.respond_to?(:eager_load_paths)
+
+        paths = Array(Rails.application.config.eager_load_paths) + Array(Rails.application.config.autoload_paths)
+        paths.map(&:to_s).select { |dir| dir.start_with?("#{real_root}/") && Dir.exist?(dir) }
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, [], label: "configured_load_paths")
+      end
+
       # The scan is raw file reading with no cache behind it, so on a monorepo
       # it is the most expensive thing this tool does. It stops here and says
       # so, the way analyze_feature states its own scan cap.
@@ -428,7 +440,7 @@ module RailsAiContext
 
       private_class_method def self.find_callers(class_name, real_root, own_file = nil)
         callers = Set.new
-        search_dirs = %w[app lib].flat_map { |d| PathResolver.dirs_for(real_root, d) }
+        search_dirs = (%w[app lib].flat_map { |d| PathResolver.dirs_for(real_root, d) } + configured_load_paths(real_root)).uniq
         # A bare `include?` matched `Billing::Invoices::Create` inside
         # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
         # underscored-path skip dropped the one real caller, whose path

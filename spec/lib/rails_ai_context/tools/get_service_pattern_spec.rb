@@ -793,6 +793,25 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
       # The scan reads every file under app/ and lib/, so on a large app it
       # has to stop somewhere and say that it did.
+      # Booted, the app's own load paths are the direct answer, and an app
+      # that autoloads a directory outside app/ and lib/ still has callers in
+      # it.
+      it "reads a caller in a directory only the app's load paths name" do
+        FileUtils.mkdir_p(File.join(tmpdir, "extras"))
+        File.write(File.join(tmpdir, "extras", "nightly_run.rb"), <<~RUBY)
+          class NightlyRun
+            def call(account)
+              Billing::Invoices::Create.run(account: account)
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:configured_load_paths).and_return([ File.join(tmpdir, "extras") ])
+
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("extras/nightly_run.rb")
+      end
+
       it "says so when the scan stopped at its file ceiling" do
         stub_const("#{described_class}::MAX_CALLER_SCAN_FILES", 1)
 
