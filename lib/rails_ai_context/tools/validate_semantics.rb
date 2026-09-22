@@ -719,8 +719,9 @@ module RailsAiContext
         warnings = []
         return warnings unless file.start_with?("app/views/") && !file.include?("/layouts/")
 
-        # Extract instance variables used in ERB tags only (not HTML/JS content)
-        erb_content = content.scan(/<%[=\-]?\s*(.+?)\s*-?%>/m).map { |m| m[0] }.join("\n")
+        # Tag bodies only, so HTML and JS text cannot look like an ivar. The
+        # in-place form blanks `<%#` comments, whose bodies are not code.
+        erb_content = RailsAiContext::ErbSource.ruby_in_place(content)
         ivars = erb_content.scan(/@(\w+)/).flatten.uniq
         return warnings if ivars.empty?
 

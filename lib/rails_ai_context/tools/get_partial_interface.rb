@@ -311,8 +311,8 @@ module RailsAiContext
         end
 
         # High-confidence local detection only - avoids false positives from HTML/CSS text
-        source.scan(/<%[=\-]?\s*(.+?)\s*-?%>/m).each do |match|
-          code = match[0]
+        source.scan(RailsAiContext::ErbSource::TAG).each do |match|
+          code = match[0].strip
           next if code.start_with?("#")
 
           # 1. Standalone ERB output: <%= local_name %> or <%= local_name.method %>

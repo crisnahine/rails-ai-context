@@ -99,6 +99,45 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       end
     end
 
+    # A `<%#` comment body is not code, so an ivar inside one is not used.
+    context "a view with a commented-out instance variable" do
+      around do |example|
+        Dir.mktmpdir do |root|
+          @root = root
+          FileUtils.mkdir_p(File.join(root, "app/views/widgets"))
+          FileUtils.mkdir_p(File.join(root, "app/controllers"))
+          File.write(File.join(root, "app/controllers/widgets_controller.rb"),
+                     "class WidgetsController < ApplicationController\n  def show\n  end\nend\n")
+          example.run
+        end
+      end
+
+      before do
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(@root))
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: {} },
+          schema: { tables: {} },
+          models: {},
+          controllers: { controllers: { "WidgetsController" => { file: "app/controllers/widgets_controller.rb" } } }
+        })
+      end
+
+      def warnings_for(view_source)
+        file = "app/views/widgets/show.html.erb"
+        full = File.join(@root, file)
+        File.write(full, view_source)
+        described_class.check_rails_semantics(file, full).join("\n")
+      end
+
+      it "says nothing about an ivar that only appears in a comment tag" do
+        expect(warnings_for("<%# @ghost %>\n")).not_to include("@ghost")
+      end
+
+      it "still flags an ivar the template really reads" do
+        expect(warnings_for("<%= @real %>\n")).to include("@real used in view but not set in WidgetsController")
+      end
+    end
+
     it "flags a scope chain that loads every record into memory" do
       source = <<~RUBY
         class WidgetsController < ApplicationController
