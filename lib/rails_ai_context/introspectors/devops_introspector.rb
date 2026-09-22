@@ -59,6 +59,12 @@ module RailsAiContext
 
       # The puma macros are receiverless, so a `config.port` on some other
       # object is not one of them.
+      #
+      # Depth is deliberately not filtered. The generated puma.rb guards
+      # `workers` behind an environment conditional, so a top-level-only
+      # reader answers "no workers configured" for the most common config
+      # there is. The cost is that a name set more than once reports the
+      # last one, including one set inside `on_worker_boot`.
       def puma_calls(path)
         SourceIntrospector.walk(path, {
           puma: -> { Listeners::MethodCallListener.new(names: PUMA_SETTINGS) }
