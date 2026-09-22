@@ -656,4 +656,41 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
       end
     end
   end
+
+  # The generated setup line follows the app's own specs: an app that assigns
+  # instance variables gets no let, and the factory call follows whichever of
+  # create and build its specs reach for more.
+  describe "setup style read from the app's own specs" do
+    def generated_for(existing_spec)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "spec", "models"))
+        File.write(File.join(dir, "spec", "models", "post_spec.rb"), existing_spec)
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: "rspec", factory_names: { "spec/factories/posts.rb" => [ :post ] } },
+          models: { "Post" => { associations: [], validations: [], scopes: [], enums: {}, callbacks: {} } }
+        })
+
+        described_class.call(model: "Post").content.first[:text]
+      end
+    end
+
+    it "writes a let when the app's specs use let" do
+      text = generated_for("let(:a) { create(:post) }\nlet(:b) { create(:post) }\n")
+
+      expect(text).to include("let(:post) { create(:post) }")
+    end
+
+    it "writes no let for an app that assigns instance variables" do
+      text = generated_for("@a = create(:post)\n@b = create(:post)\n@c = create(:post)\n")
+
+      expect(text).not_to include("let(:post)")
+    end
+
+    it "follows the app to build when its specs build more than they create" do
+      text = generated_for("let(:a) { build(:post) }\nlet(:b) { build(:post) }\n")
+
+      expect(text).to include("let(:post) { build(:post) }")
+    end
+  end
 end
