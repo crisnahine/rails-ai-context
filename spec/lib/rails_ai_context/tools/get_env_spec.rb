@@ -619,4 +619,23 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       end
     end
   end
+
+  # The per-service env var list is a filter over the names the parser already
+  # found, so a name only a raw text scan would have matched is not reported.
+  describe "external service env vars" do
+    it "lists the scanned names carrying the service prefix" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile"), "gem \"stripe\"\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:detect_external_services).and_call_original
+
+        services = described_class.send(
+          :detect_external_services, dir, %w[STRIPE_SECRET_KEY STRIPE_PUBLISHABLE_KEY DATABASE_URL]
+        )
+
+        expect(services.first[:name]).to eq("Stripe")
+        expect(services.first[:env_vars]).to eq(%w[STRIPE_PUBLISHABLE_KEY STRIPE_SECRET_KEY])
+      end
+    end
+  end
 end

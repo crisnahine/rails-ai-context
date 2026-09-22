@@ -32,7 +32,7 @@ module RailsAiContext
         env_vars = scan_env_vars(root)
         env_example = scan_env_example(root)
         dockerfile_vars = scan_dockerfile(root)
-        external_services = detect_external_services(root)
+        external_services = detect_external_services(root, env_vars.values.flatten.map { |v| v[:name] }.uniq)
         credentials_keys = detect_credentials_keys
         encrypted_columns = detect_encrypted_columns
 
@@ -449,7 +449,7 @@ module RailsAiContext
         legacy ? [ [ legacy[1], legacy[2] ] ] : []
       end
 
-      private_class_method def self.detect_external_services(root)
+      private_class_method def self.detect_external_services(root, env_names)
         services = []
         gemfile_path = File.join(root, "Gemfile")
 
@@ -491,7 +491,7 @@ module RailsAiContext
                 name: info[:name],
                 gem: gem_name,
                 detection: "Gemfile",
-                env_vars: find_env_vars_with_prefix(info[:env_prefix], root)
+                env_vars: env_names.grep(/\A#{Regexp.escape(info[:env_prefix])}/).sort
               }
             end
           end
@@ -562,28 +562,6 @@ module RailsAiContext
           $stderr.puts "[rails-ai-context] extract_service_name_from_url failed: #{e.message}" if ENV["DEBUG"]
           nil
         end
-      end
-
-      private_class_method def self.find_env_vars_with_prefix(prefix, root)
-        return [] unless prefix
-
-        vars = Set.new
-        real_root = File.realpath(root).to_s
-
-        scan_files(root, real_root).each do |file|
-          next if File.size(file) > max_file_size
-          source = safe_read(file)
-          next unless source
-
-          source.scan(/ENV(?:\[["']|\.fetch\(["'])(#{Regexp.escape(prefix)}[A-Z0-9_]+)/).each do |match|
-            vars << match[0]
-          end
-        end
-
-        vars.to_a.sort
-      rescue => e
-        $stderr.puts "[rails-ai-context] find_env_vars_with_prefix failed: #{e.message}" if ENV["DEBUG"]
-        []
       end
 
       # An encrypted credentials file the tool could not open is a different
