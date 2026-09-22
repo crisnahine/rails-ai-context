@@ -642,5 +642,32 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).to include("no Ruby files")
       end
     end
+
+    # app/services/concerns is its own autoload root, so the concerns segment
+    # is no part of the constant. Mastodon's Payloadable was listed as
+    # Concerns::Payloadable, and `include Concerns::Payloadable` raises.
+    context "with a service concern" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "concerns"))
+        File.write(File.join(tmpdir, "app", "services", "concerns", "payloadable.rb"), <<~RUBY)
+          module Payloadable
+            def serialize_payload(record, serializer)
+              record
+            end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names it by the constant the file declares" do
+        text = described_class.call(detail: "full").content.first[:text]
+        expect(text).to include("## Payloadable")
+        expect(text).not_to include("Concerns::Payloadable")
+      end
+    end
   end
 end

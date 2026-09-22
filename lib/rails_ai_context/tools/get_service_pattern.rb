@@ -242,8 +242,13 @@ module RailsAiContext
       # Zeitwerk requires the constant to match the path, and only the path
       # carries the namespace: `admin/suspend_service.rb` is `Admin::SuspendService`,
       # which no single `class` line in the file spells out.
+      #
+      # app/services/concerns is its own autoload root (railties globs
+      # "{*,*/concerns}"), so concerns/payloadable.rb defines Payloadable, not
+      # Concerns::Payloadable, and an agent told to include the latter writes a
+      # NameError.
       private_class_method def self.constant_for(file, service_dirs)
-        relative_under(file, service_dirs).delete_suffix(".rb").camelize
+        relative_under(file, service_dirs).delete_prefix("concerns/").delete_suffix(".rb").camelize
       end
 
       # The name the file's own class or module declares, resolved against the
