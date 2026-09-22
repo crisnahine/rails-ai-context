@@ -117,12 +117,7 @@ module RailsAiContext
       end
 
       def package_json_has?(package)
-        path = File.join(root, "package.json")
-        return false unless File.exist?(path)
-        (RailsAiContext::SafeFile.read(path) || "").include?("\"#{package}\"")
-      rescue => e
-        $stderr.puts "[rails-ai-context] package_json_has? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext::PackageJson.present?(root, package)
       end
     end
   end

@@ -205,11 +205,9 @@ module RailsAiContext
         package_path = File.join(root, "package.json")
         return [] unless File.exist?(package_path)
 
-        content = RailsAiContext::SafeFile.read(package_path)
-        return [] unless content
         codegen_tools = %w[openapi-typescript @graphql-codegen/cli orval]
 
-        codegen_tools.select { |tool| content.include?(%("#{tool}")) }
+        codegen_tools.select { |tool| RailsAiContext::PackageJson.present?(root, tool) }
       rescue => e
         $stderr.puts "[rails-ai-context] detect_api_client_generation failed: #{e.message}" if ENV["DEBUG"]
         []

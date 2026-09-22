@@ -126,16 +126,7 @@ module RailsAiContext
       # ---- Package.json reading ----
 
       def read_package_json_deps
-        path = File.join(root, "package.json")
-        return {} unless File.exist?(path)
-        return {} if File.size(path) > MAX_PACKAGE_JSON_SIZE
-
-        data = parse_json(path)
-        return {} unless data.is_a?(Hash)
-
-        deps = (data["dependencies"] || {})
-        dev_deps = (data["devDependencies"] || {})
-        deps.merge(dev_deps)
+        RailsAiContext::PackageJson.deps(root)
       end
 
       # ---- Framework detection ----
@@ -258,7 +249,7 @@ module RailsAiContext
         return "vite" if Dir.glob(File.join(root, "vite.config.*")).any?
         return "webpack" if File.exist?(File.join(root, "config/webpacker.yml")) ||
                             File.exist?(File.join(root, "config/shakapacker.yml"))
-        return "esbuild" if package_json_has_script?("esbuild")
+        return "esbuild" if RailsAiContext::PackageJson.present?(root, "esbuild")
 
         nil
       end
@@ -453,17 +444,6 @@ module RailsAiContext
       rescue => e
         $stderr.puts "[rails-ai-context] detect_component_libraries failed: #{e.message}" if ENV["DEBUG"]
         []
-      end
-
-      def package_json_has_script?(name)
-        path = File.join(root, "package.json")
-        return false unless File.exist?(path)
-        content = RailsAiContext::SafeFile.read(path)
-        return false unless content
-        content.include?("\"#{name}\"")
-      rescue => e
-        $stderr.puts "[rails-ai-context] package_json_has_script? failed: #{e.message}" if ENV["DEBUG"]
-        false
       end
     end
   end
