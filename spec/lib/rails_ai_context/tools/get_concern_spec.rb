@@ -577,6 +577,30 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).not_to include("BulkMailSettingsConcern")
       end
 
+      context "when one name sits in two concern directories" do
+        before do
+          File.write(File.join(model_concerns_dir, "trackable.rb"),
+                     "module Trackable\n  def model_track; end\nend\n")
+          File.write(File.join(controller_concerns_dir, "trackable.rb"),
+                     "module Trackable\n  def controller_track; end\nend\n")
+          described_class.reset_cache!
+        end
+
+        it "lists the shared name once in the not-found list" do
+          text = described_class.call(name: "NoSuchConcern").content.first[:text]
+
+          expect(text).to include("Available:")
+          expect(text.scan("Trackable").size).to eq(1)
+        end
+
+        it "names the file it did not read" do
+          text = described_class.call(name: "Trackable").content.first[:text]
+
+          expect(text).to include("**File:** `app/controllers/concerns/trackable.rb`")
+          expect(text).to include("**Also at:** `app/models/concerns/trackable.rb` (model concern)")
+        end
+      end
+
       it "agrees with the ActiveSupport introspector on the total" do
         listed = described_class.call.content.first[:text][/# Concerns \((\d+)\)/, 1].to_i
 

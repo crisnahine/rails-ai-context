@@ -95,24 +95,28 @@ module RailsAiContext
         end
 
         relative = concern_relative(name)
-        file_path = nil
-        relative_path = nil
-        concern_type = nil
+
+        # One name can sit in more than one concerns directory - the default
+        # glob returns every app/*/concerns - so every match is kept and the
+        # ones below the first are named against the file that is read.
+        matches = []
 
         concern_dirs.each do |dir|
           located = RailsAiContext::SafePath.locate(relative, under: dir, root: root, max_size: max_size)
           case located.refusal
           when :too_large
+            next if matches.any?
             return text_response("Concern file too large: #{located.realpath} (#{File.size(located.realpath)} bytes, max: #{max_size})")
-          when :sensitive then return error_response("Path not allowed: #{name} (sensitive file)")
+          when :sensitive
+            next if matches.any?
+            return error_response("Path not allowed: #{name} (sensitive file)")
           when :missing, :outside then next
           end
 
-          file_path = located.realpath
-          relative_path = located.relative
-          concern_type = ConcernPaths.type_for(dir)
-          break
+          matches << [ located.realpath, located.relative, ConcernPaths.type_for(dir) ]
         end
+
+        file_path, relative_path, concern_type = matches.first
 
         unless file_path
           # Build available list for fuzzy match
@@ -126,6 +130,14 @@ module RailsAiContext
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
         lines << "**Type:** #{concern_type} concern"
+
+        # A second file at the same relative path answers the same name, and
+        # everything below is read from the first one only. The other files are
+        # named by path, not by the module they declare - that need not match.
+        if matches.size > 1
+          others = matches.drop(1).map { |_real, rel, type| "`#{rel}` (#{type} concern)" }
+          lines << "**Also at:** #{others.join(', ')}"
+        end
 
         # Parse included/extended modules
         included_modules = source.scan(/^\s*include\s+(\S+)/).flatten
@@ -296,7 +308,7 @@ module RailsAiContext
           safe_glob(dir, "**/*.rb", real_root).map do |real|
             real.delete_prefix("#{real_dir}/").sub(/\.rb$/, "").camelize
           end
-        end.sort
+        end.uniq.sort
       end
 
       private_class_method def self.parse_concern_macros(source)
