@@ -37,22 +37,28 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
   # controller#action, so no row and no count mentioned it while
   # `bin/rails routes` listed it.
   describe "a booted route with no controller" do
-    let(:redirect) do
-      require "action_dispatch/routing/redirection"
-      ActionDispatch::Routing::Redirect.new(301, ->(*) { "https://example.com" })
+    # Drawn rather than constructed: `Redirect.new`'s arity is Rails' own
+    # business and changed in 8.1, while `redirect(...)` in a route set is the
+    # way an app writes one in every version.
+    let(:route_set) do
+      ActionDispatch::Routing::RouteSet.new.tap do |set|
+        set.draw do
+          get "/", to: redirect("https://example.com")
+          get "orders" => "orders#index"
+        end
+      end
     end
 
-    let(:app_double) do
-      route = double("route", internal: false, defaults: { controller: nil, action: nil }, app: redirect)
-      routes = double("routes", routes: [ route ], named_routes: {})
-      double("app", routes: routes, routes_reloader: nil, root: Rails.root)
-    end
+    let(:app_double) { double("app", routes: route_set, routes_reloader: nil, root: Rails.root) }
 
     it "counts it as a construct the route list does not expand" do
       result = described_class.new(app_double).call
 
       expect(result[:dynamic_routes]).to eq(1)
       expect(result[:unrouted_mounts]).to eq(0)
+      # The routed half still answers, so the redirect is the only thing the
+      # count is about.
+      expect(result[:by_controller].keys).to eq([ "orders" ])
     end
   end
 
