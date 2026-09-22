@@ -141,6 +141,9 @@ module RailsAiContext
 
         File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
         surface.say "Updated .gitignore", :ok
+      rescue SystemCallError, IOError => e
+        RailsAiContext.log_warn "[rails-ai-context] could not write .gitignore: #{e.message}"
+        surface.say "Could not update .gitignore - add .ai-context.json and .codex/config.toml by hand", :warn
       end
 
       # `standalone: nil` lets the generator detect the install mode from
@@ -153,6 +156,9 @@ module RailsAiContext
         result = generator.call
         result[:written].each { |f| surface.say "Created/Updated #{relative_to(f, root)}", :ok }
         result[:skipped].each { |f| surface.say "#{relative_to(f, root)} unchanged - skipped", :muted }
+        result[:failed].each do |f|
+          surface.say "Could not write #{relative_to(f, root)} - that tool will not auto-discover the MCP server", :warn
+        end
         surface.say "Skipped MCP config files (CLI-only mode)", :muted if tool_mode == :cli
         result
       end

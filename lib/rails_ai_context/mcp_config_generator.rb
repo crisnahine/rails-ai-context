@@ -35,26 +35,37 @@ module RailsAiContext
       @tool_mode = tool_mode
     end
 
-    # @return [Hash] { written: [paths], skipped: [paths] }
+    # @return [Hash] { written: [paths], skipped: [paths], failed: [paths] }
     def call
-      return { written: [], skipped: [] } if @tool_mode == :cli
+      return { written: [], skipped: [], failed: [] } if @tool_mode == :cli
 
       written = []
       skipped = []
+      failed = []
 
       @tools.each do |tool|
         config = TOOL_CONFIGS[tool]
         next unless config
 
         path = File.join(@output_dir, config[:path])
-        result = generate_for(tool, path, config)
+        # One rescue for every read, write and rename the merges do: an
+        # unreadable or unwritable config is one tool's auto-discovery lost,
+        # not a reason to abandon the install.
+        result = begin
+          generate_for(tool, path, config)
+        rescue SystemCallError, IOError => e
+          RailsAiContext.log_warn "[rails-ai-context] could not write #{config[:path]}: #{e.message}"
+          :failed
+        end
+
         case result
         when :written then written << path
         when :skipped then skipped << path
+        when :failed then failed << path
         end
       end
 
-      { written: written, skipped: skipped }
+      { written: written, skipped: skipped, failed: failed }
     end
 
     private
@@ -201,11 +212,14 @@ module RailsAiContext
         path = File.join(output_dir, config[:path])
         next unless File.exist?(path)
 
-        if config[:format] == :codex_toml
-          cleaned << path if remove_toml_entry(path)
-        else
-          root_key = config[:root_key]
-          cleaned << path if remove_json_entry(path, root_key)
+        begin
+          if config[:format] == :codex_toml
+            cleaned << path if remove_toml_entry(path)
+          else
+            cleaned << path if remove_json_entry(path, config[:root_key])
+          end
+        rescue SystemCallError, IOError => e
+          RailsAiContext.log_warn "[rails-ai-context] could not update #{config[:path]}: #{e.message}"
         end
       end
       cleaned
