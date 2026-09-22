@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Partial path relative to app/views (e.g. 'shared/status_badge', 'users/form'). The leading underscore is optional."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: locals list + usage count. standard: locals + usage examples from codebase (default). full: locals + usage + full partial source."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: locals list + usage count. standard: locals + usage examples from codebase (default). full: locals + usage + full partial source.")
         },
         required: [ "partial" ]
       )

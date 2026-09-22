@@ -18,11 +18,7 @@ module RailsAiContext
             type: "string",
             description: "Specific view path relative to app/views (e.g. 'posts/index.html.erb'). Returns full content."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: file list with line counts. standard: file list with partials/stimulus refs (default). full: template content."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: file list with line counts. standard: file list with partials/stimulus refs (default). full: template content.")
         }
       )
 

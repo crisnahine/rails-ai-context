@@ -29,11 +29,7 @@ module RailsAiContext
             type: "string",
             description: "Helper module name (e.g. 'ApplicationHelper', 'UsersHelper'). Omit to list all helpers."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: names + method counts. standard: names + method signatures (default). full: method signatures + view cross-references + framework helpers."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: names + method counts. standard: names + method signatures (default). full: method signatures + view cross-references + framework helpers."),
           offset: {
             type: "integer",
             description: "Skip this many helpers for pagination. Default: 0."

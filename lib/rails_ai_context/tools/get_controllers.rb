@@ -18,11 +18,7 @@ module RailsAiContext
             type: "string",
             description: "Specific action name (e.g. 'index', 'create'). Requires controller. Returns the action source code and applicable filters."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level for controller listing. summary: names + action counts. standard: names + action list (default). full: everything. Ignored when specific controller is given."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level for controller listing. summary: names + action counts. standard: names + action list (default). full: everything. Ignored when specific controller is given."),
           limit: {
             type: "integer",
             description: "Max controllers to return when listing. Default: 50."

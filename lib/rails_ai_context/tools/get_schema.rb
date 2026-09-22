@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Specific table name for full detail. Omit for overview."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: table names + column counts. standard: table names + column names/types (default). full: everything including indexes, FKs, comments."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: table names + column counts. standard: table names + column names/types (default). full: everything including indexes, FKs, comments."),
           limit: {
             type: "integer",
             description: "Max tables to return when listing. Default: 50 for summary, 25 for standard, 10 for full."

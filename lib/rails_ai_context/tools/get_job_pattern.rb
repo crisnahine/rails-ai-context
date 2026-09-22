@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Job class name or filename (e.g. 'SendWelcomeEmailJob', 'send_welcome_email'). Omit to list all jobs."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: names + queues. standard: names + queues + retries + what they call (default). full: everything including guards, broadcasts, schedules, and enqueuers."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: names + queues. standard: names + queues + retries + what they call (default). full: everything including guards, broadcasts, schedules, and enqueuers.")
         }
       )
 

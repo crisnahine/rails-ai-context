@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Specific Stimulus controller name (e.g. 'hello', 'filter-form'). Case-insensitive."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: names + counts. standard: targets + values + actions (default). full: everything including outlets, classes, HTML usage."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: names + counts. standard: targets + values + actions (default). full: everything including outlets, classes, HTML usage."),
           limit: {
             type: "integer",
             description: "Max controllers to return when listing. Default: 50."

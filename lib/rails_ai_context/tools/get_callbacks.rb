@@ -48,11 +48,7 @@ module RailsAiContext
             type: "string",
             description: "Model class name (e.g. 'User', 'Post'). Omit to see all models with their callbacks."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: model names + callback counts. standard: callbacks by type in Rails event order (default). full: callbacks with method source code."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: model names + callback counts. standard: callbacks by type in Rails event order (default). full: callbacks with method source code.")
         }
       )
 

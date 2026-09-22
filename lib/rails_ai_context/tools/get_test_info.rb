@@ -18,11 +18,7 @@ module RailsAiContext
             type: "string",
             description: "Show existing tests for a specific controller (e.g. 'Posts'). Looks for controller/request spec/test file."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: framework + counts. standard: framework + fixtures + CI (default). full: everything including fixture names, factory names, helper setup."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: framework + counts. standard: framework + fixtures + CI (default). full: everything including fixture names, factory names, helper setup.")
         }
       )
 

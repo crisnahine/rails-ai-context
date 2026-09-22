@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Model class name (e.g. 'User', 'Post'). Omit to list all models."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level for model listing. summary: names only. standard: names + association/validation counts (default). full: names + full association list. Ignored when specific model is given (always returns full)."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level for model listing. summary: names only. standard: names + association/validation counts (default). full: names + full association list. Ignored when specific model is given (always returns full)."),
           limit: {
             type: "integer",
             description: "Max models to return when listing. Default: 50."

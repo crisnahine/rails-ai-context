@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Service class name or filename (e.g. 'CreateOrder', 'create_order'). Omit to list all services with pattern detection."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: names only. standard: names + method signatures + line counts (default). full: everything including side effects, error handling, and callers."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: names only. standard: names + method signatures + line counts (default). full: everything including side effects, error handling, and callers.")
         }
       )
 

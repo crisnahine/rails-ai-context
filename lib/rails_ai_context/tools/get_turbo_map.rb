@@ -10,11 +10,7 @@ module RailsAiContext
 
       input_schema(
         properties: {
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: count of streams, frames, model broadcasts. standard: each stream with source → target (default). full: everything including inline template refs and DOM IDs."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: count of streams, frames, model broadcasts. standard: each stream with source → target (default). full: everything including inline template refs and DOM IDs."),
           stream: {
             type: "string",
             description: "Filter by stream/channel name (e.g. 'notifications', 'messages'). Shows only broadcasts and subscriptions for this stream."

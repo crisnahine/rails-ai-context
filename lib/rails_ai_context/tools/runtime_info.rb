@@ -10,11 +10,7 @@ module RailsAiContext
 
       input_schema(
         properties: {
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: one-line per section. standard: tables with sizes (default). full: index usage + cache details."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: one-line per section. standard: tables with sizes (default). full: index usage + cache details."),
           section: {
             type: "string",
             enum: %w[database cache jobs connections],

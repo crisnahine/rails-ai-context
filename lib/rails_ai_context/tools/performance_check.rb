@@ -33,11 +33,7 @@ module RailsAiContext
             enum: CATEGORIES.keys + %w[all],
             description: "Filter by issue category (default: all)"
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Level of detail: summary (counts), standard (issues + suggestions), full (+ code context)"
-          }
+          detail: RailsAiContext::DetailLevel.schema("Level of detail: summary (counts), standard (issues + suggestions), full (+ code context)")
         }
       )
 

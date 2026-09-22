@@ -19,11 +19,7 @@ module RailsAiContext
             enum: %w[model controller mailer job channel helper other all],
             description: "Filter by concern type, named for the directory: model reads app/models/concerns/, mailer reads app/mailers/concerns/. other: a configured directory outside app/*/concerns. all: everything (default)."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: concern names only. standard: names + method signatures (default). full: method signatures with source code."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: concern names only. standard: names + method signatures (default). full: method signatures with source code.")
         }
       )
 

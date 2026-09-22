@@ -25,11 +25,7 @@ module RailsAiContext
             items: { type: "string" },
             description: "Run only specific checks by Brakeman class name (e.g. ['CheckSQL', 'CheckCrossSiteScripting']). Omit to run all checks."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: counts only. standard: warnings with file/line (default). full: warnings with code snippets and remediation links."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: counts only. standard: warnings with file/line (default). full: warnings with code snippets and remediation links.")
         }
       )
 
