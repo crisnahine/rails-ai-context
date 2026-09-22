@@ -35,8 +35,7 @@ module RailsAiContext
           initializers: extract_initializers,
           credentials_configured: credentials_configured?,
           current_attributes: detect_current_attributes,
-          error_monitoring: detect_error_monitoring,
-          job_processor: detect_job_processor_config
+          error_monitoring: detect_error_monitoring
         }
 
         # Extract cache store options when configured as an Array
@@ -150,23 +149,6 @@ module RailsAiContext
         tools.empty? ? nil : tools
       rescue => e
         $stderr.puts "[rails-ai-context] detect_error_monitoring failed: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      def detect_job_processor_config
-        config = {}
-        sidekiq_path = File.join(app.root, "config", "sidekiq.yml")
-        if File.exist?(sidekiq_path)
-          content = RailsAiContext::SafeFile.read(sidekiq_path)
-          if content
-            config[:processor] = "sidekiq"
-            config[:concurrency] = $1.to_i if content.match(/concurrency:\s*(\d+)/)
-            config[:queues] = content.scan(/-\s+(\w+)/).flatten.uniq
-          end
-        end
-        config.empty? ? nil : config
-      rescue => e
-        $stderr.puts "[rails-ai-context] detect_job_processor_config failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
     end
