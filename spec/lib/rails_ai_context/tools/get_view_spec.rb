@@ -179,6 +179,52 @@ RSpec.describe RailsAiContext::Tools::GetView do
       end
     end
 
+    # A template at the root of app/views has no directory. Splitting its key
+    # on "/" made its own filename the group, so the group was empty, the row
+    # never printed, and the header counted a file the body never listed.
+    context "with a template directly under app/views" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          view_templates: {
+            templates: {
+              "notice.text.erb" => { lines: 2 },
+              "pdfs/summary.html.erb" => { lines: 2 }
+            },
+            partials: {}
+          }
+        )
+      end
+
+      it "lists the root template in the standard listing" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("# Views (2 templates, 0 partials")
+        expect(text).to include("notice.text.erb")
+        expect(text).to include("pdfs/summary.html.erb")
+      end
+
+      it "groups it under a root heading rather than under its own filename" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("## (app/views root)")
+        expect(text).not_to include("## notice.text.erb/")
+      end
+
+      it "does not offer the filename as a directory to filter by" do
+        text = described_class.call(controller: "notice").content.first[:text]
+
+        expect(text).to include("Directories with views: pdfs")
+        expect(text).not_to include("notice.text.erb")
+      end
+
+      it "names it once in the full listing of directories" do
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).to include("`controller:\"pdfs\"`")
+        expect(text).not_to include("`controller:\"notice.text.erb\"`")
+      end
+    end
+
     context "when the app is API-only" do
       before do
         allow(described_class).to receive(:cached_context).and_return(

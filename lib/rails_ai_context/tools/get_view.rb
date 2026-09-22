@@ -79,7 +79,7 @@ module RailsAiContext
               return text_response(note) if note
             end
 
-            all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
+            all_dirs = view_directories(templates, partials)
             suggestion = find_closest_match(ctrl_lower, all_dirs)
             hint = suggestion ? " Did you mean '#{suggestion}'?" : ""
             dirs_note = all_dirs.any? ? " Directories with views: #{all_dirs.join(', ')}" : " No view directories found (API-only apps typically have none)."
@@ -102,14 +102,15 @@ module RailsAiContext
 
         case detail
         when "summary"
-          all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
+          all_dirs = view_groups(templates, partials)
           lines = views_header_lines(templates, partials, layouts)
           all_dirs.each do |ctrl|
-            ctrl_templates = templates.select { |k, _| k.start_with?("#{ctrl}/") }
-            ctrl_partials = partials.select { |k, _| k.start_with?("#{ctrl}/") }
+            ctrl_templates = views_in_group(templates, ctrl)
+            ctrl_partials = views_in_group(partials, ctrl)
             file_count = ctrl_templates.size + ctrl_partials.size
             # Skip redundant section header when filtered to a single controller
-            lines << "## #{ctrl}/ (#{count_phrase(file_count, "file")})" unless controller && all_dirs.size == 1
+            heading = ctrl == ROOT_GROUP ? ctrl : "#{ctrl}/"
+            lines << "## #{heading} (#{count_phrase(file_count, "file")})" unless controller && all_dirs.size == 1
             ctrl_templates.sort.each do |name, meta|
               parts = meta[:partials]&.any? ? " renders: #{meta[:partials].join(', ')}" : ""
               stim = meta[:stimulus]&.any? ? " stimulus: #{meta[:stimulus].join(', ')}" : ""
@@ -125,7 +126,7 @@ module RailsAiContext
           text_response(lines.join("\n"))
 
         when "standard"
-          all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
+          all_dirs = view_groups(templates, partials)
           lines = views_header_lines(templates, partials, layouts)
 
           # Form builders and component usage from views introspector
@@ -139,11 +140,11 @@ module RailsAiContext
           end
 
           all_dirs.each do |ctrl|
-            ctrl_templates = templates.select { |k, _| k.start_with?("#{ctrl}/") }
-            ctrl_partials = partials.select { |k, _| k.start_with?("#{ctrl}/") }
+            ctrl_templates = views_in_group(templates, ctrl)
+            ctrl_partials = views_in_group(partials, ctrl)
             next if ctrl_templates.empty? && ctrl_partials.empty?
 
-            lines << "## #{ctrl}/" unless controller && all_dirs.size == 1
+            lines << "## #{ctrl == ROOT_GROUP ? ctrl : "#{ctrl}/"}" unless controller && all_dirs.size == 1
             ctrl_templates.sort.each do |name, meta|
               detail_parts = []
               extra = extract_view_metadata(name)
@@ -182,12 +183,12 @@ module RailsAiContext
 
           # Hydrate: inject schema hints for models inferred from view instance variables
           if RailsAiContext.configuration.hydration_enabled && controller
-            all_ivars = []
-            templates.each do |path, _meta|
-              content = read_view_content(path)
-              content.scan(/@(\w+)/).flatten.each { |v| all_ivars << v }
-            end
-            all_ivars.uniq!
+            # The same reader the introspector uses, so the hydrator cannot
+            # be handed a name the listing never showed: a bare scan read a
+            # CSS `@page` rule and a handle inside a quoted string as ivars.
+            all_ivars = templates.flat_map { |path, _meta|
+              Introspectors::ViewTemplateIntrospector.ivars_in(read_view_content(path), path: path)
+            }.uniq
             hydration = Hydrators::ViewHydrator.call(all_ivars, context: cached_context)
             hydration_text = Hydrators::HydrationFormatter.format(hydration)
             lines << hydration_text << "" unless hydration_text.empty?
@@ -213,17 +214,42 @@ module RailsAiContext
             text_response(lines.join("\n"))
           else
             # List available controllers when no controller specified
-            all_dirs = (templates.keys + partials.keys).map { |k| k.split("/").first }.uniq.sort
+            all_dirs = view_groups(templates, partials)
             lines = [ "# Views - Full Detail", "", "_Specify a controller to see template content:_", "" ]
             all_dirs.each do |ctrl|
-              count = templates.count { |k, _| k.start_with?("#{ctrl}/") } +
-                      partials.count { |k, _| k.start_with?("#{ctrl}/") }
+              count = views_in_group(templates, ctrl).size + views_in_group(partials, ctrl).size
               lines << "- `controller:\"#{ctrl}\"` (#{count_phrase(count, "file")})"
             end
             lines << "" << "_Or use `path:\"controller/action.html.erb\"` for a specific file._"
             text_response(lines.join("\n"))
           end
         end
+      end
+
+      # A template at the root of app/views belongs to no directory. Splitting
+      # its key on "/" made its own filename the group name: the group matched
+      # no file, the row was dropped, and the header went on counting it.
+      ROOT_GROUP = "(app/views root)"
+
+      private_class_method def self.view_group(key)
+        key.include?("/") ? key.split("/").first : ROOT_GROUP
+      end
+
+      # Every group the maps hold, root last so a directory listing reads as
+      # one.
+      private_class_method def self.view_groups(templates, partials)
+        (templates.keys + partials.keys).map { |k| view_group(k) }.uniq.sort_by { |g| [ g == ROOT_GROUP ? 1 : 0, g ] }
+      end
+
+      # The directories a reader can filter by. The root group is not one.
+      private_class_method def self.view_directories(templates, partials)
+        view_groups(templates, partials).reject { |g| g == ROOT_GROUP }
+      end
+
+      private_class_method def self.views_in_group(map, group)
+        return map.select { |k, _| !k.include?("/") } if group == ROOT_GROUP
+
+        map.select { |k, _| k.start_with?("#{group}/") }
       end
 
       # Layouts sit outside the template and partial maps, so a heading naming

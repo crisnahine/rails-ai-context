@@ -166,6 +166,23 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(described_class.ivars_in("= image_tag file&.url(:'@1x'), alt: @post.title")).to eq(%w[post])
     end
 
+    # A chat handle inside a quoted Ruby string is text the template prints,
+    # not a variable the controller assigns.
+    it "does not read a word inside a quoted string as an ivar" do
+      template = "<%= status.include?('sent') ? '' : '<@U12345ABC> ' %>\nOwner: <@<%= owner.id %>>\n"
+
+      expect(described_class.ivars_in(template, path: "notify.text.erb")).to eq([])
+    end
+
+    it "does not read one inside a double-quoted string either" do
+      expect(described_class.ivars_in(%{<%= "ping @U12345ABC" %>})).to eq([])
+    end
+
+    # Interpolation is code, and an ivar read inside it is a real read.
+    it "still reads an ivar interpolated into a string" do
+      expect(described_class.ivars_in(%{<%= "hello #{'#'}{@user.name}" %>})).to eq(%w[user])
+    end
+
     it "still reads ivars that legally start with an underscore or a capital" do
       expect(described_class.ivars_in("<%= @_private %><%= @Thing %>")).to eq(%w[Thing _private])
     end

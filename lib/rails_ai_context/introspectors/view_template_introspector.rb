@@ -91,7 +91,17 @@ module RailsAiContext
         text = content.to_s
         erb = path ? path.to_s.end_with?(".erb") : RailsAiContext::ErbSource.tagged?(text)
         ruby = erb ? RailsAiContext::ErbSource.tag_bodies(text) : text
-        ruby.scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
+        strip_string_literals(ruby).scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
+      end
+
+      # A string literal inside a tag body is text the template prints, so a
+      # `@handle` in it names no instance variable - a Slack user id in a
+      # quoted string was reported as the template's interface. What a double
+      # quoted string interpolates is code, and an ivar read there is real, so
+      # only the interpolations survive.
+      def self.strip_string_literals(ruby)
+        ruby.gsub(/'(?:\\.|[^'\\])*'/m, "''")
+            .gsub(/"(?:\\.|[^"\\])*"/m) { |literal| literal.scan(/#\{.*?\}/m).join(" ") }
       end
 
       def extract_ivars(content, path = nil)

@@ -90,9 +90,18 @@ module RailsAiContext
             lines << "## #{group}"
             vars.sort.each do |name|
               # Find default value if any
-              default = find_default_value(env_vars, name)
+              defaults = defaults_for(env_vars, name)
               entry = "- `#{name}`"
-              entry += " (default: `#{default}`)" if default
+              entry += if defaults.size > 1
+                # A site with no default argument raises KeyError when the
+                # variable is unset, and one site's fallback labelled as the
+                # variable's said the opposite.
+                " (defaults differ by call site; `detail:\"full\"` names each)"
+              elsif defaults.first
+                " (default: `#{defaults.first}`)"
+              else
+                ""
+              end
               lines << entry
             end
             lines << ""
@@ -169,9 +178,9 @@ module RailsAiContext
           env_vars.sort_by { |file, _| file }.each do |file, vars|
             relative = file.sub("#{root}/", "")
             vars.each do |v|
-              var_details[v[:name]] ||= { files: [], default: nil }
-              var_details[v[:name]][:files] << { file: relative, line: v[:line] }
-              var_details[v[:name]][:default] ||= v[:default]
+              var_details[v[:name]] ||= { files: [], defaults: [] }
+              var_details[v[:name]][:files] << { file: relative, line: v[:line], default: v[:default] }
+              var_details[v[:name]][:defaults] << v[:default]
             end
           end
 
@@ -188,9 +197,18 @@ module RailsAiContext
             vars = categorized[category]
             lines << "" << "### #{category}"
             vars.sort_by { |v| v[:name] }.each do |v|
-              file_locations = v[:files].map { |f| f[:line] ? "#{f[:file]}:#{f[:line]}" : f[:file] }.uniq
+              defaults = v[:defaults].uniq
+              # Where the sites disagree the default belongs next to the site
+              # that passes it: the one that passes none is the one a reader
+              # most needs, since it raises KeyError when the variable is unset.
+              file_locations = v[:files].map { |f|
+                at = f[:line] ? "#{f[:file]}:#{f[:line]}" : f[:file]
+                next at if defaults.size <= 1
+                f[:default] ? "#{at} default: `#{f[:default]}`" : "#{at} no default"
+              }.uniq
               entry = "- `#{v[:name]}`"
-              entry += " (default: `#{v[:default]}`)" if v[:default]
+              entry += " (default: `#{defaults.first}`)" if defaults.size == 1 && defaults.first
+              entry += " (defaults differ by call site)" if defaults.size > 1
               entry += " (#{file_locations.join(', ')})"
               lines << entry
             end
@@ -657,13 +675,12 @@ module RailsAiContext
         groups.sort_by { |k, _| CATEGORY_ORDER.index(k) || 99 }
       end
 
-      private_class_method def self.find_default_value(env_vars, name)
-        env_vars.each_value do |vars|
-          vars.each do |v|
-            return v[:default] if v[:name] == name && v[:default]
-          end
-        end
-        nil
+      # Every distinct default the variable is read with, a site that passes
+      # none included as nil. One member means every site agrees.
+      private_class_method def self.defaults_for(env_vars, name)
+        env_vars.each_value.flat_map { |vars|
+          vars.select { |v| v[:name] == name }.map { |v| v[:default] }
+        }.uniq
       end
     end
   end

@@ -56,6 +56,47 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     allow(described_class).to receive(:detect_encrypted_columns).and_return(encrypted_columns)
   end
 
+  # Three files read one variable three ways: a nil-defaulting fetch, a real
+  # fallback, and a fetch with no default that raises KeyError when the
+  # variable is unset. One label for all three said the variable is optional.
+  describe "a variable whose call sites disagree about the default" do
+    let(:env_vars) do
+      {
+        "#{root}/app/services/billing/audit_log.rb" => [ { name: "SITE_URL", line: 4, default: "nil" } ],
+        "#{root}/app/services/billing/mailer_link.rb" => [ { name: "SITE_URL", line: 4, default: "https://example.com" } ],
+        "#{root}/app/services/billing/oauth_link.rb" => [ { name: "SITE_URL", line: 4 } ]
+      }
+    end
+
+    it "does not label the variable with one site's default" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("`SITE_URL`")
+      expect(text).not_to include("SITE_URL` (default: `nil`)")
+      expect(text).to include("defaults differ")
+    end
+
+    it "names each site's default in full detail" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("app/services/billing/audit_log.rb:4 default: `nil`")
+      expect(text).to include("app/services/billing/mailer_link.rb:4 default: `https://example.com`")
+      expect(text).to include("app/services/billing/oauth_link.rb:4 no default")
+    end
+
+    it "keeps the single label when every site agrees" do
+      allow(described_class).to receive(:scan_env_vars).and_return(
+        "#{root}/a.rb" => [ { name: "PORT", line: 1, default: "3000" } ],
+        "#{root}/b.rb" => [ { name: "PORT", line: 2, default: "3000" } ]
+      )
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("`PORT` (default: `3000`)")
+      expect(text).not_to include("defaults differ")
+    end
+  end
+
   describe "categorize_env_var" do
     it "categorizes API key variables" do
       result = described_class.send(:categorize_env_var, "GEMINI_API_KEY")

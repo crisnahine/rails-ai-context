@@ -98,17 +98,29 @@ module RailsAiContext
       end
 
       # `:memory_store if Rails.root.join(...).exist?, else :null_store`.
+      #
+      # Two unconditional assignments of one key are not branches: Rails runs
+      # both lines and the last one wins. Comma-joining them read exactly like
+      # a single assignment whose value is a comma list
+      # (`:mem_cache_store, { pool_size: 5 }`), so the winner is named and the
+      # assignment it overrode is named after it.
       def branch_values(entries)
         return one_line(entries.first[:source].to_s) if entries.size == 1
 
-        entries.map do |entry|
+        unconditional, conditional = entries.partition { |entry| entry[:condition].nil? }
+        rendered = conditional.map { |entry|
           value = one_line(entry[:source].to_s)
-          case entry[:condition]
-          when nil then value
-          when "else" then "else #{value}"
-          else "#{value} if #{entry[:condition]}"
-          end
-        end.uniq.join(", ")
+          entry[:condition] == "else" ? "else #{value}" : "#{value} if #{entry[:condition]}"
+        }
+
+        if unconditional.any?
+          values = unconditional.map { |entry| one_line(entry[:source].to_s) }.uniq
+          last = values.last
+          overridden = values[0..-2]
+          rendered.unshift(overridden.any? ? "#{last} (overrides #{overridden.join(', ')})" : last)
+        end
+
+        rendered.uniq.join(", ")
       end
 
       # The booted app has already resolved the branch, and two tools reading
