@@ -111,14 +111,15 @@ module RailsAiContext
         to_remove.each do |key|
           tool = AiTool.find(key)
 
-          removed_paths = Cleanup.remove(tools: [ key ], keeping: selected.map(&:to_sym), root: root)
-          removed_paths.each { |path| surface.say "  Removed #{path}", :warn }
+          outcome = Cleanup.remove(tools: [ key ], keeping: selected.map(&:to_sym), root: root)
+          outcome[:removed].each { |path| surface.say "  Removed #{path}", :ok }
+          outcome[:failed].each { |path| surface.say "Could not remove #{path} - check its permissions", :warn }
 
           # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
           cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ key ], output_dir: root.to_s)
-          cleaned.each { |f| surface.say "  Removed MCP entry from #{relative_to(f, root)}", :warn }
+          cleaned.each { |f| surface.say "  Removed MCP entry from #{relative_to(f, root)}", :ok }
 
-          surface.say "  #{tool.name} files removed", :ok if tool
+          surface.say "  #{tool.name} files removed", :ok if tool && outcome[:failed].empty?
         end
       end
 
@@ -140,6 +141,9 @@ module RailsAiContext
 
         File.open(gitignore, "a") { |f| lines.each { |line| f.puts line } }
         surface.say "Updated .gitignore", :ok
+      rescue SystemCallError, IOError => e
+        RailsAiContext.log_warn "[rails-ai-context] could not write .gitignore: #{e.message}"
+        surface.say "Could not update .gitignore - add .ai-context.json and .codex/config.toml by hand", :warn
       end
 
       # `standalone: nil` lets the generator detect the install mode from
@@ -152,6 +156,9 @@ module RailsAiContext
         result = generator.call
         result[:written].each { |f| surface.say "Created/Updated #{relative_to(f, root)}", :ok }
         result[:skipped].each { |f| surface.say "#{relative_to(f, root)} unchanged - skipped", :muted }
+        result[:failed].each do |f|
+          surface.say "Could not write #{relative_to(f, root)} - that tool will not auto-discover the MCP server", :warn
+        end
         surface.say "Skipped MCP config files (CLI-only mode)", :muted if tool_mode == :cli
         result
       end

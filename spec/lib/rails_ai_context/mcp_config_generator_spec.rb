@@ -358,6 +358,51 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
       end
     end
 
+    # merge_json used to rescue JSON::ParserError only, so an existing but
+    # unreadable config raised Errno::EACCES out of the whole install.
+    context "when a config file cannot be read or written" do
+      before { skip "root can read anything" if Process.uid.zero? }
+
+      it "reports the unreadable file as failed and keeps going" do
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, ".mcp.json"), "{}")
+          File.chmod(0o000, File.join(dir, ".mcp.json"))
+
+          result = described_class.new(tools: %i[claude cursor], output_dir: dir, tool_mode: :mcp).call
+
+          expect(result[:failed]).to eq([ File.join(dir, ".mcp.json") ])
+          expect(result[:written]).to eq([ File.join(dir, ".cursor/mcp.json") ])
+        ensure
+          File.chmod(0o600, File.join(dir, ".mcp.json"))
+        end
+      end
+
+      it "reports an unwritable TOML config as failed" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          File.write(File.join(dir, ".codex/config.toml"), "[other]\n")
+          File.chmod(0o500, File.join(dir, ".codex"))
+
+          result = described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp).call
+
+          expect(result[:failed]).to eq([ File.join(dir, ".codex/config.toml") ])
+        ensure
+          File.chmod(0o700, File.join(dir, ".codex"))
+        end
+      end
+
+      it "does not raise out of .remove when the config cannot be read" do
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, ".mcp.json"), "{}")
+          File.chmod(0o000, File.join(dir, ".mcp.json"))
+
+          expect(described_class.remove(tools: [ :claude ], output_dir: dir)).to eq([])
+        ensure
+          File.chmod(0o600, File.join(dir, ".mcp.json"))
+        end
+      end
+    end
+
     context "with :cli tool_mode" do
       it "skips all MCP config generation" do
         Dir.mktmpdir do |dir|
