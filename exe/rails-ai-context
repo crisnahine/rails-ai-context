@@ -592,11 +592,20 @@ class RailsAiContextCLI < Thor
         install/program mcp_config_generator legacy_cleanup
       ].each { |file| require_relative "../lib/rails_ai_context/#{file}" }
 
-      return if ::RailsAiContext.respond_to?(:log_warn)
+      # Both are defined in the entry file, which is the thing that must not
+      # load yet. With no Rails in the process log_warn only writes to stderr.
+      unless ::RailsAiContext.respond_to?(:log_warn)
+        ::RailsAiContext.define_singleton_method(:log_warn) { |message| $stderr.puts(message) }
+      end
 
-      # Defined in the entry file, which is the thing that must not load yet.
-      # With no Rails in the process it only writes to stderr.
-      ::RailsAiContext.define_singleton_method(:log_warn) { |message| $stderr.puts(message) }
+      return if ::RailsAiContext.respond_to?(:debug_fail)
+
+      # Every rescue in the files above routes through this, so without it a
+      # rescue that fires raises NoMethodError over the error it was catching.
+      ::RailsAiContext.define_singleton_method(:debug_fail) do |error, fallback = nil, label:|
+        $stderr.puts("[rails-ai-context] #{label} failed: #{error.message}") if ENV["DEBUG"]
+        fallback
+      end
     end
 end
 
