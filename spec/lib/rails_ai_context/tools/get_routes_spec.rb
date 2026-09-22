@@ -67,6 +67,46 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     end
   end
 
+  # A Rack app attached in the routes file is counted and then dropped from
+  # the body, so the one place it could be found by path named it nowhere.
+  describe "an app with mounted Rack endpoints" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: {
+          total_routes: 1,
+          by_controller: { "posts" => [ { verb: "GET", path: "/posts", action: "index", name: "posts" } ] },
+          api_namespaces: [],
+          unrouted_mounts: 2,
+          mounted_engines: [
+            { engine: "MetricsApp", path: "/metrics" },
+            { engine: "MetricsAdminApp", path: "/metrics-admin" }
+          ]
+        }
+      })
+    end
+
+    it "names each mounted app and the path it answers on" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Mounted Rack apps (2)")
+      expect(text).to include("- **MetricsApp** at `/metrics`")
+      expect(text).to include("- **MetricsAdminApp** at `/metrics-admin`")
+    end
+
+    it "counts them in the header without calling them engines" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("2 mounted Rack apps")
+      expect(text).not_to include("engine mount")
+    end
+
+    it "leaves them out of a filtered answer" do
+      text = described_class.call(controller: "posts").content.first[:text]
+
+      expect(text).not_to include("Mounted Rack apps")
+    end
+  end
+
   describe ".call with no params" do
     it "defaults to standard detail and filters framework routes" do
       result = described_class.call

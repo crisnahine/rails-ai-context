@@ -647,4 +647,63 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       end
     end
   end
+  # A class under app/models/concerns that subclasses ActiveModel::Validator
+  # is not a concern: nothing includes it, and `validates_with` is how it is
+  # wired. The type came from the directory alone, so 37 validators on one app
+  # were reported as model concerns used by nothing.
+  describe "a validator class in the concerns directory" do
+    let(:validator_dir) { File.join(tmpdir, "app", "models", "concerns") }
+
+    before do
+      described_class.reset_cache!
+      FileUtils.mkdir_p(validator_dir)
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models"))
+      File.write(File.join(validator_dir, "address_validator.rb"), <<~RUBY)
+        class AddressValidator < ActiveModel::Validator
+          def validate(record); end
+        end
+      RUBY
+      File.write(File.join(validator_dir, "email_validator.rb"), <<~RUBY)
+        class EmailValidator < ActiveModel::EachValidator
+          def validate_each(record, attribute, value); end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "models", "order.rb"), <<~RUBY)
+        class Order < ApplicationRecord
+          validates :email, email: true
+
+          validates_with AddressValidator
+        end
+      RUBY
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+    end
+
+    it "calls it a validator rather than a model concern" do
+      text = described_class.call(name: "AddressValidator").content.first[:text]
+
+      expect(text).to include("**Type:** validator")
+      expect(text).not_to include("**Type:** model concern")
+    end
+
+    it "names the model that wires it with validates_with" do
+      text = described_class.call(name: "AddressValidator").content.first[:text]
+
+      expect(text).to include("Order")
+      expect(text).not_to include("Nothing in app/models includes this concern")
+    end
+
+    it "names the model that wires an EachValidator by its option key" do
+      text = described_class.call(name: "EmailValidator").content.first[:text]
+
+      expect(text).to include("Order")
+    end
+
+    it "lists validators apart from concerns" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Validators (2)")
+      expect(text).not_to include("## Model Concerns (2)")
+    end
+  end
+
 end

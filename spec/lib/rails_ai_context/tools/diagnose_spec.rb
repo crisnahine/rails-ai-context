@@ -157,6 +157,59 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).not_to include("undefined_method_on_model")
     end
 
+    # The method list a model carries is capped for display. Reading it as
+    # the model's complete set turned a method defined on line 36 into a
+    # confident "the method does not exist", in the same answer whose Method
+    # Trace printed the definition.
+    context "a model with more methods than the listing carries" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: {
+            "Post" => {
+              table_name: "posts",
+              associations: [],
+              scopes: [],
+              class_methods: [],
+              instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+              instance_method_count: 32
+            }
+          },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+      end
+
+      it "does not claim a method does not exist when the list was cut" do
+        text = described_class.call(error: "NoMethodError: undefined method `title_present?' for an instance of Post").content.first[:text]
+
+        expect(text).not_to include("undefined_method_on_model")
+        expect(text).not_to include("the method does not exist")
+      end
+    end
+
+    context "a model whose method list is complete" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: {
+            "Post" => {
+              table_name: "posts",
+              associations: [],
+              scopes: [],
+              class_methods: [],
+              instance_methods: %w[title_present?],
+              instance_method_count: 1
+            }
+          },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+      end
+
+      it "still names a method the model really does not define" do
+        text = described_class.call(error: "NoMethodError: undefined method `bogus_assoc' for an instance of Post").content.first[:text]
+
+        expect(text).to include("undefined_method_on_model")
+      end
+    end
+
     it "truncates oversized output to within MAX_TOTAL_OUTPUT" do
       # Stub gather_context to return a very large section
       allow(described_class).to receive(:gather_context).and_return(

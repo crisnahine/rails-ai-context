@@ -289,6 +289,12 @@ module RailsAiContext
           model_data = models[receiver]
           return nil unless model_data.is_a?(Hash) && !model_data[:error]
 
+          # The payload's method lists are capped for display, and a negative
+          # claim cannot be read off a partial list: a method past the cap was
+          # reported as not existing in the same answer that printed its
+          # definition.
+          return nil if method_lists_truncated?(model_data)
+
           known = known_model_methods(model_data)
           # "published?" / "save!" resolve through the bare attribute name, so
           # compare without the trailing punctuation too.
@@ -317,6 +323,16 @@ module RailsAiContext
             end
           end
           nil
+        end
+
+        # Whether either method list the model carries is shorter than the
+        # count beside it. A payload from before those counts existed carries
+        # neither, and is read as complete.
+        def method_lists_truncated?(model_data)
+          [ [ :instance_methods, :instance_method_count ], [ :class_methods, :class_method_count ] ].any? do |list_key, count_key|
+            count = model_data[count_key]
+            count.is_a?(Integer) && count > Array(model_data[list_key]).size
+          end
         end
 
         # Everything legitimately callable on the model that introspection

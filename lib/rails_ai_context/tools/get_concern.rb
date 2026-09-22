@@ -129,7 +129,8 @@ module RailsAiContext
         return text_response("Could not read concern file: #{file_path}") unless source
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
-        lines << "**Type:** #{concern_type} concern"
+        validator = validator_superclass(source)
+        lines << (validator ? "**Type:** validator (`#{validator}`)" : "**Type:** #{concern_type} concern")
 
         # A second file at the same relative path answers the same name, and
         # everything below is read from the first one only. The other files are
@@ -210,6 +211,22 @@ module RailsAiContext
           callbacks.each { |c| lines << "- `#{c}`" }
         end
 
+        # A validator is wired with `validates_with` (or, for an
+        # EachValidator, the option key its name gives), never with `include`,
+        # so looking for an include reported every validator as dead code.
+        if validator
+          users = find_validator_users(name, root)
+          if users.any?
+            lines << "" << "## Validated By (#{users.size})"
+            users.each { |u| lines << "- #{u}" }
+          else
+            lines << "" << "_No model in app/models wires this validator with `validates_with`._"
+          end
+
+          lines << "" << "_Next: `rails_search_code(pattern:\"#{name.demodulize.camelize}\")` for every use_"
+          return text_response(lines.join("\n"))
+        end
+
         # Find which models/controllers include this concern
         includers = find_includers(name, root, concern_type)
         if includers.any?
@@ -260,6 +277,7 @@ module RailsAiContext
             all_concerns << {
               name: concern_name,
               type: concern_type,
+              validator: source && validator_superclass(source),
               path: relative,
               method_count: method_count
             }
@@ -275,6 +293,8 @@ module RailsAiContext
 
           return text_response("No concerns found in #{dirs}.")
         end
+
+        validators, all_concerns = all_concerns.partition { |c| c[:validator] }
 
         lines = [ "# Concerns (#{all_concerns.size})", "" ]
         if excluded_count > 0
@@ -298,8 +318,53 @@ module RailsAiContext
           lines << ""
         end
 
+        if validators.any?
+          lines << "## Validators (#{validators.size})"
+          lines << "_Not concerns: each subclasses `ActiveModel::Validator` and is wired with `validates_with`._"
+          validators.each do |v|
+            lines << "- **#{v[:name]}** - #{count_phrase(v[:method_count], "method")} (`#{v[:path]}`)"
+          end
+          lines << ""
+        end
+
         lines << "_Use `name:\"ConcernName\"` for full detail including method signatures and includers._"
         text_response(lines.join("\n"))
+      end
+
+      # The class a validator file declares as its superclass, or nil for
+      # anything else - a module, a PORO, a class that subclasses something
+      # else entirely.
+      VALIDATOR_BASES = %w[ActiveModel::Validator ActiveModel::EachValidator].freeze
+
+      private_class_method def self.validator_superclass(source)
+        Introspectors::DeclaredConstant.declarations(source)
+          .map(&:superclass)
+          .find { |parent| VALIDATOR_BASES.include?(parent) }
+      end
+
+      # The models that wire a validator: `validates_with TheValidator`, and
+      # for an EachValidator the option key its name gives
+      # (EmailValidator -> `validates :x, email: true`).
+      private_class_method def self.find_validator_users(validator_name, root)
+        simple = validator_name.to_s.demodulize.camelize
+        option_key = simple.sub(/Validator\z/, "").underscore
+        with = /validates_with\s+(?:::)?(?:\w+::)*#{Regexp.escape(simple)}\b/
+        each = option_key.empty? ? nil : /validates\b[^\n]*\b#{Regexp.escape(option_key)}:\s*(?:true|\{)/
+
+        real_root = File.realpath(root).to_s
+        PathResolver.dirs_for(root, "app/models").flat_map { |dir|
+          safe_glob(dir, "**/*.rb", real_root).filter_map do |file_path|
+            next if file_path.include?("/concerns/")
+
+            source = RailsAiContext::SafeFile.read(file_path) or next
+            next unless source.match?(with) || (each && source.match?(each))
+
+            match = source.match(/^\s*class\s+(\S+)/) || source.match(/^\s*module\s+(\S+)/)
+            match ? match[1] : File.basename(file_path, ".rb").camelize
+          end
+        }.uniq.sort
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "find_validator_users")
       end
 
       private_class_method def self.collect_concern_names(concern_dirs, real_root)

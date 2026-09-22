@@ -108,6 +108,18 @@ module RailsAiContext
         end
       end
 
+      # How many methods a page lists, and how many the model has. The payload
+      # caps its own list before this one does, so a reader who takes the page
+      # for the model's whole interface is wrong twice over.
+      LISTED_METHODS = 25
+
+      private_class_method def self.methods_heading(shown, total)
+        listed = [ shown, LISTED_METHODS ].min
+        return "## Key instance methods" unless total.is_a?(Integer) && total > listed
+
+        "## Key instance methods (#{listed} of #{total})"
+      end
+
       private_class_method def self.unavailable_row(name, data)
         Serializers::SectionFacts.unread_row("- **#{name}**", data)
       end
@@ -388,8 +400,8 @@ module RailsAiContext
         # Key instance methods - only from source file, not framework-inherited
         source_instance_methods = extract_method_signatures(name)
         if source_instance_methods&.any?
-          lines << "" << "## Key instance methods"
-          source_instance_methods.first(25).each { |s| lines << "- `#{s}`" }
+          lines << "" << methods_heading(source_instance_methods.size, data[:instance_method_count])
+          source_instance_methods.first(LISTED_METHODS).each { |s| lines << "- `#{s}`" }
         elsif data[:instance_methods]&.any?
           # Fallback: filter association-generated and framework methods
           assoc_names = (data[:associations] || []).flat_map do |a|
@@ -399,8 +411,8 @@ module RailsAiContext
           end
           filtered = data[:instance_methods].reject { |m| assoc_names.include?(m) || m.end_with?("=") }
           if filtered.any?
-            lines << "" << "## Key instance methods"
-            lines << filtered.first(25).map { |m| "- `#{m}`" }.join("\n")
+            lines << "" << methods_heading(filtered.size, data[:instance_method_count])
+            lines << filtered.first(LISTED_METHODS).map { |m| "- `#{m}`" }.join("\n")
           end
         end
 
