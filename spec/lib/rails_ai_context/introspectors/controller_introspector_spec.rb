@@ -210,7 +210,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params.require(:post).permit(:title, :body)
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "post_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "post_params" }
       expect(result[:name]).to eq("post_params")
       expect(result[:requires]).to eq("post")
       expect(result[:permits]).to contain_exactly("title", "body")
@@ -222,7 +222,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params.require(:user).permit(:name, address: [:street, :city, :zip])
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "user_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "user_params" }
       expect(result[:requires]).to eq("user")
       expect(result[:permits]).to eq([ "name" ])
       expect(result[:nested]).to eq({ "address" => %w[street city zip] })
@@ -234,7 +234,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params.require(:post).permit(:title, tag_ids: [])
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "post_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "post_params" }
       expect(result[:permits]).to eq([ "title" ])
       expect(result[:arrays]).to eq([ "tag_ids" ])
     end
@@ -249,7 +249,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           )
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "post_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "post_params" }
       expect(result[:permits]).to contain_exactly("title", "body", "published")
     end
 
@@ -259,7 +259,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params.permit!
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "post_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "post_params" }
       expect(result[:unrestricted]).to be true
     end
 
@@ -269,7 +269,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params.expect(article: [ :title, :body, :published ])
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "article_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "article_params" }
       expect(result[:requires]).to eq("article")
       expect(result[:permits]).to contain_exactly("title", "body", "published")
     end
@@ -280,7 +280,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params.expect(user: [ :name, address: [ :street, :city ] ])
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "user_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "user_params" }
       expect(result[:requires]).to eq("user")
       expect(result[:permits]).to eq([ "name" ])
       expect(result[:nested]).to eq({ "address" => %w[street city] })
@@ -292,7 +292,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params.expect(post: [ :title, comments: [ [ :body ] ] ])
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "post_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "post_params" }
       expect(result[:requires]).to eq("post")
       expect(result[:permits]).to eq([ "title" ])
       expect(result[:nested]).to eq({ "comments" => [ "body" ] })
@@ -304,7 +304,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params[:post]
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "post_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "post_params" }
       expect(result[:name]).to eq("post_params")
       expect(result).not_to have_key(:permits)
     end
@@ -315,7 +315,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params.require(:user).permit(:name, :address => [:street, :city])
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "user_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "user_params" }
       expect(result[:nested]).to eq({ "address" => %w[street city] })
     end
 
@@ -325,7 +325,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector do
           params.require(:order).permit(:total, item_ids: [], address: [:line1, :line2])
         end
       RUBY
-      result = introspector.send(:extract_permit_details, source, "order_params")
+      result = introspector.send(:extract_strong_params, source).find { |h| h[:name] == "order_params" }
       expect(result[:permits]).to eq([ "total" ])
       expect(result[:arrays]).to eq([ "item_ids" ])
       expect(result[:nested]).to eq({ "address" => %w[line1 line2] })
