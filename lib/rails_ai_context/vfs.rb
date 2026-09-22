@@ -59,7 +59,7 @@ module RailsAiContext
       def resolve_controller(uri, name)
         context = RailsAiContext.introspect
         controllers = context.dig(:controllers, :controllers) || {}
-        key = find_controller(context, name)
+        key = Payload.find_controller(context, name)
 
         unless key
           available = controllers.keys.sort.first(20)
@@ -76,8 +76,8 @@ module RailsAiContext
 
         # "admin/posts" is a namespaced controller unless "admin" is itself a
         # controller with a "posts" action.
-        whole = find_controller(context, "#{controller_name}/#{action_name}")
-        key = find_controller(context, controller_name)
+        whole = Payload.find_controller(context, "#{controller_name}/#{action_name}")
+        key = Payload.find_controller(context, controller_name)
         prefix_action = key && (controllers.dig(key, :actions) || []).any? { |a| a.to_s.casecmp?(action_name) }
         return resolve_controller(uri, "#{controller_name}/#{action_name}") if whole && !prefix_action
 
@@ -141,7 +141,7 @@ module RailsAiContext
         by_controller = routes_data[:by_controller] || {}
         # A controller with no file derives a route key Rails never routed by,
         # so the caller's string is the filter when the exact key finds nothing.
-        key = find_controller(context, controller)
+        key = Payload.find_controller(context, controller)
         route_key = key && Payload.controller_route_key(context, key)
         names = by_controller.keys.map(&:to_s)
         selected = names.include?(route_key) ? [ route_key ] : names.select { |n| n.include?(controller) }
@@ -154,35 +154,6 @@ module RailsAiContext
         data = { filtered_by: controller, total_routes: routes.size, routes: routes }
 
         [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(data) } ]
-      end
-
-      # "posts", "PostsController", "admin/posts", "Admin::PostsController",
-      # and a route key whose declared constant does not camelize from it.
-      def find_controller(ctx, input)
-        controllers = ctx.dig(:controllers, :controllers) || {}
-        by_route = Payload.controller_for_route_key(ctx, input.to_s.delete_suffix("_controller"))
-        return by_route.first if by_route
-
-        Tools::BaseTool.fuzzy_find_key(controllers.keys, input) ||
-          Tools::BaseTool.fuzzy_find_key(controllers.keys, "#{input}Controller") ||
-          Tools::BaseTool.fuzzy_find_key(controllers.keys, "#{input.to_s.camelize}Controller") ||
-          short_name_match(ctx, controllers.keys, input)
-      end
-
-      # `gift_cards` is the name a person types and the one the routes
-      # resource already answers to. It camelizes to nothing the payload
-      # carries, because the class is namespaced. Only an unambiguous match
-      # answers: two controllers of the same basename are a question, not a
-      # resolution.
-      def short_name_match(ctx, keys, input)
-        needle = input.to_s.tr("-", "_").delete_suffix("_controller").downcase
-        return nil if needle.empty? || needle.include?("/") || needle.include?("::")
-
-        matches = keys.select do |key|
-          Payload.controller_route_key(ctx, key).to_s.split("/").last == needle ||
-            key.to_s.split("::").last.underscore.delete_suffix("_controller") == needle
-        end
-        matches.first if matches.size == 1
       end
     end
   end
