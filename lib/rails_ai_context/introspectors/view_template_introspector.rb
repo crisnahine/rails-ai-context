@@ -19,7 +19,8 @@ module RailsAiContext
 
       # A word character before the `@` makes it an address, and a second `@`
       # makes it a class variable; neither is an ivar the controller assigned.
-      IVAR = /(?<![\w@])@(\w+)/
+      # A digit cannot open an ivar name either, so `:'@1x'` is a symbol.
+      IVAR = /(?<![\w@])@([A-Za-z_]\w*)/
 
       attr_reader :app
 

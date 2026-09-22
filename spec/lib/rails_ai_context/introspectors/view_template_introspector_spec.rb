@@ -160,6 +160,16 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(described_class.ivars_in("Mail us at user@example.com")).to eq([])
     end
 
+    # `:'@1x'` is a symbol literal naming a Paperclip style, and a Ruby ivar
+    # cannot start with a digit.
+    it "does not read a quoted symbol starting with a digit as an ivar" do
+      expect(described_class.ivars_in("= image_tag file&.url(:'@1x'), alt: @post.title")).to eq(%w[post])
+    end
+
+    it "still reads ivars that legally start with an underscore or a capital" do
+      expect(described_class.ivars_in("<%= @_private %><%= @Thing %>")).to eq(%w[Thing _private])
+    end
+
     it "does not read a class variable as an ivar" do
       expect(described_class.ivars_in("<%= @@count %>")).to eq([])
     end
