@@ -230,6 +230,10 @@ RSpec.describe RailsAiContext::Tools::GetView do
         text = described_class.call(detail: "full").content.first[:text]
 
         expect(text).not_to include("controller:\"(app/views root)\"")
+        # The old grouping offered the template's own filename as a directory,
+        # which matched nothing when passed back.
+        expect(text).not_to include("controller:\"notice.text.erb\"")
+        expect(text.scan(/controller:"/).size).to eq(1)
         expect(text).to include("`path:")
       end
     end

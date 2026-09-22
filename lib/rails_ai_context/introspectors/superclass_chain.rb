@@ -19,8 +19,8 @@ module RailsAiContext
       # One link: the class and the source declaring it.
       Link = Data.define(:name, :source)
 
-      # A chain longer than this is a cycle, or a hierarchy no reader is
-      # following either.
+      # Hops, not names: a chain longer than this is a cycle, or a hierarchy
+      # no reader is following either.
       MAX_DEPTH = 8
 
       module_function
@@ -48,7 +48,7 @@ module RailsAiContext
           parent_source = lookup&.call(parent)
           next if parent_source.nil?
 
-          rest = to(parent_source, bases: bases, lookup: lookup, seen: seen + [ candidate.name, parent ])
+          rest = to(parent_source, bases: bases, lookup: lookup, seen: seen + [ parent ])
           return [ Link.new(name: candidate.name, source: source) ] + rest if rest.any?
         end
 

@@ -692,8 +692,9 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
         text = described_class.call(file: "app/models/ai_reports/build.rb").content.first[:text]
 
-        expect(text).to include("AIReports::Build")
+        expect(text).to include("RSpec.describe AIReports::Build")
         expect(text).not_to include("AiReports::Build")
+        expect(text).not_to include("not found")
       end
     end
   end
@@ -718,6 +719,7 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
 
         expect(text).to include("RSpec.describe AIReports::Build do")
         expect(text).not_to include("AiReports::Build")
+        expect(text).not_to include("not found")
       end
     end
 

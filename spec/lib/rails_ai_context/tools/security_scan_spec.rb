@@ -154,6 +154,22 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       end
     end
 
+    # A scan that hangs must not hold the tool open: the wait is bounded, and
+    # a child that ignores the polite signal gets the other one.
+    describe "a scan that does not end" do
+      it "returns rather than waiting on a child that ignores SIGTERM" do
+        stub_const("#{described_class}::SCAN_TIMEOUT", 1)
+        stub_const("#{described_class}::KILL_GRACE", 1)
+
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        output = described_class.send(:capture_with_timeout, [ "sh", "-c", "trap '' TERM; sleep 30" ])
+        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+        expect(output).to be_nil
+        expect(elapsed).to be < 10
+      end
+    end
+
     context "when brakeman is nowhere on the machine" do
       before do
         described_class.instance_variable_set(:@brakeman_available, nil)

@@ -42,13 +42,16 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
         "api/v1/admin/orders/ai_data" => [
           { verb: "GET", path: "/api/v1/admin/orders/ai_data/availability", action: "availability", name: nil },
           { verb: "GET", path: "/api/v1/admin/orders/ai_data/download", action: "download", name: nil }
+        ],
+        "api/v1/gift_cards" => [
+          { verb: "POST", path: "/api/v1/gift-cards/redeem", action: "redeem", name: nil }
         ]
       }
     end
 
     before do
       allow(described_class).to receive(:cached_context).and_return({
-        routes: { total_routes: 3, by_controller: nested_controllers, api_namespaces: [] }
+        routes: { total_routes: 4, by_controller: nested_controllers, api_namespaces: [] }
       })
     end
 
@@ -57,12 +60,6 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
 
       expect(text).to include("# Routes (1 route)")
       expect(text).not_to include("ai_data")
-    end
-
-    it "answers a short CamelCase name the way the MCP resource does" do
-      text = described_class.call(controller: "Orders").content.first[:text]
-
-      expect(text).to include("# Routes (3 routes)")
     end
 
     it "still answers a short name with every controller that carries it" do

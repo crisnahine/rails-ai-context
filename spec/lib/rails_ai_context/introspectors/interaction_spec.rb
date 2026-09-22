@@ -34,6 +34,22 @@ RSpec.describe RailsAiContext::Introspectors::Interaction do
       expect(described_class.interaction?(source, lookup: lookup)).to be(true)
     end
 
+    # MAX_DEPTH counts hops, not the names a hop records: an app with its own
+    # base, a base for that, and a service base under it is four hops from
+    # ActiveInteraction::Base, and the walk stopped at three.
+    it "follows a chain several classes deep" do
+      sources = {
+        "Level4" => "class Level4 < ActiveInteraction::Base\n  string :token\nend\n",
+        "Level3" => "class Level3 < Level4\nend\n",
+        "Level2" => "class Level2 < Level3\nend\n",
+        "Level1" => "class Level1 < Level2\nend\n"
+      }
+      lookup = ->(name) { sources[name] }
+
+      expect(described_class.interaction?("class Orders::Create < Level1\nend\n", lookup: lookup)).to be(true)
+      expect(described_class.filters("class Orders::Create < Level1\nend\n", lookup: lookup).map(&:name)).to eq(%w[token])
+    end
+
     # A chain that points back at itself must end rather than recurse.
     it "stops on a cycle instead of recursing" do
       a = "class A < B\nend\n"

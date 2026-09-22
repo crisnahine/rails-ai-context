@@ -189,6 +189,14 @@ RSpec.describe RailsAiContext::Payload do
       expect(described_class.find_controller(context, "gift_cards")).to eq("Admin::GiftCardsController")
     end
 
+    # Downcasing a two-word name gives "giftcards", which equals no route key
+    # and no underscored class name, so the bare CamelCase form resolved to
+    # nothing while its snake_case twin resolved fine.
+    it "finds a namespaced controller by the bare CamelCase name too" do
+      expect(described_class.find_controller(context, "GiftCards")).to eq("Admin::GiftCardsController")
+      expect(described_class.find_controller(context, "GiftCardsController")).to eq("Admin::GiftCardsController")
+    end
+
     it "finds a controller by its route key, its class name and its path" do
       expect(described_class.find_controller(context, "admin/gift_cards")).to eq("Admin::GiftCardsController")
       expect(described_class.find_controller(context, "Admin::GiftCardsController")).to eq("Admin::GiftCardsController")

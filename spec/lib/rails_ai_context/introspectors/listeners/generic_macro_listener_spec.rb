@@ -74,7 +74,8 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
       end
     RUBY
 
-    expect(results.first[:nested_in]).to be_nil
+    expect(results.first).to include(nested_in: nil, parent_offset: nil)
+    expect(results.first[:offset]).to be_a(Integer)
   end
 
   it "works with Proc factory in walk_source" do

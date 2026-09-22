@@ -182,6 +182,12 @@ module RailsAiContext
       # the tool open forever.
       SCAN_TIMEOUT = 300
 
+      # How long a child gets to end on the polite signal before it gets the
+      # one it cannot trap: popen3 waits on the process itself when the block
+      # returns, so a child that ignores TERM holds the tool open through the
+      # wait this timeout exists to bound.
+      KILL_GRACE = 5
+
       # Brakeman as its own process, with the app's bundle out of the way.
       # `-w` counts the other direction from the API's min_confidence: level 3
       # is high-only, level 1 is everything.
@@ -225,7 +231,7 @@ module RailsAiContext
           err = Thread.new { stderr.read }
 
           unless wait.join(SCAN_TIMEOUT)
-            Process.kill("TERM", wait.pid)
+            stop(wait)
             out.kill
             err.kill
             next nil
@@ -241,6 +247,17 @@ module RailsAiContext
       # holds the app's gems only, so an app that does not bundle brakeman
       # cannot require it even though `gem list` shows it. One process-wide
       # boolean let whichever tier answered first decide for the other.
+      # A child that is already gone raises ESRCH, which is the outcome asked
+      # for either way.
+      private_class_method def self.stop(wait)
+        Process.kill("TERM", wait.pid)
+        return if wait.join(KILL_GRACE)
+
+        Process.kill("KILL", wait.pid)
+      rescue Errno::ESRCH
+        nil
+      end
+
       private_class_method def self.brakeman_available?
         # A Hash, whatever was there before: the memo used to be one boolean,
         # and a stale one would be indexed into.
