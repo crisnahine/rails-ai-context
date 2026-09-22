@@ -680,6 +680,39 @@ end
       expect(actions["index"]).to include("Post.all")
       expect(actions["index"]).to include("respond_to")
     end
+
+    it "ignores methods defined in a class nested inside the controller" do
+      source = <<~RUBY
+        class FooController < ApplicationController
+          class Helper
+            def build
+              @things = Thing.all
+            end
+          end
+
+          def index
+            @items = []
+          end
+        end
+      RUBY
+      actions = introspector.send(:extract_controller_actions, source)
+      expect(actions.keys).to contain_exactly("index")
+    end
+
+    it "keeps a one-line private def out of the preceding action" do
+      source = <<~RUBY
+        class FooController < ApplicationController
+          def index
+            @posts = Post.all
+          end
+
+          private def set_post = @post = Post.where(id: params[:id])
+        end
+      RUBY
+      actions = introspector.send(:extract_controller_actions, source)
+      expect(actions.keys).to contain_exactly("index")
+      expect(actions["index"]).not_to include("Post.where")
+    end
   end
 
   describe "models and controllers across every source directory" do
