@@ -94,8 +94,7 @@ module RailsAiContext
         [ dir + File::SEPARATOR, spec.full_name ]
       }.sort_by { |dir, _name| -dir.length }
     rescue => e
-      $stderr.puts "[rails-ai-context] PortablePath.gem_checkouts failed: #{e.message}" if ENV["DEBUG"]
-      []
+      RailsAiContext.debug_fail(e, [], label: "PortablePath.gem_checkouts")
     end
   end
 end

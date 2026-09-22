@@ -345,8 +345,7 @@ module RailsAiContext
           end
       end.uniq { |skip| skip[:name] }
     rescue => e
-      $stderr.puts "[rails-ai-context] ActionFilters skip_source_records failed: #{e.message}" if ENV["DEBUG"]
-      []
+      RailsAiContext.debug_fail(e, [], label: "ActionFilters skip_source_records")
     end
 
     # ApplicationController is deliberately not in the listing: it would sit in

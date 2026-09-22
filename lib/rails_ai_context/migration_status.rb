@@ -23,8 +23,7 @@ module RailsAiContext
       context = migration_context(migrate_dir)
       context.open.pending_migrations.map { |m| { version: m.version.to_s, name: m.name } }
     rescue => e
-      $stderr.puts "[rails-ai-context] MigrationStatus.pending failed: #{e.message}" if ENV["DEBUG"]
-      nil
+      RailsAiContext.debug_fail(e, nil, label: "MigrationStatus.pending")
     end
 
     # @return [ActiveRecord::MigrationContext]

@@ -16,8 +16,7 @@ module RailsAiContext
 
         ModelHints.resolve(model_names, context: context)
       rescue => e
-        $stderr.puts "[rails-ai-context] ControllerHydrator failed: #{e.message}" if ENV["DEBUG"]
-        HydrationResult.new
+        RailsAiContext.debug_fail(e, HydrationResult.new, label: "ControllerHydrator")
       end
 
       # Detect model names referenced in a controller source file using Prism AST.
@@ -28,8 +27,7 @@ module RailsAiContext
         Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(parse_result.value)
         listener.results
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_model_references failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_model_references")
       end
       private_class_method :detect_model_references
     end

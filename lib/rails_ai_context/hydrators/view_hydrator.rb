@@ -17,8 +17,7 @@ module RailsAiContext
         ModelHints.resolve(model_names, context: context,
           describe: ->(name) { "@#{name.underscore} used in view but '#{name}' model not found" })
       rescue => e
-        $stderr.puts "[rails-ai-context] ViewHydrator failed: #{e.message}" if ENV["DEBUG"]
-        HydrationResult.new
+        RailsAiContext.debug_fail(e, HydrationResult.new, label: "ViewHydrator")
       end
 
       # Convert an instance variable name to a model name by convention.
