@@ -23,8 +23,8 @@ module RailsAiContext
         # nil for an anonymous or computed superclass (`< Struct.new(:a)`).
         def superclass_name(node)
           return nil unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
-          name = constant_path_string(node)
-          name.empty? ? nil : name
+
+          constant_path_string(node)
         end
       end
     end

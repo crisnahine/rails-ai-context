@@ -736,21 +736,9 @@ module RailsAiContext
       end
 
       def constant_node_to_string(node)
-        case node
-        when Prism::ConstantReadNode
-          node.name.to_s
-        when Prism::ConstantPathNode
-          parts = []
-          current = node
-          while current.is_a?(Prism::ConstantPathNode)
-            parts.unshift(current.name.to_s)
-            current = current.parent
-          end
-          parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
-          parts.join("::")
-        else
-          "Unknown"
-        end
+        return "Unknown" unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
+
+        node.slice.delete_prefix("::")
       end
 
       def read_source(ctrl)

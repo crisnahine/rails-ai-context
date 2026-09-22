@@ -310,14 +310,7 @@ module RailsAiContext
       end
 
       def constant_path_to_string(node)
-        parts = []
-        current = node
-        while current.is_a?(Prism::ConstantPathNode)
-          parts.unshift(current.name.to_s)
-          current = current.parent
-        end
-        parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
-        parts.join("::")
+        node.slice.delete_prefix("::")
       end
 
       def dir_exists?(relative_path)
