@@ -298,20 +298,6 @@ module RailsAiContext
           end
         end
 
-        # Also scan layouts
-        layouts_dir = File.join(root, "app/views/layouts")
-        if Dir.exist?(layouts_dir)
-          Dir.glob(File.join(layouts_dir, "*.{erb,haml,slim}")).each do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            relative = "layouts/#{File.basename(path)}"
-
-            content.scan(/<[^>]*data-turbo-permanent[^>]*>/i).each do |tag|
-              id = tag.match(/id=["']([^"']+)["']/)&.send(:[], 1)
-              elements << { file: relative, id: id }
-            end
-          end
-        end
-
         elements.uniq
       rescue => e
         $stderr.puts "[rails-ai-context] extract_permanent_elements failed: #{e.message}" if ENV["DEBUG"]
@@ -322,19 +308,13 @@ module RailsAiContext
         return { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 } unless Dir.exist?(views_dir)
 
         counts = { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 }
-        all_dirs = [ views_dir ]
-        layouts_dir = File.join(root, "app/views/layouts")
-        all_dirs << layouts_dir if Dir.exist?(layouts_dir)
-
-        all_dirs.each do |dir|
-          Dir.glob(File.join(dir, "**/*.{erb,haml,slim}")).each do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            counts[:"data-turbo-false"] += content.scan(/data-turbo=["']false["']/).size
-            counts[:"data-turbo-action"] += content.scan(/data-turbo-action=["'][^"']*["']/).size
-            # Also count Rails data hash syntax: data: { turbo_action: ... }
-            counts[:"data-turbo-action"] += content.scan(/turbo_action:\s*["'][^"']*["']/).size
-            counts[:"data-turbo-preload"] += content.scan(/data-turbo-preload/).size
-          end
+        Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim}")).each do |path|
+          content = RailsAiContext::SafeFile.read(path) or next
+          counts[:"data-turbo-false"] += content.scan(/data-turbo=["']false["']/).size
+          counts[:"data-turbo-action"] += content.scan(/data-turbo-action=["'][^"']*["']/).size
+          # Also count Rails data hash syntax: data: { turbo_action: ... }
+          counts[:"data-turbo-action"] += content.scan(/turbo_action:\s*["'][^"']*["']/).size
+          counts[:"data-turbo-preload"] += content.scan(/data-turbo-preload/).size
         end
 
         counts

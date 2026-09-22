@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -58,6 +59,18 @@ RSpec.describe RailsAiContext::Introspectors::TurboIntrospector do
 
       it "counts data-turbo-action occurrences" do
         expect(result[:turbo_drive_settings][:"data-turbo-action"]).to be >= 1
+      end
+
+      it "counts an attribute in a layout once, not twice" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "app/views/layouts"))
+          File.write(File.join(dir, "app/views/layouts/application.html.erb"),
+                     %(<body data-turbo-action="advance"><%= yield %></body>))
+
+          counts = described_class.new(double(root: dir)).send(:extract_turbo_drive_settings)
+
+          expect(counts[:"data-turbo-action"]).to eq(1)
+        end
       end
     end
 
