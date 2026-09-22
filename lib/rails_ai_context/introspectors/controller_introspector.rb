@@ -350,16 +350,6 @@ module RailsAiContext
         []
       end
 
-      # Also keep extract_permit_details for specs that call it directly
-      def extract_permit_details(source, method_name)
-        result = { name: method_name }
-        parse_result = AstCache.parse_string(source)
-        def_node = find_def_node(parse_result.value, method_name)
-        return result unless def_node
-
-        extract_permit_from_def(def_node).merge(name: method_name)
-      end
-
       def find_param_methods(node, results)
         return unless node.respond_to?(:child_nodes)
         if node.is_a?(Prism::DefNode) && node.name.to_s.end_with?("_params")
@@ -393,18 +383,6 @@ module RailsAiContext
         return result unless expect_call && call_on_params?(expect_call)
 
         result.merge(parse_expect_args_ast(expect_call))
-      end
-
-      def find_def_node(node, method_name)
-        return nil unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::DefNode) && node.name.to_s == method_name
-          return node
-        end
-        node.child_nodes.compact.each do |child|
-          found = find_def_node(child, method_name)
-          return found if found
-        end
-        nil
       end
 
       def find_call_in_tree(node, method_name)
