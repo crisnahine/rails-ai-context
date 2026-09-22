@@ -125,7 +125,7 @@ module RailsAiContext
         # Carry the file that was read: the declared name does not round-trip
         # back to a path. See CONTEXT.md, "Declared constant".
         relative_file = record.file
-        parent = extract_parent_class_ast(source)
+        parent = parent_class_of(source, class_name)
         rate_limit = rate_limit_entry(source)
         details = {
           parent_class: parent,
@@ -593,41 +593,15 @@ module RailsAiContext
         raw = ast_result[:rescue_from] || []
         raw.flat_map do |entry|
           handler = entry[:options][:with]&.to_s
-          # Extract constant arguments (exception classes)
-          exceptions = extract_constant_args_from_source(source, entry[:location])
+          # The exception classes are the listener's positional values; `args`
+          # is symbols only, so a constant reaches this line through `values`.
+          exceptions = entry[:values].grep(String)
           exceptions = entry[:args].map(&:to_s) if exceptions.empty?
           exceptions.map { |ex| { exception: ex, handler: handler }.compact }
         end
       rescue => e
         $stderr.puts "[rails-ai-context] extract_rescue_from AST failed: #{e.message}" if ENV["DEBUG"]
         []
-      end
-
-      # For rescue_from, we need constants (not symbols). GenericMacroListener's
-      # extract_symbol_args skips them. Walk the AST for the specific call node
-      # at the given line to get ConstantReadNode/ConstantPathNode args.
-      def extract_constant_args_from_source(source, line_number)
-        parse_result = AstCache.parse_string(source)
-        constants = []
-        find_call_at_line(parse_result.value, :rescue_from, line_number, constants)
-        constants
-      end
-
-      def find_call_at_line(node, method_name, line_number, constants)
-        return unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::CallNode) && node.name == method_name &&
-           node.location.start_line == line_number
-          node.arguments&.arguments&.each do |arg|
-            case arg
-            when Prism::ConstantReadNode
-              constants << arg.name.to_s
-            when Prism::ConstantPathNode
-              constants << constant_node_to_string(arg)
-            end
-          end
-          return
-        end
-        node.child_nodes.compact.each { |child| find_call_at_line(child, method_name, line_number, constants) }
       end
 
       def rate_limit_entry(source)
@@ -713,32 +687,13 @@ module RailsAiContext
 
       # --- AST helpers ---
 
-      # Extract parent class name from source via Prism AST.
-      # Walks for ClassNode and reads superclass constant path.
-      def extract_parent_class_ast(source)
-        result = AstCache.parse_string(source)
-        find_class_superclass(result.value) || "Unknown"
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_parent_class_ast failed: #{e.message}" if ENV["DEBUG"]
-        "Unknown"
-      end
-
-      def find_class_superclass(node)
-        return nil unless node.respond_to?(:child_nodes)
-        node.child_nodes.compact.each do |child|
-          if child.is_a?(Prism::ClassNode) && child.superclass
-            return constant_node_to_string(child.superclass)
-          end
-          found = find_class_superclass(child)
-          return found if found
-        end
-        nil
-      end
-
-      def constant_node_to_string(node)
-        return "Unknown" unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
-
-        node.slice.delete_prefix("::")
+      # The superclass this file's own class names. A file may declare more
+      # than one class, so the one matching the resolved constant answers
+      # first; anything else in the file only answers when it does not.
+      def parent_class_of(source, class_name)
+        declarations = DeclaredConstant.declarations(source)
+        named = declarations.find { |d| d.name == class_name }
+        named&.superclass || declarations.find(&:superclass)&.superclass || "Unknown"
       end
 
       def read_source(ctrl)

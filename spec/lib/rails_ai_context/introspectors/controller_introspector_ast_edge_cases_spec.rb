@@ -752,7 +752,7 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      parent = introspector.send(:extract_parent_class_ast, source)
+      parent = introspector.send(:parent_class_of, source, "Api::V1::WidgetsController")
       expect(parent).to eq("Api::V1::BaseController")
     end
 
@@ -764,8 +764,42 @@ RSpec.describe RailsAiContext::Introspectors::ControllerIntrospector, "AST edge 
           end
         end
       RUBY
-      parent = introspector.send(:extract_parent_class_ast, source)
+      parent = introspector.send(:parent_class_of, source, "OrphanController")
       expect(parent).to eq("Unknown")
+    end
+
+    it "answers with the superclass of the class the file is named for" do
+      source = <<~RUBY
+        class WidgetSerializer < BaseSerializer
+        end
+
+        class WidgetsController < ApplicationController
+        end
+      RUBY
+      expect(introspector.send(:parent_class_of, source, "WidgetsController")).to eq("ApplicationController")
+    end
+
+    it "falls back to another class in the file when its own names no superclass" do
+      source = <<~RUBY
+        class WidgetsController
+        end
+
+        class LegacyWidgetsController < ApplicationController
+        end
+      RUBY
+      expect(introspector.send(:parent_class_of, source, "WidgetsController")).to eq("ApplicationController")
+    end
+  end
+
+  describe "rescue_from arguments that are not constants" do
+    it "reports a computed exception argument by its source text" do
+      source = <<~RUBY
+        class WidgetsController < ApplicationController
+          rescue_from errors.first, with: :handle
+        end
+      RUBY
+      expect(introspector.send(:extract_rescue_from, source))
+        .to eq([ { exception: "errors.first", handler: "handle" } ])
     end
   end
 end
