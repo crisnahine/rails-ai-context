@@ -96,6 +96,18 @@ module RailsAiContext
         lines
       end
 
+      # The record the listing renders, as its own page: everything the
+      # introspector holds about a worker whose file it cannot re-read.
+      private_class_method def self.worker_summary(worker)
+        lines = [ "# #{worker[:name]}", "" ]
+        options = worker[:options] || {}
+        lines << "**Options:** #{options.map { |key, value| "#{key}: #{value}" }.join(', ')}" if options.any?
+        lines << "**Throttle:** #{worker[:throttle]}" if worker[:throttle]
+        lines << "**Perform:** `perform(#{worker[:perform_signature]})`" if worker[:perform_signature]
+        lines << "" << "_No file was recorded for this worker, so only what the listing holds is shown._"
+        lines.join("\n")
+      end
+
       private_class_method def self.no_job_files_message(sidekiq_line = nil)
         [ "No jobs found. #{NOT_COVERED}", sidekiq_line ].compact.join(" ")
       end
@@ -147,6 +159,10 @@ module RailsAiContext
           if worker
             class_name = worker_name
             relative = worker[:file]
+            # A worker the walk recorded without a file has no source to read,
+            # and joining nil onto the root raises. What the listing holds is
+            # still an answer.
+            return text_response(worker_summary(worker)) if relative.nil?
           else
             return not_found_response("Job", job, (names + worker_names).sort,
               recovery_tool: "Call rails_get_job_pattern(detail:\"summary\") to see all jobs")

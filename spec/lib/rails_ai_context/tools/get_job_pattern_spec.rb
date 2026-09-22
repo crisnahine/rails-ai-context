@@ -522,6 +522,19 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("**Throttle:** concurrency { limit: 1 }, threshold { limit: 10, period: 1.minute }")
     end
 
+    # A worker record with no file cannot be read from disk, and joining nil
+    # onto the root raises rather than answering.
+    it "answers with what it holds when the worker record carries no file" do
+      allow(described_class).to receive(:cached_context).and_return(
+        jobs: { jobs: [], workers: [ { name: "Billing::Invoices::CreateWorker", options: { "queue" => "default" } } ] }
+      )
+
+      text = described_class.call(job: "Billing::Invoices::CreateWorker").content.first[:text]
+
+      expect(text).to include("Billing::Invoices::CreateWorker")
+      expect(text).to include("queue: default")
+    end
+
     it "lists the worker among the known names when the query matches nothing" do
       text = described_class.call(job: "NoSuchThing").content.first[:text]
 
