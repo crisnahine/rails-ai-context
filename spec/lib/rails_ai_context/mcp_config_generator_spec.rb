@@ -119,6 +119,74 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         end
       end
 
+      # The bytes each tool's file gets, pinned whole. Every writer branch
+      # produces one of these five, so a shape change that moves a key, an
+      # indent or the TOML args rendering fails here first.
+      it "writes the same bytes for all five tools" do
+        Dir.mktmpdir do |dir|
+          described_class.new(tools: tools, output_dir: dir, tool_mode: :mcp).call
+
+          json_entry = <<~JSON.chomp
+            {
+              "command": "bundle",
+              "args": [
+                "exec",
+                "rails-ai-context",
+                "serve"
+              ]
+            }
+          JSON
+          json_entry = json_entry.gsub("\n", "\n    ")
+
+          expect(File.read(File.join(dir, ".mcp.json"))).to eq(<<~JSON)
+            {
+              "mcpServers": {
+                "rails-ai-context": #{json_entry}
+              }
+            }
+          JSON
+
+          expect(File.read(File.join(dir, ".cursor", "mcp.json"))).to eq(<<~JSON)
+            {
+              "mcpServers": {
+                "rails-ai-context": #{json_entry}
+              }
+            }
+          JSON
+
+          expect(File.read(File.join(dir, ".vscode", "mcp.json"))).to eq(<<~JSON)
+            {
+              "servers": {
+                "rails-ai-context": #{json_entry}
+              }
+            }
+          JSON
+
+          expect(File.read(File.join(dir, "opencode.json"))).to eq(<<~JSON)
+            {
+              "mcp": {
+                "rails-ai-context": {
+                  "type": "local",
+                  "command": [
+                    "bundle",
+                    "exec",
+                    "rails-ai-context",
+                    "serve"
+                  ]
+                }
+              }
+            }
+          JSON
+
+          toml = File.read(File.join(dir, ".codex", "config.toml"))
+          expect(toml.split("\n\n").first).to eq(<<~TOML.chomp)
+            [mcp_servers.rails-ai-context]
+            command = "bundle"
+            args = ["exec", "rails-ai-context", "serve"]
+          TOML
+        end
+      end
+
       it "generates all 5 configs when all tools selected" do
         Dir.mktmpdir do |dir|
           result = described_class.new(tools: tools, output_dir: dir, tool_mode: :mcp).call
