@@ -53,6 +53,13 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       expect(text).to include("post_excerpt")
     end
 
+    it "answers too-large rather than could-not-read for a helper over the cap" do
+      allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(10)
+
+      text = described_class.call(helper: "ApplicationHelper").content.first[:text]
+      expect(text).to include("Helper file too large")
+    end
+
     it "returns not-found for unknown helper" do
       result = described_class.call(helper: "NonexistentHelper")
       text = result.content.first[:text]
@@ -108,6 +115,126 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
           expect(text).to include("## Methods (1)")
           expect(text).to include("- `visible(name)`")
           expect(text).not_to include("example_usage")
+        end
+      end
+    end
+
+    context "when helpers live only in a pack" do
+      it "lists the pack helper and names its real path" do
+        Dir.mktmpdir do |root|
+          dir = File.join(root, "packs", "billing", "app", "helpers")
+          FileUtils.mkdir_p(dir)
+          File.write(File.join(dir, "invoice_helper.rb"), <<~RUBY)
+            module InvoiceHelper
+              def invoice_total(invoice); end
+            end
+          RUBY
+          allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+          text = described_class.call(helper: "InvoiceHelper").content.first[:text]
+          expect(text).to include("# InvoiceHelper")
+          expect(text).to include("packs/billing/app/helpers/invoice_helper.rb")
+        end
+      end
+    end
+
+    # Packs and engines are searched too, so naming app/helpers/ alone told a
+    # packwerk app to look somewhere the tool had not looked.
+    context "when nothing anywhere holds a helper" do
+      it "names every directory it searched" do
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "packs", "billing", "app", "helpers"))
+          allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+          text = described_class.call.content.first[:text]
+          expect(text).to include("No helper files found in app/helpers/, packs/*/app/helpers/ or engines/*/app/helpers/.")
+        end
+      end
+    end
+
+    context "when an engine and a pack hold the same helper path" do
+      def two_root_app(root)
+        engine = File.join(root, "engines", "billing", "app", "helpers")
+        pack = File.join(root, "packs", "billing", "app", "helpers")
+        [ engine, pack ].each { |d| FileUtils.mkdir_p(d) }
+        File.write(File.join(engine, "invoice_helper.rb"), <<~RUBY)
+          module InvoiceHelper
+            def engine_total(invoice); end
+          end
+        RUBY
+        File.write(File.join(pack, "invoice_helper.rb"), <<~RUBY)
+          module InvoiceHelper
+            def pack_total(invoice); end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+      end
+
+      it "names the other file behind the module rather than answering as if it were alone" do
+        Dir.mktmpdir do |root|
+          two_root_app(root)
+
+          text = described_class.call(helper: "InvoiceHelper").content.first[:text]
+
+          expect(text).to include("engines/billing/app/helpers/invoice_helper.rb")
+          expect(text).to include("packs/billing/app/helpers/invoice_helper.rb")
+          expect(text).to include("Also defined in")
+        end
+      end
+
+      it "lists the shared module name once in the not-found alternatives" do
+        Dir.mktmpdir do |root|
+          two_root_app(root)
+
+          text = described_class.call(helper: "NopeHelper").content.first[:text]
+
+          expect(text).to include("Available: InvoiceHelper\n")
+        end
+      end
+    end
+
+    context "when two namespaces hold the same helper file name" do
+      def two_namespace_app(root)
+        helpers = File.join(root, "app", "helpers")
+        FileUtils.mkdir_p(File.join(helpers, "admin"))
+        FileUtils.mkdir_p(File.join(helpers, "reports"))
+        File.write(File.join(helpers, "admin", "dashboard_helper.rb"), <<~RUBY)
+          module Admin
+            module DashboardHelper
+              def admin_total; end
+            end
+          end
+        RUBY
+        File.write(File.join(helpers, "reports", "dashboard_helper.rb"), <<~RUBY)
+          module Reports
+            module DashboardHelper
+              def reports_total; end
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+      end
+
+      it "does not claim the other namespace defines the module in the heading" do
+        Dir.mktmpdir do |root|
+          two_namespace_app(root)
+
+          text = described_class.call(helper: "DashboardHelper").content.first[:text]
+
+          expect(text).to include("# Admin::DashboardHelper")
+          expect(text).not_to include("Also defined in")
+        end
+      end
+
+      it "names the other module and its path instead of dropping it" do
+        Dir.mktmpdir do |root|
+          two_namespace_app(root)
+
+          text = described_class.call(helper: "DashboardHelper").content.first[:text]
+
+          expect(text).to include("Same file name, different module")
+          expect(text).to include("Reports::DashboardHelper")
+          expect(text).to include("app/helpers/reports/dashboard_helper.rb")
         end
       end
     end

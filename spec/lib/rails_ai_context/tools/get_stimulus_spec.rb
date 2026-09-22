@@ -106,6 +106,31 @@ RSpec.describe RailsAiContext::Tools::GetStimulus do
       expect(text).to include("No Stimulus controllers")
     end
 
+    context "with a template naming two controllers" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          stimulus: {
+            controllers: [ { name: "modal", targets: [ "body" ], actions: [ "open" ] } ],
+            cross_controller_composition: [ { file: "posts/_modal.html.erb", controllers: %w[modal hello] } ]
+          }
+        )
+      end
+
+      # The row used to interpolate the introspector's hash straight into the
+      # answer, so the reader got Ruby syntax instead of a file and its controllers.
+      it "renders the composition as prose in standard detail" do
+        text = described_class.call.content.first[:text]
+        expect(text).to include("- `posts/_modal.html.erb` - modal + hello")
+        expect(text).not_to include("{file:")
+      end
+
+      it "renders the composition as prose in full detail" do
+        text = described_class.call(detail: "full").content.first[:text]
+        expect(text).to include("- `posts/_modal.html.erb` - modal + hello")
+        expect(text).not_to include("{file:")
+      end
+    end
+
     context "when the app is API-only" do
       before do
         allow(described_class).to receive(:cached_context).and_return(

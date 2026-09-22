@@ -101,8 +101,7 @@ module RailsAiContext
           { name: name, category: categorize_middleware(name) }
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_middleware_stack failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_middleware_stack")
       end
 
       def middleware_count(custom)
@@ -111,8 +110,7 @@ module RailsAiContext
           custom: custom.size
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] middleware_count failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "middleware_count")
       end
 
       def detect_middleware_from_initializers
@@ -128,8 +126,7 @@ module RailsAiContext
         end
         additions.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_middleware_from_initializers failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_middleware_from_initializers")
       end
 
       def categorize_middleware(name)

@@ -223,8 +223,7 @@ module RailsAiContext
           end
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_local_gems failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_local_gems")
       end
 
       def detect_gem_groups
@@ -241,8 +240,7 @@ module RailsAiContext
         end
         groups
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_gem_groups failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "detect_gem_groups")
       end
 
       # Every Rails app resolves minitest through activesupport, so presence

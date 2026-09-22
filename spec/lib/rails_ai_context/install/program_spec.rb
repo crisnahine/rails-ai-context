@@ -61,20 +61,6 @@ RSpec.describe RailsAiContext::Install::Program do
     end
   end
 
-  describe ".select_tool_mode" do
-    it "answers :cli on 2 and :mcp on anything else, EOF included" do
-      expect(described_class.select_tool_mode(surface_class.new("2"))).to eq(:cli)
-      expect(described_class.select_tool_mode(surface_class.new(""))).to eq(:mcp)
-      expect(described_class.select_tool_mode(surface_class.new(nil))).to eq(:mcp)
-    end
-
-    it "uses one label per mode" do
-      surface = surface_class.new("1")
-      described_class.select_tool_mode(surface)
-      expect(surface.text).to include("Selected: MCP + CLI fallback")
-    end
-  end
-
   # A third answer, with 1 and 2 keeping the meaning they have always had so
   # anything piping input into the installer still works.
   describe ".select_setup" do
@@ -87,6 +73,12 @@ RSpec.describe RailsAiContext::Install::Program do
     it "treats an empty answer and EOF as the default" do
       expect(described_class.select_setup(surface_class.new("")).to_a).to eq([ :mcp, true ])
       expect(described_class.select_setup(surface_class.new(nil)).to_a).to eq([ :mcp, true ])
+    end
+
+    it "uses one label per mode" do
+      surface = surface_class.new("1")
+      described_class.select_setup(surface)
+      expect(surface.text).to include("Selected: MCP + CLI fallback")
     end
 
     it "says what MCP-only leaves alone" do
@@ -110,6 +102,39 @@ RSpec.describe RailsAiContext::Install::Program do
       surface = surface_class.new("n")
       described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: ".")
       expect(surface.text).to include("These AI tools were removed from your selection:")
+    end
+
+    # The CLI surface prefixes every :warn line with "Warning: ", so a line
+    # reporting a successful removal must not carry that level.
+    it "reports a removal at a level that is not a warning" do
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".cursorrules"), "x")
+
+        surface = surface_class.new("y")
+        described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root)
+
+        removal = surface.lines.select { |(_, text)| text.include?("Removed") }
+        expect(removal).not_to be_empty
+        expect(removal.map(&:first)).to all(eq(:ok))
+      end
+    end
+
+    it "warns about a path it could not remove instead of claiming it went" do
+      skip "root can remove anything" if Process.uid.zero?
+
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".cursorrules"), "x")
+        File.chmod(0o500, root)
+
+        surface = surface_class.new("y")
+        described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root)
+
+        expect(surface.lines).to include([ :warn, a_string_including("Could not remove .cursorrules") ])
+        expect(surface.text).not_to include("Removed .cursorrules")
+        expect(surface.text).not_to include("Cursor files removed")
+      ensure
+        File.chmod(0o700, root)
+      end
     end
   end
 

@@ -15,11 +15,7 @@ module RailsAiContext
             type: "string",
             description: "Component name to show details for (e.g., 'AlertComponent', 'alert')"
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Level of detail: summary (names + types), standard (+ props + slots), full (+ sidecar assets + usage)"
-          },
+          detail: RailsAiContext::DetailLevel.schema("Level of detail: summary (names + types), standard (+ props + slots), full (+ sidecar assets + usage)"),
           offset: {
             type: "integer",
             description: "Skip this many components for pagination. Default: 0."

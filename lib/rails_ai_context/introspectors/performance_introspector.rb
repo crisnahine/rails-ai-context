@@ -98,8 +98,7 @@ module RailsAiContext
             includes_calls: includes_calls
           }
         rescue => e
-          $stderr.puts "[rails-ai-context] load_model_data failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "load_model_data")
         end
       end
 
@@ -195,34 +194,11 @@ module RailsAiContext
         parts.length.downto(0).map { |n| parts.first(n).join("/").camelize }
       end
 
-      # Extract public action methods from controller source.
       # Returns Hash { "index" => "body...", "show" => "body..." }
       def extract_controller_actions(source)
-        actions = {}
-        current_action = nil
-        current_lines = []
-        in_private = false
-
-        source.each_line do |line|
-          if line.match?(/^\s*(private|protected)\s*$/)
-            actions[current_action] = current_lines.join if current_action && !in_private
-            current_action = nil
-            current_lines = []
-            in_private = true
-            next
-          end
-
-          if (m = line.match(/^\s+def\s+(\w+)/))
-            actions[current_action] = current_lines.join if current_action && !in_private
-            current_action = m[1]
-            current_lines = [ line ]
-          elsif current_action
-            current_lines << line
-          end
-        end
-
-        actions[current_action] = current_lines.join if current_action && !in_private
-        actions
+        ActionResolver.own_methods_in(source, nil)
+          .select { |m| m[:scope] == :instance && m[:visibility] == :public }
+          .to_h { |m| [ m[:name], ActionResolver.body_of(source, m)&.dig(:code).to_s ] }
       end
 
       # Extract the full query chain for an instance variable assignment.
@@ -307,8 +283,7 @@ module RailsAiContext
         end
         @app_written_counter_columns = writers
       rescue StandardError => e
-        $stderr.puts "[rails-ai-context] app_written_counter_columns failed: #{e.message}" if ENV["DEBUG"]
-        @app_written_counter_columns = Set.new
+        @app_written_counter_columns = RailsAiContext.debug_fail(e, Set.new, label: "app_written_counter_columns")
       end
 
       def detect_missing_counter_cache(model_data, schema_data)

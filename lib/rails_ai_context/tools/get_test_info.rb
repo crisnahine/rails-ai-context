@@ -18,11 +18,7 @@ module RailsAiContext
             type: "string",
             description: "Show existing tests for a specific controller (e.g. 'Posts'). Looks for controller/request spec/test file."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: framework + counts. standard: framework + fixtures + CI (default). full: everything including fixture names, factory names, helper setup."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: framework + counts. standard: framework + fixtures + CI (default). full: everything including fixture names, factory names, helper setup.")
         }
       )
 
@@ -373,8 +369,7 @@ module RailsAiContext
 
         lines
       rescue => e
-        $stderr.puts "[rails-ai-context] generate_test_template failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "generate_test_template")
       end
 
       # Parse factory file to extract attributes and traits
@@ -409,8 +404,7 @@ module RailsAiContext
 
         lines.any? ? lines.join("\n") : nil
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_factory_details failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "parse_factory_details")
       end
 
       # Parse a single fixture YAML file, returning a hash of entry_name => filtered attributes

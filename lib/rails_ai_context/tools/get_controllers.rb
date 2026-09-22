@@ -18,11 +18,7 @@ module RailsAiContext
             type: "string",
             description: "Specific action name (e.g. 'index', 'create'). Requires controller. Returns the action source code and applicable filters."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level for controller listing. summary: names + action counts. standard: names + action list (default). full: everything. Ignored when specific controller is given."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level for controller listing. summary: names + action counts. standard: names + action list (default). full: everything. Ignored when specific controller is given."),
           limit: {
             type: "integer",
             description: "Max controllers to return when listing. Default: 50."
@@ -53,18 +49,11 @@ module RailsAiContext
           app_controller_names = Payload.app_controllers(ctx).keys.sort
 
           # Specific controller - always full detail (searches ALL controllers including framework)
-          # Flexible matching: "posts", "PostsController", "postscontroller" all work
           if controller
-            # Accept multiple formats: "PostsController", "posts", "admin/posts", "Admin::PostsController"
-            # Use underscore for CamelCase→snake_case: "OmniauthCallbacks" → "omniauth_callbacks"
-            # Also match on plain downcase to handle "userscontroller" → "users"
-            input_snake = controller.gsub("/", "::").underscore.delete_suffix("_controller")
-            input_down = controller.downcase.delete_suffix("controller").tr("/", "::")
-            key = controllers.keys.find { |k|
-              key_snake = k.underscore.delete_suffix("_controller")
-              key_down = k.downcase.delete_suffix("controller")
-              key_snake == input_snake || key_down == input_down
-            } || controller
+            # Payload owns the name-to-key rule, so this tool and the
+            # rails-ai-context://controllers resource answer a name the same
+            # way. The raw string stays the fallback for a key this hash lacks.
+            key = Payload.find_controller(ctx, controller) || controller
             info = controllers[key]
             unless info
               return not_found_response("Controller", controller, app_controller_names,
@@ -241,7 +230,8 @@ module RailsAiContext
           root: rails_app.root.to_s)
 
         # Extract source code with line numbers
-        source_with_lines = source && extract_method_with_lines(source_path, action_name, source: source)
+        source_with_lines = source && extract_method_with_lines(source_path, action_name, source: source,
+          owner: controller_name)
 
         lines = [ "# #{controller_name}##{action_name}", "" ]
         lines << "**File:** `#{carried}`" if carried
@@ -261,7 +251,8 @@ module RailsAiContext
           lines << "" << "## Instance Variables" << ivars.map { |v| "- `@#{v}`" }.join("\n") if ivars.any?
 
           # Private methods called by this action - include their source inline
-          called_methods = detect_called_private_methods(source_with_lines[:code], source_path, source: source)
+          called_methods = detect_called_private_methods(source_with_lines[:code], source_path, source: source,
+            owner: controller_name)
           if called_methods.any?
             lines << "" << "## Private Methods Called"
             called_methods.each do |pm|
@@ -289,7 +280,7 @@ module RailsAiContext
         # controller, so `create_params`' permit list read as the fields
         # `deactivate` accepts.
         action_params = params_methods_for_action(info[:strong_params], source_with_lines, applicable,
-          source_path, source)
+          source_path, source, owner: controller_name)
 
         if action_params.any?
           lines << "" << "## Strong Params"
@@ -306,10 +297,10 @@ module RailsAiContext
                 end
                 sp[:arrays]&.each { |a| lines << "- array: `#{a}: []`" }
               end
-              body = extract_method_with_lines(source_path, sp[:name], source: source)
+              body = extract_method_with_lines(source_path, sp[:name], source: source, owner: controller_name)
               lines << "```ruby" << body[:code] << "```" if body
             else
-              body = extract_method_with_lines(source_path, sp, source: source)
+              body = extract_method_with_lines(source_path, sp, source: source, owner: controller_name)
               if body
                 lines << "```ruby" << body[:code] << "```"
               else
@@ -330,7 +321,7 @@ module RailsAiContext
       end
 
       # Detect private methods called within an action's source
-      private_class_method def self.detect_called_private_methods(action_code, source_path, source: nil)
+      private_class_method def self.detect_called_private_methods(action_code, source_path, source: nil, owner: nil)
         return [] unless File.exist?(source_path)
         return [] if File.size(source_path) > RailsAiContext.configuration.max_file_size
 
@@ -338,30 +329,31 @@ module RailsAiContext
         candidates = action_code.scan(/\b([a-z_]\w*[!?]?)(?:\s*[\(,]|\s*$)/).flatten.uniq
 
         full_source = source || RailsAiContext::SafeFile.read(source_path) || ""
-        private_methods = Introspectors::ActionResolver.private_methods_from_source(full_source).map { |m| m.split("(").first }
+        private_methods = Introspectors::ActionResolver.private_methods_from_source(full_source, owner: owner)
+          .map { |m| m.split("(").first }
 
         called = candidates & private_methods
         called.filter_map do |method_name|
-          body = extract_method_with_lines(source_path, method_name, source: source)
+          body = extract_method_with_lines(source_path, method_name, source: source, owner: owner)
           next unless body
           { name: method_name, code: body[:code], start_line: body[:start_line], end_line: body[:end_line] }
         end.first(5) # Limit to 5 to avoid overwhelming response
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_called_private_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_called_private_methods")
       end
 
       # The params methods this action can reach: the ones its own body names,
       # plus the ones the filters that run before it name. With no source to
       # read, every method stays - a shorter list would be a guess.
-      private_class_method def self.params_methods_for_action(strong_params, action_source, applicable, source_path, source)
+      private_class_method def self.params_methods_for_action(strong_params, action_source, applicable, source_path, source,
+        owner: nil)
         entries = Array(strong_params)
         return entries if entries.empty? || action_source.nil?
 
         reachable = action_source[:code].to_s.dup
         filter_names = (applicable[:own] + applicable[:inherited]).filter_map { |f| f[:name].to_s }
         filter_names.each do |name|
-          body = extract_method_with_lines(source_path, name, source: source)
+          body = extract_method_with_lines(source_path, name, source: source, owner: owner)
           reachable << "\n" << body[:code] if body
         end
 
@@ -433,21 +425,19 @@ module RailsAiContext
 
         { redirects: redirects.uniq, renders: renders.uniq, side_effects: side_effects.uniq }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_render_map failed: #{e.message}" if ENV["DEBUG"]
-        { redirects: [], renders: [], side_effects: [] }
+        RailsAiContext.debug_fail(e, { redirects: [], renders: [], side_effects: [] }, label: "extract_render_map")
       end
 
-      private_class_method def self.extract_method_with_lines(file_path, method_name, source: nil)
+      private_class_method def self.extract_method_with_lines(file_path, method_name, source: nil, owner: nil)
         unless source
           return nil unless file_path && File.exist?(file_path)
           return nil if File.size(file_path) > RailsAiContext.configuration.max_file_size
         end
         RailsAiContext::Introspectors::ActionResolver.method_body(
-          source || RailsAiContext::SafeFile.read(file_path) || "", method_name
+          source || RailsAiContext::SafeFile.read(file_path) || "", method_name, owner: owner
         )
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_method_with_lines failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_method_with_lines")
       end
 
       private_class_method def self.format_controller(name, info, ctx)

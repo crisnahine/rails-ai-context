@@ -15,10 +15,13 @@ module RailsAiContext
 
     ORDER = { SUMMARY => 0, STANDARD => 1, FULL => 2 }.freeze
 
-    # The enum tools publish in their input schema, so the advertised values
-    # and the normalizer cannot drift apart. Spelling the values in a tool
-    # instead fails the enum-ownership spec.
-    SCHEMA_ENUM = ALL
+    # The `detail` property tools publish in their input schema. Tools pass
+    # their own wording and get the type and the enum from here, so the
+    # advertised values and the normalizer cannot drift apart. Spelling the
+    # values in a tool instead fails the enum-ownership spec.
+    def self.schema(description)
+      { type: "string", enum: ALL, description: description }
+    end
 
     def self.valid?(detail)
       ALL.include?(detail.to_s)

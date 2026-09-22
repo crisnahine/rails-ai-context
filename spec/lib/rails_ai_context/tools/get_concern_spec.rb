@@ -197,6 +197,20 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("Post")
       end
 
+      it "does not follow a symlink out of app/models when listing includers" do
+        outside = File.join(tmpdir, "outside")
+        FileUtils.mkdir_p(outside)
+        File.write(File.join(outside, "smuggled.rb"), <<~RUBY)
+          class Smuggled
+            include Searchable
+          end
+        RUBY
+        File.symlink(File.join(outside, "smuggled.rb"), File.join(models_dir, "smuggled.rb"))
+
+        text = described_class.call(name: "Searchable").content.first[:text]
+        expect(text).not_to include("Smuggled")
+      end
+
       it "finds includers when the concern name is plural" do
         File.write(File.join(model_concerns_dir, "worksheet_imports.rb"), <<~RUBY)
           module WorksheetImports
@@ -561,6 +575,65 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         text = described_class.call(type: "model").content.first[:text]
         expect(text).to include("Searchable")
         expect(text).not_to include("BulkMailSettingsConcern")
+      end
+
+      context "when one name sits in two concern directories" do
+        before do
+          File.write(File.join(model_concerns_dir, "trackable.rb"),
+                     "module Trackable\n  def model_track; end\nend\n")
+          File.write(File.join(controller_concerns_dir, "trackable.rb"),
+                     "module Trackable\n  def controller_track; end\nend\n")
+          described_class.reset_cache!
+        end
+
+        it "lists the shared name once in the not-found list" do
+          text = described_class.call(name: "NoSuchConcern").content.first[:text]
+
+          expect(text).to include("Available:")
+          expect(text.scan("Trackable").size).to eq(1)
+        end
+
+        it "names the file it did not read" do
+          text = described_class.call(name: "Trackable").content.first[:text]
+
+          expect(text).to include("**File:** `app/controllers/concerns/trackable.rb`")
+          expect(text).to include("**Also at:** `app/models/concerns/trackable.rb` (model concern)")
+        end
+      end
+
+      # The includer search resolves packs and engines; the listing and the
+      # lookup globbed the root only, so one tool answered from two app
+      # layouts at once.
+      context "on an app whose concerns live in a pack" do
+        let(:pack_concerns_dir) { File.join(tmpdir, "packs", "billing", "app", "models", "concerns") }
+
+        before do
+          FileUtils.mkdir_p(pack_concerns_dir)
+          File.write(File.join(pack_concerns_dir, "auditable.rb"), <<~RUBY)
+            module Auditable
+              extend ActiveSupport::Concern
+
+              def audit!
+              end
+            end
+          RUBY
+          File.write(File.join(tmpdir, "packs", "billing", "app", "models", "invoice.rb"), <<~RUBY)
+            class Invoice < ApplicationRecord
+              include Auditable
+            end
+          RUBY
+          described_class.reset_cache!
+        end
+
+        it "lists, reads and finds the includers of the pack's concern" do
+          listing = described_class.call.content.first[:text]
+          expect(listing).to include("Auditable")
+
+          text = described_class.call(name: "Auditable").content.first[:text]
+          expect(text).to include("packs/billing/app/models/concerns/auditable.rb")
+          expect(text).to include("audit!")
+          expect(text).to include("Invoice")
+        end
       end
 
       it "agrees with the ActiveSupport introspector on the total" do

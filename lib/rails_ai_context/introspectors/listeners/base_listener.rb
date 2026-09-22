@@ -116,15 +116,10 @@ module RailsAiContext
           parts.map(&:unescaped).join
         end
 
+        # The name is the source text: `::Foo::Bar` and `Foo::Bar` are the same
+        # constant, so only the root scope operator comes off.
         def constant_path_string(node)
-          parts = []
-          current = node
-          while current.is_a?(Prism::ConstantPathNode)
-            parts.unshift(current.name.to_s)
-            current = current.parent
-          end
-          parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
-          parts.join("::")
+          node.slice.delete_prefix("::")
         end
 
         def hash_node_to_hash(node)

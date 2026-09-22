@@ -45,8 +45,7 @@ module RailsAiContext
 
         attachments.sort_by { |a| [ a[:model], a[:name] ] }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_attachments failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_attachments")
       end
 
       def extract_storage_services
@@ -57,8 +56,7 @@ module RailsAiContext
         config = YAML.load_file(config_path, permitted_classes: [ Symbol ], aliases: true) || {}
         config.keys.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_storage_services failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_storage_services")
       end
 
       def extract_attachment_validations
@@ -75,8 +73,7 @@ module RailsAiContext
         end
         validations
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_attachment_validations failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_attachment_validations")
       end
 
       # `validates :avatar, content_type: [...]` names its validator in the
@@ -99,8 +96,7 @@ module RailsAiContext
         end
         variants
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_variants failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_variants")
       end
 
       def detect_direct_upload

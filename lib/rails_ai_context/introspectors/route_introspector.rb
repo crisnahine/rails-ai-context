@@ -30,7 +30,7 @@ module RailsAiContext
           # quoting a grand total their own app-route number cannot reach.
           total_routes: Tools::BaseTool.dedupe_put_patch_routes(routes).size,
           by_controller: group_by_controller(routes),
-          api_namespaces: detect_api_namespaces(routes),
+          api_namespaces: api_namespaces(routes),
           mounted_engines: detect_mounted_engines,
           # Everything routable that has no controller#action: Engine mounts
           # AND bare rack apps (propshaft's /assets mounts a Server instance,
@@ -72,7 +72,7 @@ module RailsAiContext
           # for itself, said 7 on the same `resources :posts`.
           total_routes: Tools::BaseTool.dedupe_put_patch_routes(entries).size,
           by_controller: group_by_controller(entries),
-          api_namespaces: static_api_namespaces(entries),
+          api_namespaces: api_namespaces(entries),
           mounted_engines: mounts.map { |m| { engine: m[:engine], path: m[:path] } },
           # Every mount parsed from routes.rb is controller-less by
           # construction, so the booted tier's count has a static answer too.
@@ -214,8 +214,7 @@ module RailsAiContext
         constraints = route.constraints.to_s
         constraints.empty? ? nil : constraints
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_constraints failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_constraints")
       end
 
       def group_by_controller(routes)
@@ -229,26 +228,16 @@ module RailsAiContext
         end
       end
 
-      def detect_api_namespaces(routes)
-        routes
-          .select { |r| r[:path].match?(%r{/api/}) }
-          .map { |r| r[:path].match(%r{(/api/v?\d*)})&.captures&.first }
-          .compact
-          .uniq
-      end
-
       def count_unrouted_mounts
         controllerless_routes.count { |r| !dynamic_target?(r) }
       rescue => e
-        $stderr.puts "[rails-ai-context] count_unrouted_mounts failed: #{e.message}" if ENV["DEBUG"]
-        0
+        RailsAiContext.debug_fail(e, 0, label: "count_unrouted_mounts")
       end
 
       def count_controllerless_constructs
         controllerless_routes.count { |r| dynamic_target?(r) }
       rescue => e
-        $stderr.puts "[rails-ai-context] count_controllerless_constructs failed: #{e.message}" if ENV["DEBUG"]
-        0
+        RailsAiContext.debug_fail(e, 0, label: "count_controllerless_constructs")
       end
 
       def controllerless_routes
@@ -277,14 +266,15 @@ module RailsAiContext
               path: r.path.spec.to_s
             }
           rescue => e
-            $stderr.puts "[rails-ai-context] detect_mounted_engines failed: #{e.message}" if ENV["DEBUG"]
-            nil
+            RailsAiContext.debug_fail(e, nil, label: "detect_mounted_engines")
           end
       end
 
-      def static_api_namespaces(entries)
-        # Match path prefixes anchored at /api and sort for deterministic output.
-        entries.filter_map { |e| e[:path][%r{\A/api(?:/v\d+)?}] }.uniq.sort
+      # One rule for both tiers, like total_routes above: a namespace is a
+      # prefix the app serves, so /admin/api/v1 is not one and /apidocs is not
+      # /api. Sorted so the two tiers cannot differ on order either.
+      def api_namespaces(entries)
+        entries.filter_map { |e| e[:path][%r{\A/api(?:/v\d+)?(?=/|\z)}] }.uniq.sort
       end
 
       def static_root_route(entries)

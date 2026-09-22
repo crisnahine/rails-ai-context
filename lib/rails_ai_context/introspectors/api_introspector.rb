@@ -85,8 +85,7 @@ module RailsAiContext
           .map { |relative| { path: relative, files: Dir.glob(File.join(root, relative, "**", "*.rb")).size } }
           .reject { |entry| entry[:files].zero? }
       rescue StandardError => e
-        $stderr.puts "[rails-ai-context] other_serializer_dirs failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "other_serializer_dirs")
       end
 
       def detect_graphql
@@ -120,8 +119,7 @@ module RailsAiContext
              .sort
              .uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_openapi_specs failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_openapi_specs")
       end
 
       # Per `allow` block, because that is the unit rack-cors applies: one
@@ -143,8 +141,7 @@ module RailsAiContext
 
         { file: "config/initializers/cors.rb", origins: origins, allows: allows }
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_cors_config failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_cors_config")
       end
 
       def collect_allow_blocks(node, found)
@@ -205,14 +202,11 @@ module RailsAiContext
         package_path = File.join(root, "package.json")
         return [] unless File.exist?(package_path)
 
-        content = RailsAiContext::SafeFile.read(package_path)
-        return [] unless content
         codegen_tools = %w[openapi-typescript @graphql-codegen/cli orval]
 
-        codegen_tools.select { |tool| content.include?(%("#{tool}")) }
+        codegen_tools.select { |tool| RailsAiContext::PackageJson.present?(root, tool) }
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_api_client_generation failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_api_client_generation")
       end
 
       def extract_graphql_details
@@ -225,8 +219,7 @@ module RailsAiContext
         details[:dataloaders] = Dir.glob(File.join(graphql_dir, "**", "{loaders,dataloaders}", "*.rb")).map { |f| File.basename(f, ".rb").camelize }
         details.reject { |_, v| v.empty? }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_graphql_details failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_graphql_details")
       end
 
       def detect_pagination
@@ -240,8 +233,7 @@ module RailsAiContext
         strategies << "cursor" if lock.present?("graphql-pro") # cursor-based pagination
         strategies.empty? ? nil : strategies
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_pagination failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_pagination")
       end
 
       def detect_rate_limiting

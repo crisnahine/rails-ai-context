@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Model class name (e.g. 'User', 'Post'). Omit to list all models."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level for model listing. summary: names only. standard: names + association/validation counts (default). full: names + full association list. Ignored when specific model is given (always returns full)."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level for model listing. summary: names only. standard: names + association/validation counts (default). full: names + full association list. Ignored when specific model is given (always returns full)."),
           limit: {
             type: "integer",
             description: "Max models to return when listing. Default: 50."
@@ -245,6 +241,7 @@ module RailsAiContext
 
         # Custom validate methods (business rules) - show method body when possible
         if data[:custom_validates]&.any?
+          lines << "" << "## Validations" unless data[:validations]&.any?
           bodies = extract_custom_validate_bodies(name, data[:custom_validates])
           data[:custom_validates].each do |v|
             if bodies[v]
@@ -458,10 +455,7 @@ module RailsAiContext
 
       # Extract bodies of custom validate methods (single-line or first meaningful line)
       private_class_method def self.extract_custom_validate_bodies(model_name, method_names)
-        path = resolved_model_path(model_name)
-        return {} unless path && File.exist?(path) && File.size(path) <= max_file_size
-
-        source = RailsAiContext::SafeFile.read(path)
+        source = RailsAiContext::SafeFile.read(resolved_model_path(model_name))
         return {} unless source
         bodies = {}
         method_names.each do |name|
@@ -473,16 +467,12 @@ module RailsAiContext
         end
         bodies
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_custom_validate_bodies failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_custom_validate_bodies")
       end
 
       # The model's own source, nil when the file is missing or too large.
       private_class_method def self.model_source(model_name)
-        path = resolved_model_path(model_name)
-        return nil unless path && File.exist?(path) && File.size(path) <= max_file_size
-
-        RailsAiContext::SafeFile.read(path)
+        RailsAiContext::SafeFile.read(resolved_model_path(model_name))
       end
 
       private_class_method def self.extract_source_class_methods(model_name)
@@ -525,11 +515,7 @@ module RailsAiContext
 
       # Public method names from a concern's source file
       private_class_method def self.extract_concern_methods(concern_name)
-        max_size = RailsAiContext.configuration.max_file_size
         path = ConcernPaths.find_file(rails_app.root.to_s, concern_name)
-        return nil unless path
-        return nil if File.size(path) > max_size
-
         source = RailsAiContext::SafeFile.read(path)
         return nil unless source
 
@@ -540,10 +526,9 @@ module RailsAiContext
       private_class_method def self.extract_model_structure(model_name)
         path = relative_model_path(model_name)
         full_path = resolved_model_path(model_name)
-        return nil unless full_path && File.exist?(full_path)
-        return nil if File.size(full_path) > max_file_size
+        source = RailsAiContext::SafeFile.read(full_path) or return nil
 
-        source_lines = (RailsAiContext::SafeFile.read(full_path) || "").lines
+        source_lines = source.lines
         sections = []
         current_section = nil
         current_start = nil
@@ -573,8 +558,7 @@ module RailsAiContext
 
         { path: path, total_lines: source_lines.size, sections: sections }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_model_structure failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_model_structure")
       end
     end
   end

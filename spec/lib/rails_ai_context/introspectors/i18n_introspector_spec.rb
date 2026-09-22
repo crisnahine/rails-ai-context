@@ -63,6 +63,28 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       end
     end
 
+    # A file the reader refuses reads as refused everywhere: it cannot carry a
+    # key count and its locales in one section while the coverage pass skips it
+    # in another.
+    context "with a locale file above the size the reader accepts" do
+      let(:es_locale) { File.join(Rails.root, "config/locales/es.yml") }
+
+      before do
+        File.write(es_locale, "es:\n" + (1..200).map { |i| "  key#{i}: \"#{'x' * 20}\"\n" }.join)
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000)
+        allow(I18n).to receive(:available_locales).and_return([ :en, :es ])
+      end
+
+      after { FileUtils.rm_f(es_locale) }
+
+      it "reports the refusal the same way everywhere" do
+        big_file = result[:locale_files].find { |f| f[:file] == "es.yml" }
+        expect(big_file[:parse_error]).to be true
+        expect(big_file).not_to have_key(:key_count)
+        expect(result[:locale_coverage]["es"][:keys]).to eq(0)
+      end
+    end
+
     # en.yml carries hello, posts.index.title and posts.show.title.
     context "with a locale that translates one key and adds four of its own" do
       let(:es_locale) { File.join(Rails.root, "config/locales/es.yml") }
@@ -275,6 +297,25 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
 
       expect(result[:locales_without_translations]).to be_empty
       expect(result[:locale_coverage]["es"]).to include(coverage_pct: 100.0, extra: 1)
+    end
+
+    # Only the locale-rooted key paths are kept per file; a locale's own paths
+    # are derived by stripping that root. These numbers are what that derivation
+    # has to reproduce, across files holding one root and files holding several.
+    it "scores every locale the same whether its root shares a file or not" do
+      result = static_result(
+        "en.yml"     => "en:\n  a: A\n  b: B\n  c: C\n  d: D\n",
+        "fr.yml"     => "fr:\n  a: A\n  b: B\n",
+        "shared.yml" => "de:\n  a: A\nes:\n  a: A\n  b: B\n  c: C\nfr:\n  c: C\n  own: X\n"
+      )
+
+      expect(result[:available_locales]).to eq(%w[de en es fr])
+      expect(result[:locale_coverage]).to eq(
+        "de" => { keys: 1, missing: 3, extra: 0, coverage_pct: 25.0 },
+        "es" => { keys: 3, missing: 1, extra: 0, coverage_pct: 75.0 },
+        "fr" => { keys: 4, missing: 1, extra: 1, coverage_pct: 75.0 }
+      )
+      expect(result[:locales_without_translations]).to be_empty
     end
 
     # Reading every file to answer "which files hold locale X" once per locale

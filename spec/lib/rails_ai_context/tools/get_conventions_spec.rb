@@ -3,6 +3,7 @@
 require "spec_helper"
 require "tmpdir"
 require "fileutils"
+require "pathname"
 
 RSpec.describe RailsAiContext::Tools::GetConventions do
   before { described_class.reset_cache! }
@@ -288,6 +289,30 @@ RSpec.describe RailsAiContext::Tools::GetConventions do
         expect(text).to include("render :new, status: :unprocessable_content")
         expect(text).not_to include("render json: @record")
       end
+    end
+  end
+
+  describe ".detect_frontend_stack" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    before { allow(RailsAiContext).to receive(:default_app).and_return(double("app", root: Pathname.new(@root))) }
+
+    def stack(package_json)
+      File.write(File.join(@root, "package.json"), JSON.generate(package_json))
+      described_class.send(:detect_frontend_stack)
+    end
+
+    it "names only the packages the app depends on" do
+      result = stack(
+        "dependencies" => { "vite" => "^5.0.0", "vite-plugin-ruby" => "^5.0.0" },
+        "overrides" => { "webpack" => "^5.76.0", "esbuild" => "^0.25.0" }
+      )
+      expect(result).to eq([ "Vite" ])
+    end
+
+    it "names a tool reached only through a scoped plugin package" do
+      result = stack("devDependencies" => { "@tailwindcss/vite" => "^4.0.0", "@hotwired/turbo-rails" => "^8.0.0" })
+      expect(result).to contain_exactly("Tailwind CSS", "Turbo")
     end
   end
 end

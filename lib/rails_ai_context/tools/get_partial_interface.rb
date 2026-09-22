@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Partial path relative to app/views (e.g. 'shared/status_badge', 'users/form'). The leading underscore is optional."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: locals list + usage count. standard: locals + usage examples from codebase (default). full: locals + usage + full partial source."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: locals list + usage count. standard: locals + usage examples from codebase (default). full: locals + usage + full partial source.")
         },
         required: [ "partial" ]
       )
@@ -268,8 +264,7 @@ module RailsAiContext
 
         locals.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_magic_comment_locals failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_magic_comment_locals")
       end
 
       # Extract local variable references from ERB source.
@@ -311,8 +306,8 @@ module RailsAiContext
         end
 
         # High-confidence local detection only - avoids false positives from HTML/CSS text
-        source.scan(/<%[=\-]?\s*(.+?)\s*-?%>/m).each do |match|
-          code = match[0]
+        source.scan(RailsAiContext::ErbSource::TAG).each do |match|
+          code = match[0].strip
           next if code.start_with?("#")
 
           # 1. Standalone ERB output: <%= local_name %> or <%= local_name.method %>
@@ -337,8 +332,7 @@ module RailsAiContext
         # Filter out things that are clearly method definitions or blocks
         locals.reject { |l| l.match?(/\A(each|map|select|reject|find|collect|do|end)\z/) }.to_a.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_local_variable_references failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_local_variable_references")
       end
 
       # Find all views that render this partial and extract the locals they pass.
@@ -382,7 +376,6 @@ module RailsAiContext
         view_files = Dir.glob(File.join(views_dir, "**", "*.{erb,haml,slim}")).sort
 
         view_files.each do |file|
-          next if File.size(file) > max_file_size
           content = safe_read(file)
           next unless content
 
@@ -436,8 +429,7 @@ module RailsAiContext
 
         sites
       rescue => e
-        $stderr.puts "[rails-ai-context] find_render_sites failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "find_render_sites")
       end
 
       # Extract local variable names from a render call line.
@@ -464,8 +456,7 @@ module RailsAiContext
 
         locals.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_locals_from_render failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_locals_from_render")
       end
 
       # Extract method calls made on each local variable within the partial.
@@ -494,8 +485,7 @@ module RailsAiContext
 
         calls
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_method_calls_on_locals failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_method_calls_on_locals")
       end
 
       # Find available partials for fuzzy matching in not_found_response.
@@ -508,8 +498,7 @@ module RailsAiContext
           parts.join("/")
         end.uniq.sort.first(30)
       rescue => e
-        $stderr.puts "[rails-ai-context] find_available_partials failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "find_available_partials")
       end
     end
   end

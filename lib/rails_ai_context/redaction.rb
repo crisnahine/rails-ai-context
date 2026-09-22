@@ -67,20 +67,22 @@ module RailsAiContext
     DOTENV_LINE = /\[dotenv\]\s+Set\s+.*/i
     ENV_VAR_LINE = /\b[A-Z][A-Z0-9_]*(SECRET|KEY|TOKEN|PASSWORD|API|CREDENTIAL)[A-Z0-9_]*=\S+/
 
+    # A log line spells an assignment four ways: `key=value`, `key: value`,
+    # `"key"=>"value"` and `"key":"value"`. One pattern over SECRET_NAME
+    # covers every secret-ish name in all four; a per-name lookbehind list
+    # covered four names in two shapes and shipped the rest verbatim.
+    # Lookbehind is unavailable here because SECRET_NAME is variable width,
+    # so the key and the assignment are captured and written back.
+    LOG_SECRET_ASSIGNMENT = /
+      (["']?)(#{SECRET_NAME})\1
+      (\s*(?:=>|:|=(?!>))\s*)
+      (?:"([^"]*)"|'([^']*)'|([^\s,;&)\]}]+))
+    /xi
+
     # Each entry is [pattern, replacement]. The replacement is spelled beside
     # the pattern rather than worked out later by grepping the pattern's own
     # source for a distinguishing substring.
     LOG_PATTERNS = [
-      [ /(?<=password=)\S+/i, FILTERED ],
-      [ /(?<=password:\s)\S+/i, FILTERED ],
-      [ /("password":\s*")[^"]+(")/i, "\\1#{FILTERED}\\2" ],
-      [ /("password"=>")[^"]+(")/i, "\\1#{FILTERED}\\2" ],
-      [ /(?<=token=)\S+/i, FILTERED ],
-      [ /(?<=token:\s)\S+/i, FILTERED ],
-      [ /(?<=secret=)\S+/i, FILTERED ],
-      [ /(?<=secret:\s)\S+/i, FILTERED ],
-      [ /(?<=api_key=)\S+/i, FILTERED ],
-      [ /(?<=api_key:\s)\S+/i, FILTERED ],
       [ /(?<=authorization:\s)(Bearer\s)?\S+/i, FILTERED ],
       # Keeps the variable's name, filters only what it was set to.
       [ /((?:SECRET|PRIVATE|SIGNING|ENCRYPTION)[_A-Z]*=)\S+/i, "\\1#{FILTERED}" ],
@@ -172,6 +174,8 @@ module RailsAiContext
         result.gsub!(DOTENV_LINE, "[dotenv] Set #{FILTERED}")
         result.gsub!(ENV_VAR_LINE, FILTERED)
         result.gsub!(EMAIL_PATTERN, EMAIL)
+
+        result.gsub!(LOG_SECRET_ASSIGNMENT) { filter_assignment(Regexp.last_match) }
 
         LOG_PATTERNS.each { |pattern, replacement| result.gsub!(pattern, replacement) }
 
@@ -266,6 +270,18 @@ module RailsAiContext
       def filtered_like(value)
         quote = value.start_with?('"', "'") ? value[0] : nil
         quote ? "#{quote}#{FILTERED}#{quote}" : FILTERED
+      end
+
+      # Rebuilds a matched log assignment with its value gone, keeping the
+      # key, the quoting and the assignment shape so the line still reads.
+      # The match is passed in because `$~` does not cross a method call.
+      # `password_length: 8` is policy, not a credential, so it survives.
+      def filter_assignment(match)
+        quote, key, assign = match[1], match[2], match[3]
+        return match[0] if key.match?(DESCRIPTOR_SUFFIX)
+
+        value_quote = match[4] ? '"' : (match[5] ? "'" : "")
+        "#{quote}#{key}#{quote}#{assign}#{value_quote}#{FILTERED}#{value_quote}"
       end
 
       # The setting name at the head of a matched assignment.

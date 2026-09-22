@@ -110,11 +110,12 @@ flowchart LR
 
 The `Introspector` orchestrator runs configured introspectors and merges results.
 
-Three modules answer questions every introspector used to answer for itself:
+Four modules answer questions every introspector used to answer for itself:
 
 - **SourceScan** - one walk over a kind of app source, across every directory `PathResolver` resolves: `paths` stats, `each` reads, `classes` names by the declared constant
 - **EagerLoad** - loads a directory's constants for a booted-tier walk, one file at a time, so an unloadable file costs only itself
 - **GemLock** - which gems the app resolved and at what version, read once per lockfile and matched by exact name across GEM, GIT and PATH
+- **PackageJson** - which npm packages the app depends on, read once per `package.json`: present means named in `dependencies` or `devDependencies`, so an `overrides` pin is not a dependency, and `@tailwindcss/vite` counts as tailwindcss
 
 Two more answer a question a tool asks:
 
@@ -198,7 +199,6 @@ Result: controller and view tools automatically include relevant schema informat
 | `ToolGuideHelper` | MCP/CLI tool reference sections |
 | `TestCommandDetection` | Test framework detection |
 | `SectionFacts` | The facts every surface states about an app - auth, assets, associations, the filter chain, an unread entry's row, the static-tier notice - each rendered in one place |
-| `SectionGuard` | Whether a section resolved, so a refused one is not rendered |
 | `SectionMarkerWriter` | Writes a managed section into a file the user also owns |
 | `ContextModeDispatch` | Picks full or compact rendering for a run |
 

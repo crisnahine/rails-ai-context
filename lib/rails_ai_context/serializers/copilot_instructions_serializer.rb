@@ -42,43 +42,7 @@ module RailsAiContext
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
-        lines.concat(SectionFacts.static_notice_lines(context))
-
-        if (db_line = SectionFacts.database_line(context))
-          lines << db_line
-        end
-        if (models_line = SectionFacts.models_line(context))
-          lines << models_line
-        end
-
-        routes = Payload.section(context, :routes)
-        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes
-
-        notable = Payload.notable_gems(context)
-        if notable.any?
-          notable.group_by { |g| g[:category]&.to_s || "other" }.first(6).each do |cat, gem_list|
-            lines << "- #{cat}: #{gem_list.map { |g| g[:name] }.join(', ')}"
-          end
-        end
-
-        if Payload.section(context, :conventions)
-          arch_labels = arch_labels_hash
-          Payload.architecture(context).first(5).each { |p| lines << "- #{arch_labels[p] || p}" }
-        end
-
-        lines.concat(full_preset_stack_lines)
-
-        # List service objects
-        services = detect_service_files
-        lines << "- Services: #{services.join(', ')}" if services.any?
-
-        # List jobs
-        jobs = detect_job_files
-        lines << "- Jobs: #{jobs.join(', ')}" if jobs.any?
-
-        # ApplicationController before_actions
-        before_actions = detect_before_actions
-        lines << "" << "**Global before_actions:** #{before_actions.join(', ')}" if before_actions.any?
+        lines.concat(overview_lines)
 
         lines << ""
         lines << "Use MCP tools for detailed data. Start with `detail:\"summary\"`."

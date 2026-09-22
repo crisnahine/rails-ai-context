@@ -112,4 +112,45 @@ RSpec.describe RailsAiContext::Introspectors::AssetPipelineIntrospector do
       expect(introspect(lock).send(:detect_css_framework)).to eq("tailwindcss")
     end
   end
+
+  describe "package detection through package.json" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def introspect(package_json)
+      File.write(File.join(@root, "package.json"), JSON.generate(package_json))
+      File.write(File.join(@root, "Gemfile.lock"), <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            propshaft (1.1.0)
+      LOCK
+      described_class.new(double("app", root: @root))
+    end
+
+    let(:vite_app) do
+      {
+        "dependencies" => { "vite" => "^5.0.0", "vite-plugin-ruby" => "^5.0.0" },
+        "overrides" => { "webpack" => "^5.76.0", "postcss" => "^8.4.31", "esbuild" => "^0.25.0" }
+      }
+    end
+
+    it "ignores an overrides pin when naming the bundler" do
+      File.write(File.join(@root, "vite.config.js"), "export default {}")
+      expect(introspect(vite_app).send(:detect_js_bundler)).to eq("vite")
+    end
+
+    it "ignores an overrides pin when naming the CSS framework" do
+      expect(introspect(vite_app).send(:detect_css_framework)).to be_nil
+    end
+
+    it "reports tailwindcss reached through a scoped plugin package" do
+      pkg = { "devDependencies" => { "@tailwindcss/vite" => "^4.0.0" } }
+      expect(introspect(pkg).send(:detect_css_framework)).to eq("tailwindcss")
+    end
+
+    it "reports a dependency named outright" do
+      pkg = { "devDependencies" => { "esbuild" => "^0.25.0" } }
+      expect(introspect(pkg).send(:detect_js_bundler)).to eq("esbuild")
+    end
+  end
 end

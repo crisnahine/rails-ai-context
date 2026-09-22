@@ -31,8 +31,7 @@ module RailsAiContext
           initializers: summarize(all)
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] InitializerIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "InitializerIntrospector#call")
       end
 
       private
@@ -56,8 +55,7 @@ module RailsAiContext
           entry[:source] = loc if loc
           entry
         rescue => e
-          $stderr.puts "[rails-ai-context] summarize initializer failed: #{e.message}" if ENV["DEBUG"]
-          { name: init.name.to_s, error: e.message }
+          RailsAiContext.debug_fail(e, { name: init.name.to_s, error: e.message }, label: "summarize initializer")
         end
       end
 
@@ -97,8 +95,7 @@ module RailsAiContext
           "unknown"
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] owner_name failed: #{e.message}" if ENV["DEBUG"]
-        "unknown"
+        RailsAiContext.debug_fail(e, "unknown", label: "owner_name")
       end
 
       # Extract file:line for the initializer's block. `Rails::Initializer`
@@ -112,8 +109,7 @@ module RailsAiContext
         path, line = loc
         "#{PortablePath.relativize(path, root)}:#{line}"
       rescue => e
-        $stderr.puts "[rails-ai-context] block_source_location failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "block_source_location")
       end
     end
   end

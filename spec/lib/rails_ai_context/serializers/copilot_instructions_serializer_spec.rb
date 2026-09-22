@@ -37,6 +37,18 @@ RSpec.describe RailsAiContext::Serializers::CopilotInstructionsSerializer do
     end
   end
 
+  it "names every gem category, not the first six" do
+    categories = %w[auth background_jobs testing api search storage admin]
+    context[:gems] = {
+      notable_gems: categories.map { |cat| { name: "#{cat}_gem", category: cat } }
+    }
+    Dir.mktmpdir do |dir|
+      described_class.new(context).call(dir)
+      content = File.read(File.join(dir, ".github", "instructions", "rails-context.instructions.md"))
+      categories.each { |cat| expect(content).to include("- #{cat}: #{cat}_gem") }
+    end
+  end
+
   it "skips models file when no models" do
     context[:models] = {}
     Dir.mktmpdir do |dir|

@@ -29,8 +29,7 @@ module RailsAiContext
           known_events: KNOWN_EVENTS
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] ObservabilityIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "ObservabilityIntrospector#call")
       end
 
       private
@@ -52,8 +51,7 @@ module RailsAiContext
           entry
         end.sort_by { |e| e[:class].to_s }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_log_subscribers failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_log_subscribers")
       end
 
       # Walk the Notifications notifier's subscriber registry. Each event
@@ -75,8 +73,7 @@ module RailsAiContext
           }
         end.sort_by { |h| h[:pattern].to_s }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_notification_subscribers failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_notification_subscribers")
       end
 
       # The Fanout notifier splits subscribers across @string_subscribers
@@ -93,8 +90,7 @@ module RailsAiContext
         end
         all
       rescue StandardError => e
-        $stderr.puts "[rails-ai-context] extract_subscribers_from_notifier failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_subscribers_from_notifier")
       end
 
       def subscriber_raw_pattern(sub)
@@ -137,8 +133,7 @@ module RailsAiContext
           enabled: app.config.respond_to?(:server_timing) ? !!app.config.server_timing : false
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_server_timing failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "detect_server_timing")
       end
 
       # Rails 8.1 adds `Rails.application.event_reporter`. Report whether it's
@@ -155,8 +150,7 @@ module RailsAiContext
         entry[:subscriber_count] = reporter.subscribers.size if reporter.respond_to?(:subscribers) && reporter.subscribers.respond_to?(:size)
         entry
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_event_reporter failed: #{e.message}" if ENV["DEBUG"]
-        { available: false }
+        RailsAiContext.debug_fail(e, { available: false }, label: "detect_event_reporter")
       end
 
       # Canonical Rails notification event names grouped by subsystem. Kept

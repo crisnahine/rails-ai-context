@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Filter routes by controller name (e.g. 'users', 'api/v1/posts')."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: route counts per controller. standard: paths and actions (default). full: everything including names and constraints."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: route counts per controller. standard: paths and actions (default). full: everything including names and constraints."),
           limit: {
             type: "integer",
             description: "Max routes to return. Default: depends on detail level."

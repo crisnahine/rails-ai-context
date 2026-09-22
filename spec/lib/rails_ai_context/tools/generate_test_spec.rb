@@ -633,6 +633,47 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     end
   end
 
+  describe "the short name of a namespaced controller" do
+    let(:context) do
+      {
+        tests: { framework: "rspec", test_helper_setup: [], factories: { count: 1 },
+                 factory_names: { "gift_cards" => [ :gift_card ] } },
+        models: { "GiftCard" => { table_name: "gift_cards" } },
+        controllers: { controllers: { "Admin::GiftCardsController" => { actions: %w[index] } } },
+        routes: {
+          by_controller: {
+            "admin/gift_cards" => [
+              { verb: "GET", path: "/admin/gift_cards", action: "index", name: "admin_gift_cards" }
+            ]
+          }
+        }
+      }
+    end
+
+    before { allow(described_class).to receive(:cached_context).and_return(context) }
+
+    it "resolves every form the routes already answer to" do
+      %w[gift_cards gift-cards admin::gift_cards admin/gift_cards].each do |name|
+        text = described_class.call(controller: name).content.first[:text]
+
+        expect(text).not_to include("not found"), "expected #{name.inspect} to resolve"
+        expect(text).to include("spec/requests/admin/gift_cards_spec.rb")
+      end
+    end
+
+    # Two surfaces, one rule: a name rails_get_controllers resolves is a name
+    # this tool generates for.
+    it "resolves a short name the way rails_get_controllers does" do
+      allow(RailsAiContext::Tools::GetControllers).to receive(:cached_context).and_return(context)
+
+      listed = RailsAiContext::Tools::GetControllers.call(controller: "gift_cards").content.first[:text]
+      generated = described_class.call(controller: "gift_cards").content.first[:text]
+
+      expect(listed).to include("Admin::GiftCardsController")
+      expect(generated).not_to include("not found")
+    end
+  end
+
   describe "an ActiveInteraction service" do
     it "runs it the way the base class does" do
       Dir.mktmpdir do |dir|
@@ -654,6 +695,43 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         expect(text).to include("described_class.run(order: nil, reason: nil)")
         expect(text).not_to include("described_class.call")
       end
+    end
+  end
+
+  # The generated setup line follows the app's own specs: an app that assigns
+  # instance variables gets no let, and the factory call follows whichever of
+  # create and build its specs reach for more.
+  describe "setup style read from the app's own specs" do
+    def generated_for(existing_spec)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "spec", "models"))
+        File.write(File.join(dir, "spec", "models", "post_spec.rb"), existing_spec)
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: { framework: "rspec", factory_names: { "spec/factories/posts.rb" => [ :post ] } },
+          models: { "Post" => { associations: [], validations: [], scopes: [], enums: {}, callbacks: {} } }
+        })
+
+        described_class.call(model: "Post").content.first[:text]
+      end
+    end
+
+    it "writes a let when the app's specs use let" do
+      text = generated_for("let(:a) { create(:post) }\nlet(:b) { create(:post) }\n")
+
+      expect(text).to include("let(:post) { create(:post) }")
+    end
+
+    it "writes no let for an app that assigns instance variables" do
+      text = generated_for("@a = create(:post)\n@b = create(:post)\n@c = create(:post)\n")
+
+      expect(text).not_to include("let(:post)")
+    end
+
+    it "follows the app to build when its specs build more than they create" do
+      text = generated_for("let(:a) { build(:post) }\nlet(:b) { build(:post) }\n")
+
+      expect(text).to include("let(:post) { build(:post) }")
     end
   end
 end

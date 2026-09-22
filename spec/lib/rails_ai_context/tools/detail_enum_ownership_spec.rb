@@ -20,14 +20,24 @@ RSpec.describe "DetailLevel owns the schema enum" do
       "Files spelling the detail levels instead of referencing DetailLevel::ALL: #{offenders.join(', ')}"
   end
 
-  it "publishes the same enum every tool declares" do
+  it "builds every tool's detail property, wording aside" do
     tools = RailsAiContext::Tools::BaseTool.registered_tools.select(&:detail_param?)
 
     expect(tools.size).to be >= 20
 
     tools.each do |tool|
-      enum = tool.input_schema.to_h.dig(:properties, :detail, :enum)
-      expect(enum).to eq(RailsAiContext::DetailLevel::ALL), "#{tool.tool_name} declares #{enum.inspect}"
+      declared = tool.input_schema.to_h.dig(:properties, :detail)
+      expect(declared).to eq(RailsAiContext::DetailLevel.schema(declared[:description])),
+        "#{tool.tool_name} declares #{declared.inspect}"
     end
+  end
+
+  it "leaves no tool spelling the detail property by hand" do
+    offenders = Dir.glob(File.join(lib_root, "rails_ai_context", "tools", "*.rb"))
+      .select { |f| File.read(f).match?(/detail: \{/) }
+      .map { |f| File.basename(f) }
+
+    expect(offenders).to eq([ "onboard.rb" ]),
+      "Tools spelling the detail hash instead of calling DetailLevel.schema: #{offenders.join(', ')}"
   end
 end

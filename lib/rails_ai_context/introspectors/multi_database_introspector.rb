@@ -47,8 +47,7 @@ module RailsAiContext
           parse_database_yml
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] discover_databases failed: #{e.message}" if ENV["DEBUG"]
-        parse_database_yml
+        RailsAiContext.debug_fail(e, parse_database_yml, label: "discover_databases")
       end
 
       def discover_replicas
@@ -61,8 +60,7 @@ module RailsAiContext
           []
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] discover_replicas failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "discover_replicas")
       end
 
       def detect_sharding
@@ -93,8 +91,7 @@ module RailsAiContext
 
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_sharding failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_sharding")
       end
 
       def detect_model_connections
@@ -182,8 +179,7 @@ module RailsAiContext
 
         databases
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_database_yml failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "parse_database_yml")
       end
 
       def anonymize_db_name(name)
@@ -195,8 +191,7 @@ module RailsAiContext
           name
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] anonymize_db_name failed: #{e.message}" if ENV["DEBUG"]
-        "external"
+        RailsAiContext.debug_fail(e, "external", label: "anonymize_db_name")
       end
     end
   end

@@ -51,17 +51,14 @@ module RailsAiContext
 
         def compose_quick(ctx)
           app = ctx[:app_name] || "This Rails app"
-          purpose = infer_app_purpose(ctx)
 
-          # The inferred purpose is this sentence's noun ("a news aggregation
-          # app with ..."), so the head supplies one only when there is none.
           version = named_ruby_version(ctx)
           rails = named_rails_version(ctx)
           head = "**#{app}** is a Rails#{" #{rails}" if rails}"
           # The slash pairs two versions; with no Rails version to pair, the
           # Ruby one follows the noun instead of sitting in front of it.
           head += " / Ruby #{version}" if version && rails
-          parts = [ head, purpose || "app" ]
+          parts = [ head, "app" ]
           parts << "running Ruby #{version}" if version && !rails
 
           # Stats: tables, models, jobs
@@ -641,215 +638,6 @@ module RailsAiContext
             .map(&:first)
         end
 
-        # ── Purpose inference ────────────────────────────────────────────
-
-        # Infer a short description of what the app does from its jobs,
-        # services, models, gems, and architecture patterns.
-        def infer_app_purpose(ctx)
-          signals = collect_purpose_signals(ctx)
-          return nil if signals.empty?
-
-          # Deduplicate and join into a natural phrase
-          capabilities = signals.uniq
-          return nil if capabilities.empty?
-
-          "#{capabilities.shift} app#{capabilities.any? ? ' with ' + join_capabilities(capabilities) : ''}"
-        end
-
-        # Collect domain signals from jobs, services, models, gems, and conventions
-        def collect_purpose_signals(ctx)
-          signals = []
-
-          # Gather raw names from all sources
-          job_names = extract_job_names(ctx)
-          service_names = extract_service_names
-          model_names = extract_model_names(ctx)
-          gem_names = extract_gem_names(ctx)
-          architecture = extract_architecture(ctx)
-
-          # Infer primary domain from model names
-          signals.concat(infer_domain(model_names, job_names, service_names))
-
-          # Infer capabilities from jobs and services
-          signals.concat(infer_ingestion_sources(job_names, service_names))
-          signals.concat(infer_federation(service_names, gem_names, model_names))
-          signals.concat(infer_ai_processing(service_names, job_names, gem_names))
-          signals.concat(infer_social_features(model_names, service_names))
-          signals.concat(infer_notifications(service_names, job_names))
-          signals.concat(infer_search(gem_names, architecture))
-          signals.concat(infer_ecommerce(model_names, service_names, gem_names))
-          signals.concat(infer_messaging(model_names, job_names))
-
-          signals
-        end
-
-        def extract_job_names(ctx)
-          jobs = Payload.section(ctx, :jobs)
-          return [] unless jobs
-          (jobs[:jobs] || []).map { |j| j[:name].to_s }.reject(&:empty?)
-        end
-
-        def extract_service_names
-          services_dir = File.join(rails_app.root, "app", "services")
-          return [] unless Dir.exist?(services_dir)
-
-          real_root = File.realpath(rails_app.root).to_s
-          safe_glob(services_dir, "**/*.rb", real_root).filter_map do |path|
-            name = File.basename(path, ".rb").camelize
-            name unless name == "ApplicationService" || name == "BaseService"
-          end
-        rescue => e
-          $stderr.puts "[rails-ai-context] extract_service_names failed: #{e.message}" if ENV["DEBUG"]
-          []
-        end
-
-        def extract_model_names(ctx)
-          models = Payload.models(ctx)
-          return [] unless models.any?
-          models.keys.map(&:to_s)
-        end
-
-        def extract_gem_names(ctx)
-          Payload.notable_gems(ctx).map { |g| g[:name].to_s }
-        end
-
-        def extract_architecture(ctx)
-          conv = Payload.section(ctx, :conventions)
-          return [] unless conv
-          conv[:architecture] || []
-        end
-
-        # Infer the primary domain of the app (e.g., "news aggregation", "e-commerce")
-        def infer_domain(model_names, job_names, service_names)
-          all_names = (model_names + job_names + service_names).map(&:downcase).join(" ")
-
-          # Order matters: more specific patterns first
-          if all_names.match?(/article|news|rss|feed/) && all_names.match?(/site|source|feed/)
-            [ "news aggregation" ]
-          elsif all_names.match?(/article|blog|post/) && all_names.match?(/comment|author/)
-            [ "content publishing" ]
-          elsif all_names.match?(/product|cart|order|checkout/)
-            [ "e-commerce" ]
-          elsif all_names.match?(/patient|appointment|doctor|medical/)
-            [ "healthcare" ]
-          elsif all_names.match?(/course|lesson|student|enrollment/)
-            [ "education/LMS" ]
-          elsif all_names.match?(/listing|property|booking|reservation/)
-            [ "marketplace" ]
-          elsif all_names.match?(/ticket|issue|sprint|project/) && all_names.match?(/assign|board/)
-            [ "project management" ]
-          elsif all_names.match?(/message|conversation|chat|thread/)
-            [ "messaging" ]
-          elsif all_names.match?(/invoice|payment|subscription|billing/)
-            [ "billing/SaaS" ]
-          elsif all_names.match?(/post|comment|follow|like|feed/)
-            [ "social platform" ]
-          elsif all_names.match?(/article|post|page|content/)
-            [ "content management" ]
-          else
-            []
-          end
-        end
-
-        # Infer content ingestion sources from job/service names
-        def infer_ingestion_sources(job_names, service_names)
-          all_names = (job_names + service_names).map(&:downcase)
-          sources = []
-
-          sources << "RSS" if all_names.any? { |n| n.include?("rss") }
-          sources << "YouTube" if all_names.any? { |n| n.include?("youtube") }
-          sources << "HackerNews" if all_names.any? { |n| n.include?("hackernews") || n.include?("hacker_news") }
-          sources << "Reddit" if all_names.any? { |n| n.include?("reddit") }
-          sources << "Gmail" if all_names.any? { |n| n.include?("gmail") }
-          sources << "Twitter" if all_names.any? { |n| n.include?("twitter") }
-
-          return [] if sources.empty?
-          [ "#{sources.join(', ')} ingestion" ]
-        end
-
-        # Infer ActivityPub/federation features
-        def infer_federation(service_names, gem_names, model_names)
-          all = (service_names + gem_names + model_names).map(&:downcase)
-
-          if all.any? { |n| n.match?(/mastodon|activitypub|federails|federation/) }
-            [ "ActivityPub federation" ]
-          elsif all.any? { |n| n.match?(/fediverse/) }
-            [ "Fediverse integration" ]
-          else
-            []
-          end
-        end
-
-        # Infer AI/ML processing features
-        def infer_ai_processing(service_names, job_names, gem_names)
-          all = (service_names + job_names + gem_names).map(&:downcase)
-
-          if all.any? { |n| n.match?(/agent|openai|anthropic|llm|ai_|_ai/) }
-            [ "AI processing" ]
-          elsif all.any? { |n| n.match?(/ml_|machine_learn|predict/) }
-            [ "ML processing" ]
-          else
-            []
-          end
-        end
-
-        # Infer social features (follows, likes, etc.)
-        def infer_social_features(model_names, service_names)
-          all = (model_names + service_names).map(&:downcase)
-
-          if all.any? { |n| n.match?(/follow|like|mention|social/) } && all.any? { |n| n.match?(/federation|mastodon/) }
-            [] # Already covered by federation
-          elsif all.any? { |n| n.match?(/oauth|social_media/) }
-            [ "social media integration" ]
-          else
-            []
-          end
-        end
-
-        # Infer push/notification features
-        def infer_notifications(service_names, job_names)
-          all = (service_names + job_names).map(&:downcase)
-
-          if all.any? { |n| n.match?(/push_notif|web_push|notification/) }
-            [ "push notifications" ]
-          else
-            []
-          end
-        end
-
-        # Infer search capabilities
-        def infer_search(gem_names, architecture)
-          all = (gem_names + architecture).map(&:downcase)
-
-          if all.any? { |n| n.match?(/elasticsearch|searchkick|meilisearch/) }
-            [ "full-text search" ]
-          else
-            []
-          end
-        end
-
-        # Infer e-commerce features
-        def infer_ecommerce(model_names, service_names, gem_names)
-          all = (model_names + service_names + gem_names).map(&:downcase)
-
-          if all.any? { |n| n.match?(/stripe|pay\b|braintree/) }
-            [ "payment processing" ]
-          else
-            []
-          end
-        end
-
-        # Infer messaging/real-time features
-        def infer_messaging(model_names, job_names)
-          all = (model_names + job_names).map(&:downcase)
-
-          if all.any? { |n| n.match?(/conversation|chat|direct_message/) }
-            [ "real-time messaging" ]
-          else
-            []
-          end
-        end
-
         # Quick one-line frontend summary from conventions
         def quick_frontend_summary(ctx)
           conv = Payload.section(ctx, :conventions)
@@ -881,16 +669,6 @@ module RailsAiContext
           end
 
           parts.any? ? "#{parts.join(' + ')} frontend" : nil
-        end
-
-        # Join a list of capabilities with commas and "and" before the last
-        def join_capabilities(items)
-          case items.size
-          when 0 then ""
-          when 1 then items.first
-          when 2 then "#{items[0]} and #{items[1]}"
-          else "#{items[0..-2].join(', ')}, and #{items.last}"
-          end
         end
       end
     end

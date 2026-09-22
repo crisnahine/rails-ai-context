@@ -146,8 +146,7 @@ module RailsAiContext
 
         nil
       rescue => e
-        $stderr.puts "[rails-ai-context] find_file_suggestion failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "find_file_suggestion")
       end
 
       private_class_method def self.validate_ruby(full_path)

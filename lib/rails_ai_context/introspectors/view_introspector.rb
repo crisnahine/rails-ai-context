@@ -113,8 +113,7 @@ module RailsAiContext
             methods: methods
           }
         rescue => e
-          $stderr.puts "[rails-ai-context] extract_helpers failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "extract_helpers")
         end.sort_by { |h| h[:file] }
       end
 
@@ -168,8 +167,7 @@ module RailsAiContext
 
         counts.sort_by { |_, v| -v }.to_h
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_form_builders failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "detect_form_builders")
       end
 
       def detect_component_usage
@@ -188,8 +186,7 @@ module RailsAiContext
 
         components.to_a.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_component_usage failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_component_usage")
       end
 
       def extract_layout_mapping
@@ -204,8 +201,7 @@ module RailsAiContext
           name
         end.uniq.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_layout_mapping failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_layout_mapping")
       end
 
       def detect_conditional_layouts
@@ -242,8 +238,7 @@ module RailsAiContext
         end
         layouts
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_conditional_layouts failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_conditional_layouts")
       end
     end
   end

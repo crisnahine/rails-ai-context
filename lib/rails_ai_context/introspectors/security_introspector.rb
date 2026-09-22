@@ -30,8 +30,7 @@ module RailsAiContext
           signed_global_id: extract_signed_gid
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] SecurityIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "SecurityIntrospector#call")
       end
 
       private
@@ -55,8 +54,7 @@ module RailsAiContext
         result[:secure_cookies] = options[:secure_cookies] if options.key?(:secure_cookies)
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_ssl_options failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_ssl_options")
       end
 
       def extract_host_authorization
@@ -67,8 +65,7 @@ module RailsAiContext
         entry[:options] = exclude.keys.map(&:to_s) if exclude.is_a?(Hash) && exclude.any?
         entry
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_host_authorization failed: #{e.message}" if ENV["DEBUG"]
-        { hosts: [] }
+        RailsAiContext.debug_fail(e, { hosts: [] }, label: "extract_host_authorization")
       end
 
       def extract_csp
@@ -92,8 +89,7 @@ module RailsAiContext
           directives: directives.first(30)
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_csp failed: #{e.message}" if ENV["DEBUG"]
-        { configured: false }
+        RailsAiContext.debug_fail(e, { configured: false }, label: "extract_csp")
       end
 
       def extract_permissions_policy
@@ -106,8 +102,7 @@ module RailsAiContext
 
         { configured: true, file: "config/initializers/permissions_policy.rb", directives: directives }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_permissions_policy failed: #{e.message}" if ENV["DEBUG"]
-        { configured: false }
+        RailsAiContext.debug_fail(e, { configured: false }, label: "extract_permissions_policy")
       end
 
       # Walk AST to find policy.directive_name calls (CSP directives).
@@ -187,8 +182,7 @@ module RailsAiContext
         result[:origin_check] = !!origin_check unless origin_check.nil?
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_csrf failed: #{e.message}" if ENV["DEBUG"]
-        { default: "unknown" }
+        RailsAiContext.debug_fail(e, { default: "unknown" }, label: "extract_csrf")
       end
 
       def extract_cookie_config
@@ -201,8 +195,7 @@ module RailsAiContext
         end
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_cookie_config failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_cookie_config")
       end
 
       # Rails 7.2 introduced `allow_browser` to block unsupported browsers.
@@ -221,8 +214,7 @@ module RailsAiContext
         end
         findings
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_allow_browser failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_allow_browser")
       end
 
       def format_ast_value(value)
@@ -239,8 +231,7 @@ module RailsAiContext
         sgid_expiration = app.config.respond_to?(:global_id) && app.config.global_id.respond_to?(:expires_in) ? app.config.global_id.expires_in : nil
         { expires_in: sgid_expiration&.to_s }.compact
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_signed_gid failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_signed_gid")
       end
 
       # Rails 8 defaults same_site to a lambda. Left alone it reaches

@@ -282,6 +282,48 @@ RSpec.describe RailsAiContext::Redaction do
         .to include("[FILTERED]")
     end
 
+    # Every secret-ish name the module knows, in each of the four shapes a
+    # Rails log writes. The list used to name four of them in two shapes, so
+    # a `Parameters:` line shipped every credential but the password.
+    %w[password passwd secret token api_key apikey access_key private_key
+       credentials pepper salt master_key signing_key encryption_key
+       access_token refresh_token auth_token otp_secret client_secret
+       csrf_token session_token].each do |name|
+      it "filters #{name} in every shape a log line writes" do
+        expect(described_class.redact_log_line(%(#{name}=SHHH))).to eq("#{name}=[FILTERED]")
+        expect(described_class.redact_log_line(%(#{name}: SHHH))).to eq("#{name}: [FILTERED]")
+        expect(described_class.redact_log_line(%("#{name}"=>"SHHH"))).to eq(%("#{name}"=>"[FILTERED]"))
+        expect(described_class.redact_log_line(%("#{name}":"SHHH"))).to eq(%("#{name}":"[FILTERED]"))
+      end
+    end
+
+    it "filters every pair of a Rails Parameters line" do
+      line = '  Parameters: {"token"=>"AAA1", "api_key"=>"AAA2", "secret"=>"AAA3", ' \
+             '"access_token"=>"AAA4", "auth_token"=>"AAA5", "password"=>"AAA6", "otp_secret"=>"AAA7"}'
+
+      redacted = described_class.redact_log_line(line)
+
+      (1..7).each { |n| expect(redacted).not_to include("AAA#{n}") }
+      expect(redacted.scan("[FILTERED]").size).to eq(7)
+    end
+
+    it "filters a bare Authorization header" do
+      expect(described_class.redact_log_line("Authorization: Bearer abc.def"))
+        .to eq("Authorization: [FILTERED]")
+    end
+
+    # Filtering these would hide the config the reader came for, and prose
+    # is not an assignment however often it says "token".
+    it "leaves policy values, prose and paths that merely name a secret" do
+      [
+        "password_length: 8 and token_expiry=3600",
+        'Started GET "/admin/secret/list" for 127.0.0.1',
+        "Refreshing the access token for user 5 now",
+        "the passwordless_login flag is on",
+        "Completed 200 OK in 5ms"
+      ].each { |line| expect(described_class.redact_log_line(line)).to eq(line) }
+    end
+
     it "never emits the old markers" do
       samples = [
         '{"password":"hunter2"}',
@@ -360,6 +402,15 @@ RSpec.describe RailsAiContext::Redaction do
     it "filters on the redacted text, never the original" do
       expect(described_class.redact_log_lines(lines, search: "sk_live_abc")).to eq([])
       expect(described_class.redact_log_lines(lines, search: "FILTERED")).to eq([ "INFO Bearer [FILTERED] used" ])
+    end
+
+    # The leak this pins: a targeted search for the value used to return the
+    # line with the value still in it, because the patterns never caught it.
+    it "returns a line searched for by its secret value with the value gone" do
+      line = '  Parameters: {"token"=>"AAA1", "api_key"=>"AAA2"}'
+
+      expect(described_class.redact_log_lines([ line ], search: "AAA1")).to eq([])
+      expect(described_class.redact_log_lines([ line ]).first).not_to include("AAA1")
     end
 
     it "matches case-insensitively and ignores a blank search" do

@@ -61,6 +61,21 @@ module RailsAiContext
       end
     end
 
+    # Report a swallowed error under DEBUG and hand back the value the rescue
+    # body would have returned, so a fault-isolating rescue is one line:
+    #
+    #   rescue => e
+    #     RailsAiContext.debug_fail(e, [], label: "detect_form_builders")
+    #
+    # Writes $stderr directly rather than through log_warn. DEBUG output is for
+    # whoever is watching the terminal; log_warn would bury it in Rails.logger
+    # the moment an app is booted. The label is an argument because it is often
+    # not the enclosing method name.
+    def debug_fail(error, fallback = nil, label:)
+      $stderr.puts("[rails-ai-context] #{label} failed: #{error.message}") if ENV["DEBUG"]
+      fallback
+    end
+
     # Operating tier. :runtime means the host app booted and live reflection
     # is available; :static means only source files are being analyzed.
     # Defaults to :runtime because in-app usage (railtie, rake tasks) only

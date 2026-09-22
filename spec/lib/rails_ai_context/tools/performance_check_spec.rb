@@ -44,6 +44,35 @@ RSpec.describe RailsAiContext::Tools::PerformanceCheck do
       })
     end
 
+    # The summary labels and the detail headings are spelled differently on
+    # purpose, so they are pinned separately.
+    it "labels every summary count" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("- N+1 risks: 3 (1 high, 1 medium, 1 low)")
+      expect(text).to include("- Missing counter_cache: 0")
+      expect(text).to include("- Missing FK indexes: 2")
+      expect(text).to include("- Model.all in controllers: 1")
+      expect(text).to include("- Eager load candidates: 1")
+    end
+
+    it "heads every detail section" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text.scan(/^## .*/)).to eq([
+        "## N+1 Query Risks (3) (1 high, 1 medium, 1 low)",
+        "## Missing FK Indexes (2)",
+        "## Model.all in Controllers (1)",
+        "## Eager Load Candidates (1)"
+      ])
+    end
+
+    it "renders one category at a time" do
+      text = described_class.call(category: "indexes").content.first[:text]
+
+      expect(text.scan(/^## .*/)).to eq([ "## Missing FK Indexes (2)" ])
+    end
+
     it "returns summary counts with risk breakdown" do
       response = described_class.call(detail: "summary")
       text = response.content.first[:text]

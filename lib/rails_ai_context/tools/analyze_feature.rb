@@ -52,15 +52,15 @@ module RailsAiContext
         discover_controllers(ctx, pattern, lines)
         discover_routes(ctx, pattern, lines)
         discover_services(root, pattern, lines)
-        discover_jobs(root, pattern, lines)
+        discover_jobs(ctx, pattern, lines)
         discover_views(ctx, root, pattern, lines)
         discover_stimulus(ctx, pattern, lines)
         test_files, tests_truncated = discover_tests(root, pattern, lines)
         discover_related_models(ctx, matched_models, lines)
         discover_concerns(ctx, matched_models, lines)
         discover_callbacks(ctx, matched_models, lines)
-        discover_channels(root, pattern, lines)
-        discover_mailers(root, pattern, lines)
+        discover_channels(ctx, pattern, lines)
+        discover_mailers(ctx, pattern, lines)
         discover_env_dependencies(root, pattern, matched_models, lines)
         discover_test_gaps(root, pattern, matched_models, ctx, test_files || [], lines, truncated: tests_truncated)
         discover_components(ctx, pattern, lines)
@@ -264,34 +264,34 @@ module RailsAiContext
           end
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_services failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_services")
         end
 
         # --- AF2: Jobs ---
-        def discover_jobs(root, pattern, lines)
-          dir = File.join(root, "app", "jobs")
-          return unless Dir.exist?(dir)
-
-          real_root = File.realpath(root).to_s
-          candidates = safe_glob(dir, "**/*.rb", real_root).first(MAX_SCAN_FILES)
-          found = candidates.select do |path|
-            feature_word_match?(File.basename(path, ".rb"), pattern)
+        def discover_jobs(ctx, pattern, lines)
+          payload_section(Payload.jobs(ctx), pattern, lines, "Jobs") do |job|
+            bits = []
+            bits << "queue: #{job[:queue]}" if job[:queue]
+            bits << "retry_on: #{Array(job[:retry_on]).join('; ')}" if Array(job[:retry_on]).any?
+            bits << "discard_on: #{Array(job[:discard_on]).join('; ')}" if Array(job[:discard_on]).any?
+            bits << "perform(#{job[:perform_signature]})" if job[:perform_signature]
+            bits.any? ? " (#{bits.join(', ')})" : ""
           end
-          return if found.empty?
+        end
 
-          lines << "## Jobs (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
-          found.each do |path|
-            relative = path.sub("#{real_root}/", "")
-            source = RailsAiContext::SafeFile.read(path) or next
-            queue = source.match(/queue_as\s+[:'"](\w+)/)&.captures&.first || "default"
-            retries = source.match(/retry_on.*attempts:\s*(\d+)/)&.captures&.first
-            lines << "- `#{relative}` (queue: #{queue}#{retries ? ", retries: #{retries}" : ""})"
+        # The jobs, mailers and channels the :jobs introspector read, matched
+        # by class name. A section the introspector did not produce stays out
+        # rather than being re-derived from a directory walk.
+        def payload_section(records, pattern, lines, heading)
+          matched = records.select { |r| r.is_a?(Hash) && feature_word_match?(r[:name], pattern) }
+          return if matched.empty?
+
+          lines << "## #{heading} (#{matched.size})"
+          matched.each do |record|
+            label = record[:file] ? "`#{record[:file]}`" : "**#{record[:name]}**"
+            lines << "- #{label}#{yield(record)}"
           end
           lines << ""
-        rescue => e
-          $stderr.puts "[rails-ai-context] discover_jobs failed: #{e.message}" if ENV["DEBUG"]
-          nil
         end
 
         # --- AF3: Views + Partials ---
@@ -324,8 +324,7 @@ module RailsAiContext
           end
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_views failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_views")
         end
 
         # --- AF4: Stimulus Controllers ---
@@ -396,8 +395,7 @@ module RailsAiContext
           lines << ""
           [ found, truncated ]
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_tests failed: #{e.message}" if ENV["DEBUG"]
-          [ [], false ]
+          RailsAiContext.debug_fail(e, [ [], false ], label: "discover_tests")
         end
 
         # --- Test coverage gaps ---
@@ -465,8 +463,7 @@ module RailsAiContext
           gaps.each { |g| lines << "- #{g}" }
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_test_gaps failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_test_gaps")
         end
 
         # --- AF6: Related Models via Associations ---
@@ -510,8 +507,7 @@ module RailsAiContext
           concerns.sort.each { |name, count| lines << "- **#{name}** (used by #{count_phrase(count, 'model')})" }
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_concerns failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_concerns")
         end
 
         # --- AF13: Callback Chains ---
@@ -534,47 +530,19 @@ module RailsAiContext
         end
 
         # --- AF10: Channels/WebSocket ---
-        def discover_channels(root, pattern, lines)
-          dir = File.join(root, "app", "channels")
-          return unless Dir.exist?(dir)
-
-          real_root = File.realpath(root).to_s
-          candidates = safe_glob(dir, "**/*.rb", real_root).first(MAX_SCAN_FILES)
-          found = candidates.select { |p| feature_word_match?(File.basename(p, ".rb"), pattern) }
-          return if found.empty?
-
-          lines << "## Channels (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
-          found.each do |path|
-            relative = path.sub("#{real_root}/", "")
-            lines << "- `#{relative}`"
+        def discover_channels(ctx, pattern, lines)
+          payload_section(Payload.channels(ctx), pattern, lines, "Channels") do |channel|
+            streams = Array(channel[:stream_methods])
+            streams.any? ? " - #{streams.join(', ')}" : ""
           end
-          lines << ""
-        rescue => e
-          $stderr.puts "[rails-ai-context] discover_channels failed: #{e.message}" if ENV["DEBUG"]
-          nil
         end
 
         # --- AF11: Mailers ---
-        def discover_mailers(root, pattern, lines)
-          dir = File.join(root, "app", "mailers")
-          return unless Dir.exist?(dir)
-
-          real_root = File.realpath(root).to_s
-          candidates = safe_glob(dir, "**/*.rb", real_root).first(MAX_SCAN_FILES)
-          found = candidates.select { |p| feature_word_match?(File.basename(p, ".rb"), pattern) }
-          return if found.empty?
-
-          lines << "## Mailers (#{found.size}#{candidates.size == MAX_SCAN_FILES ? " - first #{MAX_SCAN_FILES} scanned" : ""})"
-          found.each do |path|
-            relative = path.sub("#{real_root}/", "")
-            source = RailsAiContext::SafeFile.read(path) or next
-            methods = source.scan(/^\s*def (\w+)/m).flatten.reject { |m| m == "initialize" }
-            lines << "- `#{relative}` - #{methods.join(', ')}" if methods.any?
+        def discover_mailers(ctx, pattern, lines)
+          payload_section(Payload.mailers(ctx), pattern, lines, "Mailers") do |mailer|
+            actions = Array(mailer[:actions])
+            actions.any? ? " - #{actions.join(', ')}" : ""
           end
-          lines << ""
-        rescue => e
-          $stderr.puts "[rails-ai-context] discover_mailers failed: #{e.message}" if ENV["DEBUG"]
-          nil
         end
 
         # --- Component usage in feature views ---
@@ -598,8 +566,7 @@ module RailsAiContext
           end
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_components failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_components")
         end
 
         # --- AF9: Environment Dependencies ---
@@ -628,8 +595,7 @@ module RailsAiContext
           env_vars.sort.each { |v| lines << "- `#{v}`" }
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_env_dependencies failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_env_dependencies")
         end
       end
     end

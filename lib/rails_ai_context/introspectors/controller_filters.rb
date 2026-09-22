@@ -23,8 +23,7 @@ module RailsAiContext
       def from_source(source)
         walk(source).filter_map { |entry| record(entry) }
       rescue => e
-        $stderr.puts "[rails-ai-context] controller filter read failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "controller filter read")
       end
 
       def walk(source)

@@ -125,7 +125,7 @@ module RailsAiContext
         # Carry the file that was read: the declared name does not round-trip
         # back to a path. See CONTEXT.md, "Declared constant".
         relative_file = record.file
-        parent = extract_parent_class_ast(source)
+        parent = parent_class_of(source, class_name)
         rate_limit = rate_limit_entry(source)
         details = {
           parent_class: parent,
@@ -227,8 +227,7 @@ module RailsAiContext
 
         []
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_filters failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_filters")
       end
 
       # A compiled callback keeps only:/except: in private ivars, so the
@@ -252,8 +251,7 @@ module RailsAiContext
         end
         constraints
       rescue => e
-        $stderr.puts "[rails-ai-context] collect_source_constraints failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "collect_source_constraints")
       end
 
       # Reflection hands every class the whole chain and no skips at all, so
@@ -316,15 +314,13 @@ module RailsAiContext
         return false unless defined?(::DeviseController)
         ctrl < ::DeviseController || ctrl.ancestors.any? { |a| a.name&.start_with?("Devise::") }
       rescue => e
-        $stderr.puts "[rails-ai-context] devise_controller? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext.debug_fail(e, false, label: "devise_controller?")
       end
 
       def extract_concerns(ctrl)
         ConcernMembership.from_ancestors(ctrl)
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_concerns failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_concerns")
       end
 
       # Through MixinsListener rather than a hand walk: the listener knows
@@ -334,8 +330,7 @@ module RailsAiContext
         walked = SourceIntrospector.walk_source(source, { mixins: Listeners::MixinsListener })
         ConcernMembership.from_mixins(walked[:mixins])
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_concerns_from_source AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_concerns_from_source AST")
       end
 
       def extract_strong_params(source)
@@ -346,18 +341,7 @@ module RailsAiContext
         find_param_methods(parse_result.value, param_methods)
         param_methods
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_strong_params AST failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      # Also keep extract_permit_details for specs that call it directly
-      def extract_permit_details(source, method_name)
-        result = { name: method_name }
-        parse_result = AstCache.parse_string(source)
-        def_node = find_def_node(parse_result.value, method_name)
-        return result unless def_node
-
-        extract_permit_from_def(def_node).merge(name: method_name)
+        RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
       end
 
       def find_param_methods(node, results)
@@ -393,18 +377,6 @@ module RailsAiContext
         return result unless expect_call && call_on_params?(expect_call)
 
         result.merge(parse_expect_args_ast(expect_call))
-      end
-
-      def find_def_node(node, method_name)
-        return nil unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::DefNode) && node.name.to_s == method_name
-          return node
-        end
-        node.child_nodes.compact.each do |child|
-          found = find_def_node(child, method_name)
-          return found if found
-        end
-        nil
       end
 
       def find_call_in_tree(node, method_name)
@@ -558,8 +530,7 @@ module RailsAiContext
         respond_to_blocks.each { |block| find_format_calls(block, formats) }
         formats.uniq.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_respond_to AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_respond_to AST")
       end
 
       def find_respond_to_blocks(node, blocks)
@@ -593,41 +564,14 @@ module RailsAiContext
         raw = ast_result[:rescue_from] || []
         raw.flat_map do |entry|
           handler = entry[:options][:with]&.to_s
-          # Extract constant arguments (exception classes)
-          exceptions = extract_constant_args_from_source(source, entry[:location])
+          # The exception classes are the listener's positional values; `args`
+          # is symbols only, so a constant reaches this line through `values`.
+          exceptions = entry[:values].grep(String)
           exceptions = entry[:args].map(&:to_s) if exceptions.empty?
           exceptions.map { |ex| { exception: ex, handler: handler }.compact }
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_rescue_from AST failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      # For rescue_from, we need constants (not symbols). GenericMacroListener's
-      # extract_symbol_args skips them. Walk the AST for the specific call node
-      # at the given line to get ConstantReadNode/ConstantPathNode args.
-      def extract_constant_args_from_source(source, line_number)
-        parse_result = AstCache.parse_string(source)
-        constants = []
-        find_call_at_line(parse_result.value, :rescue_from, line_number, constants)
-        constants
-      end
-
-      def find_call_at_line(node, method_name, line_number, constants)
-        return unless node.respond_to?(:child_nodes)
-        if node.is_a?(Prism::CallNode) && node.name == method_name &&
-           node.location.start_line == line_number
-          node.arguments&.arguments&.each do |arg|
-            case arg
-            when Prism::ConstantReadNode
-              constants << arg.name.to_s
-            when Prism::ConstantPathNode
-              constants << constant_node_to_string(arg)
-            end
-          end
-          return
-        end
-        node.child_nodes.compact.each { |child| find_call_at_line(child, method_name, line_number, constants) }
+        RailsAiContext.debug_fail(e, [], label: "extract_rescue_from AST")
       end
 
       def rate_limit_entry(source)
@@ -638,8 +582,7 @@ module RailsAiContext
         })
         (ast_result[:rate_limit] || []).first
       rescue => e
-        $stderr.puts "[rails-ai-context] rate_limit_entry failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "rate_limit_entry")
       end
 
       def extract_rate_limit(source, entry)
@@ -652,8 +595,7 @@ module RailsAiContext
         raw_line = lines[line_num - 1].strip
         raw_line.sub(/\Arate_limit\s+/, "")
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_rate_limit AST failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_rate_limit AST")
       end
 
       def parse_rate_limit(entry)
@@ -669,8 +611,7 @@ module RailsAiContext
 
         parsed.empty? ? nil : parsed
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_rate_limit failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "parse_rate_limit")
       end
 
       def extract_turbo_stream_actions(source)
@@ -681,8 +622,7 @@ module RailsAiContext
         find_turbo_stream_in_defs(parse_result.value, nil, actions)
         actions.uniq.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_turbo_stream_actions AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_turbo_stream_actions AST")
       end
 
       # Walk AST tracking which DefNode we're inside,
@@ -713,44 +653,13 @@ module RailsAiContext
 
       # --- AST helpers ---
 
-      # Extract parent class name from source via Prism AST.
-      # Walks for ClassNode and reads superclass constant path.
-      def extract_parent_class_ast(source)
-        result = AstCache.parse_string(source)
-        find_class_superclass(result.value) || "Unknown"
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_parent_class_ast failed: #{e.message}" if ENV["DEBUG"]
-        "Unknown"
-      end
-
-      def find_class_superclass(node)
-        return nil unless node.respond_to?(:child_nodes)
-        node.child_nodes.compact.each do |child|
-          if child.is_a?(Prism::ClassNode) && child.superclass
-            return constant_node_to_string(child.superclass)
-          end
-          found = find_class_superclass(child)
-          return found if found
-        end
-        nil
-      end
-
-      def constant_node_to_string(node)
-        case node
-        when Prism::ConstantReadNode
-          node.name.to_s
-        when Prism::ConstantPathNode
-          parts = []
-          current = node
-          while current.is_a?(Prism::ConstantPathNode)
-            parts.unshift(current.name.to_s)
-            current = current.parent
-          end
-          parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
-          parts.join("::")
-        else
-          "Unknown"
-        end
+      # The superclass this file's own class names. A file may declare more
+      # than one class, so the one matching the resolved constant answers
+      # first; anything else in the file only answers when it does not.
+      def parent_class_of(source, class_name)
+        declarations = DeclaredConstant.declarations(source)
+        named = declarations.find { |d| d.name == class_name }
+        named&.superclass || declarations.find(&:superclass)&.superclass || "Unknown"
       end
 
       def read_source(ctrl)

@@ -257,6 +257,13 @@ RSpec.describe RailsAiContext::CLI::ToolRunner do
         expect(parse([ "--files", "a.rb,b.rb", "c.rb" ])).to include(files: %w[a.rb b.rb c.rb])
       end
 
+      # The cursor advances by tokens, never by values: a comma token yields
+      # more values than it consumed, and counting values skipped the flag.
+      it "keeps the cursor on tokens when a comma token expands" do
+        expect(parse([ "--files", "a.rb,b.rb", "c.rb", "--level", "syntax" ]))
+          .to include(files: %w[a.rb b.rb c.rb], level: "syntax")
+      end
+
       it "reads a bare flag as no files rather than true" do
         expect(parse([ "--files" ])).to include(files: [])
       end

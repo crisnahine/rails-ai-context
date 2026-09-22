@@ -19,11 +19,7 @@ module RailsAiContext
             enum: %w[model controller mailer job channel helper other all],
             description: "Filter by concern type, named for the directory: model reads app/models/concerns/, mailer reads app/mailers/concerns/. other: a configured directory outside app/*/concerns. all: everything (default)."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: concern names only. standard: names + method signatures (default). full: method signatures with source code."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: concern names only. standard: names + method signatures (default). full: method signatures with source code.")
         }
       )
 
@@ -62,7 +58,7 @@ module RailsAiContext
         end
 
         # List all concerns
-        list_concerns(concern_dirs, root, max_size)
+        list_concerns(concern_dirs, root)
       end
 
       private_class_method def self.refuse_name(name, root)
@@ -99,28 +95,32 @@ module RailsAiContext
         end
 
         relative = concern_relative(name)
-        file_path = nil
-        relative_path = nil
-        concern_type = nil
+
+        # One name can sit in more than one concerns directory - the default
+        # glob returns every app/*/concerns - so every match is kept and the
+        # ones below the first are named against the file that is read.
+        matches = []
 
         concern_dirs.each do |dir|
           located = RailsAiContext::SafePath.locate(relative, under: dir, root: root, max_size: max_size)
           case located.refusal
           when :too_large
+            next if matches.any?
             return text_response("Concern file too large: #{located.realpath} (#{File.size(located.realpath)} bytes, max: #{max_size})")
-          when :sensitive then return error_response("Path not allowed: #{name} (sensitive file)")
+          when :sensitive
+            next if matches.any?
+            return error_response("Path not allowed: #{name} (sensitive file)")
           when :missing, :outside then next
           end
 
-          file_path = located.realpath
-          relative_path = located.relative
-          concern_type = ConcernPaths.type_for(dir)
-          break
+          matches << [ located.realpath, located.relative, ConcernPaths.type_for(dir) ]
         end
+
+        file_path, relative_path, concern_type = matches.first
 
         unless file_path
           # Build available list for fuzzy match
-          available = collect_concern_names(concern_dirs)
+          available = collect_concern_names(concern_dirs, File.realpath(root).to_s)
           return not_found_response("Concern", name, available,
             recovery_tool: "Call rails_get_concern() to see all concerns")
         end
@@ -130,6 +130,14 @@ module RailsAiContext
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
         lines << "**Type:** #{concern_type} concern"
+
+        # A second file at the same relative path answers the same name, and
+        # everything below is read from the first one only. The other files are
+        # named by path, not by the module they declare - that need not match.
+        if matches.size > 1
+          others = matches.drop(1).map { |_real, rel, type| "`#{rel}` (#{type} concern)" }
+          lines << "**Also at:** #{others.join(', ')}"
+        end
 
         # Parse included/extended modules
         included_modules = source.scan(/^\s*include\s+(\S+)/).flatten
@@ -225,7 +233,7 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.list_concerns(concern_dirs, root, max_size)
+      private_class_method def self.list_concerns(concern_dirs, root)
         all_concerns = []
         excluded_count = 0
         real_root = File.realpath(root).to_s
@@ -233,23 +241,7 @@ module RailsAiContext
         concern_dirs.each do |dir|
           concern_type = ConcernPaths.type_for(dir)
           real_dir = File.realpath(dir).to_s
-          Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file_path|
-            # Apply the 5-rule file-reading pattern per CLAUDE.md. Even though
-            # file_path comes from Dir.glob (not caller-supplied), a symlink
-            # planted inside `app/models/concerns/` pointing at
-            # `config/master.key` would otherwise be silently read.
-            real =
-              begin
-                File.realpath(file_path).to_s
-              rescue Errno::ENOENT
-                nil
-              end
-            next unless real
-            next unless real == real_dir || real.start_with?(real_dir + File::SEPARATOR)
-
-            relative_real = real.sub("#{real_root}/", "")
-            next if sensitive_file?(relative_real)
-
+          safe_glob(dir, "**/*.rb", real_root).sort.each do |real|
             relative = real.sub("#{real_root}/", "")
             concern_name = real.sub("#{real_dir}/", "").sub(/\.rb$/, "").camelize
             if ConcernMembership.excluded?(concern_name)
@@ -258,13 +250,11 @@ module RailsAiContext
             end
 
             method_count = 0
-            if File.size(real) <= max_size
-              source = RailsAiContext::SafeFile.read(real)
-              if source
-                public_methods = Introspectors::ActionResolver.public_methods_from_source(source)
-                class_methods = Introspectors::ActionResolver.class_methods_from_source(source)
-                method_count = public_methods.size + class_methods.size
-              end
+            source = RailsAiContext::SafeFile.read(real)
+            if source
+              public_methods = Introspectors::ActionResolver.public_methods_from_source(source)
+              class_methods = Introspectors::ActionResolver.class_methods_from_source(source)
+              method_count = public_methods.size + class_methods.size
             end
 
             all_concerns << {
@@ -312,12 +302,13 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.collect_concern_names(concern_dirs)
+      private_class_method def self.collect_concern_names(concern_dirs, real_root)
         concern_dirs.flat_map do |dir|
-          Dir.glob(File.join(dir, "**", "*.rb")).map do |file_path|
-            file_path.sub("#{dir}/", "").sub(/\.rb$/, "").camelize
+          real_dir = File.realpath(dir).to_s
+          safe_glob(dir, "**/*.rb", real_root).map do |real|
+            real.delete_prefix("#{real_dir}/").sub(/\.rb$/, "").camelize
           end
-        end.sort
+        end.uniq.sort
       end
 
       private_class_method def self.parse_concern_macros(source)
@@ -349,8 +340,7 @@ module RailsAiContext
 
         macros
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_concern_macros failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "parse_concern_macros")
       end
 
       # The listener knows every callback macro Rails has, so the section no
@@ -363,8 +353,7 @@ module RailsAiContext
           .map { |cb| callback_declaration(cb) }
           .uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_concern_callbacks failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "parse_concern_callbacks")
       end
 
       # Names the directories find_includers actually searched, so the empty
@@ -383,13 +372,12 @@ module RailsAiContext
         # app/*/concerns has no directory to name, so that one searches both
         # of the places a concern is usually included from.
         if concern_type.nil? || concern_type == "other"
-          search_dirs << File.join(root, "app", "models")
-          search_dirs << File.join(root, "app", "controllers")
+          search_dirs.concat(PathResolver.dirs_for(root, "app/models"))
+          search_dirs.concat(PathResolver.dirs_for(root, "app/controllers"))
         else
-          search_dirs << File.join(root, "app", concern_type.pluralize)
+          search_dirs.concat(PathResolver.dirs_for(root, "app/#{concern_type.pluralize}"))
         end
 
-        max_size = RailsAiContext.configuration.max_file_size
         # Build pattern: match `include ConcernName` or `include ModuleName::ConcernName`
         # Handle both simple and namespaced concern names.
         # Use `camelize` (not `classify`) - `classify` singularizes, which drops
@@ -398,12 +386,11 @@ module RailsAiContext
         simple_name = concern_name.demodulize.camelize
         pattern = /^\s*include\s+(?:\w+::)*#{Regexp.escape(simple_name)}\b/
 
+        real_root = File.realpath(root).to_s
         search_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          Dir.glob(File.join(dir, "**", "*.rb")).each do |file_path|
+          safe_glob(dir, "**/*.rb", real_root).each do |file_path|
             # Skip concern files themselves
             next if file_path.include?("/concerns/")
-            next if File.size(file_path) > max_size
 
             source = RailsAiContext::SafeFile.read(file_path) or next
             if source.match?(pattern)
@@ -417,8 +404,7 @@ module RailsAiContext
 
         includers.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] find_includers failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "find_includers")
       end
     end
   end

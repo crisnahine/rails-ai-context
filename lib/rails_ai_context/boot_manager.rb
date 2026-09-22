@@ -39,11 +39,32 @@ module RailsAiContext
         status == :booted
       end
 
-      # One-line summary safe to relay to an AI client or a terminal.
+      # Bundler::GemRequireError names the gem it failed to require and
+      # nothing about why; the incompatibility that actually raised is in
+      # `cause`. Walk to the deepest one, capped so a cycle cannot hang.
+      def root_cause
+        cause = error&.cause
+        10.times do
+          break unless cause&.cause
+
+          cause = cause.cause
+        end
+        cause
+      end
+
+      # One-line summary safe to relay to an AI client or a terminal. It
+      # carries the cause too: the footer this feeds is the only place most
+      # callers ever see, and a gem name with no reason is not actionable.
       def failure_summary
         return nil if booted?
 
-        "#{error.class}: #{error.message.to_s.lines.first&.strip}"
+        summary = one_line(error)
+        cause = root_cause
+        cause ? "#{summary} (cause: #{one_line(cause)})" : summary
+      end
+
+      def one_line(e)
+        "#{e.class}: #{e.message.to_s.lines.first&.strip}"
       end
 
       # An unguarded `RailsAiContext.configure` in config/initializers has

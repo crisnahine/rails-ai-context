@@ -74,11 +74,11 @@ module RailsAiContext
         state = detect_state_management(all_deps)
         testing = detect_testing(all_deps)
         pkg_mgr = detect_package_manager
-        ts = detect_typescript
         mono = detect_monorepo(all_deps)
         build = detect_build_tool
         vite_fw = detect_vite_config_frameworks
         roots = detect_frontend_roots
+        ts = detect_typescript(roots)
 
         # Merge vite config detected frameworks into main frameworks hash
         vite_fw.each { |sym| frameworks[sym] ||= nil unless frameworks.key?(sym) }
@@ -126,16 +126,7 @@ module RailsAiContext
       # ---- Package.json reading ----
 
       def read_package_json_deps
-        path = File.join(root, "package.json")
-        return {} unless File.exist?(path)
-        return {} if File.size(path) > MAX_PACKAGE_JSON_SIZE
-
-        data = parse_json(path)
-        return {} unless data.is_a?(Hash)
-
-        deps = (data["dependencies"] || {})
-        dev_deps = (data["devDependencies"] || {})
-        deps.merge(dev_deps)
+        RailsAiContext::PackageJson.deps(root)
       end
 
       # ---- Framework detection ----
@@ -177,9 +168,12 @@ module RailsAiContext
 
       # ---- TypeScript ----
 
-      def detect_typescript
-        path = File.join(root, "tsconfig.json")
-        return { enabled: false } unless File.exist?(path)
+      # An app whose TypeScript lives under frontend/ has no tsconfig.json at
+      # its root, so the frontend roots are searched too. The root one wins.
+      def detect_typescript(roots)
+        dirs = [ root ] + roots.map { |fr| File.join(root, fr[:path]) }
+        path = dirs.map { |dir| File.join(dir, "tsconfig.json") }.find { |p| File.exist?(p) }
+        return { enabled: false } unless path
 
         data = parse_json(path)
         return { enabled: false } unless data.is_a?(Hash)
@@ -258,7 +252,7 @@ module RailsAiContext
         return "vite" if Dir.glob(File.join(root, "vite.config.*")).any?
         return "webpack" if File.exist?(File.join(root, "config/webpacker.yml")) ||
                             File.exist?(File.join(root, "config/shakapacker.yml"))
-        return "esbuild" if package_json_has_script?("esbuild")
+        return "esbuild" if RailsAiContext::PackageJson.present?(root, "esbuild")
 
         nil
       end
@@ -322,7 +316,7 @@ module RailsAiContext
         end
 
         # 5. Common directories
-        %w[app/frontend app/javascript frontend client].filter_map do |dir|
+        RailsAiContext::PackageJson::FRONTEND_DIRS.filter_map do |dir|
           full = File.join(root, dir)
           next unless Dir.exist?(full)
           next unless safe_path?(full)
@@ -444,26 +438,13 @@ module RailsAiContext
       def detect_api_clients(all_deps)
         API_CLIENT_MARKERS.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_api_clients failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_api_clients")
       end
 
       def detect_component_libraries(all_deps)
         COMPONENT_LIB_MARKERS.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_component_libraries failed: #{e.message}" if ENV["DEBUG"]
-        []
-      end
-
-      def package_json_has_script?(name)
-        path = File.join(root, "package.json")
-        return false unless File.exist?(path)
-        content = RailsAiContext::SafeFile.read(path)
-        return false unless content
-        content.include?("\"#{name}\"")
-      rescue => e
-        $stderr.puts "[rails-ai-context] package_json_has_script? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext.debug_fail(e, [], label: "detect_component_libraries")
       end
     end
   end

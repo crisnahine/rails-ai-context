@@ -10,11 +10,7 @@ module RailsAiContext
 
       input_schema(
         properties: {
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: count of streams, frames, model broadcasts. standard: each stream with source → target (default). full: everything including inline template refs and DOM IDs."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: count of streams, frames, model broadcasts. standard: each stream with source → target (default). full: everything including inline template refs and DOM IDs."),
           stream: {
             type: "string",
             description: "Filter by stream/channel name (e.g. 'notifications', 'messages'). Shows only broadcasts and subscriptions for this stream."
@@ -90,8 +86,7 @@ module RailsAiContext
         lock = RailsAiContext::GemLock.for(rails_app.root)
         !lock.missing? && !lock.present?("turbo-rails")
       rescue => e
-        $stderr.puts "[rails-ai-context] turbo_rails_absent? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext.debug_fail(e, false, label: "turbo_rails_absent?")
       end
 
       private_class_method def self.format_summary(found, turbo_data:, filter_label: nil)
@@ -375,8 +370,7 @@ module RailsAiContext
 
         warnings.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_mismatches failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_mismatches")
       end
 
       # Fuzzy-match stream names: "post_{id}" matches "post_{id}",
@@ -422,8 +416,7 @@ module RailsAiContext
 
         wiring.sort_by { |k, _| k }.to_h
       rescue => e
-        $stderr.puts "[rails-ai-context] build_stream_wiring failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "build_stream_wiring")
       end
     end
   end

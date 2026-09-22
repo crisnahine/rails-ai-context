@@ -74,6 +74,47 @@ RSpec.describe RailsAiContext::Introspectors::ConfigIntrospector do
         expect(result[:current_attributes]).to include("Current")
       end
     end
+
+    context "with a model file that nests the CurrentAttributes class" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/holder.rb") }
+
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class Holder < ApplicationRecord
+            class Inner < ActiveSupport::CurrentAttributes
+              attribute :user
+            end
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f(fixture_model) }
+
+      it "reads the class the file declares first and stops there" do
+        expect(result[:current_attributes]).not_to include("Holder", "Holder::Inner")
+      end
+    end
+
+    context "with a model file whose first class names no superclass" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/ledger.rb") }
+
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class Ledger
+          end
+
+          class LedgerCurrent < ActiveSupport::CurrentAttributes
+            attribute :book
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f(fixture_model) }
+
+      it "does not look past it to a later class" do
+        expect(result[:current_attributes]).not_to include("Ledger", "LedgerCurrent")
+      end
+    end
   end
 
   describe "#detect_error_monitoring" do

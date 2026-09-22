@@ -18,11 +18,7 @@ module RailsAiContext
             type: "string",
             description: "Specific view path relative to app/views (e.g. 'posts/index.html.erb'). Returns full content."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: file list with line counts. standard: file list with partials/stimulus refs (default). full: template content."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: file list with line counts. standard: file list with partials/stimulus refs (default). full: template content.")
         }
       )
 
@@ -375,8 +371,7 @@ module RailsAiContext
 
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_view_metadata failed: #{e.message}" if ENV["DEBUG"]
-        { ivars: [], turbo: [], components: [], helpers: [] }
+        RailsAiContext.debug_fail(e, { ivars: [], turbo: [], components: [], helpers: [] }, label: "extract_view_metadata")
       end
 
       # Detect if content is a Phlex view class
@@ -426,8 +421,7 @@ module RailsAiContext
 
         locals.to_a.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_partial_locals failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_partial_locals")
       end
 
       private_class_method def self.read_from_disk(controller:, path:, detail:)

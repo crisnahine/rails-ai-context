@@ -10,11 +10,7 @@ module RailsAiContext
 
       input_schema(
         properties: {
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: env var names only. standard: env vars grouped by source + external services (default). full: everything including per-file locations, Dockerfile vars, and credentials keys."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: env var names only. standard: env vars grouped by source + external services (default). full: everything including per-file locations, Dockerfile vars, and credentials keys.")
         }
       )
 
@@ -32,7 +28,7 @@ module RailsAiContext
         env_vars = scan_env_vars(root)
         env_example = scan_env_example(root)
         dockerfile_vars = scan_dockerfile(root)
-        external_services = detect_external_services(root)
+        external_services = detect_external_services(root, env_vars.values.flatten.map { |v| v[:name] }.uniq)
         credentials_keys = detect_credentials_keys
         encrypted_columns = detect_encrypted_columns
 
@@ -129,7 +125,17 @@ module RailsAiContext
           lines << ""
         end
 
-        # Credentials keys
+        lines.concat(credentials_and_encrypted_lines(credentials_keys, encrypted_columns))
+
+        lines << SCAN_NOTE
+        text_response(lines.join("\n"))
+      end
+
+      # Both `standard` and `full` end with these two sections, so a wording
+      # change cannot land in one detail level and miss the other.
+      private_class_method def self.credentials_and_encrypted_lines(credentials_keys, encrypted_columns)
+        lines = []
+
         if credentials_keys.any?
           lines << "## Credentials Keys (values hidden)"
           credentials_keys.each { |k| lines << "- `#{k}`" }
@@ -140,7 +146,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Encrypted columns
         if encrypted_columns.any?
           lines << "## Encrypted Model Columns"
           encrypted_columns.each do |model, cols|
@@ -149,8 +154,7 @@ module RailsAiContext
           lines << ""
         end
 
-        lines << SCAN_NOTE
-        text_response(lines.join("\n"))
+        lines
       end
 
       private_class_method def self.format_full(env_vars, env_example, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
@@ -178,11 +182,7 @@ module RailsAiContext
             categorized[category] << { name: name, **details }
           end
 
-          category_order = [
-            "API Keys & Secrets", "Mail", "Database", "Infrastructure",
-            "Monitoring", "Push Notifications", "Other"
-          ]
-          sorted_categories = categorized.keys.sort_by { |k| category_order.index(k) || 99 }
+          sorted_categories = categorized.keys.sort_by { |k| CATEGORY_ORDER.index(k) || 99 }
 
           sorted_categories.each do |category|
             vars = categorized[category]
@@ -234,25 +234,7 @@ module RailsAiContext
           lines << ""
         end
 
-        # Credentials keys
-        if credentials_keys.any?
-          lines << "## Credentials Keys (values hidden)"
-          credentials_keys.each { |k| lines << "- `#{k}`" }
-          lines << ""
-        elsif credentials_file_present?
-          lines << "## Credentials Keys (values hidden)"
-          lines << RailsAiContext::Confidence.unavailable("credentials are encrypted; reading the key names needs a booted app with its master key")
-          lines << ""
-        end
-
-        # Encrypted columns
-        if encrypted_columns.any?
-          lines << "## Encrypted Model Columns"
-          encrypted_columns.each do |model, cols|
-            lines << "- **#{model}:** #{cols.join(', ')}"
-          end
-          lines << ""
-        end
+        lines.concat(credentials_and_encrypted_lines(credentials_keys, encrypted_columns))
 
         lines << SCAN_NOTE
         text_response(lines.join("\n"))
@@ -289,8 +271,6 @@ module RailsAiContext
         real_root = File.realpath(root).to_s
 
         scan_files(root, real_root).each do |file|
-          next if File.size(file) > max_file_size
-
           source = safe_read(file)
           next unless source
           next unless source.include?("ENV")
@@ -329,8 +309,7 @@ module RailsAiContext
           var
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] env_references failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "env_references")
       end
 
       private_class_method def self.scan_env_example(root)
@@ -340,9 +319,6 @@ module RailsAiContext
 
         candidates.each do |name|
           path = File.join(root, name)
-          next unless File.exist?(path)
-          next if File.size(path) > max_file_size
-
           source = safe_read(path)
           next unless source
 
@@ -382,9 +358,6 @@ module RailsAiContext
 
         candidates.each do |name|
           path = File.join(root, name)
-          next unless File.exist?(path)
-          next if File.size(path) > max_file_size
-
           source = safe_read(path)
           next unless source
 
@@ -449,7 +422,7 @@ module RailsAiContext
         legacy ? [ [ legacy[1], legacy[2] ] ] : []
       end
 
-      private_class_method def self.detect_external_services(root)
+      private_class_method def self.detect_external_services(root, env_names)
         services = []
         gemfile_path = File.join(root, "Gemfile")
 
@@ -482,18 +455,16 @@ module RailsAiContext
           "recaptcha" => { name: "reCAPTCHA", env_prefix: "RECAPTCHA_" }
         }
 
-        if File.exist?(gemfile_path) && File.size(gemfile_path) < max_file_size
-          gemfile = safe_read(gemfile_path)
-          if gemfile
-            service_gems.each do |gem_name, info|
-              next unless gemfile.match?(/gem\s+["']#{Regexp.escape(gem_name)}["']/)
-              services << {
-                name: info[:name],
-                gem: gem_name,
-                detection: "Gemfile",
-                env_vars: find_env_vars_with_prefix(info[:env_prefix], root)
-              }
-            end
+        gemfile = safe_read(gemfile_path)
+        if gemfile
+          service_gems.each do |gem_name, info|
+            next unless gemfile.match?(/gem\s+["']#{Regexp.escape(gem_name)}["']/)
+            services << {
+              name: info[:name],
+              gem: gem_name,
+              detection: "Gemfile",
+              env_vars: env_names.grep(/\A#{Regexp.escape(info[:env_prefix])}/).sort
+            }
           end
         end
 
@@ -511,7 +482,6 @@ module RailsAiContext
 
         real_root = File.realpath(root).to_s
         safe_glob(app_dir, "**/*.rb", real_root).each do |file|
-          next if File.size(file) > max_file_size
           source = safe_read(file)
           next unless source
 
@@ -541,8 +511,7 @@ module RailsAiContext
 
         services.uniq { |s| "#{s[:name]}:#{s[:file]}" }
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_http_clients failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_http_clients")
       end
 
       private_class_method def self.extract_service_name_from_url(url)
@@ -559,31 +528,8 @@ module RailsAiContext
           # Use the main domain part
           parts[-2]&.capitalize
         rescue => e
-          $stderr.puts "[rails-ai-context] extract_service_name_from_url failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "extract_service_name_from_url")
         end
-      end
-
-      private_class_method def self.find_env_vars_with_prefix(prefix, root)
-        return [] unless prefix
-
-        vars = Set.new
-        real_root = File.realpath(root).to_s
-
-        scan_files(root, real_root).each do |file|
-          next if File.size(file) > max_file_size
-          source = safe_read(file)
-          next unless source
-
-          source.scan(/ENV(?:\[["']|\.fetch\(["'])(#{Regexp.escape(prefix)}[A-Z0-9_]+)/).each do |match|
-            vars << match[0]
-          end
-        end
-
-        vars.to_a.sort
-      rescue => e
-        $stderr.puts "[rails-ai-context] find_env_vars_with_prefix failed: #{e.message}" if ENV["DEBUG"]
-        []
       end
 
       # An encrypted credentials file the tool could not open is a different
@@ -639,9 +585,6 @@ module RailsAiContext
 
         candidates.each do |file|
           path = File.join(root, file)
-          next unless File.exist?(path)
-          next if File.size(path) > max_file_size
-
           source = safe_read(path)
           next unless source
 
@@ -688,6 +631,14 @@ module RailsAiContext
         [ "Infrastructure", %w[PORT CONCURRENCY THREADS WORKERS TIMEOUT QUEUE PIDFILE] ]
       ].freeze
 
+      # Display order, not declaration order: CATEGORY_SEGMENTS is ordered by
+      # how specific a match is, and reading the order off it would swap
+      # Infrastructure and Monitoring in every answer.
+      CATEGORY_ORDER = [
+        "API Keys & Secrets", "Mail", "Database", "Infrastructure",
+        "Monitoring", "Push Notifications", "Other"
+      ].freeze
+
       private_class_method def self.categorize_env_var(name)
         segments = name.to_s.upcase.split("_")
         CATEGORY_SEGMENTS.each do |category, keys|
@@ -703,12 +654,7 @@ module RailsAiContext
           groups[categorize_env_var(name)] << name
         end
 
-        # Sort groups: important ones first
-        priority = [
-          "API Keys & Secrets", "Mail", "Database", "Infrastructure",
-          "Monitoring", "Push Notifications", "Other"
-        ]
-        groups.sort_by { |k, _| priority.index(k) || 99 }
+        groups.sort_by { |k, _| CATEGORY_ORDER.index(k) || 99 }
       end
 
       private_class_method def self.find_default_value(env_vars, name)

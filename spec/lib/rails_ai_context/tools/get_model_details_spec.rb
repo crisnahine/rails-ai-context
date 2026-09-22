@@ -365,6 +365,29 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
     end
   end
 
+  describe "a model whose only validation is a custom validate method" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Widget" => {
+            table_name: "widgets",
+            associations: [ { type: "belongs_to", name: "account", optional: true } ],
+            validations: [],
+            custom_validates: [ "price_is_sane" ]
+          }
+        }
+      )
+    end
+
+    it "prints the Validations heading above the custom bullets" do
+      text = described_class.call(model: "Widget", detail: "full").content.first[:text]
+
+      expect(text).to include("## Validations")
+      expect(text).to match(/## Validations\n- \*\*Custom:\*\* `price_is_sane`/)
+    end
+  end
+
   # The builder emits `field:` and `transformation:`; the renderer read
   # `attribute:` and `with:`, so both blocks printed "- **** ...".
   describe "detailed macro blocks" do

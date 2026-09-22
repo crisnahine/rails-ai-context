@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Specific Stimulus controller name (e.g. 'hello', 'filter-form'). Case-insensitive."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: names + counts. standard: targets + values + actions (default). full: everything including outlets, classes, HTML usage."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: names + counts. standard: targets + values + actions (default). full: everything including outlets, classes, HTML usage."),
           limit: {
             type: "integer",
             description: "Max controllers to return when listing. Default: 50."
@@ -130,9 +126,7 @@ module RailsAiContext
             # Cross-controller composition
             if data[:cross_controller_composition]&.any?
               lines << "" << "## Cross-Controller Composition"
-              data[:cross_controller_composition].first(10).each do |comp|
-                lines << "- #{comp}"
-              end
+              lines.concat(composition_lines(data[:cross_controller_composition]))
             end
 
             lines << pagination_hint unless pagination_hint.empty?
@@ -148,15 +142,19 @@ module RailsAiContext
             # Cross-controller composition
             if data[:cross_controller_composition]&.any?
               lines << "## Cross-Controller Composition"
-              data[:cross_controller_composition].first(10).each do |comp|
-                lines << "- #{comp}"
-              end
+              lines.concat(composition_lines(data[:cross_controller_composition]))
               lines << ""
             end
 
             text_response(lines.join("\n"))
 
           end
+        end
+      end
+
+      private_class_method def self.composition_lines(compositions)
+        compositions.first(10).map do |comp|
+          "- `#{comp[:file]}` - #{Array(comp[:controllers]).join(' + ')}"
         end
       end
 
@@ -246,8 +244,7 @@ module RailsAiContext
           path.sub("#{real_views_dir}/", "")
         end.first(10)
       rescue => e
-        $stderr.puts "[rails-ai-context] find_views_using failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "find_views_using")
       end
     end
   end

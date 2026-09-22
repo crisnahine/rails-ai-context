@@ -88,8 +88,7 @@ module RailsAiContext
         # A permission bit, a directory in place of a file and a bug in a
         # listener all land in `unresolved` alike, so the cause is worth
         # saying where the booted walk already says it.
-        $stderr.puts "[rails-ai-context] concern introspection failed for #{path}: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "concern introspection of #{path}")
       end
 
       def tagged(entry, concern_name)

@@ -32,70 +32,51 @@ module RailsAiContext
         app.root.to_s
       end
 
+      PUMA_SETTINGS = %i[threads workers port].freeze
+
+      # A number inside an ENV name is part of the name: the default in
+      # `ENV.fetch("PORT_2", 3000)` is 3000, not 2.
+      PUMA_INTEGER = /(?<!\w)\d+/
+
       def extract_puma_config
         path = File.join(root, "config/puma.rb")
         return nil unless File.exist?(path)
 
-        # Walk AST directly for puma macro calls with integer/ENV arguments
-        parse_result = AstCache.parse(path)
         config = {}
-        extract_puma_calls(parse_result.value, config)
+        puma_calls(path).each do |call|
+          ints = call[:arguments].filter_map { |arg| puma_integer(arg) }
+          case call[:name]
+          when "threads" then config[:threads_min], config[:threads_max] = ints if ints.size >= 2
+          when "workers" then config[:workers] = ints.first if ints.first
+          when "port"    then config[:port] = ints.first if ints.first
+          end
+        end
 
         config.empty? ? nil : config
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_puma_config failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_puma_config")
       end
 
-      # Walk AST to find threads/workers/port calls and extract their arguments.
-      def extract_puma_calls(node, config)
-        case node
-        when Prism::ProgramNode
-          extract_puma_calls(node.statements, config)
-        when Prism::StatementsNode
-          node.body.each { |child| extract_puma_calls(child, config) }
-        when Prism::CallNode
-          if node.receiver.nil?
-            args = node.arguments&.arguments || []
-            case node.name
-            when :threads
-              ints = args.select { |a| a.is_a?(Prism::IntegerNode) }.map(&:value)
-              if ints.size >= 2
-                config[:threads_min] = ints[0]
-                config[:threads_max] = ints[1]
-              end
-            when :workers
-              int_arg = args.find { |a| a.is_a?(Prism::IntegerNode) }
-              config[:workers] = int_arg.value if int_arg
-            when :port
-              # port is usually called with ENV.fetch("PORT", default_int)
-              args.each do |arg|
-                int_val = find_integer_in_node(arg)
-                if int_val
-                  config[:port] = int_val
-                  break
-                end
-              end
-            end
-          end
-        else
-          # Recurse into child nodes for blocks, if-statements, etc.
-          node.child_nodes.compact.each { |child| extract_puma_calls(child, config) }
-        end
+      # The puma macros are receiverless, so a `config.port` on some other
+      # object is not one of them.
+      #
+      # Depth is deliberately not filtered. The generated puma.rb guards
+      # `workers` behind an environment conditional, so a top-level-only
+      # reader answers "no workers configured" for the most common config
+      # there is. The cost is that a name set more than once reports the
+      # last one, including one set inside `on_worker_boot`.
+      def puma_calls(path)
+        SourceIntrospector.walk(path, {
+          puma: -> { Listeners::MethodCallListener.new(names: PUMA_SETTINGS) }
+        })[:puma].reject { |call| call[:receiver] }
       end
 
-      # Recursively search an AST node for an integer literal (handles ENV.fetch("X", 3000)).
-      def find_integer_in_node(node)
-        case node
-        when Prism::IntegerNode then node.value
-        when Prism::CallNode
-          (node.arguments&.arguments || []).each do |arg|
-            val = find_integer_in_node(arg)
-            return val if val
-          end
-          nil
-        else nil
-        end
+      # An argument the listener could not read a literal from arrives as its
+      # own source, which is where `ENV.fetch("PORT", 3000)` keeps its default.
+      def puma_integer(arg)
+        return arg if arg.is_a?(Integer)
+
+        arg.to_s[PUMA_INTEGER]&.to_i
       end
 
       def extract_procfile
@@ -132,8 +113,7 @@ module RailsAiContext
         return true if content.match?(%r{["']/?(?:up|health|ping|status|healthz|alive|liveness|readiness)["']})
         nil
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_health_check failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_health_check")
       end
 
       def extract_docker_info
@@ -153,8 +133,7 @@ module RailsAiContext
 
         info
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_docker_info failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_docker_info")
       end
 
       def detect_deployment_tool

@@ -88,6 +88,72 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       end
     end
 
+    # The auto-attach glob has to name the dump file the app actually committed,
+    # or the rule never fires on a :sql app: db/schema.rb is never opened there.
+    #
+    # Rails 7.1 moved schema_format from ActiveRecord::Base to ActiveRecord.
+    # Only one of the two is real on any given matrix leg, so each is pinned
+    # here by making it the one that answers.
+    [ ActiveRecord, ActiveRecord::Base ].each do |owner|
+      context "with schema_format on #{owner}" do
+        # The accessor the running Rails does not have has to be conjured, so
+        # partial-double verification is off for the stubbing itself.
+        def stub_schema_format(owner, value)
+          without_partial_double_verification do
+            [ ActiveRecord, ActiveRecord::Base ].each do |mod|
+              allow(mod).to receive(:respond_to?).and_call_original
+              allow(mod).to receive(:respond_to?).with(:schema_format).and_return(mod == owner)
+            end
+            allow(owner).to receive(:schema_format).and_return(value)
+          end
+        end
+
+        it "names db/structure.sql when the app configures :sql" do
+          Dir.mktmpdir do |dir|
+            FileUtils.mkdir_p(File.join(dir, "db"))
+            File.write(File.join(dir, "db", "schema.rb"), "# stale\n")
+            allow(Rails).to receive(:root).and_return(Pathname.new(dir))
+            stub_schema_format(owner, :sql)
+
+            described_class.new(context).call(dir)
+            content = File.read(File.join(dir, ".claude", "rules", "rails-schema.md"))
+            expect(content).to include('- "db/structure.sql"')
+            expect(content).not_to include('- "db/schema.rb"')
+          end
+        end
+
+        it "names db/schema.rb when the app configures :ruby" do
+          Dir.mktmpdir do |dir|
+            FileUtils.mkdir_p(File.join(dir, "db"))
+            File.write(File.join(dir, "db", "structure.sql"), "CREATE TABLE users (id integer);\n")
+            allow(Rails).to receive(:root).and_return(Pathname.new(dir))
+            stub_schema_format(owner, :ruby)
+
+            described_class.new(context).call(dir)
+            content = File.read(File.join(dir, ".claude", "rules", "rails-schema.md"))
+            expect(content).to include('- "db/schema.rb"')
+            expect(content).not_to include('- "db/structure.sql"')
+          end
+        end
+      end
+    end
+
+    # The static tier, where nothing is loaded and the dump on disk is the
+    # only evidence there is.
+    it "names db/structure.sql from disk when no configuration is reachable" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "structure.sql"), "CREATE TABLE users (id integer);\n")
+        allow(Rails).to receive(:root).and_return(Pathname.new(dir))
+        hide_const("ActiveRecord")
+
+        described_class.new(context).call(dir)
+        content = File.read(File.join(dir, ".claude", "rules", "rails-schema.md"))
+        expect(content).to include('- "db/structure.sql"')
+        expect(content).not_to include('- "db/schema.rb"')
+      end
+    end
+
     it "includes paths: frontmatter on models rule" do
       Dir.mktmpdir do |dir|
         described_class.new(context).call(dir)

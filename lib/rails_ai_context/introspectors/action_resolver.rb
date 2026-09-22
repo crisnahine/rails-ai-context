@@ -82,8 +82,7 @@ module RailsAiContext
       def actions_from_source(source, class_name:, skip_underscored: true)
         own_actions(methods_in(source), class_name: class_name, skip_underscored: skip_underscored)
       rescue => e
-        $stderr.puts "[rails-ai-context] ActionResolver.actions_from_source failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "ActionResolver.actions_from_source")
       end
 
       # The same reading with signatures, for the tools that show a file's
@@ -120,14 +119,52 @@ module RailsAiContext
         signature(method)[/\A[^(]*\((.*)\)\z/m, 1].to_s
       end
 
+      # The lines a walked method occupies, cut out of the source it was
+      # walked from. A caller that already holds the method hash cuts the body
+      # with this rather than searching the file again for the name.
+      def body_of(source, method)
+        start_line = method[:location]
+        end_line = method[:end_location]
+        return nil unless start_line && end_line
+
+        lines = source.to_s.lines[(start_line - 1)..(end_line - 1)]
+        return nil unless lines
+
+        { code: lines.map(&:rstrip).join("\n"), start_line: start_line, end_line: end_line }
+      end
+
       # One method's body out of a file's source, with the lines it occupies.
-      # The `end` that closes a `def` sits at the `def`'s own indentation,
-      # which reads more reliably than counting block depth.
+      # The owner decides which `def` answers: a class nested in the file can
+      # define the same name earlier, and a whole-file search for the name
+      # would hand back that one instead. Pass the owner when the caller holds
+      # it - `default_owner` only guesses, and it guesses the wrong sibling
+      # when two classes sit at the same depth in one file.
+      #
+      # `def self.x` is a different method from `def x`, and every caller here
+      # wants the instance one, so the class-method def never answers.
       #
       # The name matches ignoring case, so an action asked for as "Show"
       # reaches `def show` here the way it does in the controller listing.
-      def method_body(source, method_name)
-        lines = source.to_s.lines
+      #
+      # A name the owner does not carry falls back to reading lines, which is
+      # what answers for a `def` the walk does not record (`initialize`), for a
+      # file it could not parse, and for an owner that was guessed wrong. The
+      # `end` that closes a `def` sits at the `def`'s own indentation, which
+      # reads more reliably than block depth.
+      def method_body(source, method_name, owner: nil)
+        methods = methods_in(source)
+        named = methods.select do |m|
+          m[:scope] == :instance && m[:name].to_s.casecmp?(method_name.to_s)
+        end
+        own = own_methods(named, owner || default_owner(source, methods))
+        return body_of(source, own.first) if own.any?
+
+        scanned_body(source.to_s.lines, method_name)
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "ActionResolver.method_body")
+      end
+
+      def scanned_body(lines, method_name)
         start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/i) }
         return nil unless start_idx
 
@@ -141,9 +178,6 @@ module RailsAiContext
         end
 
         { code: body.join("\n"), start_line: start_idx + 1, end_line: end_idx + 1 }
-      rescue => e
-        $stderr.puts "[rails-ai-context] ActionResolver.method_body failed: #{e.message}" if ENV["DEBUG"]
-        nil
       end
 
       # What an action body assigns and what it renders. One owner for the
@@ -183,8 +217,7 @@ module RailsAiContext
         methods = methods_in(source)
         own_methods(methods, owner || default_owner(source, methods))
       rescue => e
-        $stderr.puts "[rails-ai-context] ActionResolver.own_methods_in failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "ActionResolver.own_methods_in")
       end
 
       # The outermost owner the methods sit in: the file's class, or its
@@ -215,8 +248,7 @@ module RailsAiContext
 
         []
       rescue => e
-        $stderr.puts "[rails-ai-context] ActionResolver.resolve failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "ActionResolver.resolve")
       end
 
       # The nearest ancestor in the app that defines actions of its own.

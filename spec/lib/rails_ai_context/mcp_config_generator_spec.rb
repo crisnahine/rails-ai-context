@@ -119,6 +119,74 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
         end
       end
 
+      # The bytes each tool's file gets, pinned whole. Every writer branch
+      # produces one of these five, so a shape change that moves a key, an
+      # indent or the TOML args rendering fails here first.
+      it "writes the same bytes for all five tools" do
+        Dir.mktmpdir do |dir|
+          described_class.new(tools: tools, output_dir: dir, tool_mode: :mcp).call
+
+          json_entry = <<~JSON.chomp
+            {
+              "command": "bundle",
+              "args": [
+                "exec",
+                "rails-ai-context",
+                "serve"
+              ]
+            }
+          JSON
+          json_entry = json_entry.gsub("\n", "\n    ")
+
+          expect(File.read(File.join(dir, ".mcp.json"))).to eq(<<~JSON)
+            {
+              "mcpServers": {
+                "rails-ai-context": #{json_entry}
+              }
+            }
+          JSON
+
+          expect(File.read(File.join(dir, ".cursor", "mcp.json"))).to eq(<<~JSON)
+            {
+              "mcpServers": {
+                "rails-ai-context": #{json_entry}
+              }
+            }
+          JSON
+
+          expect(File.read(File.join(dir, ".vscode", "mcp.json"))).to eq(<<~JSON)
+            {
+              "servers": {
+                "rails-ai-context": #{json_entry}
+              }
+            }
+          JSON
+
+          expect(File.read(File.join(dir, "opencode.json"))).to eq(<<~JSON)
+            {
+              "mcp": {
+                "rails-ai-context": {
+                  "type": "local",
+                  "command": [
+                    "bundle",
+                    "exec",
+                    "rails-ai-context",
+                    "serve"
+                  ]
+                }
+              }
+            }
+          JSON
+
+          toml = File.read(File.join(dir, ".codex", "config.toml"))
+          expect(toml.split("\n\n").first).to eq(<<~TOML.chomp)
+            [mcp_servers.rails-ai-context]
+            command = "bundle"
+            args = ["exec", "rails-ai-context", "serve"]
+          TOML
+        end
+      end
+
       it "generates all 5 configs when all tools selected" do
         Dir.mktmpdir do |dir|
           result = described_class.new(tools: tools, output_dir: dir, tool_mode: :mcp).call
@@ -286,6 +354,51 @@ RSpec.describe RailsAiContext::McpConfigGenerator do
           content = File.read(File.join(dir, ".codex", "config.toml"))
           expect(content).to include('command = "rails-ai-context"')
           expect(content).to include('args = ["serve"]')
+        end
+      end
+    end
+
+    # merge_json used to rescue JSON::ParserError only, so an existing but
+    # unreadable config raised Errno::EACCES out of the whole install.
+    context "when a config file cannot be read or written" do
+      before { skip "root can read anything" if Process.uid.zero? }
+
+      it "reports the unreadable file as failed and keeps going" do
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, ".mcp.json"), "{}")
+          File.chmod(0o000, File.join(dir, ".mcp.json"))
+
+          result = described_class.new(tools: %i[claude cursor], output_dir: dir, tool_mode: :mcp).call
+
+          expect(result[:failed]).to eq([ File.join(dir, ".mcp.json") ])
+          expect(result[:written]).to eq([ File.join(dir, ".cursor/mcp.json") ])
+        ensure
+          File.chmod(0o600, File.join(dir, ".mcp.json"))
+        end
+      end
+
+      it "reports an unwritable TOML config as failed" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, ".codex"))
+          File.write(File.join(dir, ".codex/config.toml"), "[other]\n")
+          File.chmod(0o500, File.join(dir, ".codex"))
+
+          result = described_class.new(tools: [ :codex ], output_dir: dir, tool_mode: :mcp).call
+
+          expect(result[:failed]).to eq([ File.join(dir, ".codex/config.toml") ])
+        ensure
+          File.chmod(0o700, File.join(dir, ".codex"))
+        end
+      end
+
+      it "does not raise out of .remove when the config cannot be read" do
+        Dir.mktmpdir do |dir|
+          File.write(File.join(dir, ".mcp.json"), "{}")
+          File.chmod(0o000, File.join(dir, ".mcp.json"))
+
+          expect(described_class.remove(tools: [ :claude ], output_dir: dir)).to eq([])
+        ensure
+          File.chmod(0o600, File.join(dir, ".mcp.json"))
         end
       end
     end

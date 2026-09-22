@@ -78,8 +78,7 @@ module RailsAiContext
 
         pin_names.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_importmap_pins failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_importmap_pins")
       end
 
       def detect_css_framework
@@ -117,12 +116,7 @@ module RailsAiContext
       end
 
       def package_json_has?(package)
-        path = File.join(root, "package.json")
-        return false unless File.exist?(path)
-        (RailsAiContext::SafeFile.read(path) || "").include?("\"#{package}\"")
-      rescue => e
-        $stderr.puts "[rails-ai-context] package_json_has? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext::PackageJson.present?(root, package)
       end
     end
   end

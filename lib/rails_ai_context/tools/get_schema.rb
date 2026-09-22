@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Specific table name for full detail. Omit for overview."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: table names + column counts. standard: table names + column names/types (default). full: everything including indexes, FKs, comments."
-          },
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: table names + column counts. standard: table names + column names/types (default). full: everything including indexes, FKs, comments."),
           limit: {
             type: "integer",
             description: "Max tables to return when listing. Default: 50 for summary, 25 for standard, 10 for full."
@@ -252,15 +248,13 @@ module RailsAiContext
           end
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] habtm_join_tables failed: #{e.message}" if ENV["DEBUG"]
-        Set.new
+        RailsAiContext.debug_fail(e, Set.new, label: "habtm_join_tables")
       end
 
       private_class_method def self.models_for_table(table_name, models)
         models.select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
       rescue => e
-        $stderr.puts "[rails-ai-context] models_for_table failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "models_for_table")
       end
 
       # Rails 8 multi-database apps dump each secondary database (queue,

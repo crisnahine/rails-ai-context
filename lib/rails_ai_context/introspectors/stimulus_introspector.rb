@@ -22,17 +22,6 @@ module RailsAiContext
           parse_controller(path, controllers_dir)
         end
 
-        # Merge action bindings from views into each controller's data
-        bindings = extract_action_bindings
-        if bindings.any?
-          controllers.each do |ctrl|
-            next unless ctrl[:name]
-            if (ctrl_bindings = bindings[ctrl[:name]])
-              ctrl[:action_bindings] = ctrl_bindings
-            end
-          end
-        end
-
         {
           controllers: controllers,
           cross_controller_composition: extract_cross_controller_composition(root)
@@ -49,16 +38,13 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path)
         return { name: File.basename(path), error: "unreadable" } unless content
 
-        outlets = extract_outlets(content)
-
         {
           name: name,
           file: relative,
           targets: extract_targets(content),
           values: extract_values(content),
           actions: extract_actions(content),
-          outlets: outlets,
-          outlet_controllers: outlets.any? ? outlets.each_with_object({}) { |o, h| h[o] = "#{o}-controller" } : nil,
+          outlets: extract_outlets(content),
           classes: extract_classes(content),
           lifecycle: extract_lifecycle(content),
           import_graph: extract_import_graph(content),
@@ -147,8 +133,7 @@ module RailsAiContext
         end
         imports
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_import_graph failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_import_graph")
       end
 
       JS_KEYWORDS = %w[if else for while switch catch function].freeze
@@ -159,50 +144,21 @@ module RailsAiContext
         method_count = methods.count { |m| !JS_KEYWORDS.include?(m) }
         { loc: loc, method_count: method_count }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_complexity failed: #{e.message}" if ENV["DEBUG"]
-        { loc: 0, method_count: 0 }
+        RailsAiContext.debug_fail(e, { loc: 0, method_count: 0 }, label: "extract_complexity")
       end
 
       def extract_turbo_event_listeners(content)
         events = content.scan(/["']turbo:([\w:-]+)["']/).flatten.uniq
         events.map { |e| "turbo:#{e}" }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_turbo_event_listeners failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_turbo_event_listeners")
       end
 
       def extract_lifecycle(content)
         hooks = content.scan(/\b(connect|disconnect|initialize)\s*\(\s*\)/).flatten.uniq
         hooks.any? ? hooks : nil
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_lifecycle failed: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      def extract_action_bindings
-        bindings = Hash.new { |h, k| h[k] = [] }
-        view_dirs = [ File.join(app.root, "app", "views"), File.join(app.root, "app", "components") ]
-        view_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          Dir.glob(File.join(dir, "**", "*.{erb,haml,slim}")).each do |path|
-            content = RailsAiContext::SafeFile.read(path) or next
-            content.scan(/data-action=["']([^"']+)["']/).each do |match|
-              match[0].split(/\s+/).each do |binding_str|
-                # Format: event->controller#method
-                if (m = binding_str.match(/(?:(\w+)->)?(\w[\w-]*)#(\w+)/))
-                  controller = m[2]
-                  method = m[3]
-                  event = m[1]
-                  bindings[controller] << { event: event, method: method }.compact
-                end
-              end
-            end
-          end
-        end
-        bindings.transform_values(&:uniq)
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_action_bindings failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, nil, label: "extract_lifecycle")
       end
 
       def extract_cross_controller_composition(root)
@@ -223,8 +179,7 @@ module RailsAiContext
 
         compositions.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_cross_controller_composition failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_cross_controller_composition")
       end
     end
   end

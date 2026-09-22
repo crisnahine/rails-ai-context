@@ -14,12 +14,7 @@ module RailsAiContext
 
       input_schema(
         properties: {
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Level of detail: summary (one-liner), standard (per-area breakdown), " \
-              "full (+ OpenAPI spec files, API client codegen, GraphQL resolvers/subscriptions/dataloaders)"
-          }
+          detail: RailsAiContext::DetailLevel.schema("Level of detail: summary (one-liner), standard (per-area breakdown), full (+ OpenAPI spec files, API client codegen, GraphQL resolvers/subscriptions/dataloaders)")
         }
       )
 

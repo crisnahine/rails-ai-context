@@ -11,11 +11,7 @@ module RailsAiContext
 
       input_schema(
         properties: {
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Level of detail: summary (one-liner), standard (stack overview + component counts), full (+ config details, path aliases, monorepo info)"
-          }
+          detail: RailsAiContext::DetailLevel.schema("Level of detail: summary (one-liner), standard (stack overview + component counts), full (+ config details, path aliases, monorepo info)")
         }
       )
 

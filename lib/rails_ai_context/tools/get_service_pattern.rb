@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Service class name or filename (e.g. 'CreateOrder', 'create_order'). Omit to list all services with pattern detection."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: names only. standard: names + method signatures + line counts (default). full: everything including side effects, error handling, and callers."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: names only. standard: names + method signatures + line counts (default). full: everything including side effects, error handling, and callers.")
         }
       )
 
@@ -32,45 +28,68 @@ module RailsAiContext
 
       def self.call(service: nil, detail: "standard", server_context: nil)
         root = rails_app.root.to_s
-        services_dir = File.join(root, "app", "services")
+        service_dirs = PathResolver.dirs_for(root, "app/services")
 
-        unless Dir.exist?(services_dir)
-          return text_response("No app/services/ directory found. This app may not use the service objects pattern.")
+        if service_dirs.empty?
+          return text_response("No services directory found. Searched app/services/, packs/*/app/services/ and engines/*/app/services/. " \
+            "This app may not use the service objects pattern.")
         end
 
         real_root = File.realpath(root).to_s
-        real_services_dir = File.realpath(services_dir).to_s
+        real_service_dirs = service_dirs.map { |d| File.realpath(d).to_s }
 
-        service_files = Dir.glob(File.join(services_dir, "**", "*.rb"))
-                          .filter_map { |f| safe_glob_realpath(f, real_services_dir, real_root) }
-                          .sort
+        service_files = service_dirs.flat_map { |d| safe_glob(d, "**/*.rb", real_root) }.uniq.sort
         if service_files.empty?
-          return text_response("app/services/ directory exists but contains no Ruby files.")
+          return text_response("A services directory exists but contains no Ruby files.")
         end
 
         if service
-          return format_single_service(service, service_files, real_services_dir, real_root)
+          return format_single_service(service, service_files, real_service_dirs, real_root)
         end
 
-        format_service_listing(service_files, real_services_dir, real_root, detail)
+        format_service_listing(service_files, real_service_dirs, real_root, detail)
       end
 
-      private_class_method def self.format_single_service(service, service_files, services_dir, root)
-        matches = match_service_files(service, service_files, services_dir)
+      # A service lives under app/services, a pack, an in-repo engine or a
+      # configured extra path; only its path under whichever one holds it
+      # carries the namespace Zeitwerk expects.
+      private_class_method def self.relative_under(file, service_dirs)
+        dir = service_dirs.find { |d| file.start_with?("#{d}#{File::SEPARATOR}") }
+        dir ? file.delete_prefix("#{dir}#{File::SEPARATOR}") : File.basename(file)
+      end
+
+      private_class_method def self.format_single_service(service, service_files, service_dirs, root)
+        matches = match_service_files(service, service_files, service_dirs)
 
         if matches.size > 1
-          names = matches.map { |f| f.sub("#{services_dir}/", "") }
+          # Paths are printed from the app root, not re-prefixed with
+          # `app/services/`: a pack or engine service carries the same relative
+          # path, and the re-prefixed line names a file that exists in neither.
+          names = matches.map { |f| relative_under(f, service_dirs).delete_suffix(".rb") }
+          counts = names.tally
+          unambiguous = names.find { |n| counts[n] == 1 }
+          hint = if unambiguous
+            "_Pass the namespaced name, for example `service:\"#{unambiguous.camelize}\"`._"
+          elsif counts.size == 1
+            "_These sit at the same relative path under different roots, so they declare the same `#{names.first.camelize}`. Open the path you want directly._"
+          else
+            # No name is unique, but several distinct ones are here: narrowing
+            # shortens the list without ever reaching a single file.
+            constants = counts.keys.map { |n| "`#{n.camelize}`" }.join(", ")
+            "_Each of #{constants} sits under more than one root. Pass one to narrow the list, then open the path you want directly._"
+          end
+
           return text_response(
             [ "Service '#{service}' matches #{count_phrase(matches.size, 'file')}:", "",
-              *names.map { |n| "- `app/services/#{n}`" }, "",
-              "_Pass the namespaced name, for example `service:\"#{names.first.delete_suffix('.rb').camelize}\"`._" ].join("\n")
+              *matches.map { |f| "- `#{f.sub("#{root}/", "")}`" }, "",
+              hint ].join("\n")
           )
         end
 
         file = matches.first
 
         unless file
-          available = service_files.map { |f| constant_for(f, services_dir) }
+          available = service_files.map { |f| constant_for(f, service_dirs) }.uniq
           return not_found_response("Service", service, available.sort,
             recovery_tool: "Call rails_get_service_pattern(detail:\"summary\") to see all services")
         end
@@ -82,7 +101,7 @@ module RailsAiContext
 
         relative = file.sub("#{root}/", "")
         line_count = source.lines.size
-        class_name = service_class_name(source, file, services_dir)
+        class_name = service_class_name(source, file, service_dirs)
 
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
@@ -93,7 +112,7 @@ module RailsAiContext
           inputs.each { |i| lines << "- #{i}" }
         end
 
-        owned = owned_methods(source, constant_for(file, services_dir))
+        owned = owned_methods(source, constant_for(file, service_dirs))
 
         # Initialize params
         init_params = extract_initialize_params(owned)
@@ -140,20 +159,19 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.format_service_listing(service_files, services_dir, root, detail)
+      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail)
         # Detect common pattern across all services
         pattern_stats = { initialize_call: 0, initialize_single_method: 0, class_method_call: 0, result_object: 0, active_interaction: 0, total: 0 }
         service_data = []
 
         service_files.each do |file|
-          next if File.size(file) > max_file_size
           source = safe_read(file)
           next unless source
 
           relative = file.sub("#{root}/", "")
-          class_name = service_class_name(source, file, services_dir)
+          class_name = service_class_name(source, file, service_dirs)
           line_count = source.lines.size
-          owned = owned_methods(source, constant_for(file, services_dir))
+          owned = owned_methods(source, constant_for(file, service_dirs))
           public_methods = extract_public_methods(owned)
           init_params = extract_initialize_params(owned)
 
@@ -224,24 +242,29 @@ module RailsAiContext
       # Zeitwerk requires the constant to match the path, and only the path
       # carries the namespace: `admin/suspend_service.rb` is `Admin::SuspendService`,
       # which no single `class` line in the file spells out.
-      private_class_method def self.constant_for(file, services_dir)
-        file.sub("#{services_dir}/", "").delete_suffix(".rb").camelize
+      #
+      # app/services/concerns is its own autoload root (railties globs
+      # "{*,*/concerns}"), so concerns/payloadable.rb defines Payloadable, not
+      # Concerns::Payloadable, and an agent told to include the latter writes a
+      # NameError.
+      private_class_method def self.constant_for(file, service_dirs)
+        relative_under(file, service_dirs).delete_prefix("concerns/").delete_suffix(".rb").camelize
       end
 
       # The name the file's own class or module declares, resolved against the
       # path the way every other static name is. A regex over raw source read
       # the word after "class" in a comment, never matched `module`, and its
       # basename fallback dropped the namespace every nested service carries.
-      private_class_method def self.service_class_name(source, file, services_dir)
-        Introspectors::DeclaredConstant.resolve(source, constant_for(file, services_dir))
+      private_class_method def self.service_class_name(source, file, service_dirs)
+        Introspectors::DeclaredConstant.resolve(source, constant_for(file, service_dirs))
       end
 
       # Exact relative path first. A bare name with no namespace may still
       # match on basename, but `Users::Create` must never answer with
       # `api/v1/addresses/create.rb` just because it sorts first.
-      private_class_method def self.match_service_files(service, service_files, services_dir)
+      private_class_method def self.match_service_files(service, service_files, service_dirs)
         snake = service.underscore.delete_suffix(".rb")
-        relative_of = ->(f) { f.sub("#{services_dir}/", "").delete_suffix(".rb") }
+        relative_of = ->(f) { relative_under(f, service_dirs).delete_suffix(".rb") }
 
         exact = service_files.select { |f| relative_of.call(f) == snake }
         return exact if exact.any?
@@ -301,8 +324,7 @@ module RailsAiContext
         owner = primary_owner(methods, expected_constant)
         Introspectors::ActionResolver.own_methods(methods, owner)
       rescue => e
-        $stderr.puts "[rails-ai-context] owned_methods AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "owned_methods AST")
       end
 
       # A service that defines no constructor answers `.new` with no arguments.
@@ -387,24 +409,24 @@ module RailsAiContext
 
       private_class_method def self.find_callers(class_name, real_root, own_file = nil)
         callers = Set.new
-        search_dirs = %w[app/controllers app/jobs app/models app/services app/workers app/mailers].map { |d| File.join(real_root, d) }
+        search_dirs = %w[app/controllers app/jobs app/models app/services app/workers app/mailers]
+                        .flat_map { |d| PathResolver.dirs_for(real_root, d) }
         # A bare `include?` matched `Billing::Invoices::Create` inside
         # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
         # underscored-path skip dropped the one real caller, whose path
         # contains the service's own path as a prefix.
         reference = /(?<![\w:])(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
+        # A second file declaring the same short name under its own namespace
+        # is not a caller of this one, so the declaration is not a reference.
+        definition = /\b(?:class|module)\s+(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
 
         search_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          real_dir = File.realpath(dir).to_s
-          Dir.glob(File.join(dir, "**", "*.rb")).each do |file_path|
-            real = safe_glob_realpath(file_path, real_dir, real_root)
-            next unless real
+          safe_glob(dir, "**/*.rb", real_root).each do |real|
             next if own_file && real == own_file
-            next if File.size(real) > max_file_size
             source = safe_read(real)
             next unless source
             next unless source.match?(reference)
+            next unless source.gsub(definition, "").match?(reference)
 
             callers << real.sub("#{real_root}/", "")
           end

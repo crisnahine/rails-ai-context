@@ -28,8 +28,7 @@ module RailsAiContext
       lock = RailsAiContext::GemLock.for(root)
       lock.missing? ? false : !lock.present?("rails-ai-context")
     rescue => e
-      $stderr.puts "[rails-ai-context] standalone install detection failed: #{e.message}" if ENV["DEBUG"]
-      false
+      RailsAiContext.debug_fail(e, false, label: "standalone install detection")
     end
   end
 end

@@ -263,6 +263,82 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       expect(described_class.method_body(source, "Show"))
         .to eq(code: "  def show\n    @a = 1\n  end", start_line: 2, end_line: 4)
     end
+
+    it "answers the body when the guessed owner is a sibling class, not the one asked for" do
+      source = <<~RUBY
+        class Helper
+          def call
+            :helped
+          end
+        end
+
+        class PostsController < ApplicationController
+          def index
+            @posts = Post.all
+          end
+        end
+      RUBY
+
+      expect(described_class.default_owner(source, described_class.methods_in(source))).to eq("Helper")
+      expect(described_class.method_body(source, "index")&.dig(:code)).to include("@posts = Post.all")
+    end
+
+    it "takes the owner's own body when a sibling class defines the same name first" do
+      source = <<~RUBY
+        class Helper
+          def index
+            :sibling
+          end
+        end
+
+        class PostsController < ApplicationController
+          def index
+            @posts = Post.all
+          end
+        end
+      RUBY
+
+      expect(described_class.method_body(source, "index", owner: "PostsController")&.dig(:code))
+        .to include("@posts = Post.all")
+    end
+
+    it "takes the instance def, not the class method of the same name" do
+      source = <<~RUBY
+        class PostsController < ApplicationController
+          def self.index
+            :class_level
+          end
+
+          def index
+            @posts = Post.all
+          end
+        end
+      RUBY
+
+      body = described_class.method_body(source, "index")&.dig(:code)
+      expect(body).to include("@posts = Post.all")
+      expect(body).not_to include("class_level")
+    end
+
+    it "still takes the action's own body over a nested class defining the name first" do
+      source = <<~RUBY
+        class PostsController < ApplicationController
+          class Presenter
+            def index
+              :nested
+            end
+          end
+
+          def index
+            @posts = Post.all
+          end
+        end
+      RUBY
+
+      body = described_class.method_body(source, "index")&.dig(:code)
+      expect(body).to include("@posts = Post.all")
+      expect(body).not_to include(":nested")
+    end
   end
 
   describe ".app_base_name?" do

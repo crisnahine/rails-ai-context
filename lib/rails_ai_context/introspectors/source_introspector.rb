@@ -59,8 +59,7 @@ module RailsAiContext
       rescue ListenerRegistration::UnknownEventError
         raise
       rescue => e
-        $stderr.puts "[rails-ai-context] SourceIntrospector walk_dispatch failed: #{e.message}" if ENV["DEBUG"]
-        listener_map.keys.each_with_object({}) { |key, h| h[key] = [] }
+        RailsAiContext.debug_fail(e, listener_map.keys.each_with_object({}) { |key, h| h[key] = [] }, label: "SourceIntrospector walk_dispatch")
       end
       private_class_method :walk_dispatch
     end

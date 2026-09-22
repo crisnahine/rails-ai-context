@@ -318,11 +318,14 @@ module RailsAiContext
         # Structured not-found error with fuzzy suggestion and recovery hint.
         # Helps AI agents self-correct without retrying blind.
         def not_found_response(type, name, available, recovery_tool: nil)
-          suggestion = find_closest_match(name, available)
           # Don't suggest the exact same string the user typed - that's useless
-          suggestion = nil if suggestion == name
+          suggestions = find_closest_matches(name, available) - [ name ]
           lines = [ "#{type} '#{name}' not found." ]
-          lines << "Did you mean '#{suggestion}'?" if suggestion
+          if suggestions.size == 1
+            lines << "Did you mean '#{suggestions.first}'?"
+          elsif suggestions.any?
+            lines << "Did you mean one of: #{suggestions.join(', ')}? Give the full name."
+          end
           lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}" if available.any?
           lines << "_Recovery: #{recovery_tool}_" if recovery_tool
           empty_response(lines.join("\n"))
@@ -495,28 +498,37 @@ module RailsAiContext
 
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
         def find_closest_match(input, available)
-          return nil if available.empty?
+          find_closest_matches(input, available).first
+        end
+
+        # Every name that matches as well as the best one does. A bare
+        # `ReportsController` names three real controllers under different
+        # namespaces, and answering with one of them arbitrarily hides the
+        # other two behind a truncated `Available:` list.
+        def find_closest_matches(input, available)
+          return [] if available.empty?
           # A blank query matches everything via substring ("".include? anything),
           # so it would otherwise surface an arbitrary "Did you mean" suggestion
           # for input that isn't a typo at all - just missing.
-          return nil if input.to_s.strip.empty?
+          return [] if input.to_s.strip.empty?
           downcased = input.downcase
           underscored = input.underscore.downcase
+          wanted = [ downcased, underscored ]
 
-          # Exact case-insensitive match (including underscore/classify variants)
-          exact = available.find do |a|
-            a_down = a.downcase
-            a_under = a.underscore.downcase
-            a_down == downcased || a_under == underscored || a_down == underscored || a_under == downcased
+          # Exact case-insensitive match, on the full name and on the
+          # demodulized one, in underscore and classify variants alike.
+          exact = available.select do |a|
+            forms = [ a, a.split("::").last ].flat_map { |f| [ f.downcase, f.underscore.downcase ] }
+            forms.intersect?(wanted)
           end
-          return exact if exact
+          return exact.sort_by { |a| [ a.length, a ] } if exact.any?
 
           # Substring match - prefer shortest (most specific) to avoid post → post_comments
           substring_matches = available.select { |a| a.downcase.include?(downcased) || downcased.include?(a.downcase) }
-          return substring_matches.min_by(&:length) if substring_matches.any?
+          return [ substring_matches.min_by(&:length) ] if substring_matches.any?
 
           # Prefix match
-          available.find { |a| a.downcase.start_with?(downcased[0..2]) }
+          Array(available.find { |a| a.downcase.start_with?(downcased[0..2]) })
         end
 
         # Cache key for paginated responses - lets agents detect stale data between pages
@@ -524,20 +536,10 @@ module RailsAiContext
           SHARED_CACHE[:fingerprint]&.digest || "none"
         end
 
-        # Case-insensitive fuzzy key lookup for hashes keyed by class/table names.
-        # Tries exact, underscore, singularize, and classify variants. Returns matching key or nil.
-        # Shared by get_model_details, get_callbacks, get_context, generate_test, dependency_graph.
+        # Payload keys, so the rule lives beside the payload readers that need
+        # it; tools reach it here without qualifying the module.
         def fuzzy_find_key(keys, query)
-          return nil if query.nil? || keys.nil? || keys.empty?
-          q = query.to_s.strip
-          return nil if q.empty?
-          q_down = q.downcase
-          q_under = q.underscore.downcase
-
-          keys.find { |k| k.to_s.downcase == q_down } ||
-            keys.find { |k| k.to_s.underscore.downcase == q_under } ||
-            keys.find { |k| k.to_s.downcase == q.singularize.downcase } ||
-            keys.find { |k| k.to_s.downcase == q.classify.downcase }
+          Payload.fuzzy_find_key(keys, query)
         end
 
         # `\b` is a word/non-word transition, so it cannot fire beside a pattern
@@ -573,15 +575,12 @@ module RailsAiContext
 
           { code: result.join("\n"), start_line: start_idx + 1, end_line: end_idx + 1 }
         rescue => e
-          $stderr.puts "[rails-ai-context] extract_method_source_from_string failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "extract_method_source_from_string")
         end
 
         # Extract method source from a file path. Reads file safely. Returns hash or nil.
         def extract_method_source_from_file(path, method_name)
-          return nil unless path && File.exist?(path)
-          return nil if File.size(path) > RailsAiContext.configuration.max_file_size
-          source = RailsAiContext::SafeFile.read(path) || ""
+          source = RailsAiContext::SafeFile.read(path) or return nil
           extract_method_source_from_string(source, method_name)
         end
 
@@ -846,8 +845,7 @@ module RailsAiContext
         #
         # Usage:
         #   safe_glob(app_dir, "**/*.rb", real_root).each do |realpath|
-        #     next if File.size(realpath) > max_file_size
-        #     source = safe_read(realpath)
+        #     source = safe_read(realpath) or next
         #     ...
         #   end
         def safe_glob(dir, pattern, real_root)
@@ -857,8 +855,7 @@ module RailsAiContext
             safe_glob_realpath(file_path, real_dir, real_root)
           end
         rescue Errno::ENOENT, Errno::EACCES => e
-          $stderr.puts "[rails-ai-context] safe_glob failed: #{e.message}" if ENV["DEBUG"]
-          []
+          RailsAiContext.debug_fail(e, [], label: "safe_glob")
         end
 
         # Merge duplicate PUT/PATCH entries for the same path+action into a

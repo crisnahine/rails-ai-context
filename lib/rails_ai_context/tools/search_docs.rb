@@ -139,8 +139,7 @@ module RailsAiContext
 
           "#{match[1].tr('.', '-')}-stable"
         rescue => e
-          $stderr.puts "[rails-ai-context] detect_rails_branch failed: #{e.message}" if ENV["DEBUG"]
-          "main"
+          RailsAiContext.debug_fail(e, "main", label: "detect_rails_branch")
         end
 
         def compute_score(tokens, topic)

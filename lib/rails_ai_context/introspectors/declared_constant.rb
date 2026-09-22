@@ -68,8 +68,7 @@ module RailsAiContext
 
         [].tap { |found| collect_modules(root, [], found) }
       rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] DeclaredConstant failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")
       end
 
       # Every class the source declares, with the superclass it names -
@@ -83,8 +82,7 @@ module RailsAiContext
 
         [].tap { |found| collect(root, [], found) }
       rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] DeclaredConstant failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")
       end
 
       def collect(node, scope, found)

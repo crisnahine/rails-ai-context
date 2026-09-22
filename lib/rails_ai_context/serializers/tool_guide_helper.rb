@@ -307,8 +307,14 @@ module RailsAiContext
       # Apps with `config.active_record.schema_format = :sql` dump the schema
       # to db/structure.sql instead of db/schema.rb; guidance that names the
       # wrong file sends the AI hunting for a file that does not exist.
+      #
+      # Rails 7.1 moved the accessor from ActiveRecord::Base to ActiveRecord,
+      # so both homes are asked before falling back to what is on disk - the
+      # fallback is for the static tier, where nothing is loaded.
       def schema_dump_path
-        sql_format = if defined?(ActiveRecord::Base) && ActiveRecord::Base.respond_to?(:schema_format)
+        sql_format = if defined?(ActiveRecord) && ActiveRecord.respond_to?(:schema_format)
+          ActiveRecord.schema_format == :sql
+        elsif defined?(ActiveRecord::Base) && ActiveRecord::Base.respond_to?(:schema_format)
           ActiveRecord::Base.schema_format == :sql
         end
         if sql_format.nil?

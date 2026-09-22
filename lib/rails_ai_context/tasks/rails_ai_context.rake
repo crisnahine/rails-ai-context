@@ -69,15 +69,13 @@ end unless defined?(prompt_setup)
 def save_tool_mode_to_initializer(mode)
   RailsAiContext::Install::SelectionRecord.write_tool_mode(mode, root: Rails.root)
 rescue => e
-  $stderr.puts "[rails-ai-context] save_tool_mode_to_initializer failed: #{e.message}" if ENV["DEBUG"]
-  nil
+  RailsAiContext.debug_fail(e, nil, label: "save_tool_mode_to_initializer")
 end unless defined?(save_tool_mode_to_initializer)
 
 def save_context_files_to_initializer(value)
   RailsAiContext::Install::SelectionRecord.write_context_files(value, root: Rails.root)
 rescue => e
-  $stderr.puts "[rails-ai-context] save_context_files_to_initializer failed: #{e.message}" if ENV["DEBUG"]
-  nil
+  RailsAiContext.debug_fail(e, nil, label: "save_context_files_to_initializer")
 end unless defined?(save_context_files_to_initializer)
 
 def ensure_mcp_configs(ai_tools = nil)
@@ -93,8 +91,7 @@ end unless defined?(ensure_mcp_configs)
 def tool_mode_configured?
   !RailsAiContext::Install::SelectionRecord.tool_mode(root: Rails.root).nil?
 rescue => e
-  $stderr.puts "[rails-ai-context] tool_mode_configured? failed: #{e.message}" if ENV["DEBUG"]
-  false
+  RailsAiContext.debug_fail(e, false, label: "tool_mode_configured?")
 end unless defined?(tool_mode_configured?)
 
 # `record_initializer:` is false on an ordinary `ai:context` run. The YAML is
@@ -113,8 +110,7 @@ def save_selection(ai_tools, tool_mode, record_initializer: false)
     puts "#{level == :warn ? '⚠️ ' : '💾'} #{text}"
   end
 rescue => e
-  $stderr.puts "[rails-ai-context] save_selection failed: #{e.message}" if ENV["DEBUG"]
-  nil
+  RailsAiContext.debug_fail(e, nil, label: "save_selection")
 end unless defined?(save_selection)
 
 
@@ -144,8 +140,7 @@ def add_ai_tool_to_initializer(format)
     puts "#{level == :warn ? '⚠️ ' : '💾'} #{text}"
   end
 rescue => e
-  $stderr.puts "[rails-ai-context] add_ai_tool_to_initializer failed: #{e.message}" if ENV["DEBUG"]
-  nil
+  RailsAiContext.debug_fail(e, nil, label: "add_ai_tool_to_initializer")
 end unless defined?(add_ai_tool_to_initializer)
 
 namespace :ai do

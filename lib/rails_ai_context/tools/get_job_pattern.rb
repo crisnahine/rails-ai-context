@@ -14,11 +14,7 @@ module RailsAiContext
             type: "string",
             description: "Job class name or filename (e.g. 'SendWelcomeEmailJob', 'send_welcome_email'). Omit to list all jobs."
           },
-          detail: {
-            type: "string",
-            enum: RailsAiContext::DetailLevel::SCHEMA_ENUM,
-            description: "Detail level. summary: names + queues. standard: names + queues + retries + what they call (default). full: everything including guards, broadcasts, schedules, and enqueuers."
-          }
+          detail: RailsAiContext::DetailLevel.schema("Detail level. summary: names + queues. standard: names + queues + retries + what they call (default). full: everything including guards, broadcasts, schedules, and enqueuers.")
         }
       )
 
@@ -436,9 +432,6 @@ module RailsAiContext
         schedule_files = %w[config/sidekiq.yml config/sidekiq_cron.yml config/schedule.yml config/recurring.yml]
         schedule_files.each do |file|
           path = File.join(root, file)
-          next unless File.exist?(path)
-          next if File.size(path) > max_file_size
-
           content = safe_read(path)
           next unless content
           next unless content.include?(class_name)
@@ -476,15 +469,11 @@ module RailsAiContext
 
       private_class_method def self.find_enqueuers(class_name, real_root)
         enqueuers = Set.new
-        search_dirs = %w[app/controllers app/models app/services app/jobs app/workers app/mailers].map { |d| File.join(real_root, d) }
+        search_dirs = %w[app/controllers app/models app/services app/jobs app/workers app/mailers]
+                        .flat_map { |d| PathResolver.dirs_for(real_root, d) }
 
         search_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          real_dir = File.realpath(dir).to_s
-          Dir.glob(File.join(dir, "**", "*.rb")).each do |file_path|
-            real = safe_glob_realpath(file_path, real_dir, real_root)
-            next unless real
-            next if File.size(real) > max_file_size
+          safe_glob(dir, "**/*.rb", real_root).each do |real|
             source = safe_read(real)
             next unless source
 

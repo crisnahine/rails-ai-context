@@ -75,15 +75,13 @@ module RailsAiContext
       def applied_versions
         RailsAiContext::SchemaVersion.applied(root) || current_schema_version
       rescue => e
-        $stderr.puts "[rails-ai-context] applied_versions failed: #{e.message}" if ENV["DEBUG"]
-        current_schema_version
+        RailsAiContext.debug_fail(e, current_schema_version, label: "applied_versions")
       end
 
       def current_schema_version
         RailsAiContext::SchemaVersion.current(root)
       rescue => e
-        $stderr.puts "[rails-ai-context] current_schema_version failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "current_schema_version")
       end
 
       def migration_stats

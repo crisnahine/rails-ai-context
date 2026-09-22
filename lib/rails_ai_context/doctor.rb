@@ -444,8 +444,7 @@ module RailsAiContext
           fix: introspector_failure_hint(failures))
       end
     rescue StandardError, ScriptError => e
-      $stderr.puts "[rails-ai-context] check_introspector_health failed: #{e.message}" if ENV["DEBUG"]
-      nil
+      RailsAiContext.debug_fail(e, nil, label: "check_introspector_health")
     end
 
     MAX_SHOWN_FAILURES = 3

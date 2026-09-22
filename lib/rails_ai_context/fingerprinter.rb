@@ -156,8 +156,7 @@ module RailsAiContext
         return false unless spec
         spec.source.is_a?(Bundler::Source::Path)
       rescue => e
-        $stderr.puts "[rails-ai-context] local_gem_path? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext.debug_fail(e, false, label: "local_gem_path?")
       end
     end
   end

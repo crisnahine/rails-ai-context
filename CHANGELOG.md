@@ -5,6 +5,195 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.28.0] - 2026-09-22
+
+Thirty-six changes an architecture survey of v5.27.0 asked for, nine of them
+defects where a user got a wrong answer, plus what three review rounds found in
+the fixes themselves.
+
+### Added
+
+- **Services, helpers, jobs and concerns are found wherever the app keeps
+  them.** The four tools globbed `app/<kind>` off the app root, so a packwerk
+  app whose services live under `packs/billing/app/services` was told it had no
+  services directory and may not use the pattern. Directory discovery reads
+  `PathResolver.dirs_for`, which already resolved packs, engines and
+  `extra_app_paths` for the payload side. `ConcernPaths.resolve` and
+  `ActiveSupportIntrospector` read the same resolver, so a concern's listing,
+  its lookup and its "Used By" line now agree on one app. Counts move on any
+  app with packs or engines. Each walk names the directory a file came from, so
+  two files of the same basename under different roots no longer collide, and a
+  tool that finds nothing names all three directory patterns it searched
+  instead of the conventional one alone.
+- **`RailsAiContext.debug_fail`.** About 258 rescue bodies in `lib/`
+  hand-rolled the same three lines: rescue the error, write a `DEBUG`-gated
+  warning to stderr, return a fallback. They call one method now, with every
+  message string and every fallback value unchanged. `exe/rails-ai-context`
+  shims it beside `log_warn`, because the standalone install path loads seven
+  files by hand and a converted rescue inside `install_mode.rb` would otherwise
+  raise `NoMethodError` after the removed-tool cleanup had already deleted
+  files.
+- **`PackageJson`.** GemLock's twin for the node side: `package.json` parsed
+  once per root, `dependencies` merged with `devDependencies`, capped by
+  `configuration.max_file_size` rather than by a constant no caller can reach,
+  and empty for anything it cannot read. A scope named after the package
+  counts, so an app reaching tailwind through `@tailwindcss/vite` keeps its
+  answer.
+
+### Removed
+
+- **`config.job_processor`, gone from `.ai-context.json` and from
+  `get_config`.** `ConfigIntrospector` parsed `config/sidekiq.yml` a second
+  time to publish it, and nothing read it: no renderer, no spec, no template.
+  The two readers disagreed, so a `:queues:` block written with weights,
+  `- [critical, 2]`, lost `critical` on the config side and kept it on the jobs
+  side, and one sidekiq.yml shipped two queue lists in one payload. The same
+  concurrency and queues stay under `jobs.sidekiq_config`, which
+  `get_job_pattern` already consumes, and `config.queue_adapter` still names
+  the adapter. Both sections sit in the standard and full presets, so no preset
+  loses the fact.
+- **`action_bindings` and `outlet_controllers`, gone from every Stimulus
+  controller entry.** Filling `action_bindings` read every ERB, HAML and Slim
+  file under `app/views` and `app/components` on every generation, and
+  `outlet_controllers` restated the outlets list one line above it. Nothing in
+  `lib/` read either key: `get_stimulus` renders outlets, and the compact
+  serializer touches the section through `controllers` and `total_controllers`.
+  Both keys leave the artifact, and one full pass over the view and component
+  trees leaves every generation.
+- **`Serializers::SectionGuard`, `DetailLevel::SCHEMA_ENUM` and
+  `Install::Program.select_tool_mode`.** SectionGuard was 15 lines forwarding
+  to `Tools::SectionFetch.usable?`; both callers sat in `SchemaAdapter`, which
+  is not a serializer, and `RouteCoverage` already called SectionFetch
+  directly. SCHEMA_ENUM went with its last reference when
+  `DetailLevel.schema(description)` replaced the same four-line input-schema
+  hash in 21 tools; every published schema is byte-identical, and
+  `rails_onboard` keeps its own literal because its levels are quick, standard
+  and full. `select_tool_mode` was a shim for `select_setup(surface).tool_mode`
+  with no caller left in `lib/`, and it cannot express the MCP-config-only
+  mode. `ModelIntrospector#sti_bases` and
+  `ControllerIntrospector#extract_permit_details` go with them; only their own
+  recursion and their own specs were calling them.
+
+### Changed
+
+- **`.github/instructions/rails-context.instructions.md` prints every gem
+  category.** `.first(6)` on the grouped Hash returned the first six pairs, so
+  the seventh category onward was dropped with nothing saying so, while
+  `.cursor/rules/rails-project.mdc` rendered the same grouping uncapped. One
+  payload, two gem lists.
+- **`.cursor/rules/rails-project.mdc` bolds `Global before_actions:`** like the
+  Claude and Copilot files. The three serializers each hand-wrote the same
+  ten-step overview and had drifted; `StackOverviewHelper#overview_lines`
+  states the body once and each renderer keeps only its frontmatter, title and
+  MCP hint.
+- **Puma settings are read inside blocks.** The hand-rolled recursion stopped
+  at the top level, so a `workers` line guarded by an environment conditional,
+  which is what the generated `puma.rb` ships, was invisible and the answer
+  read as no workers configured. `MethodCallListener` sees a receiverless call
+  at any depth. The cost of the widening is that nesting no longer hides a
+  setting, so a name set twice reports the last one wherever it sits. Also
+  `threads ENV.fetch("RAILS_MIN_THREADS") { 5 }, ENV.fetch("RAILS_MAX_THREADS")
+  { 5 }` reports 5 and 5 where it reported nothing, and the digit match is
+  anchored away from word characters, so `ENV.fetch("PORT_2", 3000)` no longer
+  reads as 2.
+- **`get_conventions`' frontend stack string reads parsed dependencies.**
+  `detect_frontend_stack` matched bare substrings against the raw file, with no
+  quotes at all, so `vite-plugin-ruby` on its own reported Vite. The markers
+  carry alternates where an exact name would have lost an answer the substring
+  caught: svelte or `@sveltejs/kit`, `@hotwired/turbo` or
+  `@hotwired/turbo-rails`.
+- **`api_introspector`'s codegen list reads parsed dependencies.** It searched
+  the file for the quoted tool name, so `openapi-typescript`, `orval` or
+  `@graphql-codegen/cli` named anywhere in `package.json`, an `overrides` block
+  included, counted as a client generator the app runs.
+- **`rails_generate_test` resolves a controller by the rule
+  `rails_get_controllers` uses.** It camelized the string and looked the result
+  up, so with `Admin::GiftCardsController` as the only gift-card controller,
+  `rails_get_controllers(controller: "gift_cards")` resolved and
+  `rails_generate_test(controller: "gift_cards")` answered "not found".
+  `Payload.find_controller` answers for both, with the camelize kept as the
+  fallback for a payload carrying no controllers at all.
+
+### Fixed
+
+Nine defects the survey confirmed against v5.27.0, and the defects three review
+rounds found in the work that fixed them.
+
+- **`onboard(detail: "quick")` no longer prints a guessed domain noun.** Eleven
+  ordered regexes read model, job and service names and stated the result as
+  plain fact with no confidence marker, so one model named `Message` made an
+  app "a messaging app". Quick mode now states what it measured: versions,
+  table, model and job counts, the frontend and the test framework.
+- **`api_namespaces` invented a namespace and missed one.** The two tiers
+  derived the list their own way. The booted regex kept a trailing slash on
+  `/api/users`, matched unanchored so `namespace :admin { namespace :api }`
+  reported `/api/v1` for an app that serves `/admin/api/v1`, and dropped a
+  route sitting at exactly `/api`. The static spelling got the segment boundary
+  wrong, so `/apidocs` reported `/api`. Both tiers read one anchored form.
+- **Turbo drive settings were double-counted for layouts.** `app/views/layouts`
+  was walked again after `app/views/**/*` had already reached it. The permanent
+  element pass threw its duplicate away through `uniq`; the drive settings did
+  not, so one attribute in a layout and one in a view printed as 3.
+- **The asset pipeline reported the wrong bundler and CSS framework.** Three
+  readers asked whether a package was present by searching the raw file for its
+  quoted name, so an app pinning CVE fixes in an `overrides` block was told
+  esbuild is its bundler and postcss its CSS framework, while the one reader
+  that parsed the file called the same app vite. Both answers landed in one
+  payload.
+- **`analyze_feature`'s Jobs, Mailers and Channels sections came from a glob.**
+  Each job's queue was read off its own `queue_as`, so a job inheriting the
+  queue from `ApplicationJob` was reported on a queue it does not use. The
+  three sections read the payload now, which carries what the booted tier
+  resolved, mailer actions and channel stream methods included. A section whose
+  payload entry is not there, because the `:jobs` introspector is off, is left
+  out rather than rendered from a directory walk.
+- **`performance_check` attributed queries to methods that are not actions.** A
+  `def` inside a nested class became a call site, and a one-line
+  `private def set_post` leaked its body into the action above it.
+  `ActionResolver` answers what an action is here, as it does everywhere else.
+  A second collision went with it: each body was found by searching the whole
+  file for the first `def <name>`, so a nested class defining the same name
+  earlier handed back its body and the real action was never scanned. The body
+  is cut from the lines the owner-filtered walk recorded, and `get_controllers`
+  and `get_context` share the seam. An empty owner filter falls back to the
+  line scan rather than answering nothing, and `def self.index` no longer
+  stands in for `def index`.
+- **A model whose only rule is `validate :method` printed its bullets under the
+  wrong heading.** `## Validations` was emitted only when the reflected list
+  had entries, and the custom bullets come from a second list that is disjoint
+  from it on both tiers, so they landed under Associations.
+- **Two ERB readers missed `<%== ... %>` and read a commented ivar as used.**
+  `check_instance_variable_usage` and `extract_local_variable_references` each
+  carried their own copy of the tag regex, byte for byte the same and neither
+  matching `ErbSource::TAG`. Both read `<%[=\-]?`, one optional character, so
+  `<%== title %>` parsed as a body of "= title" and the local never reached a
+  partial's expected locals. The comment skip was a second answer too:
+  `get_partial_interface` re-implemented it and `validate_semantics` never had
+  one, so `<%# @ghost %>` was reported as an ivar used in the view and not set
+  in the controller. Both readers ask `ErbSource` now.
+- **`rails_get_controllers` refused a name the VFS resource accepts.** VFS
+  resolved five ways, the tool two, so `controller: "gift_cards"` failed
+  against `Admin::GiftCardsController` while the resource answered off the same
+  payload. Both read `Payload.find_controller`, so a route key, an unambiguous
+  basename and the singularize and classify spellings now resolve in the tool
+  too.
+- **Two files behind one name no longer hide each other.** Once services,
+  helpers and concerns were read from packs and engines, a name could have more
+  than one file behind it. The ambiguous-service list printed
+  `app/services/<path>` for files that live under a pack, so two candidates
+  printed as two identical lines naming a file that exists in neither, and the
+  suggestion that followed handed back the name it had just refused. Paths
+  print from the app root, and a narrowing suggestion is offered only when some
+  candidate's relative path is unique. `rails_get_helper_methods` rendered the
+  first match as the whole module and listed the others under "Also defined
+  in" even when they declare different modules, so a file declaring
+  `Reports::DashboardHelper` was named under an `Admin::DashboardHelper`
+  heading; matches are split by the module each file declares.
+  `rails_get_concern` broke on the first directory that resolved, so an app
+  with both `app/models/concerns/trackable.rb` and
+  `app/controllers/concerns/trackable.rb` saw only the controller one. Every
+  "available" list is deduplicated where it is built.
+
 ## [5.27.0] - 2026-09-22
 
 ### Added

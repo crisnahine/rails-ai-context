@@ -84,8 +84,7 @@ module RailsAiContext
 
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_rails_auth failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_rails_auth")
       end
 
       def scan_allow_unauthenticated_access
@@ -106,8 +105,7 @@ module RailsAiContext
           end
         end.compact.sort_by { |h| h[:file] }
       rescue => e
-        $stderr.puts "[rails-ai-context] scan_allow_unauthenticated_access failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "scan_allow_unauthenticated_access")
       end
 
       # Format a scope value extracted by the AST listener (symbol, array of
@@ -178,8 +176,7 @@ module RailsAiContext
 
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_devise_modules_per_model failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "detect_devise_modules_per_model")
       end
 
       def detect_token_auth
@@ -191,8 +188,7 @@ module RailsAiContext
 
         token_auth
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_token_auth failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "detect_token_auth")
       end
 
       def detect_devise_jwt
@@ -206,8 +202,7 @@ module RailsAiContext
 
         { detected: true }
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_devise_jwt failed: #{e.message}" if ENV["DEBUG"]
-        { detected: false }
+        RailsAiContext.debug_fail(e, { detected: false }, label: "detect_devise_jwt")
       end
 
       def detect_doorkeeper
@@ -231,8 +226,7 @@ module RailsAiContext
         result[:access_token_expires_in] = expires_in if expires_in
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_doorkeeper failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_doorkeeper")
       end
 
       def detect_http_token_auth
@@ -244,8 +238,7 @@ module RailsAiContext
           record.file
         end.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_http_token_auth failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_http_token_auth")
       end
 
       def detect_omniauth_providers
@@ -281,8 +274,7 @@ module RailsAiContext
 
         providers.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_omniauth_providers failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_omniauth_providers")
       end
 
       def extract_devise_settings
@@ -298,8 +290,7 @@ module RailsAiContext
         end
         settings
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_devise_settings failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_devise_settings")
       end
 
       def devise_setting_value(key, hit)
@@ -323,8 +314,7 @@ module RailsAiContext
         end
         results.sort_by { |r| r[:model] }
       rescue => e
-        $stderr.puts "[rails-ai-context] scan_models_for_devise failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "scan_models_for_devise")
       end
 
       def scan_models_for_macro(macro_name)
@@ -336,8 +326,7 @@ module RailsAiContext
         end
         results.sort_by { |r| r[:model] }
       rescue => e
-        $stderr.puts "[rails-ai-context] scan_models_for_macro failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "scan_models_for_macro")
       end
 
       def gem_present?(name)

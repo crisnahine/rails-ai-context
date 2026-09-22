@@ -11,8 +11,7 @@ module RailsAiContext
     module SectionFetch
       # Whether a section can be rendered at all: a hash carrying :error (the
       # introspector raised) or :unavailable (the data source was absent) is
-      # not empty data, it is no data. The serializers ask through
-      # Serializers::SectionGuard, which defers here.
+      # not empty data, it is no data. Every surface asks here.
       def self.usable?(data)
         data.is_a?(Hash) && !data[:error] && !data[:unavailable]
       end

@@ -83,8 +83,7 @@ module RailsAiContext
           entry
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] inspect_environment_credentials failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "inspect_environment_credentials")
       end
 
       # Which source Rails uses to obtain the master key. Important because
@@ -120,8 +119,7 @@ module RailsAiContext
           { name: name, file: rel, key_file_present: File.exist?(key_file) }
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_encrypted_configs failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_encrypted_configs")
       end
 
       # Try to enumerate top-level keys without revealing values. Returns
@@ -132,8 +130,7 @@ module RailsAiContext
         return nil unless hash.is_a?(Hash)
         hash.keys.map(&:to_s).sort
       rescue StandardError => e
-        $stderr.puts "[rails-ai-context] attempt_top_level_keys failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "attempt_top_level_keys")
       end
     end
   end

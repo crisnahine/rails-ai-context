@@ -62,6 +62,57 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
     end
   end
 
+  # Both tiers answer the same question, so they answer it with the same rule.
+  describe "api namespaces on both tiers" do
+    let(:route_set) do
+      ActionDispatch::Routing::RouteSet.new.tap do |set|
+        set.draw do
+          namespace :api do
+            resources :users, only: [ :index ]
+          end
+          namespace :admin do
+            namespace :api do
+              namespace :v1 do
+                resources :reports, only: [ :index ]
+              end
+            end
+          end
+        end
+      end
+    end
+
+    let(:routes_source) do
+      <<~RUBY
+        Rails.application.routes.draw do
+          namespace :api do
+            resources :users, only: [:index]
+          end
+          namespace :admin do
+            namespace :api do
+              namespace :v1 do
+                resources :reports, only: [:index]
+              end
+            end
+          end
+        end
+      RUBY
+    end
+
+    it "reports the same namespaces booted and static" do
+      app_double = double("app", routes: route_set, routes_reloader: nil, root: Rails.root)
+      booted = described_class.new(app_double).call
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), routes_source)
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(booted[:api_namespaces]).to eq([ "/api" ])
+        expect(static[:api_namespaces]).to eq(booted[:api_namespaces])
+      end
+    end
+  end
+
   describe "#static_call" do
     it "builds the runtime output shape from config/routes.rb without booting" do
       Dir.mktmpdir do |dir|

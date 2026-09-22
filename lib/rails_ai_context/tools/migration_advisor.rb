@@ -440,8 +440,7 @@ module RailsAiContext
         def strong_migrations_gem_present?
           RailsAiContext::GemLock.for(rails_app.root).present?("strong_migrations")
         rescue => e
-          $stderr.puts "[rails-ai-context] strong_migrations_gem_present? failed: #{e.message}" if ENV["DEBUG"]
-          false
+          RailsAiContext.debug_fail(e, false, label: "strong_migrations_gem_present?")
         end
 
         # ignored_columns has to go on the class that owns the table, and
@@ -547,8 +546,7 @@ module RailsAiContext
 
           nil
         rescue => e
-          $stderr.puts "[rails-ai-context] rails_version failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "rails_version")
         end
 
         # nil for anything that is not a real version, including the

@@ -23,7 +23,12 @@ module RailsAiContext
       configured = RailsAiContext.configuration.concern_paths
       dirs =
         if configured.nil?
-          Dir.glob(File.join(root, "app", "*", "concerns"))
+          # Every app tree the app has, not just the one at the root: a
+          # packwerk pack or an in-repo engine keeps its own app/*/concerns.
+          # `dirs_for` cannot take the glob directly - it tests each candidate
+          # with `Dir.exist?`, which a literal `app/*/concerns` never passes -
+          # so the app trees are resolved first and globbed here.
+          PathResolver.dirs_for(root, "app").flat_map { |app_dir| Dir.glob(File.join(app_dir, "*", "concerns")) }
         else
           # A path that is already absolute is taken as given; `File.join`
           # would graft it onto the root and point at nothing.

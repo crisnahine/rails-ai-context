@@ -282,8 +282,7 @@ module RailsAiContext
         result.value.accept(visitor)
         visitor
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_and_visit failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "parse_and_visit")
       end
 
       # ── CHECK 1: Partial existence (AST) ─────────────────────────────
@@ -719,8 +718,9 @@ module RailsAiContext
         warnings = []
         return warnings unless file.start_with?("app/views/") && !file.include?("/layouts/")
 
-        # Extract instance variables used in ERB tags only (not HTML/JS content)
-        erb_content = content.scan(/<%[=\-]?\s*(.+?)\s*-?%>/m).map { |m| m[0] }.join("\n")
+        # Tag bodies only, so HTML and JS text cannot look like an ivar. The
+        # in-place form blanks `<%#` comments, whose bodies are not code.
+        erb_content = RailsAiContext::ErbSource.ruby_in_place(content)
         ivars = erb_content.scan(/@(\w+)/).flatten.uniq
         return warnings if ivars.empty?
 
@@ -765,8 +765,7 @@ module RailsAiContext
         end
         warnings
       rescue => e
-        $stderr.puts "[rails-ai-context] check_instance_variable_usage failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_instance_variable_usage")
       end
 
       # ── CHECK 11: Turbo Stream channel matching ────────────────────
@@ -800,8 +799,7 @@ module RailsAiContext
         end
         warnings
       rescue => e
-        $stderr.puts "[rails-ai-context] check_turbo_stream_channels failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_turbo_stream_channels")
       end
 
       # ── CHECK 12: respond_to template existence ────────────────────
@@ -826,8 +824,7 @@ module RailsAiContext
         end
         warnings
       rescue => e
-        $stderr.puts "[rails-ai-context] check_respond_to_template_existence failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_respond_to_template_existence")
       end
 
       # ── CHECK: Memory-loading anti-pattern ───────────────────────────
@@ -852,8 +849,7 @@ module RailsAiContext
         end
         warnings.first(3) # cap at 3 to avoid noise
       rescue => e
-        $stderr.puts "[rails-ai-context] check_memory_loading failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_memory_loading")
       end
 
       # ── CHECK 13+14: Performance warnings from introspector ────────
@@ -882,8 +878,7 @@ module RailsAiContext
 
         warnings.first(5)
       rescue => e
-        $stderr.puts "[rails-ai-context] check_performance_warnings failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_performance_warnings")
       end
 
       # ── Brakeman security scan (runs once for all files) ───────────
@@ -914,8 +909,7 @@ module RailsAiContext
           "[#{w.confidence_name}] #{w.warning_type} - #{loc}: #{w.message}"
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] check_brakeman_security failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_brakeman_security")
       end
 
       private_class_method def self.brakeman_available?

@@ -19,7 +19,8 @@ module RailsAiContext
 
       # A word character before the `@` makes it an address, and a second `@`
       # makes it a class variable; neither is an ivar the controller assigned.
-      IVAR = /(?<![\w@])@(\w+)/
+      # A digit cannot open an ivar name either, so `:'@1x'` is a symbol.
+      IVAR = /(?<![\w@])@([A-Za-z_]\w*)/
 
       attr_reader :app
 
@@ -233,8 +234,7 @@ module RailsAiContext
       def extract_slot_refs(content)
         content.scan(/\b(?:renders_one|renders_many)\s+:(\w+)/).flatten
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_slot_refs failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_slot_refs")
       end
     end
   end

@@ -71,38 +71,29 @@ module RailsAiContext
 
         nil
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_framework_from_lockfile failed: #{e.message}" if ENV["DEBUG"]
+        RailsAiContext.debug_fail(e, nil, label: "detect_framework_from_lockfile")
+      end
+
+      # First listed wins: an app holding the same thing under spec/ and test/
+      # reports one location, not both. `detect_system_tests` deliberately
+      # answers the other way.
+      def first_dir_with(glob, *rels)
+        rels.each do |rel|
+          dir = File.join(root, rel)
+          next unless Dir.exist?(dir)
+
+          count = Dir.glob(File.join(dir, "**", glob)).size
+          return { location: rel, count: count } if count > 0
+        end
         nil
       end
 
       def detect_factories
-        dirs = [
-          File.join(root, "spec/factories"),
-          File.join(root, "test/factories")
-        ]
-
-        dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          count = Dir.glob(File.join(dir, "**/*.rb")).size
-          return { location: dir.sub("#{root}/", ""), count: count } if count > 0
-        end
-
-        nil
+        first_dir_with("*.rb", "spec/factories", "test/factories")
       end
 
       def detect_fixtures
-        dirs = [
-          File.join(root, "spec/fixtures"),
-          File.join(root, "test/fixtures")
-        ]
-
-        dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          count = Dir.glob(File.join(dir, "**/*.yml")).size
-          return { location: dir.sub("#{root}/", ""), count: count } if count > 0
-        end
-
-        nil
+        first_dir_with("*.yml", "spec/fixtures", "test/fixtures")
       end
 
       # Both bases are summed: an app that keeps system tests under spec/ and
@@ -186,20 +177,7 @@ module RailsAiContext
       end
 
       def detect_vcr
-        dirs = [
-          File.join(root, "spec/cassettes"),
-          File.join(root, "spec/vcr_cassettes"),
-          File.join(root, "test/cassettes"),
-          File.join(root, "test/vcr_cassettes")
-        ]
-
-        dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          count = Dir.glob(File.join(dir, "**/*.yml")).size
-          return { location: dir.sub("#{root}/", ""), count: count } if count > 0
-        end
-
-        nil
+        first_dir_with("*.yml", "spec/cassettes", "spec/vcr_cassettes", "test/cassettes", "test/vcr_cassettes")
       end
 
       def detect_ci
@@ -231,8 +209,7 @@ module RailsAiContext
         end
         nil
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_factory_traits failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_factory_traits")
       end
 
       def detect_shared_examples
@@ -253,8 +230,7 @@ module RailsAiContext
         end
         shared.sort_by { |s| s[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_shared_examples failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_shared_examples")
       end
 
       def detect_database_cleaner
@@ -274,8 +250,7 @@ module RailsAiContext
           { detected: true, strategy: strategy }.compact
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_database_cleaner failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_database_cleaner")
       end
 
       # Kept for the .ai-context.json dump, whose keys are read back by
@@ -322,8 +297,7 @@ module RailsAiContext
           .sort_by { |cat, row| [ -row[:count], cat ] }
           .to_h
       rescue => e
-        $stderr.puts "[rails-ai-context] test_categories failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "test_categories")
       end
     end
   end

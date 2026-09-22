@@ -43,8 +43,7 @@ module RailsAiContext
         end
         customs.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_trix_customizations failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_trix_customizations")
       end
 
       def extract_rich_text_fields
@@ -59,8 +58,7 @@ module RailsAiContext
 
         fields.sort_by { |f| [ f[:model], f[:field] ] }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_rich_text_fields failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_rich_text_fields")
       end
     end
   end

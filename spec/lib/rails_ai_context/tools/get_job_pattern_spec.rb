@@ -103,6 +103,13 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
       after { FileUtils.remove_entry(tmpdir) }
 
+      it "answers too-large rather than not-found for a job over the cap" do
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(10)
+
+        text = described_class.call(job: "NotifyJob").content.first[:text]
+        expect(text).to include("Job file too large to analyze.")
+      end
+
       it "extracts queue name from job" do
         result = described_class.call(job: "NotifyJob")
         text = result.content.first[:text]
@@ -396,6 +403,20 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("# InvoiceJob")
       expect(text).to include("**File:** `packs/billing/app/jobs/invoice_job.rb`")
       expect(text).to include("billing")
+    end
+
+    it "names a pack service among the enqueuers" do
+      services_dir = File.join(tmpdir, "packs", "billing", "app", "services")
+      FileUtils.mkdir_p(services_dir)
+      File.write(File.join(services_dir, "send_invoice.rb"), <<~RUBY)
+        class SendInvoice
+          def call = InvoiceJob.perform_later(1)
+        end
+      RUBY
+
+      text = described_class.call(job: "InvoiceJob").content.first[:text]
+      expect(text).to include("## Enqueued By")
+      expect(text).to include("packs/billing/app/services/send_invoice.rb")
     end
 
     it "finds the job by its snake_case name" do

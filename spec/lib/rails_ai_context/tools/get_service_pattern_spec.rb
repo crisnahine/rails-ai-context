@@ -8,10 +8,123 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
   before { described_class.reset_cache! }
 
   describe ".call" do
-    it "returns message when no services directory exists" do
+    # Packs and engines are searched too, so naming app/services/ alone told a
+    # packwerk app to look somewhere the tool had not looked.
+    it "names every directory it searched when it found none" do
       result = described_class.call
       text = result.content.first[:text]
-      expect(text).to include("No app/services/ directory found")
+      expect(text).to include("No services directory found")
+      expect(text).to include("packs/*/app/services/")
+      expect(text).to include("engines/*/app/services/")
+    end
+
+    context "with services only in a pack" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        pack_services = File.join(tmpdir, "packs", "billing", "app", "services")
+        FileUtils.mkdir_p(pack_services)
+        File.write(File.join(pack_services, "charge_card.rb"), <<~RUBY)
+          class ChargeCard
+            def initialize(amount:)
+              @amount = amount
+            end
+
+            def call
+              Stripe::Charge.create(amount: @amount)
+            end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "lists the pack service and names its real path" do
+        text = described_class.call(detail: "full").content.first[:text]
+        expect(text).to include("ChargeCard")
+        expect(text).to include("packs/billing/app/services/charge_card.rb")
+      end
+
+      it "answers for the pack service by name" do
+        text = described_class.call(service: "ChargeCard").content.first[:text]
+        expect(text).to include("# ChargeCard")
+      end
+    end
+
+    context "with the same relative path under two roots" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        app = File.join(tmpdir, "app", "services")
+        pack = File.join(tmpdir, "packs", "billing", "app", "services")
+        [ app, pack ].each { |d| FileUtils.mkdir_p(d) }
+        File.write(File.join(app, "create_order.rb"), "class CreateOrder\n  def call; end\nend\n")
+        File.write(File.join(pack, "create_order.rb"), "class CreateOrder\n  def call; end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names both real paths rather than re-prefixing app/services" do
+        text = described_class.call(service: "CreateOrder").content.first[:text]
+
+        expect(text).to include("matches 2 files")
+        expect(text).to include("- `app/services/create_order.rb`")
+        expect(text).to include("- `packs/billing/app/services/create_order.rb`")
+      end
+
+      it "does not suggest the name it just refused" do
+        text = described_class.call(service: "CreateOrder").content.first[:text]
+
+        expect(text).not_to include("service:\"CreateOrder\"")
+        expect(text).to include("same relative path under different roots")
+      end
+
+      it "lists the shared constant once in the not-found alternatives" do
+        text = described_class.call(service: "Nope").content.first[:text]
+
+        expect(text).to include("Available: CreateOrder\n")
+      end
+    end
+
+    context "with two namespaces duplicated across two roots" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        app = File.join(tmpdir, "app", "services")
+        pack = File.join(tmpdir, "packs", "billing", "app", "services")
+        [ app, pack ].each do |dir|
+          FileUtils.mkdir_p(File.join(dir, "admin"))
+          FileUtils.mkdir_p(File.join(dir, "billing"))
+          File.write(File.join(dir, "admin", "report.rb"), "module Admin\n  class Report\n    def call; end\n  end\nend\n")
+          File.write(File.join(dir, "billing", "report.rb"), "module Billing\n  class Report\n    def call; end\n  end\nend\n")
+        end
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "does not claim every match declares the same constant" do
+        text = described_class.call(service: "Report").content.first[:text]
+
+        expect(text).to include("matches 4 files")
+        expect(text).not_to include("they declare the same")
+      end
+
+      it "names both constants so the list can be narrowed" do
+        text = described_class.call(service: "Report").content.first[:text]
+
+        expect(text).to include("`Admin::Report`")
+        expect(text).to include("`Billing::Report`")
+      end
+
+      it "still says the paths are equal once one constant is named" do
+        text = described_class.call(service: "Billing::Report").content.first[:text]
+
+        expect(text).to include("matches 2 files")
+        expect(text).to include("they declare the same `Billing::Report`")
+      end
     end
 
     context "with service fixtures" do
@@ -77,6 +190,13 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
 
       after { FileUtils.remove_entry(tmpdir) }
+
+      it "answers too-large rather than not-found for a service over the cap" do
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(10)
+
+        text = described_class.call(service: "CreateOrder").content.first[:text]
+        expect(text).to include("Service file too large to analyze.")
+      end
 
       it "lists all services with default params" do
         result = described_class.call
@@ -440,11 +560,15 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).not_to include("app/services/api/v1/addresses/create.rb")
       end
 
-      it "lists the candidates for an ambiguous bare name" do
+      it "lists the candidates for an ambiguous bare name and names one that resolves" do
         text = described_class.call(service: "Create").content.first[:text]
         expect(text).to include("matches 2 files")
         expect(text).to include("app/services/api/v1/addresses/create.rb")
         expect(text).to include("app/services/billing/invoices/create.rb")
+
+        suggested = text[/service:"([^"]+)"/, 1]
+        expect(described_class.call(service: suggested).content.first[:text])
+          .to include("# #{suggested}")
       end
 
       it "answers not found for a name no file declares" do
@@ -472,6 +596,36 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
+    context "with the same short name declared in a pack" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        app = File.join(tmpdir, "app", "services")
+        pack = File.join(tmpdir, "packs", "billing", "app", "services", "billing")
+        controllers = File.join(tmpdir, "app", "controllers")
+        [ app, pack, controllers ].each { |d| FileUtils.mkdir_p(d) }
+        File.write(File.join(app, "report_builder.rb"), "class ReportBuilder\n  def call; :app_report; end\nend\n")
+        File.write(File.join(pack, "report_builder.rb"),
+          "module Billing\n  class ReportBuilder\n    def call; :pack_report; end\n  end\nend\n")
+        File.write(File.join(controllers, "reports_controller.rb"),
+          "class ReportsController\n  def show\n    ReportBuilder.new.call\n  end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "does not count a declaration of the same name as a caller" do
+        text = described_class.call(service: "ReportBuilder").content.first[:text]
+        expect(text).not_to include("packs/billing/app/services/billing/report_builder.rb")
+      end
+
+      it "still names the file that calls it" do
+        text = described_class.call(service: "ReportBuilder").content.first[:text]
+        expect(text).to include("## Called By")
+        expect(text).to include("app/controllers/reports_controller.rb")
+      end
+    end
+
     context "with empty services directory" do
       let(:tmpdir) { Dir.mktmpdir }
 
@@ -486,6 +640,33 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         result = described_class.call
         text = result.content.first[:text]
         expect(text).to include("no Ruby files")
+      end
+    end
+
+    # app/services/concerns is its own autoload root, so the concerns segment
+    # is no part of the constant. Mastodon's Payloadable was listed as
+    # Concerns::Payloadable, and `include Concerns::Payloadable` raises.
+    context "with a service concern" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "concerns"))
+        File.write(File.join(tmpdir, "app", "services", "concerns", "payloadable.rb"), <<~RUBY)
+          module Payloadable
+            def serialize_payload(record, serializer)
+              record
+            end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names it by the constant the file declares" do
+        text = described_class.call(detail: "full").content.first[:text]
+        expect(text).to include("## Payloadable")
+        expect(text).not_to include("Concerns::Payloadable")
       end
     end
   end
