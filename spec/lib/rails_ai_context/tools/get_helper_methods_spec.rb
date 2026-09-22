@@ -138,6 +138,47 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
     end
 
+    context "when an engine and a pack hold the same helper path" do
+      def two_root_app(root)
+        engine = File.join(root, "engines", "billing", "app", "helpers")
+        pack = File.join(root, "packs", "billing", "app", "helpers")
+        [ engine, pack ].each { |d| FileUtils.mkdir_p(d) }
+        File.write(File.join(engine, "invoice_helper.rb"), <<~RUBY)
+          module InvoiceHelper
+            def engine_total(invoice); end
+          end
+        RUBY
+        File.write(File.join(pack, "invoice_helper.rb"), <<~RUBY)
+          module InvoiceHelper
+            def pack_total(invoice); end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+      end
+
+      it "names the other file behind the module rather than answering as if it were alone" do
+        Dir.mktmpdir do |root|
+          two_root_app(root)
+
+          text = described_class.call(helper: "InvoiceHelper").content.first[:text]
+
+          expect(text).to include("engines/billing/app/helpers/invoice_helper.rb")
+          expect(text).to include("packs/billing/app/helpers/invoice_helper.rb")
+          expect(text).to include("Also defined in")
+        end
+      end
+
+      it "lists the shared module name once in the not-found alternatives" do
+        Dir.mktmpdir do |root|
+          two_root_app(root)
+
+          text = described_class.call(helper: "NopeHelper").content.first[:text]
+
+          expect(text).to include("Available: InvoiceHelper\n")
+        end
+      end
+    end
+
     context "when an API-only app has no app/helpers directory" do
       it "answers not applicable instead of not found" do
         Dir.mktmpdir do |root|

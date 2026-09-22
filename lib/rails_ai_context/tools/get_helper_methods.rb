@@ -102,17 +102,20 @@ module RailsAiContext
         # Exact relative-path matches win before basename fallbacks so a
         # top-level DashboardHelper isn't shadowed by admin/dashboard_helper.
         underscore = name.underscore.delete_suffix("_helper")
-        file_path = helper_files.find do |f|
+        matches = helper_files.select do |f|
           rel = relative_under(f, helper_dirs).delete_suffix(".rb")
           rel == name.underscore || rel == "#{underscore}_helper"
         end
-        file_path ||= helper_files.find do |f|
-          basename = File.basename(f, ".rb")
-          basename == "#{underscore}_helper" || basename == underscore || basename == name.underscore
+        if matches.empty?
+          matches = helper_files.select do |f|
+            basename = File.basename(f, ".rb")
+            basename == "#{underscore}_helper" || basename == underscore || basename == name.underscore
+          end
         end
+        file_path = matches.first
 
         unless file_path
-          available = helper_files.map { |f| module_name_for(f, helper_dirs) }
+          available = helper_files.map { |f| module_name_for(f, helper_dirs) }.uniq
           return not_found_response("Helper", name, available,
             recovery_tool: "Call rails_get_helper_methods() to see all helpers")
         end
@@ -128,6 +131,13 @@ module RailsAiContext
 
         lines = [ "# #{module_name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
+
+        # Two roots can hold the same relative path, so one module name can have
+        # more than one file behind it. Everything below is this file only.
+        if matches.size > 1
+          others = matches.drop(1).map { |f| "`#{f.sub("#{root}/", "")}`" }
+          lines << "**Also defined in:** #{others.join(', ')}"
+        end
 
         # Parse method signatures
         methods = Introspectors::ActionResolver.public_methods_from_source(source)
