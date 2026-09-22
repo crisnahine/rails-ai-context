@@ -77,6 +77,30 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(RailsAiContext::Configuration.new.concern_paths).to be_nil
     end
 
+    # `GetConcern`'s includer search resolves packs and engines, so a concern
+    # listing that only globbed the root answered from a narrower app than the
+    # "Used By" list beside it.
+    it "finds concerns under packs and engines, not just the root app tree" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models", "concerns"))
+      FileUtils.mkdir_p(File.join(tmpdir, "packs", "billing", "app", "models", "concerns"))
+      FileUtils.mkdir_p(File.join(tmpdir, "engines", "reporting", "app", "controllers", "concerns"))
+
+      expect(described_class.resolve(tmpdir).map { |d| d.sub("#{tmpdir}/", "") })
+        .to eq(%w[
+          app/models/concerns
+          engines/reporting/app/controllers/concerns
+          packs/billing/app/models/concerns
+        ])
+    end
+
+    it "reads an extra_app_paths tree the same way" do
+      FileUtils.mkdir_p(File.join(tmpdir, "custom", "app", "models", "concerns"))
+      allow(RailsAiContext.configuration).to receive(:extra_app_paths).and_return(%w[custom])
+
+      expect(described_class.resolve(tmpdir).map { |d| d.sub("#{tmpdir}/", "") })
+        .to eq(%w[custom/app/models/concerns])
+    end
+
     it "returns nothing when the app has no concerns at all" do
       expect(described_class.resolve(tmpdir)).to eq([])
     end
@@ -124,6 +148,14 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(described_class.find_file(tmpdir, "DebugConcern", within: "Fasp::Provider"))
         .to eq(File.join(dir, "debug_concern.rb"))
       expect(described_class.find_file(tmpdir, "DebugConcern")).to be_nil
+    end
+
+    it "finds a concern that lives only inside a pack" do
+      dir = File.join(tmpdir, "packs", "billing", "app", "models", "concerns")
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "auditable.rb"), "module Auditable\nend\n")
+
+      expect(described_class.find_file(tmpdir, "Auditable")).to eq(File.join(dir, "auditable.rb"))
     end
 
     # Ruby reaches the top level last, so the nested file is the one the
