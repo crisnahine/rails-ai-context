@@ -10,6 +10,18 @@ module RailsAiContext
         "Use when: reviewing code for performance, before deploying, or investigating slow pages. " \
         "Key params: model (filter by model), category (filter by issue type), detail level."
 
+      # Each category, once: the payload key it reads, the label the summary
+      # counts print, and the heading the detail section prints. The two label
+      # sets are spelled separately because they differ in case, and N+1 has no
+      # heading here because render_n_plus_one_section writes its own.
+      CATEGORIES = {
+        "n_plus_one"    => [ :n_plus_one_risks,         "N+1 risks",             nil ],
+        "counter_cache" => [ :missing_counter_cache,    "Missing counter_cache", "Missing counter_cache" ],
+        "indexes"       => [ :missing_fk_indexes,       "Missing FK indexes",    "Missing FK Indexes" ],
+        "model_all"     => [ :model_all_in_controllers, "Model.all in controllers", "Model.all in Controllers" ],
+        "eager_load"    => [ :eager_load_candidates,    "Eager load candidates", "Eager Load Candidates" ]
+      }.freeze
+
       input_schema(
         properties: {
           model: {
@@ -18,7 +30,7 @@ module RailsAiContext
           },
           category: {
             type: "string",
-            enum: %w[n_plus_one counter_cache indexes model_all eager_load all],
+            enum: CATEGORIES.keys + %w[all],
             description: "Filter by issue category (default: all)"
           },
           detail: {
@@ -59,18 +71,13 @@ module RailsAiContext
           lines = [ "# Performance Analysis", "" ]
 
           # Collect all items then filter, so the count reflects actual displayed results
-          all_sections = {}
-          all_sections[:n_plus_one] = data[:n_plus_one_risks] || []
-          all_sections[:counter_cache] = data[:missing_counter_cache] || []
-          all_sections[:indexes] = data[:missing_fk_indexes] || []
-          all_sections[:model_all] = data[:model_all_in_controllers] || []
-          all_sections[:eager_load] = data[:eager_load_candidates] || []
+          all_sections = CATEGORIES.transform_values { |(key, _, _)| data[key] || [] }
 
           # Apply model filter to count
           filtered_count = if model && !model.empty?
             all_sections.values.sum { |items| filter_items(items, model).size }
           elsif category != "all"
-            (all_sections[category.to_sym] || []).size
+            (all_sections[category] || []).size
           else
             all_sections.values.sum(&:size)
           end
@@ -79,27 +86,18 @@ module RailsAiContext
           lines << ""
 
           if RailsAiContext::DetailLevel.summary?(detail)
-            n1_items = filter_items(all_sections[:n_plus_one], model)
-            lines << "- N+1 risks: #{n1_items.size}#{risk_summary_counts(n1_items)}"
-            lines << "- Missing counter_cache: #{filter_items(all_sections[:counter_cache], model).size}"
-            lines << "- Missing FK indexes: #{filter_items(all_sections[:indexes], model).size}"
-            lines << "- Model.all in controllers: #{filter_items(all_sections[:model_all], model).size}"
-            lines << "- Eager load candidates: #{filter_items(all_sections[:eager_load], model).size}"
+            CATEGORIES.each do |name, (_, label, _)|
+              items = filter_items(all_sections[name], model)
+              counts = name == "n_plus_one" ? risk_summary_counts(items) : ""
+              lines << "- #{label}: #{items.size}#{counts}"
+            end
           else
-            if category == "all" || category == "n_plus_one"
-              lines.concat(render_n_plus_one_section(data[:n_plus_one_risks], model))
-            end
-            if category == "all" || category == "counter_cache"
-              lines.concat(render_section("Missing counter_cache", data[:missing_counter_cache], model, detail))
-            end
-            if category == "all" || category == "indexes"
-              lines.concat(render_section("Missing FK Indexes", data[:missing_fk_indexes], model, detail))
-            end
-            if category == "all" || category == "model_all"
-              lines.concat(render_section("Model.all in Controllers", data[:model_all_in_controllers], model, detail))
-            end
-            if category == "all" || category == "eager_load"
-              lines.concat(render_section("Eager Load Candidates", data[:eager_load_candidates], model, detail))
+            CATEGORIES.each do |name, (key, _, title)|
+              next unless category == "all" || category == name
+
+              lines.concat(
+                title ? render_section(title, data[key], model, detail) : render_n_plus_one_section(data[key], model)
+              )
             end
           end
 

@@ -51,14 +51,13 @@ module RailsAiContext
 
         tests_data = cached_context[:tests] || {}
         framework = tests_data[:framework] || detect_framework
-        patterns = detect_patterns(framework)
 
         if model
-          generate_model_test(model.strip, framework, patterns, tests_data)
+          generate_model_test(model.strip, framework, tests_data)
         elsif controller
-          generate_controller_test(controller.strip, framework, patterns, tests_data)
+          generate_controller_test(controller.strip, framework, tests_data)
         elsif file
-          generate_file_test(file.strip, framework, patterns, tests_data, type)
+          generate_file_test(file.strip, framework, tests_data, type)
         end
       rescue => e
         text_response("Generate test error: #{e.message}")
@@ -75,45 +74,36 @@ module RailsAiContext
           end
         end
 
-        # Scan existing tests to learn project patterns
-        def detect_patterns(framework)
+        # The setup line follows the app's own specs: whether they name their
+        # subject with let or an instance variable, and whether they create or
+        # build it.
+        def rspec_style
           root = rails_app.root.to_s
-          real_root = File.realpath(root).to_s
-          patterns = { factory_style: :create, let_style: true, expect_style: true, described_class: true }
-
-          dir, glob = framework == "rspec" ? [ "spec", "**/*_spec.rb" ] : [ "test", "**/*_test.rb" ]
-          files = safe_glob(File.join(root, dir), glob, real_root).first(5)
-
-          expect_count = 0
-          should_count = 0
-          create_count = 0
-          build_count = 0
-          let_count = 0
-          instance_var_count = 0
+          files = safe_glob(File.join(root, "spec"), "**/*_spec.rb", File.realpath(root).to_s).first(5)
+          create_count = build_count = let_count = instance_var_count = 0
 
           files.each do |f|
             next if File.size(f) > config.max_test_file_size
             source = RailsAiContext::SafeFile.read(f) or next
-            expect_count += source.scan(/expect\(/).size
-            should_count += source.scan(/\.should\b/).size
             create_count += source.scan(/create\(:/).size
             build_count += source.scan(/build\(:/).size
             let_count += source.scan(/\blet[!]?\(:/).size
             instance_var_count += source.scan(/@\w+\s*=/).size
           end
 
-          patterns[:expect_style] = expect_count >= should_count
-          patterns[:factory_style] = create_count >= build_count ? :create : :build
-          patterns[:let_style] = let_count > instance_var_count
-          # Every one-liner below is a shoulda-matchers matcher. Written into
-          # an app that does not bundle it, each one fails with NoMethodError.
-          patterns[:shoulda] = RailsAiContext::GemLock.for(root).present?("shoulda-matchers")
-          patterns
+          { factory: create_count >= build_count ? :create : :build, let: let_count > instance_var_count }
+        end
+
+        # Every one-liner the model generator writes for an association, a
+        # validation or an enum is a shoulda-matchers matcher. Written into an
+        # app that does not bundle it, each one fails with NoMethodError.
+        def shoulda?
+          RailsAiContext::GemLock.for(rails_app.root.to_s).present?("shoulda-matchers")
         end
 
         # ── Model test generation ────────────────────────────────────────
 
-        def generate_model_test(model_name, framework, patterns, tests_data)
+        def generate_model_test(model_name, framework, tests_data)
           models = cached_context[:models] || {}
           key = fuzzy_find_key(models.keys, model_name)
           unless key
@@ -125,9 +115,9 @@ module RailsAiContext
           return text_response("Model #{key} has errors: #{data[:error]}") if data[:error]
 
           if framework == "rspec"
-            generate_rspec_model(key, data, patterns, tests_data)
+            generate_rspec_model(key, data, tests_data)
           else
-            generate_minitest_model(key, data, patterns, tests_data)
+            generate_minitest_model(key, data, tests_data)
           end
         end
 
@@ -147,11 +137,12 @@ module RailsAiContext
           end
         end
 
-        def generate_rspec_model(name, data, patterns, tests_data)
+        def generate_rspec_model(name, data, tests_data)
           # The spec mirrors the model's own path, and underscoring the name
           # does not reproduce it: OAuthClientConfig is oauth_client_config.rb.
           file_path = "spec/models/#{model_path_stem(name)}_spec.rb"
           factory = find_factory_name(name, tests_data)
+          shoulda = shoulda?
           lines = []
           lines << "# #{file_path}"
           lines << ""
@@ -164,9 +155,9 @@ module RailsAiContext
 
           # Factory/fixture setup
           if factory
-            style = patterns[:factory_style]
-            if patterns[:let_style]
-              lines << "  let(:#{name.underscore}) { #{style}(:#{factory}) }"
+            style = rspec_style
+            if style[:let]
+              lines << "  let(:#{name.underscore}) { #{style[:factory]}(:#{factory}) }"
             end
           end
 
@@ -174,7 +165,7 @@ module RailsAiContext
           # An association type with no matcher renders nothing, so the block
           # opens on the rows rather than on the association count.
           rows = (data[:associations] || []).filter_map do |a|
-            next reflection_example(a) unless patterns[:shoulda]
+            next reflection_example(a) unless shoulda
 
             case a[:type]
             when "belongs_to"
@@ -211,7 +202,7 @@ module RailsAiContext
                 next if seen.include?(key)
                 seen << key
 
-                unless patterns[:shoulda]
+                unless shoulda
                   lines.concat(plain_validation_example(v, attr))
                   next
                 end
@@ -270,7 +261,7 @@ module RailsAiContext
             lines << "  describe \"enums\" do"
             enums.each do |attr, values|
               vals = values.is_a?(Hash) ? values.keys : Array(values)
-              lines << if patterns[:shoulda]
+              lines << if shoulda
                 "    it { is_expected.to define_enum_for(:#{attr}).with_values(#{vals.inspect}) }"
               else
                 "    it { expect(described_class.defined_enums[\"#{attr}\"].keys).to match_array(#{vals.map(&:to_s).inspect}) }"
@@ -300,7 +291,7 @@ module RailsAiContext
           text_response(lines.join("\n"))
         end
 
-        def generate_minitest_model(name, data, _patterns, tests_data)
+        def generate_minitest_model(name, data, tests_data)
           file_path = "test/models/#{model_path_stem(name)}_test.rb"
           factory = find_factory_name(name, tests_data)
           table = data[:table_name] || model_path_stem(name).split("/").last.pluralize
@@ -441,7 +432,7 @@ module RailsAiContext
           "uuid" => "SecureRandom.uuid"
         }.freeze
 
-        def generate_controller_test(ctrl_name, framework, patterns, tests_data)
+        def generate_controller_test(ctrl_name, framework, tests_data)
           ctrl_name = ctrl_name.strip
           # Normalize: "posts" → "PostsController", "PostsController" stays
           ctrl_class = ctrl_name.end_with?("Controller") ? ctrl_name : "#{ctrl_name.camelize}Controller"
@@ -464,7 +455,7 @@ module RailsAiContext
           res = resource_info(ctrl_class, snake, tests_data)
 
           if framework == "rspec"
-            generate_rspec_request(ctrl_class, snake, ctrl_routes, patterns, tests_data, res)
+            generate_rspec_request(ctrl_class, snake, ctrl_routes, tests_data, res)
           else
             generate_minitest_controller(ctrl_class, snake, ctrl_routes, tests_data, res)
           end
@@ -718,7 +709,7 @@ module RailsAiContext
 
         # ── RSpec request generation ─────────────────────────────────────
 
-        def generate_rspec_request(ctrl_class, snake, routes, patterns, tests_data, res)
+        def generate_rspec_request(ctrl_class, snake, routes, tests_data, res)
           file_path = "spec/requests/#{snake}_spec.rb"
           factory = find_factory_name(snake.singularize.camelize, tests_data)
 
@@ -1060,14 +1051,14 @@ module RailsAiContext
 
         # ── File-based test generation ───────────────────────────────────
 
-        def generate_file_test(file, framework, patterns, tests_data, type)
+        def generate_file_test(file, framework, tests_data, type)
           case file
           when %r{app/models/(.+)\.rb}
             model_name = $1.split("/").last.camelize
-            generate_model_test(model_name, framework, patterns, tests_data)
+            generate_model_test(model_name, framework, tests_data)
           when %r{app/controllers/(.+)_controller\.rb}
             ctrl_name = "#{$1.split('/').map(&:camelize).join('::')}Controller"
-            generate_controller_test(ctrl_name, framework, patterns, tests_data)
+            generate_controller_test(ctrl_name, framework, tests_data)
           when %r{app/services/(.+)\.rb}, %r{app/jobs/(.+)\.rb}
             class_name = $1.split("/").map(&:camelize).join("::")
             generate_service_test(class_name, file, framework)
