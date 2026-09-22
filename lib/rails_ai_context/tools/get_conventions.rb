@@ -154,34 +154,32 @@ module RailsAiContext
         PATTERN_LABELS[key] || key.humanize
       end
 
+      # A package is present by name in dependencies or devDependencies, so a
+      # CVE pin under `overrides` and a plugin such as vite-plugin-ruby no
+      # longer name the app's stack.
+      STACK_MARKERS = [
+        [ "Tailwind CSS", %w[tailwindcss] ],
+        [ "Bootstrap", %w[bootstrap] ],
+        [ "DaisyUI", %w[daisyui] ],
+        [ "esbuild", %w[esbuild] ],
+        [ "Vite", %w[vite] ],
+        [ "Webpack", %w[webpack] ],
+        [ "React", %w[react] ],
+        [ "Vue", %w[vue] ],
+        [ "Svelte", %w[svelte @sveltejs/kit] ],
+        [ "TypeScript", %w[typescript] ],
+        [ "Turbo", %w[@hotwired/turbo @hotwired/turbo-rails] ],
+        [ "Stimulus", %w[@hotwired/stimulus stimulus-rails] ]
+      ].freeze
+
       private_class_method def self.detect_frontend_stack
-        pkg_path = rails_app.root.join("package.json")
-        return [] unless File.exist?(pkg_path)
+        root = rails_app.root.to_s
+        return [] unless File.exist?(File.join(root, "package.json"))
 
-        content = RailsAiContext::SafeFile.read(pkg_path) || ""
-        stack = []
+        stack = STACK_MARKERS.filter_map do |label, packages|
+          label if packages.any? { |pkg| RailsAiContext::PackageJson.present?(root, pkg) }
+        end
 
-        # CSS frameworks
-        stack << "Tailwind CSS" if content.include?("tailwindcss")
-        stack << "Bootstrap" if content.include?("bootstrap")
-        stack << "DaisyUI" if content.include?("daisyui")
-
-        # JS bundlers
-        stack << "esbuild" if content.include?("esbuild")
-        stack << "Vite" if content.include?("vite")
-        stack << "Webpack" if content.include?("webpack")
-
-        # JS frameworks
-        stack << "React" if content.include?("\"react\"")
-        stack << "Vue" if content.include?("\"vue\"")
-        stack << "Svelte" if content.include?("svelte")
-
-        # Utilities
-        stack << "TypeScript" if content.include?("typescript")
-        stack << "Turbo" if content.include?("@hotwired/turbo")
-        stack << "Stimulus" if content.include?("@hotwired/stimulus")
-
-        # Package manager
         pm = detect_package_manager
         stack << "#{pm} (package manager)" if pm
 
