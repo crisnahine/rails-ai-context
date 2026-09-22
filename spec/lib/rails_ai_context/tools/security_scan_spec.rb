@@ -110,6 +110,41 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       end
     end
 
+    # The two scanners render through one formatter, so a Tracker and the
+    # JSON report have to produce the same page.
+    context "when the app's bundle carries brakeman" do
+      before do
+        warning = Struct.new(:warning_type, :confidence, :confidence_name, :file, :line,
+                             :message, :cwe_id, :code, :link, keyword_init: true)
+        file = Struct.new(:relative, keyword_init: true)
+        found = warning.new(warning_type: "Mass Assignment", confidence: 1, confidence_name: "Medium",
+                            file: file.new(relative: "app/controllers/admin/users_controller.rb"), line: 9,
+                            message: "Potentially dangerous key allowed for mass assignment",
+                            cwe_id: [ 915 ], code: nil, link: nil)
+        checks = Class.new { def checks_run = [ "Brakeman::Checks::CheckSQL", "Brakeman::Checks::CheckMassAssignment" ] }.new
+        tracker = Struct.new(:filtered_warnings, :checks, keyword_init: true)
+                        .new(filtered_warnings: [ found ], checks: checks)
+
+        allow(described_class).to receive(:load_brakeman).and_return(true)
+        stub_const("Brakeman", Class.new { def self.run(_options); end })
+        allow(Brakeman).to receive(:run).and_return(tracker)
+      end
+
+      it "renders the in-process result the same way as the outside one" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("**1 warning** (2 checks run)")
+        expect(text).to include("## Mass Assignment")
+        expect(text).to include("[Medium] app/controllers/admin/users_controller.rb:9")
+      end
+
+      it "says nothing about running outside the bundle" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).not_to include("outside the app's bundle")
+      end
+    end
+
     context "when brakeman is nowhere on the machine" do
       before do
         described_class.instance_variable_set(:@brakeman_available, nil)
