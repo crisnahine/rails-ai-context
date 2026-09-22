@@ -633,6 +633,47 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     end
   end
 
+  describe "the short name of a namespaced controller" do
+    let(:context) do
+      {
+        tests: { framework: "rspec", test_helper_setup: [], factories: { count: 1 },
+                 factory_names: { "gift_cards" => [ :gift_card ] } },
+        models: { "GiftCard" => { table_name: "gift_cards" } },
+        controllers: { controllers: { "Admin::GiftCardsController" => { actions: %w[index] } } },
+        routes: {
+          by_controller: {
+            "admin/gift_cards" => [
+              { verb: "GET", path: "/admin/gift_cards", action: "index", name: "admin_gift_cards" }
+            ]
+          }
+        }
+      }
+    end
+
+    before { allow(described_class).to receive(:cached_context).and_return(context) }
+
+    it "resolves every form the routes already answer to" do
+      %w[gift_cards gift-cards admin::gift_cards admin/gift_cards].each do |name|
+        text = described_class.call(controller: name).content.first[:text]
+
+        expect(text).not_to include("not found"), "expected #{name.inspect} to resolve"
+        expect(text).to include("spec/requests/admin/gift_cards_spec.rb")
+      end
+    end
+
+    # Two surfaces, one rule: a name rails_get_controllers resolves is a name
+    # this tool generates for.
+    it "resolves a short name the way rails_get_controllers does" do
+      allow(RailsAiContext::Tools::GetControllers).to receive(:cached_context).and_return(context)
+
+      listed = RailsAiContext::Tools::GetControllers.call(controller: "gift_cards").content.first[:text]
+      generated = described_class.call(controller: "gift_cards").content.first[:text]
+
+      expect(listed).to include("Admin::GiftCardsController")
+      expect(generated).not_to include("not found")
+    end
+  end
+
   describe "an ActiveInteraction service" do
     it "runs it the way the base class does" do
       Dir.mktmpdir do |dir|
