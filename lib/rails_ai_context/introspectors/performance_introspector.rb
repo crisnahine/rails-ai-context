@@ -283,7 +283,7 @@ module RailsAiContext
         end
         @app_written_counter_columns = writers
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, @app_written_counter_columns = Set.new, label: "app_written_counter_columns")
+        @app_written_counter_columns = RailsAiContext.debug_fail(e, Set.new, label: "app_written_counter_columns")
       end
 
       def detect_missing_counter_cache(model_data, schema_data)
