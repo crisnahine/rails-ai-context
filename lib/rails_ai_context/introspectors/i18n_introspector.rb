@@ -342,15 +342,9 @@ module RailsAiContext
         end
       end
 
-      # Every locale file, parsed once. Four readers used to parse the same
-      # file for the same three facts, each carrying its own copy of the
-      # permitted_classes/aliases incantation and its own rescue, and one of
-      # them read through YAML.load_file, so a file SafeFile refused was
-      # counted in the file list and skipped everywhere else.
-      #
-      # The parsed document is derived from and dropped: holding every locale
-      # YAML resident would trade an i18n-heavy app's CPU spike for a memory
-      # one. Only the key paths survive.
+      # Every locale file, parsed once. Only the key paths survive: holding
+      # every locale YAML resident trades an i18n-heavy app's CPU spike for a
+      # memory one.
       def locale_index
         @locale_index ||= locale_file_paths.to_h { |path| [ path, index_locale_file(path) ] }
       end

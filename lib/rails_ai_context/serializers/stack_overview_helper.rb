@@ -87,9 +87,7 @@ module RailsAiContext
       end
 
       # The project-overview body, between a rule file's own frontmatter and its
-      # own trailing MCP hint. Three surfaces render it and used to hand-write
-      # it, which is how the Copilot file ended up capping gem categories and
-      # the Cursor file ended up not bolding before_actions.
+      # own trailing MCP hint.
       #
       # The keywords are not settings. They name the facts the .claude/rules
       # overview leaves out because CLAUDE.md/AGENTS.md already states them;

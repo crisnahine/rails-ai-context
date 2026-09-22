@@ -63,9 +63,9 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       end
     end
 
-    # A file the reader refuses used to be listed with a key count and its
-    # locales while the coverage pass skipped it, so the same file was both
-    # read and not read in one answer.
+    # A file the reader refuses reads as refused everywhere: it cannot carry a
+    # key count and its locales in one section while the coverage pass skips it
+    # in another.
     context "with a locale file above the size the reader accepts" do
       let(:es_locale) { File.join(Rails.root, "config/locales/es.yml") }
 

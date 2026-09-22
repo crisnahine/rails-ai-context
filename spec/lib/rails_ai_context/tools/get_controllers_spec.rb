@@ -187,10 +187,8 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("# CommentsController")
     end
 
-    # The tool used to carry its own matcher, weaker than the one the
-    # rails-ai-context://controllers resource reads: a bare `gift_cards` came
-    # back "not found" from the tool and resolved from the same payload as a
-    # resource.
+    # A bare `gift_cards` resolves from the tool the same way the
+    # rails-ai-context://controllers resource resolves it, off the same payload.
     it "resolves the bare name of a controller that only exists namespaced" do
       allow(described_class).to receive(:cached_context).and_return(
         controllers: { controllers: {
