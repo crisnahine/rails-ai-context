@@ -291,6 +291,13 @@ module RailsAiContext
         end
         return text_response("Could not read file: #{path}") unless content
 
+        # A file the caller named by path is shown either way; only a
+        # template is fenced as erb, because fencing a JPEG's bytes as ERB
+        # said it was one.
+        unless RailsAiContext::ViewFile.template?(result.relative)
+          return text_response("# #{result.relative}\n\n_No template handler renders this file._\n\n```\n#{content}\n```")
+        end
+
         content = compress_tailwind(strip_svg(content))
         text_response("# #{result.relative}\n\n```erb\n#{content}\n```")
       end
@@ -346,7 +353,7 @@ module RailsAiContext
         content = read_view_content(relative_path)
         return { ivars: [], turbo: [], components: [], helpers: [] } if content.nil? || content.include?("(file not found)")
 
-        ivars = Introspectors::ViewTemplateIntrospector.ivars_in(content)
+        ivars = Introspectors::ViewTemplateIntrospector.ivars_in(content, path: relative_path)
 
         # Turbo Frame IDs and turbo_stream_from channels
         turbo = []
@@ -443,6 +450,7 @@ module RailsAiContext
         # List views from disk
         files = Dir.glob(File.join(views_dir, "**", "*"))
           .reject { |f| File.directory?(f) || f.include?("/layouts/") }
+          .select { |f| RailsAiContext::ViewFile.template?(f) }
           .map { |f| f.sub("#{views_dir}/", "") }
           .sort
 

@@ -456,6 +456,56 @@ RSpec.describe RailsAiContext::Install::SelectionRecord do
     end
   end
 
+  # MCP-only: the same two records, the same precedence.
+  describe ".context_files" do
+    it "is nil when nothing has been recorded" do
+      expect(described_class.context_files(root: root)).to be_nil
+    end
+
+    it "reads the YAML the installer wrote" do
+      write_yaml("ai_tools:\n- claude\ncontext_files: false\n")
+
+      expect(described_class.context_files(root: root)).to be(false)
+    end
+
+    it "lets the initializer line win over the YAML" do
+      write_yaml("context_files: true\n")
+      write_initializer("  config.context_files = false\n")
+
+      expect(described_class.context_files(root: root)).to be(false)
+    end
+
+    it "ignores the commented-out default in the generated initializer" do
+      write_initializer("  # config.context_files = true\n")
+
+      expect(described_class.context_files(root: root)).to be_nil
+    end
+  end
+
+  describe ".write_context_files" do
+    it "rewrites an existing uncommented line" do
+      write_initializer("RailsAiContext.configure do |config|\n  config.context_files = true\nend\n")
+
+      expect(described_class.write_context_files(false, root: root)).to eq(:updated)
+      expect(described_class.context_files(root: root)).to be(false)
+    end
+
+    it "inserts beside the recorded tools line" do
+      write_initializer(<<~RUBY)
+        RailsAiContext.configure do |config|
+          config.ai_tools = %i[claude]
+        end
+      RUBY
+
+      expect(described_class.write_context_files(false, root: root)).to eq(:inserted)
+      expect(described_class.context_files(root: root)).to be(false)
+    end
+
+    it "says so when there is no initializer to write to" do
+      expect(described_class.write_context_files(false, root: root)).to eq(:absent)
+    end
+  end
+
   describe ".write_tool_mode" do
     it "rewrites an existing uncommented line" do
       write_initializer("RailsAiContext.configure do |config|\n  config.tool_mode = :mcp\nend\n")

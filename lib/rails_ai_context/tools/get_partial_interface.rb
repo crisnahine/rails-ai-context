@@ -137,7 +137,8 @@ module RailsAiContext
           all_locals.each do |local|
             methods = method_calls[local]
             if methods&.any?
-              lines << "- **#{local}** - calls: #{methods.first(10).join(', ')}"
+              more = methods.size > 10 ? ", ...and #{methods.size - 10} more" : ""
+              lines << "- **#{local}** - calls: #{methods.first(10).join(', ')}#{more}"
             else
               lines << "- **#{local}**"
             end
@@ -228,30 +229,21 @@ module RailsAiContext
         prefixed_basename = basename.start_with?("_") ? basename : "_#{basename}"
         unprefixed_basename = basename.delete_prefix("_")
 
-        extensions = %w[.html.erb .erb .html.haml .haml .html.slim .slim .rb .json.jbuilder .jbuilder .turbo_stream.erb]
-        candidates = []
+        # A fixed extension list refused `.text.erb`, which the Available
+        # list built by globbing had just offered. Rails names a partial by
+        # its directory and basename, whatever format and handler follow.
+        candidates = [
+          *Dir.glob(File.join(views_dir, *dir_parts, "#{prefixed_basename}.*")).sort,
+          *Dir.glob(File.join(views_dir, *dir_parts, "#{unprefixed_basename}.*")).sort,
+          File.join(views_dir, partial)
+        ]
 
-        # Try prefixed name with various extensions
-        extensions.each do |ext|
-          candidates << File.join(views_dir, *dir_parts, "#{prefixed_basename}#{ext}")
-          candidates << File.join(views_dir, *dir_parts, "#{unprefixed_basename}#{ext}")
-        end
-
-        # Also try the exact path as given
-        candidates << File.join(views_dir, partial)
-
-        found = candidates.find { |c| File.exist?(c) }
+        found = candidates.find { |c| File.file?(c) }
 
         # Fallback: if no directory was specified and direct lookup failed,
         # search recursively for the partial across all view directories
         if found.nil? && dir_parts.empty?
-          extensions.each do |ext|
-            matches = Dir.glob(File.join(views_dir, "**", "#{prefixed_basename}#{ext}"))
-            if matches.any?
-              found = matches.first
-              break
-            end
-          end
+          found = Dir.glob(File.join(views_dir, "**", "#{prefixed_basename}.*")).sort.find { |c| File.file?(c) }
         end
 
         return nil unless found

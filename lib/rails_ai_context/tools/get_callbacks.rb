@@ -106,7 +106,7 @@ module RailsAiContext
           lines << ""
 
           ordered.each do |type, methods|
-            lines << "## #{type}"
+            lines << "## #{callback_type_label(type)}"
             methods.each do |method_name|
               source = extract_callback_source(name, method_name, data, ctx)
               if source
@@ -126,7 +126,7 @@ module RailsAiContext
           lines << ""
 
           ordered.each do |type, methods|
-            lines << "- **#{type}** → #{format_targets(methods)}"
+            lines << "- **#{callback_type_label(type)}** → #{format_targets(methods)}"
           end
         end
 
@@ -167,7 +167,7 @@ module RailsAiContext
         when "summary"
           models_with_callbacks.sort_by { |_name, data| -(data[:callbacks]&.values&.flatten&.size || 0) }.each do |name, data|
             total = data[:callbacks].values.flatten.size
-            types = data[:callbacks].keys.join(", ")
+            types = data[:callbacks].keys.map { |t| callback_type_label(t) }.join(", ")
             lines << "- **#{name}** - #{count_phrase(total, "callback")} (#{types})"
           end
           lines << "" << "_Use `model:\"Name\"` for callbacks by type._"
@@ -177,7 +177,7 @@ module RailsAiContext
             ordered = order_callbacks(data[:callbacks])
             lines << "## #{name}"
             ordered.each do |type, methods|
-              lines << "- **#{type}** → #{format_targets(methods)}"
+              lines << "- **#{callback_type_label(type)}** → #{format_targets(methods)}"
             end
             lines << ""
           end
@@ -191,10 +191,10 @@ module RailsAiContext
               methods.each do |method_name|
                 source = extract_callback_source(name, method_name, data, ctx)
                 if source
-                  lines << "### #{type} #{callback_target(method_name)} (#{source_location(source)})"
+                  lines << "### #{callback_type_label(type)} #{callback_target(method_name)} (#{source_location(source)})"
                   lines << "```ruby" << source[:code] << "```" << ""
                 else
-                  lines << "- **#{type}** → `#{callback_target(method_name)}`"
+                  lines << "- **#{callback_type_label(type)}** → `#{callback_target(method_name)}`"
                 end
               end
             end

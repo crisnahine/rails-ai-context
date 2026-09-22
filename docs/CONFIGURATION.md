@@ -51,6 +51,33 @@ preset: full
 |:-------|:-----|:--------|:------------|
 | `ai_tools` | Array of symbols | `[:claude]` | Which AI tools to generate context for. Options: `:claude`, `:cursor`, `:copilot`, `:opencode`, `:codex` |
 | `tool_mode` | Symbol | `:mcp` | `:mcp` (MCP server primary, CLI fallback) or `:cli` (CLI only, no MCP server) |
+| `context_files` | Boolean | `true` | Set `false` for MCP-only: the server and the CLI still answer, and no context file is written or touched |
+
+#### MCP only
+
+Some apps keep their own `CLAUDE.md`, `AGENTS.md` and rules files and want the
+server and nothing else:
+
+```bash
+rails generate rails_ai_context:install --mcp-only   # or: rails-ai-context init --mcp-only
+```
+
+That writes the MCP config for the tools you pick and records:
+
+```ruby
+RailsAiContext.configure do |config|
+  config.tool_mode = :mcp
+  config.context_files = false
+end
+```
+
+`rails ai:context` then writes nothing and exits 0, `rails ai:watch` writes
+nothing, and `rails ai:doctor` raises no context-file warning. A command that
+names a file still writes it: `rails ai:context:claude` and
+`rails-ai-context context --format claude`.
+
+`config.ai_tools = []` means no context files too, and still picks which MCP
+config file is written. Before v5.27.0 an empty list wrote every tool's files.
 
 ### Introspection
 

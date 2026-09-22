@@ -81,8 +81,10 @@ RSpec.describe RailsAiContext::Watcher do
         allow($stderr).to receive(:puts)
       end
 
-      it "regenerates context files" do
-        expect(RailsAiContext).to receive(:generate_context).with(format: :all)
+      # `format: :all` rewrote every tool's files whatever the user picked,
+      # and wrote them at all under an MCP-only install.
+      it "regenerates the context files the configuration asks for" do
+        expect(RailsAiContext).to receive(:generate_context).with(no_args)
         watcher.send(:handle_change)
       end
 

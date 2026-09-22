@@ -18,6 +18,35 @@ module RailsAiContext
           super()
           names = roots.flatten.map(&:to_s)
           @roots = (names.empty? ? DEFAULT_ROOTS : names).to_set
+          @conditions = []
+        end
+
+        # The branch an assignment sits in. Rails' own generated
+        # `config/environments/development.rb` assigns `perform_caching` in
+        # both halves of one `if`, and reporting the first as the value made
+        # this tool disagree with the running app.
+        def on_if_node_enter(node)
+          @conditions.push(condition_text(node.predicate))
+        end
+
+        def on_if_node_leave(_node)
+          @conditions.pop
+        end
+
+        def on_unless_node_enter(node)
+          @conditions.push("not #{condition_text(node.predicate)}")
+        end
+
+        def on_unless_node_leave(_node)
+          @conditions.pop
+        end
+
+        def on_else_node_enter(_node)
+          @conditions.push("else")
+        end
+
+        def on_else_node_leave(_node)
+          @conditions.pop
         end
 
         def on_call_node_enter(node)
@@ -59,8 +88,15 @@ module RailsAiContext
             assignment: true,
             value:      redacted[:value],
             source:     redacted[:source],
+            condition:  @conditions.compact.last,
             location:   node.location.start_line
           }
+        end
+
+        def condition_text(node)
+          return nil unless node
+
+          node.slice.gsub(/\s+/, " ").strip
         end
 
         # A bare `config.jwt` reference, with or without a block. Enough to tell

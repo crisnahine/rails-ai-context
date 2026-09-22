@@ -62,9 +62,9 @@ def prompt_ai_tools
   RailsAiContext::Install::Program.select_ai_tools(install_surface)
 end unless defined?(prompt_ai_tools)
 
-def prompt_tool_mode
-  RailsAiContext::Install::Program.select_tool_mode(install_surface)
-end unless defined?(prompt_tool_mode)
+def prompt_setup
+  RailsAiContext::Install::Program.select_setup(install_surface)
+end unless defined?(prompt_setup)
 
 def save_tool_mode_to_initializer(mode)
   RailsAiContext::Install::SelectionRecord.write_tool_mode(mode, root: Rails.root)
@@ -72,6 +72,13 @@ rescue => e
   $stderr.puts "[rails-ai-context] save_tool_mode_to_initializer failed: #{e.message}" if ENV["DEBUG"]
   nil
 end unless defined?(save_tool_mode_to_initializer)
+
+def save_context_files_to_initializer(value)
+  RailsAiContext::Install::SelectionRecord.write_context_files(value, root: Rails.root)
+rescue => e
+  $stderr.puts "[rails-ai-context] save_context_files_to_initializer failed: #{e.message}" if ENV["DEBUG"]
+  nil
+end unless defined?(save_context_files_to_initializer)
 
 def ensure_mcp_configs(ai_tools = nil)
   tools = ai_tools || RailsAiContext.configuration.ai_tools || RailsAiContext::McpConfigGenerator::TOOL_CONFIGS.keys
@@ -97,7 +104,8 @@ end unless defined?(tool_mode_configured?)
 def save_selection(ai_tools, tool_mode, record_initializer: false)
   result = RailsAiContext::Install::SelectionRecord.write(
     ai_tools, root: Rails.root,
-    extra_yaml: { "tool_mode" => tool_mode.to_s },
+    extra_yaml: { "tool_mode" => tool_mode.to_s,
+                  "context_files" => RailsAiContext.configuration.context_files },
     initializer: record_initializer
   )
 
@@ -121,7 +129,9 @@ def cleanup_removed_ai_tools(previous, current)
 end unless defined?(cleanup_removed_ai_tools)
 
 def add_ai_context_to_gitignore
-  RailsAiContext::Install::Program.mark_gitignore(install_surface, root: Rails.root)
+  RailsAiContext::Install::Program.mark_gitignore(
+    install_surface, root: Rails.root, context_files: RailsAiContext.configuration.context_files
+  )
 end unless defined?(add_ai_context_to_gitignore)
 
 # Writing only the initializer here was the last hand-rolled record left: it
@@ -186,6 +196,14 @@ namespace :ai do
 
     apply_context_mode_override
 
+    # An MCP-only install asked for no context files. Saying so and stopping
+    # beats prompting for tools whose files this run would not write.
+    unless RailsAiContext.configuration.context_files
+      puts "MCP-only install (config.context_files = false): no context files written."
+      puts "Run `rails 'ai:context:claude'` to write one anyway, or set config.context_files = true."
+      next
+    end
+
     ai_tools = RailsAiContext.configuration.ai_tools
     previous_tools = read_previous_ai_tools_from_config
 
@@ -199,9 +217,17 @@ namespace :ai do
 
     # Prompt for tool_mode if not yet configured in initializer
     unless tool_mode_configured?
-      tool_mode = prompt_tool_mode
-      RailsAiContext.configuration.tool_mode = tool_mode
-      save_tool_mode_to_initializer(tool_mode)
+      setup = prompt_setup
+      RailsAiContext.configuration.tool_mode = setup.tool_mode
+      RailsAiContext.configuration.context_files = setup.context_files
+      save_tool_mode_to_initializer(setup.tool_mode)
+      save_context_files_to_initializer(setup.context_files)
+
+      unless setup.context_files
+        puts "MCP-only install: no context files written."
+        ensure_mcp_configs(ai_tools)
+        next
+      end
     end
 
     # Cleanup removed tools (only when re-running with different selections)

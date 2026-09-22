@@ -51,6 +51,11 @@ RSpec.describe RailsAiContext::VFS do
             file: "app/controllers/activitypub/inboxes_controller.rb",
             actions: [ "create" ],
             filters: []
+          },
+          "Api::V1::GiftCardsController" => {
+            file: "app/controllers/api/v1/gift_cards_controller.rb",
+            actions: [ "redeem", "list" ],
+            filters: []
           }
         }
       },
@@ -143,6 +148,15 @@ RSpec.describe RailsAiContext::VFS do
       it "resolves a namespaced controller by its route key" do
         result = described_class.resolve("rails-ai-context://controllers/admin/posts")
         expect(JSON.parse(result.first[:text])).to include("actions")
+      end
+
+      # The routes resource answers this spelling, and answering "not found"
+      # to one of two resources for the same name reads as a missing
+      # controller.
+      it "resolves a namespaced controller by its last path segment" do
+        result = described_class.resolve("rails-ai-context://controllers/gift_cards")
+        data = JSON.parse(result.first[:text])
+        expect(data["actions"]).to include("redeem")
       end
 
       it "resolves a controller whose declared name does not camelize from its path" do

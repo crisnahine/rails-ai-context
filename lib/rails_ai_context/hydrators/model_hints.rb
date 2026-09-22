@@ -9,7 +9,10 @@ module RailsAiContext
     module ModelHints
       module_function
 
-      def resolve(names, context:, describe:)
+      # `describe` nil means a name that resolves to no model is simply not a
+      # model: a controller names services, serializers and plain constants,
+      # and every one of them read as a model the payload had lost.
+      def resolve(names, context:, describe: nil)
         max = RailsAiContext.configuration.hydration_max_hints
         hints = {}
         warnings = []
@@ -17,7 +20,7 @@ module RailsAiContext
           hint = SchemaHintBuilder.build(name, context: context)
           if hint
             hints[hint.model_name] ||= hint
-          else
+          elsif describe
             warnings << describe.call(name)
           end
         end

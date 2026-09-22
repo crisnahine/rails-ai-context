@@ -99,7 +99,13 @@ module RailsAiContext
         # declares has no class to attribute it to, and a conditional skip
         # names the condition it is taken out on.
         def inherited_filter_label(filter)
-          from = filter[:from] ? " _(from #{filter[:from]})_" : ""
+          from = if filter[:from]
+            " _(from #{filter[:from]})_"
+          elsif filter[:provenance]
+            " _(#{filter[:provenance]})_"
+          else
+            ""
+          end
           "#{filter[:name]}#{from}#{Serializers::SectionFacts.skip_condition_tail(filter)}"
         end
 

@@ -627,6 +627,15 @@ module RailsAiContext
           method.to_s.match?(/\A\w+[?!=]?\z/)
         end
 
+        # A callback type as a reader can write it. `after_commit_on_create`
+        # is the key this gem synthesizes to order the events of one
+        # `after_commit on: [...]`; Rails has no macro by that name, so an
+        # agent that copies it gets a NoMethodError.
+        def callback_type_label(type)
+          event = type.to_s[/\Aafter_commit_on_(\w+)\z/, 1]
+          event ? "after_commit (on: :#{event})" : type.to_s
+        end
+
         # One callback record rendered as the line the file declares. The
         # declared macro, not the resolved type: `after_commit_on_create` is
         # a key this gem synthesizes, not something the source says.

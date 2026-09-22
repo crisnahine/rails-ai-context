@@ -15,6 +15,7 @@ module RailsAiContext
       class RailsSemanticVisitor < Prism::Visitor
         attr_reader :render_calls, :route_helper_calls, :validates_calls,
                     :permit_calls, :callback_registrations, :has_many_calls,
+                    :virtual_attributes,
                     :local_method_names_by_scope, :singleton_method_names_by_scope
 
         TOP_LEVEL_SCOPE = "__top_level__"
@@ -32,6 +33,7 @@ module RailsAiContext
           @permit_calls = []
           @callback_registrations = []
           @has_many_calls = []
+          @virtual_attributes = Set.new
           @local_method_names_by_scope = Hash.new { |hash, key| hash[key] = Set.new }
           @singleton_method_names_by_scope = Hash.new { |hash, key| hash[key] = Set.new }
           @scope_stack = [ TOP_LEVEL_SCOPE ]
@@ -70,6 +72,7 @@ module RailsAiContext
           when :validates  then extract_validates(node)
           when :permit     then extract_permit(node)
           when :has_many   then extract_has_many(node)
+          when :attribute, :attr_accessor, :attr_writer then extract_virtual_attributes(node)
           else
             if node.name.to_s.end_with?("_path", "_url") && node.receiver.nil?
               @route_helper_calls << {
@@ -132,6 +135,10 @@ module RailsAiContext
           end
         end
 
+        # An attribute validated with `acceptance:` needs no column:
+        # ActiveModel defines the reader and the writer when none exists.
+        SELF_DEFINING_VALIDATIONS = %w[acceptance].freeze
+
         def extract_validates(node)
           args = node.arguments&.arguments || []
           columns = []
@@ -139,7 +146,28 @@ module RailsAiContext
             break unless arg.is_a?(Prism::SymbolNode)
             columns << arg.value
           end
-          @validates_calls << { columns: columns, line: node.location.start_line } if columns.any?
+          return if columns.empty? || self_defining?(args)
+
+          @validates_calls << { columns: columns, line: node.location.start_line }
+        end
+
+        def self_defining?(args)
+          args.grep(Prism::KeywordHashNode).any? do |hash|
+            hash.elements.grep(Prism::AssocNode).any? do |element|
+              element.key.is_a?(Prism::SymbolNode) && SELF_DEFINING_VALIDATIONS.include?(element.key.value)
+            end
+          end
+        end
+
+        # `attribute :foo` and `attr_accessor :foo` are real readers with no
+        # column behind them, and a migration for one is a column nobody
+        # wants.
+        def extract_virtual_attributes(node)
+          return unless node.receiver.nil?
+
+          (node.arguments&.arguments || []).each do |arg|
+            @virtual_attributes << arg.value if arg.is_a?(Prism::SymbolNode)
+          end
         end
 
         def extract_permit(node)
@@ -410,6 +438,8 @@ module RailsAiContext
 
         visitor.validates_calls.each do |vc|
           vc[:columns].each do |col|
+            next if visitor.virtual_attributes.include?(col)
+
             unless valid[:columns].include?(col)
               warnings << "validates :#{col} - column \"#{col}\" not found in #{valid[:table]} table. Fix: add migration `rails g migration Add#{col.camelize}To#{valid[:table].camelize} #{col}:string` or check concerns"
             end
@@ -429,6 +459,7 @@ module RailsAiContext
         content.each_line do |line|
           next unless line.match?(/\A\s*validates\s+:/)
           after = line.sub(/\A\s*validates\s+/, "")
+          next if after.include?("acceptance:")
           after.scan(/:(\w+)/).each do |m|
             col = m[0]
             break if after.include?("#{col}:")

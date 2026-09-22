@@ -2539,4 +2539,34 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
   end
+
+  # A `has_many :through` naming an association the model does not declare
+  # loads fine and only raises when something touches it. Reading it cost the
+  # whole model: its callbacks, its table heading and its graph node were
+  # replaced by one error line.
+  describe "a reflection that cannot resolve" do
+    let(:owner) { double("Post", reflect_on_association: nil) }
+
+    let(:resolvable) do
+      double("comments", name: :comments, macro: :has_many, class_name: "Comment",
+                         foreign_key: "post_id", options: {})
+    end
+
+    let(:dangling) do
+      double("reader_emails", name: :reader_emails, macro: :has_many,
+                              options: { through: :reader }, active_record: owner).tap do |reflection|
+        allow(reflection).to receive(:class_name).and_raise(NoMethodError, "undefined method 'klass' for nil")
+      end
+    end
+
+    it "keeps every other association and marks the one that failed" do
+      model = double("Post", reflect_on_all_associations: [ resolvable, dangling ])
+
+      associations = introspector.send(:extract_associations, model)
+
+      expect(associations.first).to include(name: "comments", class_name: "Comment")
+      expect(associations.last).to include(name: "reader_emails",
+                                           unavailable: "through :reader is not an association")
+    end
+  end
 end

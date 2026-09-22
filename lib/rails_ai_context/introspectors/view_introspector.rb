@@ -64,6 +64,7 @@ module RailsAiContext
         templates = {}
         Dir.glob(File.join(views_dir, "**/*")).each do |path|
           next if File.directory?(path)
+          next unless RailsAiContext::ViewFile.template?(path)
           relative = path.sub("#{views_dir}/", "")
           next if relative.start_with?("layouts/")
           next if File.basename(relative).start_with?("_")

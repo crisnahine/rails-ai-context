@@ -409,6 +409,57 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(vars.first).to include(name: "PORT", default: "3000")
     end
 
+    # database.yml, newrelic.yml, a rake task and a view all read ENV, and
+    # none of their names reached the answer someone writes a .env.example
+    # from.
+    it "reads ENV out of an ERB yml, a rake task and a view" do
+      FileUtils.mkdir_p(File.join(tmpdir, "config"))
+      FileUtils.mkdir_p(File.join(tmpdir, "lib", "tasks"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "views", "probes"))
+      File.write(File.join(tmpdir, "config", "cache.yml"), <<~YAML)
+        default: &default
+          pool: <%= ENV.fetch("CACHE_MAX_THREADS") { 10 } %>
+          url: <%= ENV['CACHE_DATABASE_URL'] %>
+      YAML
+      File.write(File.join(tmpdir, "lib", "tasks", "probe.rake"), <<~RUBY)
+        task probe: :environment do
+          puts ENV["RAKE_ONLY_VAR"]
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "views", "probes", "show.html.erb"),
+                 %(<p><%= ENV["VIEW_ONLY_VAR"] %></p>\n))
+
+      names = described_class.send(:scan_env_vars, tmpdir).values.flatten.map { |v| v[:name] }
+
+      expect(names).to include("CACHE_MAX_THREADS", "CACHE_DATABASE_URL",
+                               "RAKE_ONLY_VAR", "VIEW_ONLY_VAR")
+    end
+
+    # config/database.yml is on `sensitive_patterns`, so it stays unread and
+    # the answer says so rather than leaving the gap unexplained.
+    it "still does not open a sensitive config file" do
+      FileUtils.mkdir_p(File.join(tmpdir, "config"))
+      File.write(File.join(tmpdir, "config", "database.yml"),
+                 %(production:\n  password: <%= ENV['DB_PASSWORD'] %>\n))
+
+      names = described_class.send(:scan_env_vars, tmpdir).values.flatten.map { |v| v[:name] }
+
+      expect(names).to be_empty
+    end
+
+    it "reports the line the yml file reads it on" do
+      FileUtils.mkdir_p(File.join(tmpdir, "config"))
+      File.write(File.join(tmpdir, "config", "newrelic.yml"), <<~YAML)
+        common: &default_settings
+          app_name: probe
+          license_key: <%= ENV["NEWRELIC_ONLY_VAR"] %>
+      YAML
+
+      entry = described_class.send(:scan_env_vars, tmpdir).values.flatten.first
+
+      expect(entry).to include(name: "NEWRELIC_ONLY_VAR", line: 3)
+    end
+
     it "does not print a Ruby expression where a default value belongs" do
       vars = scan(%{PORT = ENV.fetch("PORT", defaults[:port])\n})
       expect(vars.first[:name]).to eq("PORT")

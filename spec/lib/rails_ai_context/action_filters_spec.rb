@@ -222,7 +222,7 @@ RSpec.describe RailsAiContext::ActionFilters do
   describe "a skip record constrained to some actions" do
     let(:constrained_context) do
       { controllers: { controllers: {
-        "AdminController" => { filters: [ { kind: "before", name: "authenticate_admin!" } ] },
+        "AdminController" => { filters: [ { kind: "before", name: "authenticate_admin!", declared: true } ] },
         "ReportsController" => {
           parent_class: "AdminController",
           actions: %w[index show],
@@ -260,7 +260,7 @@ RSpec.describe RailsAiContext::ActionFilters do
 
     it "names the actions an except:-constrained skip leaves alone" do
       ctx = { controllers: { controllers: {
-        "AdminController" => { filters: [ { kind: "before", name: "authenticate_admin!" } ] },
+        "AdminController" => { filters: [ { kind: "before", name: "authenticate_admin!", declared: true } ] },
         "ReportsController" => {
           parent_class: "AdminController",
           filters: [ { kind: "before", name: "authenticate_admin!", skipped: true, except: %w[show] } ]
@@ -488,7 +488,7 @@ RSpec.describe RailsAiContext::ActionFilters do
       { controllers: { controllers: {
         "Admin::BaseController" => {
           parent_class: "ApplicationController",
-          filters: [ { kind: "before", name: "require_admin" }, { kind: "after", name: "audit" } ]
+          filters: [ { kind: "before", name: "require_admin", declared: true }, { kind: "after", name: "audit", declared: true } ]
         },
         "Admin::ReportsController" => {
           parent_class: "BaseController",
@@ -595,10 +595,10 @@ RSpec.describe RailsAiContext::ActionFilters do
   describe "an ancestor chain deeper than one level" do
     let(:deep_context) do
       { controllers: { controllers: {
-        "ApplicationController" => { filters: [ { kind: "before_action", name: "authenticate" } ] },
+        "ApplicationController" => { filters: [ { kind: "before_action", name: "authenticate", declared: true } ] },
         "Admin::BaseController" => {
           parent_class: "ApplicationController",
-          filters: [ { kind: "before_action", name: "require_admin" } ]
+          filters: [ { kind: "before_action", name: "require_admin", declared: true } ]
         },
         "Admin::PostsController" => { parent_class: "Admin::BaseController", filters: [] }
       } } }
@@ -607,16 +607,75 @@ RSpec.describe RailsAiContext::ActionFilters do
     it "carries the grandparent's filter into inherited" do
       result = described_class.for_controller(deep_context, "Admin::PostsController")
 
-      expect(result[:inherited].map { |f| f[:name] }).to eq(%w[require_admin authenticate])
+      expect(result[:inherited].map { |f| f[:name] }).to eq(%w[authenticate require_admin])
     end
 
-    it "lists a filter the closer ancestor redeclares once" do
+    # Re-declaring a filter moves it to the end of the chain, the way
+    # `set_callback` does: the closer class's position is the one it runs at.
+    it "lists a filter the closer ancestor redeclares once, at the closer position" do
       deep_context[:controllers][:controllers]["Admin::BaseController"][:filters] <<
-        { kind: "before_action", name: "authenticate", only: %w[index] }
+        { kind: "before_action", name: "authenticate", only: %w[index], declared: true }
 
       names = described_class.for_controller(deep_context, "Admin::PostsController")[:inherited].map { |f| f[:name] }
       expect(names.count("authenticate")).to eq(1)
       expect(names).to eq(%w[require_admin authenticate])
+    end
+
+    # Rails runs the root's callbacks first: authentication after the current
+    # user is loaded reads as the wrong order to an agent reading the chain.
+    it "emits the inherited list in the order Rails runs it" do
+      result = described_class.for_controller(deep_context, "Admin::PostsController")
+
+      expect(result[:inherited].map { |f| f[:name] }).to eq(%w[authenticate require_admin])
+    end
+
+    # sentry-rails and paper_trail add callbacks from an
+    # `on_load :action_controller` block. The reflection list of the nearest
+    # ancestor carries them, no app class declares them, and naming that
+    # ancestor sent an agent to a file that never mentions the callback.
+    it "names no class for a filter no ancestor's body declares" do
+      deep_context[:controllers][:controllers]["Admin::BaseController"][:filters] <<
+        { kind: "around", name: "sentry_around_action" }
+
+      entry = described_class.for_controller(deep_context, "Admin::PostsController")[:inherited]
+        .find { |f| f[:name] == "sentry_around_action" }
+
+      expect(entry).not_to have_key(:from)
+      expect(entry[:provenance]).to eq("not declared in the controller chain")
+    end
+
+    # Reflection hands every class the whole chain, so the gem callback is on
+    # the child's own list too. The child's copy used to win and arrive with
+    # neither an attribution nor the label that explains its absence.
+    it "carries the label through to the booted tier's own copy" do
+      chain = [ { kind: "around", name: "sentry_around_action" },
+                { kind: "before", name: "authenticate" } ]
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ chain.first, chain.last.merge(declared: true) ] },
+        "Admin::PostsController" => { parent_class: "ApplicationController", filters: chain }
+      } } }
+
+      entry = described_class.for_controller(ctx, "Admin::PostsController")[:inherited]
+        .find { |f| f[:name] == "sentry_around_action" }
+
+      expect(entry).not_to have_key(:from)
+      expect(entry[:provenance]).to eq("not declared in the controller chain")
+    end
+
+    # A controller whose file the walk cannot read - an engine's, a gem's -
+    # marks nothing as declared. That is "unknown", not "a gem installed it",
+    # and dropping the attribution there loses the answer.
+    it "keeps the attribution when no ancestor's body could be read" do
+      ctx = { controllers: { controllers: {
+        "ApplicationController" => { filters: [ { kind: "before", name: "authenticate" } ] },
+        "Admin::PostsController" => { parent_class: "ApplicationController",
+                                      filters: [ { kind: "before", name: "authenticate" } ] }
+      } } }
+
+      entry = described_class.for_controller(ctx, "Admin::PostsController")[:inherited].first
+
+      expect(entry[:from]).to eq("ApplicationController")
+      expect(entry).not_to have_key(:provenance)
     end
 
     it "stops at the first ancestor the payload does not carry" do
@@ -630,7 +689,7 @@ RSpec.describe RailsAiContext::ActionFilters do
       result = described_class.for_controller(deep_context, "Admin::PostsController")
 
       expect(result[:inherited].map { |f| [ f[:name], f[:from] ] })
-        .to eq([ %w[require_admin Admin::BaseController], %w[authenticate ApplicationController] ])
+        .to eq([ %w[authenticate ApplicationController], %w[require_admin Admin::BaseController] ])
     end
 
     # A booted ancestor's list carries every inherited name, so the nearest
@@ -705,7 +764,7 @@ RSpec.describe RailsAiContext::ActionFilters do
           parent_class: "ApplicationController",
           filters: [
             { kind: "before", name: "authenticate_user!", skipped: true },
-            { kind: "before", name: "authenticate_user!", only: %w[admin] }
+            { kind: "before", name: "authenticate_user!", only: %w[admin], declared: true }
           ],
           file: "app/controllers/public_controller.rb"
         },
@@ -845,7 +904,7 @@ RSpec.describe RailsAiContext::ActionFilters do
   describe "a conditional skip of a filter the chain does declare" do
     it "says nothing for an action the ancestor's own constraint excludes" do
       ctx = { controllers: { controllers: {
-        "ApplicationController" => { filters: [ { kind: "before", name: "authenticate_user!", except: %w[index] } ] },
+        "ApplicationController" => { filters: [ { kind: "before", name: "authenticate_user!", except: %w[index], declared: true } ] },
         "PostsController" => {
           parent_class: "ApplicationController",
           filters: [ { kind: "before", name: "authenticate_user!", skipped: true, if: "public_request?" } ]

@@ -2,10 +2,11 @@
 
 module RailsAiContext
   module Introspectors
-    # Discovers ActiveJob jobs, mailers, and Action Cable channels. Sidekiq
-    # reaches this only as config/sidekiq.yml: a class that includes
-    # Sidekiq::Worker without subclassing ActiveJob::Base is not a descendant
-    # and does not live in app/jobs/, so neither pass here finds it.
+    # Discovers ActiveJob jobs, mailers, Action Cable channels, and the
+    # Sidekiq workers that are none of those: a class that includes
+    # Sidekiq::Job or Sidekiq::Worker is not an ActiveJob descendant and does
+    # not live in app/jobs/, so both job passes miss it. On an app that runs
+    # its background work that way, workers are the whole picture.
     class JobIntrospector
       extend StaticTier
       static_tier :alternate_source
@@ -26,6 +27,7 @@ module RailsAiContext
 
         {
           jobs: jobs,
+          workers: extract_workers,
           mailers: extract_mailers,
           channels: extract_channels,
           recurring_jobs: extract_solid_queue_recurring,
@@ -39,6 +41,7 @@ module RailsAiContext
       def static_call
         {
           jobs: extract_jobs_from_source,
+          workers: extract_workers,
           mailers: extract_mailers_from_source,
           channels: extract_channels_from_source,
           recurring_jobs: extract_solid_queue_recurring,
@@ -153,6 +156,35 @@ module RailsAiContext
         end.sort_by { |j| j[:name] }
       rescue => e
         $stderr.puts "[rails-ai-context] extract_jobs_from_source failed: #{e.message}" if ENV["DEBUG"]
+        []
+      end
+
+      # Sidekiq workers, read from source in both tiers: the class is not an
+      # ActiveJob descendant, so reflection has no list to walk.
+      WORKER_MIXINS = %w[Sidekiq::Job Sidekiq::Worker].freeze
+
+      def extract_workers
+        SourceScan.each(app.root, kind: "app/workers").filter_map do |record|
+          next unless WORKER_MIXINS.any? { |mixin| record.source.include?(mixin) }
+
+          ast = SourceIntrospector.walk_source(record.source, {
+            macros:  -> { Listeners::GenericMacroListener.new(:sidekiq_options, :include) },
+            methods: Listeners::MethodsListener
+          })
+          next unless ast[:macros].any? { |m| m[:macro] == :include && m[:values].flatten.map(&:to_s).any? { |v| WORKER_MIXINS.include?(v) } }
+
+          options = ast[:macros].find { |m| m[:macro] == :sidekiq_options }
+          perform = ast[:methods].find { |m| m[:name] == "perform" && m[:scope] == :instance }
+
+          {
+            name: DeclaredConstant.resolve(record.source, record.path_name),
+            file: record.file,
+            options: options ? (options[:option_values] || {}).transform_keys(&:to_s) : {},
+            perform_signature: perform && perform[:params]&.any? ? ActionResolver.parameter_list(perform) : nil
+          }.compact
+        end.sort_by { |w| w[:name] }
+      rescue => e
+        $stderr.puts "[rails-ai-context] extract_workers failed: #{e.message}" if ENV["DEBUG"]
         []
       end
 

@@ -38,7 +38,10 @@ module RailsAiContext
         "devise" => "config/initializers/devise.rb",
         "pundit" => "app/policies/",
         "cancancan" => "app/models/ability.rb",
-        "sidekiq" => "config/sidekiq.yml",
+        # A glob, because an app may name it sidekiq_production.yml or keep
+        # its schedule in sidekiq_cron.yml, and the fixed string pointed at a
+        # file that was not there.
+        "sidekiq" => [ "config/sidekiq*.yml" ],
         # Rails 8's solid_queue generator writes queue.yml (worker/dispatcher
         # config) and recurring.yml (scheduled tasks) - never solid_queue.yml.
         # Checked at runtime since apps that only added the gem without
@@ -105,7 +108,11 @@ module RailsAiContext
         return nil unless hint.is_a?(Array)
 
         root = rails_app.root
-        present = hint.select { |path| File.exist?(File.join(root, path)) }
+        present = hint.flat_map do |path|
+          next [ path ] if !path.include?("*") && File.exist?(File.join(root, path))
+
+          Dir.glob(File.join(root, path)).sort.map { |found| found.sub("#{root}/", "") }
+        end
         present.any? ? present.join(", ") : nil
       end
     end

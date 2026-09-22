@@ -25,6 +25,8 @@ module RailsAiContext
           @stack = []
           @concern_blocks = {}
           @replaying = []
+          # Rails drops a generated name another route already took.
+          @generated_names = Set.new
         end
 
         def on_call_node_enter(node)
@@ -488,13 +490,29 @@ module RailsAiContext
 
           return route_name_for(as_option.to_s) if as_option
 
-          plain = plain_segment_name(segment)
-          plain ? route_name_for(plain) : nil
+          generated_name(route_name_for(plain_segment_name(segment)))
         end
 
+        # Rails converts the hyphens of a path-derived name to underscores
+        # (`api_v1_gift_cards_redeem`), and uses no part of the path at all
+        # when the path carries a character outside [\w\-/], such as the dot
+        # of `.well-known`. Then it drops the whole generated name when the
+        # result does not start with a letter or an underscore.
+        UNNAMEABLE_PATH = %r{[^\w\-/]}
+        NAMEABLE = /\A[_a-z]/i
+
         def plain_segment_name(segment)
-          plain = segment.to_s.delete_prefix("/").tr("/", "_")
-          plain.empty? || plain.include?(":") ? nil : plain
+          plain = segment.to_s.delete_prefix("/")
+          return nil if plain.empty? || plain.include?(":") || plain.match?(UNNAMEABLE_PATH)
+
+          plain.tr("/", "_").tr("-", "_")
+        end
+
+        def generated_name(name)
+          return nil if name.nil? || name.empty? || !name.match?(NAMEABLE)
+          return nil unless @generated_names.add?(name)
+
+          name
         end
 
         def join_path(*segments)

@@ -285,9 +285,15 @@ module RailsAiContext
           lines << "" << "_Could not extract source code. File: #{source_path || "not recorded for #{controller_name}"}_"
         end
 
-        if info[:strong_params]&.any?
+        # One action's answer used to carry every strong-params method in the
+        # controller, so `create_params`' permit list read as the fields
+        # `deactivate` accepts.
+        action_params = params_methods_for_action(info[:strong_params], source_with_lines, applicable,
+          source_path, source)
+
+        if action_params.any?
           lines << "" << "## Strong Params"
-          info[:strong_params].each do |sp|
+          action_params.each do |sp|
             if sp.is_a?(Hash)
               lines << "### #{sp[:name]}"
               if sp[:unrestricted]
@@ -345,9 +351,30 @@ module RailsAiContext
         []
       end
 
+      # The params methods this action can reach: the ones its own body names,
+      # plus the ones the filters that run before it name. With no source to
+      # read, every method stays - a shorter list would be a guess.
+      private_class_method def self.params_methods_for_action(strong_params, action_source, applicable, source_path, source)
+        entries = Array(strong_params)
+        return entries if entries.empty? || action_source.nil?
+
+        reachable = action_source[:code].to_s.dup
+        filter_names = (applicable[:own] + applicable[:inherited]).filter_map { |f| f[:name].to_s }
+        filter_names.each do |name|
+          body = extract_method_with_lines(source_path, name, source: source)
+          reachable << "\n" << body[:code] if body
+        end
+
+        entries.select do |sp|
+          name = sp.is_a?(Hash) ? sp[:name].to_s : sp.to_s
+          name.empty? || reachable.match?(/(?<![\w:])#{Regexp.escape(name)}(?![\w])/)
+        end
+      end
+
       private_class_method def self.filter_line(filter)
         line = "- `#{filter[:kind]}` **#{filter[:name]}**"
         line += " _(from #{filter[:from]})_" if filter[:from]
+        line += " _(#{filter[:provenance]})_" if !filter[:from] && filter[:provenance]
         line += " (only: #{filter[:only].join(', ')})" if filter[:only]&.any?
         line += " (except: #{filter[:except].join(', ')})" if filter[:except]&.any?
         line + Serializers::SectionFacts.skip_condition_tail(filter)
@@ -482,10 +509,13 @@ module RailsAiContext
         # Cross-reference hints. The route key is the controller's path, which
         # the class name does not reproduce wherever an inflection is in play.
         ctrl_path = RailsAiContext::Payload.controller_route_key(ctx, name)
+        # The model is a guess off the path, so it is only offered when the
+        # payload carries one by that name.
         model_name = ctrl_path.split("/").last.singularize.camelize
+        model_name = nil unless RailsAiContext::Payload.models(ctx).key?(model_name)
         lines << ""
         lines << "_Next: `rails_get_routes(controller:\"#{ctrl_path}\")` for routes"
-        lines << " | `rails_get_model_details(model:\"#{model_name}\")` for model"
+        lines << " | `rails_get_model_details(model:\"#{model_name}\")` for model" if model_name
         lines << " | `rails_get_view(controller:\"#{ctrl_path.split('/').last}\")` for views_"
 
         lines.join("\n")

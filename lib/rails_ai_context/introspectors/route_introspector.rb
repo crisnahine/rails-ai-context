@@ -37,7 +37,13 @@ module RailsAiContext
           # which detect_mounted_engines' Class check can't see).
           unrouted_mounts: count_unrouted_mounts,
           root_route: root ? "#{root[:controller]}##{root[:action]}" : nil
-        }
+        }.tap do |result|
+          # `get "/", to: redirect(...)` is routable, has no controller#action
+          # and is not a mount, so no row and no count mentioned it. The static
+          # tier already counts it as a construct it did not expand.
+          dynamic = count_controllerless_constructs
+          result[:dynamic_routes] = dynamic if dynamic.positive?
+        end
       rescue => e
         { error: e.message }
       end
@@ -232,21 +238,32 @@ module RailsAiContext
       end
 
       def count_unrouted_mounts
-        app.routes.routes.count do |r|
-          next false if r.respond_to?(:internal) && r.internal
-          next false unless r.defaults[:controller].blank?
-
-          # Only genuine rack mounts: redirect(...) and to: ->(env) {} routes
-          # also have no controller but are not mounted apps.
-          rack_app = r.app.respond_to?(:app) ? r.app.app : r.app
-          next false if defined?(ActionDispatch::Routing::Redirect) && rack_app.is_a?(ActionDispatch::Routing::Redirect)
-          next false if rack_app.is_a?(Proc)
-
-          true
-        end
+        controllerless_routes.count { |r| !dynamic_target?(r) }
       rescue => e
         $stderr.puts "[rails-ai-context] count_unrouted_mounts failed: #{e.message}" if ENV["DEBUG"]
         0
+      end
+
+      def count_controllerless_constructs
+        controllerless_routes.count { |r| dynamic_target?(r) }
+      rescue => e
+        $stderr.puts "[rails-ai-context] count_controllerless_constructs failed: #{e.message}" if ENV["DEBUG"]
+        0
+      end
+
+      def controllerless_routes
+        app.routes.routes.reject do |r|
+          (r.respond_to?(:internal) && r.internal) || r.defaults[:controller].present?
+        end
+      end
+
+      # A redirect or a `to: ->(env) {}` route has no controller and is not a
+      # mounted app.
+      def dynamic_target?(route)
+        rack_app = route.app.respond_to?(:app) ? route.app.app : route.app
+        return true if defined?(ActionDispatch::Routing::Redirect) && rack_app.is_a?(ActionDispatch::Routing::Redirect)
+
+        rack_app.is_a?(Proc)
       end
 
       def detect_mounted_engines

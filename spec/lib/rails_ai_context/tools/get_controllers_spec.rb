@@ -553,7 +553,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       stub_controllers({
         "ApplicationController" => {
           actions: [],
-          filters: [ { kind: "before", name: "require_functional!" } ],
+          filters: [ { kind: "before", name: "require_functional!", declared: true } ],
           strong_params: []
         },
         "AccountsController" => {
@@ -644,7 +644,7 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
     it "names the grandparent an inherited filter was declared on" do
       allow(described_class).to receive(:cached_context).and_return(
         controllers: { controllers: {
-          "ApplicationController" => { actions: [], filters: [ { kind: "before_action", name: "authenticate" } ] },
+          "ApplicationController" => { actions: [], filters: [ { kind: "before_action", name: "authenticate", declared: true } ] },
           "Admin::BaseController" => { actions: [], filters: [], parent_class: "ApplicationController" },
           "Admin::PostsController" => { actions: %w[index], filters: [], parent_class: "Admin::BaseController" }
         } }

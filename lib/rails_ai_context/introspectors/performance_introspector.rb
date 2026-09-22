@@ -28,7 +28,7 @@ module RailsAiContext
         {
           n_plus_one_risks: detect_n_plus_one(model_data),
           missing_counter_cache: detect_missing_counter_cache(model_data, schema_data),
-          missing_fk_indexes: detect_missing_fk_indexes(schema_data),
+          missing_fk_indexes: detect_missing_fk_indexes(schema_data, model_data, load_foreign_keys),
           model_all_in_controllers: detect_model_all_in_controllers,
           eager_load_candidates: detect_eager_load_candidates,
           summary: nil # populated below
@@ -45,6 +45,10 @@ module RailsAiContext
 
       def load_schema_data
         SchemaReader.for(root).tables
+      end
+
+      def load_foreign_keys
+        SchemaReader.for(root).foreign_keys
       end
 
       def active_record_class_name(classes)
@@ -287,8 +291,29 @@ module RailsAiContext
         end
       end
 
+      # A counter the app maintains itself is not a missing counter_cache:
+      # adding one double-counts every create and makes a reset stick until
+      # the next destroy.
+      def app_written_counter_columns
+        return @app_written_counter_columns if defined?(@app_written_counter_columns)
+
+        writers = Set.new
+        %w[app lib].each do |kind|
+          SourceScan.each(root, kind: kind, skip_concerns: false) do |record|
+            next unless record.source.include?("_count")
+
+            record.source.scan(/(\w+_count)\s*[:=]/).each { |match| writers << match[0] }
+          end
+        end
+        @app_written_counter_columns = writers
+      rescue StandardError => e
+        $stderr.puts "[rails-ai-context] app_written_counter_columns failed: #{e.message}" if ENV["DEBUG"]
+        @app_written_counter_columns = Set.new
+      end
+
       def detect_missing_counter_cache(model_data, schema_data)
         missing = []
+        written = app_written_counter_columns
 
         model_data.each do |model|
           model[:has_many].each do |assoc|
@@ -304,6 +329,7 @@ module RailsAiContext
             next unless table
             next unless table[:columns].any? { |c| c[:name] == count_col }
             next if options.key?(:counter_cache)
+            next if written.include?(count_col)
 
             belongs_to_model = association_model(model_data, assoc)
             next unless belongs_to_model
@@ -335,8 +361,47 @@ module RailsAiContext
           model_data.find { |m| m[:name].demodulize == wanted.demodulize }
       end
 
-      def detect_missing_fk_indexes(schema_data)
+      # A `*_id` column is only a foreign key when something says so. An app
+      # on uuid primary keys keeps `stripe_customer_id` and
+      # `calendar_app_id` as external ids that cannot reference any row here,
+      # and every one of them was reported as a missing index.
+      # integer and bigint are one type for this purpose: an app that keeps a
+      # bigint primary key may still declare an integer foreign key.
+      def normalized_type(type)
+        type.to_s == "bigint" ? "integer" : type.to_s
+      end
+
+      def primary_key_types(schema_data)
+        schema_data.each_with_object(Set.new) do |(_name, table), types|
+          Array(table[:columns]).each do |col|
+            types << normalized_type(col[:type]) if col[:primary_key]
+          end
+        end
+      end
+
+      def foreign_key_columns(foreign_keys)
+        Array(foreign_keys).each_with_object(Set.new) do |fk, found|
+          column = fk[:column] || "#{fk[:to].to_s.singularize}_id"
+          found << [ fk[:from].to_s, column.to_s ]
+        end
+      end
+
+      def belongs_to_columns(model_data)
+        Array(model_data).each_with_object(Set.new) do |model, found|
+          table = model[:table_name].to_s
+          next if table.empty?
+
+          Array(model[:belongs_to]).each do |assoc|
+            options = assoc[:options] || {}
+            found << [ table, (options[:foreign_key] || "#{assoc[:name]}_id").to_s ]
+          end
+        end
+      end
+
+      def detect_missing_fk_indexes(schema_data, model_data = [], foreign_keys = [])
         missing = []
+        pk_types = primary_key_types(schema_data)
+        declared = foreign_key_columns(foreign_keys) | belongs_to_columns(model_data)
 
         schema_data.each do |table_name, table|
           columns = table[:columns]
@@ -367,6 +432,9 @@ module RailsAiContext
                 }
               end
             else
+              next unless declared.include?([ table_name.to_s, col[:name] ]) ||
+                          pk_types.include?(normalized_type(col[:type]))
+
               missing << {
                 table: table_name,
                 column: col[:name],

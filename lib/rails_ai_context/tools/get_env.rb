@@ -6,7 +6,7 @@ module RailsAiContext
       tool_name "rails_get_env"
       description "Discover environment variables, external service dependencies, and credentials keys used by the app. " \
         "Use when: setting up a development environment, debugging missing config, or auditing external dependencies. " \
-        "Scans Ruby files for ENV[], .env.example, Dockerfile, external HTTP calls, and credentials keys (never values)."
+        "Scans .rb, .rake, ERB views and config YAML for ENV[], plus .env.example, Dockerfile, external HTTP calls, and credentials keys (never values)."
 
       input_schema(
         properties: {
@@ -74,6 +74,12 @@ module RailsAiContext
         lines << "" << "_Use `detail:\"standard\"` for sources and external services, or `detail:\"full\"` for per-file locations._"
         text_response(lines.join("\n"))
       end
+
+      # Named in the answer, because a name missing from it is otherwise
+      # indistinguishable from a name the app does not read. `database.yml`
+      # and the other files on `sensitive_patterns` are never opened.
+      SCAN_NOTE = "_Scanned `app`, `config` and `lib` for `.rb`, `.rake`, `.erb` and config `.yml`. " \
+        "Files matching `sensitive_patterns` (config/database.yml, credentials, keys) are never read._"
 
       private_class_method def self.format_standard(env_vars, env_example, external_services, credentials_keys, encrypted_columns)
         lines = [ "# Environment Configuration", "" ]
@@ -143,6 +149,7 @@ module RailsAiContext
           lines << ""
         end
 
+        lines << SCAN_NOTE
         text_response(lines.join("\n"))
       end
 
@@ -247,26 +254,49 @@ module RailsAiContext
           lines << ""
         end
 
+        lines << SCAN_NOTE
         text_response(lines.join("\n"))
+      end
+
+      # An app reads ENV from more than its Ruby: `config/database.yml` and
+      # `config/newrelic.yml` through ERB, a rake task, a view. Scanning `.rb`
+      # alone left those names out of the very answer someone writes a
+      # `.env.example` from, with nothing saying a file type was skipped.
+      SCAN_PATTERNS = {
+        "app"       => %w[**/*.rb **/*.erb],
+        "config"    => %w[**/*.rb **/*.yml **/*.yaml],
+        "lib"       => %w[**/*.rb **/*.rake]
+      }.freeze
+
+      private_class_method def self.scan_files(root, real_root)
+        SCAN_PATTERNS.flat_map do |dir_name, patterns|
+          dir = File.join(root, dir_name)
+          next [] unless Dir.exist?(dir)
+
+          patterns.flat_map { |pattern| safe_glob(dir, pattern, real_root) }
+        end.uniq
+      end
+
+      # ERB tags carry the Ruby of a `.yml` or `.erb` file.
+      private_class_method def self.ruby_source(file, source)
+        return source if file.end_with?(".rb", ".rake")
+
+        RailsAiContext::ErbSource.ruby_in_place(source)
       end
 
       private_class_method def self.scan_env_vars(root)
         env_vars = {}
         real_root = File.realpath(root).to_s
-        scan_dirs = %w[app config lib].map { |d| File.join(root, d) }
 
-        scan_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          safe_glob(dir, "**/*.rb", real_root).each do |file|
-            next if File.size(file) > max_file_size
+        scan_files(root, real_root).each do |file|
+          next if File.size(file) > max_file_size
 
-            source = safe_read(file)
-            next unless source
-            next unless source.include?("ENV")
+          source = safe_read(file)
+          next unless source
+          next unless source.include?("ENV")
 
-            vars = env_references(source)
-            env_vars[file] = vars if vars.any?
-          end
+          vars = env_references(ruby_source(file, source))
+          env_vars[file] = vars if vars.any?
         end
 
         env_vars
@@ -293,7 +323,9 @@ module RailsAiContext
           next unless name.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
 
           var = { name: name, line: entry[:location] }
-          var[:default] = RailsAiContext::Redaction.value(name, entry[:default]) if entry[:default]
+          # The listener writes a `nil` default as the string "nil", which
+          # redaction then treated as a value worth hiding.
+          var[:default] = entry[:default] == "nil" ? "nil" : RailsAiContext::Redaction.value(name, entry[:default]) if entry[:default]
           var
         end
       rescue => e
@@ -537,18 +569,14 @@ module RailsAiContext
 
         vars = Set.new
         real_root = File.realpath(root).to_s
-        scan_dirs = %w[app config lib].map { |d| File.join(root, d) }
 
-        scan_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          safe_glob(dir, "**/*.rb", real_root).each do |file|
-            next if File.size(file) > max_file_size
-            source = safe_read(file)
-            next unless source
+        scan_files(root, real_root).each do |file|
+          next if File.size(file) > max_file_size
+          source = safe_read(file)
+          next unless source
 
-            source.scan(/ENV(?:\[["']|\.fetch\(["'])(#{Regexp.escape(prefix)}[A-Z0-9_]+)/).each do |match|
-              vars << match[0]
-            end
+          source.scan(/ENV(?:\[["']|\.fetch\(["'])(#{Regexp.escape(prefix)}[A-Z0-9_]+)/).each do |match|
+            vars << match[0]
           end
         end
 
@@ -647,16 +675,25 @@ module RailsAiContext
         encrypted
       end
 
+      # Matched on whole `_`-delimited segments: unanchored, PORT matched
+      # inside PORTAL and SUPPORT, and MAIL inside VOICEMAIL. The mail keys
+      # carry their own spellings, because MAILER_SENDER and MAILGUN_DOMAIN
+      # are mail settings whose segment is not the bare word.
+      CATEGORY_SEGMENTS = [
+        [ "API Keys & Secrets", %w[API_KEY SECRET TOKEN] ],
+        [ "Mail", %w[MAIL MAILER MAILGUN SENDGRID POSTMARK IMAP SMTP] ],
+        [ "Database", %w[DATABASE DB REDIS] ],
+        [ "Monitoring", %w[OTEL SENTRY DATADOG NEWRELIC APPSIGNAL] ],
+        [ "Push Notifications", %w[PUSH VAPID FCM] ],
+        [ "Infrastructure", %w[PORT CONCURRENCY THREADS WORKERS TIMEOUT QUEUE PIDFILE] ]
+      ].freeze
+
       private_class_method def self.categorize_env_var(name)
-        case name
-        when /API_KEY|SECRET|TOKEN/i then "API Keys & Secrets"
-        when /MAIL|IMAP|SMTP/i then "Mail"
-        when /DATABASE|DB_|REDIS/i then "Database"
-        when /OTEL|SENTRY|DATADOG|NEWRELIC|APPSIGNAL/i then "Monitoring"
-        when /PUSH|VAPID|FCM/i then "Push Notifications"
-        when /PORT|CONCURRENCY|THREADS|WORKERS|TIMEOUT|QUEUE|PIDFILE/i then "Infrastructure"
-        else "Other"
+        segments = name.to_s.upcase.split("_")
+        CATEGORY_SEGMENTS.each do |category, keys|
+          return category if keys.any? { |key| segments.each_cons(key.count("_") + 1).any? { |run| run.join("_") == key } }
         end
+        "Other"
       end
 
       private_class_method def self.group_env_vars(var_names)

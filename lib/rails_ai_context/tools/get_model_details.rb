@@ -190,6 +190,7 @@ module RailsAiContext
             detail += " [optional]" if a[:optional]
             detail += " dependent: #{a[:dependent]}" if a[:dependent]
             detail += " (fk: #{a[:foreign_key]})" if a[:foreign_key] && a[:type] == "belongs_to"
+            detail += " [UNAVAILABLE: #{a[:unavailable]}]" if a[:unavailable]
             lines << detail
           end
         end
@@ -287,7 +288,7 @@ module RailsAiContext
         if data[:callbacks]&.any?
           lines << "" << "## Callbacks"
           data[:callbacks].each do |type, methods|
-            lines << "- `#{type}`: #{methods.map { |m| callback_target(m.to_s) }.join(', ')}"
+            lines << "- `#{callback_type_label(type)}`: #{methods.map { |m| callback_target(m.to_s) }.join(', ')}"
           end
         end
 

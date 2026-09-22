@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "set"
 require_relative "safe_file"
 
 module RailsAiContext
@@ -13,6 +14,7 @@ module RailsAiContext
   module GemLock
     MAX_SIZE = 5 * 1024 * 1024
     SPEC_LINE = /\A {4}(\S+) \(([^)]+)\)\s*\z/
+    DEPENDENCY_LINE = /\A {2}(\S+?)!?(?: \(.*\))?\s*\z/
     RUBY_LINE = /\A\s+ruby (\S+)/
     GEMFILE_RUBY_LINE = /^\s*ruby\s+(["'])([^"']+)\1/
     PLAIN_VERSION = /\A\d+(?:\.\d+)*\S*\z/
@@ -20,11 +22,12 @@ module RailsAiContext
     class Spec
       attr_reader :ruby_version, :reason
 
-      def initialize(versions, ruby_version: nil, reason: nil, absent: false)
+      def initialize(versions, ruby_version: nil, reason: nil, absent: false, direct: nil)
         @versions = versions
         @ruby_version = ruby_version
         @reason = reason
         @absent = absent
+        @direct = direct || Set.new
       end
 
       # No lockfile, and a lockfile that named no gem, are both "the app's
@@ -47,6 +50,14 @@ module RailsAiContext
 
       def version(name)
         @versions[name.to_s]
+      end
+
+      # Named in the Gemfile, as opposed to resolved as some other gem's
+      # dependency. Every Rails app resolves minitest through activesupport,
+      # and reporting that as the app's test framework sent agents to a
+      # `test/` directory that does not exist.
+      def direct?(name)
+        @direct.include?(name.to_s)
       end
 
       def any?(*names)
@@ -99,12 +110,17 @@ module RailsAiContext
       return Spec.new({}, reason: "Gemfile.lock could not be read") unless content
 
       versions = {}
+      direct = Set.new
       ruby_version = nil
       in_specs = false
+      in_dependencies = false
       specs_section = false
       content.each_line do |line|
         if line.match?(/\A\S/)
           in_specs = false
+          in_dependencies = line.start_with?("DEPENDENCIES")
+        elsif in_dependencies && (match = line.match(DEPENDENCY_LINE))
+          direct << match[1]
         elsif line.strip == "specs:"
           in_specs = true
           specs_section = true
@@ -122,7 +138,7 @@ module RailsAiContext
       # and answering it as an app with no gems denies every gem it holds.
       return Spec.new({}, reason: "Gemfile.lock has no specs section") unless specs_section
 
-      Spec.new(versions, ruby_version: ruby_version || gemfile_ruby_version(gemfile))
+      Spec.new(versions, ruby_version: ruby_version || gemfile_ruby_version(gemfile), direct: direct)
     end
     private_class_method :parse
 

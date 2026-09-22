@@ -195,6 +195,11 @@ module RailsAiContext
 
           remaining = models.size - top.size
           lines << "- _...and #{count_phrase(remaining, "more model")}._" if remaining > 0
+
+          # A model whose introspection failed can never reach the list above,
+          # and leaving it unnamed read as an app that does not have it.
+          unavailable = models.select { |_, d| d.is_a?(Hash) && d[:error] }.keys
+          lines << "- _#{count_phrase(unavailable.size, "model")} could not be read: #{unavailable.sort.join(', ')}._" if unavailable.any?
           lines << ""
           lines
         end

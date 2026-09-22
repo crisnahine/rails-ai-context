@@ -640,6 +640,14 @@ RSpec.describe RailsAiContext::Doctor do
 
     let(:app) { Rails.application }
 
+    # An MCP-only install asked for no context files, so "No context files
+    # generated" is the configuration working, not something to fix.
+    it "is skipped rather than warned under an MCP-only install" do
+      allow(RailsAiContext.configuration).to receive(:context_files).and_return(false)
+
+      expect(check).to be_nil
+    end
+
     context "when cursor-only (split rules only, no root file)" do
       before do
         allow(RailsAiContext.configuration).to receive(:ai_tools).and_return(%i[cursor])

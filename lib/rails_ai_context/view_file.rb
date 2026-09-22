@@ -12,7 +12,45 @@ module RailsAiContext
 
     LOGICAL_PATH = %r{\A[\w\-]+(?:/[\w\-]+)*\z}
 
+    # What Rails registers when nothing else is bundled, for the static tier
+    # and for a booted app whose handlers cannot be read. A file under
+    # app/views whose last extension is none of these is not a template the
+    # tools can read: an image counted as a template, and the ivar regex ran
+    # over its bytes.
+    # Rails registers only erb/html/builder/ruby/raw itself; every other
+    # handler here comes from a gem. Booted, the registry answers and this
+    # list is a floor. Unbooted there is no registry, so a template a gem
+    # renders has to be on it or the app reads as having fewer views than it
+    # has. `rb` is Phlex, a Ruby class under app/views rather than a
+    # template.
+    DEFAULT_HANDLER_EXTENSIONS = %w[
+      raw erb html builder ruby rb jbuilder haml slim
+      rabl liquid arb md markdown prawn csv atom rss
+    ].freeze
+
     module_function
+
+    # @return [Array<String>] the template handler extensions this app has
+    def handler_extensions
+      return @handler_extensions if defined?(@handler_extensions) && @handler_extensions
+
+      registered = if defined?(ActionView::Template::Handlers) &&
+                      ActionView::Template::Handlers.respond_to?(:extensions)
+        ActionView::Template::Handlers.extensions.map(&:to_s)
+      else
+        []
+      end
+      @handler_extensions = registered | DEFAULT_HANDLER_EXTENSIONS
+    end
+
+    # @param path [String] any path under app/views
+    # @return [Boolean] whether its last extension names a template handler
+    def template?(path)
+      ext = File.extname(path.to_s).delete_prefix(".").downcase
+      return false if ext.empty?
+
+      handler_extensions.include?(ext)
+    end
 
     # path: relative to app/views, or spelled from the app root.
     def locate(root, path)

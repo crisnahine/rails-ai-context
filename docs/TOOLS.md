@@ -349,7 +349,7 @@ Notable gems with versions, categories, and config file locations.
 
 ### `rails_get_env`
 
-Environment variables + credentials keys (values are never exposed).
+Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -374,7 +374,9 @@ Service object interface, dependencies, side effects, callers.
 
 ### `rails_get_job_pattern`
 
-Background job queue, retries, guard clauses, broadcasts, schedules.
+Background job queue, retries, guard clauses, broadcasts, schedules. Sidekiq
+workers under `app/workers` are listed alongside the ActiveJob jobs, with
+their `sidekiq_options` and `perform` signature.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -430,7 +432,7 @@ ActiveSupport surface: concerns registry, deprecators, MessageVerifier/MessageEn
 
 ### `rails_get_env_config`
 
-Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets.
+Per-environment configuration from `config/environments/*.rb`: notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) and every config key each environment sets. A key assigned in more than one branch reports every value with its condition; booted, the running environment reports the value the app resolved.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -450,9 +452,13 @@ Model/service dependency graph in Mermaid or text format.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
-| `root` | string | - | Starting node |
-| `format` | enum | `text` | `text`, `mermaid` |
-| `detail` | enum | `standard` | `summary`, `standard`, `full` |
+| `model` | string | - | Center the graph on this model |
+| `depth` | integer | `2` | Hops from the centre model (1-3) |
+| `format` | enum | `mermaid` | `mermaid`, `text` |
+| `show_cycles` | boolean | `false` | Detect and list circular dependencies |
+| `show_sti` | boolean | `false` | Show Single Table Inheritance hierarchies |
+
+Without `model` the graph is capped at 50 nodes, and says so when it cuts.
 
 ### `rails_migration_advisor`
 

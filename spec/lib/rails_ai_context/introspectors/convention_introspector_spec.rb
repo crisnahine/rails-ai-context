@@ -301,6 +301,29 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       end
     end
 
+    # The Custom Directories list names them, and the only section carrying
+    # file counts walked a fixed list that had never heard of app/workers.
+    it "counts the files of any other directory the app keeps under app/" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "workers", "billing"))
+        FileUtils.mkdir_p(File.join(dir, "app", "tools"))
+        File.write(File.join(dir, "app", "workers", "billing", "create_worker.rb"),
+                   "class Billing::CreateWorker
+  include Sidekiq::Job
+end
+")
+        File.write(File.join(dir, "app", "tools", "probe.rb"), "class Probe
+end
+")
+
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+        structure = described_class.new(app).call[:directory_structure]
+
+        expect(structure["app/workers"]).to eq(1)
+        expect(structure["app/tools"]).to eq(1)
+      end
+    end
+
     it "detects STI under a namespaced parent" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app", "models", "admin"))

@@ -101,7 +101,10 @@ module RailsAiContext
           controller: key,
           action: action.to_s,
           filters: applicable[:inherited] + applicable[:own],
-          strong_params: info[:strong_params]
+          # Every params method the controller declares, not only the ones
+          # this action reaches, so the scope is stated rather than implied.
+          strong_params: info[:strong_params],
+          strong_params_scope: info[:strong_params] ? "controller" : nil
         }.compact
 
         [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(action_data) } ]
@@ -162,7 +165,24 @@ module RailsAiContext
 
         Tools::BaseTool.fuzzy_find_key(controllers.keys, input) ||
           Tools::BaseTool.fuzzy_find_key(controllers.keys, "#{input}Controller") ||
-          Tools::BaseTool.fuzzy_find_key(controllers.keys, "#{input.to_s.camelize}Controller")
+          Tools::BaseTool.fuzzy_find_key(controllers.keys, "#{input.to_s.camelize}Controller") ||
+          short_name_match(ctx, controllers.keys, input)
+      end
+
+      # `gift_cards` is the name a person types and the one the routes
+      # resource already answers to. It camelizes to nothing the payload
+      # carries, because the class is namespaced. Only an unambiguous match
+      # answers: two controllers of the same basename are a question, not a
+      # resolution.
+      def short_name_match(ctx, keys, input)
+        needle = input.to_s.tr("-", "_").delete_suffix("_controller").downcase
+        return nil if needle.empty? || needle.include?("/") || needle.include?("::")
+
+        matches = keys.select do |key|
+          Payload.controller_route_key(ctx, key).to_s.split("/").last == needle ||
+            key.to_s.split("::").last.underscore.delete_suffix("_controller") == needle
+        end
+        matches.first if matches.size == 1
       end
     end
   end

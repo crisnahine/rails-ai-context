@@ -143,6 +143,9 @@ rails-ai-context init
 
 The MCP config files are updated automatically. Both modes generate identical context files and provide the same 45 tools.
 
+Both also take `--mcp-only`, which writes the MCP config and no context files
+at all. See [CONFIGURATION.md](CONFIGURATION.md#mcp-only).
+
 ## Troubleshooting
 
 ### "Bundler::GemNotFound" on `rails-ai-context serve`

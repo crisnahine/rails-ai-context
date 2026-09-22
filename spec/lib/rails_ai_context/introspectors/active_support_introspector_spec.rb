@@ -72,6 +72,25 @@ RSpec.describe RailsAiContext::Introspectors::ActiveSupportIntrospector do
         expect(concern[:class_methods_block]).to eq(true)
       end
 
+      # Some apps keep every ActiveModel validator in app/models/concerns.
+      # None of them is a module, and all of them read as "plain module".
+      it "says a class in the concerns directory is a class" do
+        validator_path = File.join(concerns_dir, "email_validator.rb")
+        File.write(validator_path, <<~RUBY)
+          class EmailValidator < ActiveModel::Validator
+            def validate(record); end
+          end
+        RUBY
+
+        entry = described_class.new(Rails.application).call[:concerns]["app/models/concerns"]
+          .find { |e| e[:name] == "EmailValidator" }
+
+        expect(entry[:kind]).to eq("class")
+        expect(entry[:superclass]).to eq("ActiveModel::Validator")
+      ensure
+        FileUtils.rm_f(validator_path)
+      end
+
       it "leaves an excluded concern out of the registry" do
         original = RailsAiContext.configuration.excluded_concerns
         RailsAiContext.configuration.excluded_concerns = [ /TestTrackable/ ]

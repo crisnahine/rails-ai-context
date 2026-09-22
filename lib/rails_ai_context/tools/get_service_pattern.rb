@@ -56,15 +56,21 @@ module RailsAiContext
       end
 
       private_class_method def self.format_single_service(service, service_files, services_dir, root)
-        # Match by class name or filename: "CreateOrder", "create_order", "create_order.rb"
-        snake = service.underscore.delete_suffix(".rb")
-        file = service_files.find do |f|
-          relative = f.sub("#{services_dir}/", "").delete_suffix(".rb")
-          relative == snake || relative.split("/").last == snake.split("/").last
+        matches = match_service_files(service, service_files, services_dir)
+
+        if matches.size > 1
+          names = matches.map { |f| f.sub("#{services_dir}/", "") }
+          return text_response(
+            [ "Service '#{service}' matches #{count_phrase(matches.size, 'file')}:", "",
+              *names.map { |n| "- `app/services/#{n}`" }, "",
+              "_Pass the namespaced name, for example `service:\"#{names.first.delete_suffix('.rb').camelize}\"`._" ].join("\n")
+          )
         end
 
+        file = matches.first
+
         unless file
-          available = service_files.map { |f| File.basename(f, ".rb").camelize }
+          available = service_files.map { |f| constant_for(f, services_dir) }
           return not_found_response("Service", service, available.sort,
             recovery_tool: "Call rails_get_service_pattern(detail:\"summary\") to see all services")
         end
@@ -76,10 +82,16 @@ module RailsAiContext
 
         relative = file.sub("#{root}/", "")
         line_count = source.lines.size
-        class_name = extract_class_name(source) || File.basename(file, ".rb").camelize
+        class_name = service_class_name(source, file, services_dir)
 
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
+
+        inputs = interaction_inputs(source)
+        if inputs.any?
+          lines << "" << "## Inputs (ActiveInteraction)"
+          inputs.each { |i| lines << "- #{i}" }
+        end
 
         owned = owned_methods(source, constant_for(file, services_dir))
 
@@ -116,7 +128,7 @@ module RailsAiContext
         end
 
         # Cross-reference: who calls this service
-        callers = find_callers(class_name, root)
+        callers = find_callers(class_name, root, file)
         if callers.any?
           lines << "" << "## Called By"
           callers.each { |c| lines << "- `#{c}`" }
@@ -130,7 +142,7 @@ module RailsAiContext
 
       private_class_method def self.format_service_listing(service_files, services_dir, root, detail)
         # Detect common pattern across all services
-        pattern_stats = { initialize_call: 0, initialize_single_method: 0, class_method_call: 0, result_object: 0, total: 0 }
+        pattern_stats = { initialize_call: 0, initialize_single_method: 0, class_method_call: 0, result_object: 0, active_interaction: 0, total: 0 }
         service_data = []
 
         service_files.each do |file|
@@ -139,7 +151,7 @@ module RailsAiContext
           next unless source
 
           relative = file.sub("#{root}/", "")
-          class_name = extract_class_name(source) || File.basename(file, ".rb").camelize
+          class_name = service_class_name(source, file, services_dir)
           line_count = source.lines.size
           owned = owned_methods(source, constant_for(file, services_dir))
           public_methods = extract_public_methods(owned)
@@ -151,6 +163,7 @@ module RailsAiContext
           pattern_stats[:initialize_single_method] += 1 if has_initialize && public_methods.size == 1
           pattern_stats[:class_method_call] += 1 if owned.any? { |m| m[:scope] == :class && m[:name] == "call" }
           pattern_stats[:result_object] += 1 if source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/)
+          pattern_stats[:active_interaction] += 1 if active_interaction?(source)
 
           service_data << {
             file: relative,
@@ -215,9 +228,52 @@ module RailsAiContext
         file.sub("#{services_dir}/", "").delete_suffix(".rb").camelize
       end
 
-      private_class_method def self.extract_class_name(source)
-        match = source.match(/class\s+([\w:]+)/)
-        match[1] if match
+      # The name the file's own class or module declares, resolved against the
+      # path the way every other static name is. A regex over raw source read
+      # the word after "class" in a comment, never matched `module`, and its
+      # basename fallback dropped the namespace every nested service carries.
+      private_class_method def self.service_class_name(source, file, services_dir)
+        Introspectors::DeclaredConstant.resolve(source, constant_for(file, services_dir))
+      end
+
+      # Exact relative path first. A bare name with no namespace may still
+      # match on basename, but `Users::Create` must never answer with
+      # `api/v1/addresses/create.rb` just because it sorts first.
+      private_class_method def self.match_service_files(service, service_files, services_dir)
+        snake = service.underscore.delete_suffix(".rb")
+        relative_of = ->(f) { f.sub("#{services_dir}/", "").delete_suffix(".rb") }
+
+        exact = service_files.select { |f| relative_of.call(f) == snake }
+        return exact if exact.any?
+        return [] if snake.include?("/")
+
+        service_files.select { |f| relative_of.call(f).split("/").last == snake }
+      end
+
+      # ActiveInteraction declares its interface as filter macros rather than
+      # an `initialize`, so a service that looks argument-less from its
+      # methods alone is documented entirely by these lines.
+      INTERACTION_FILTERS = %w[
+        array boolean date date_time decimal file float hash integer
+        interface object record string symbol time
+      ].freeze
+
+      private_class_method def self.active_interaction?(source)
+        Introspectors::DeclaredConstant.declarations(source)
+          .any? { |d| d.superclass == "ActiveInteraction::Base" }
+      end
+
+      private_class_method def self.interaction_inputs(source)
+        return [] unless active_interaction?(source)
+
+        walked = Introspectors::SourceIntrospector.walk_source(
+          source, { filters: -> { Introspectors::Listeners::GenericMacroListener.new(INTERACTION_FILTERS) } }
+        )
+        (walked[:filters] || []).flat_map do |record|
+          options = record[:option_values] || {}
+          suffix = options.any? ? " (#{options.map { |k, v| "#{k}: #{v.nil? ? 'nil' : v}" }.join(', ')})" : ""
+          Array(record[:args]).map { |name| "`#{record[:macro]} :#{name}`#{suffix}" }
+        end
       end
 
       # The methods the service class defines itself. Nesting a query builder
@@ -329,9 +385,14 @@ module RailsAiContext
         effects.to_a.sort
       end
 
-      private_class_method def self.find_callers(class_name, real_root)
+      private_class_method def self.find_callers(class_name, real_root, own_file = nil)
         callers = Set.new
         search_dirs = %w[app/controllers app/jobs app/models app/services app/workers app/mailers].map { |d| File.join(real_root, d) }
+        # A bare `include?` matched `Billing::Invoices::Create` inside
+        # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
+        # underscored-path skip dropped the one real caller, whose path
+        # contains the service's own path as a prefix.
+        reference = /(?<![\w:])(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
 
         search_dirs.each do |dir|
           next unless Dir.exist?(dir)
@@ -339,16 +400,13 @@ module RailsAiContext
           Dir.glob(File.join(dir, "**", "*.rb")).each do |file_path|
             real = safe_glob_realpath(file_path, real_dir, real_root)
             next unless real
+            next if own_file && real == own_file
             next if File.size(real) > max_file_size
             source = safe_read(real)
             next unless source
-            next unless source.include?(class_name)
+            next unless source.match?(reference)
 
-            relative = real.sub("#{real_root}/", "")
-            # Skip the service's own file
-            next if relative.include?(class_name.underscore)
-
-            callers << relative
+            callers << real.sub("#{real_root}/", "")
           end
         end
 
@@ -359,6 +417,9 @@ module RailsAiContext
         return nil if stats[:total] == 0
 
         parts = []
+        if stats[:active_interaction].to_i > stats[:total] / 2
+          parts << "ActiveInteraction::Base, run with `.run` / `.run!` (#{stats[:active_interaction]}/#{stats[:total]})"
+        end
         if stats[:initialize_call] > stats[:total] / 2
           parts << "initialize + #call instance method (#{stats[:initialize_call]}/#{stats[:total]})"
         elsif stats[:initialize_single_method] > stats[:total] / 2

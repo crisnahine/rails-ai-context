@@ -60,6 +60,16 @@ RSpec.describe "controllers named through an inflection" do
 
   def text(result) = result.content.first[:text]
 
+  # The route group is keyed by the path, and camelizing it back knows none
+  # of the app's acronyms, so the group printed no filters while a sibling
+  # group under the same base controller printed its own.
+  it "names the filters of the group it routes to" do
+    context[:controllers][:controllers]["ActivityPub::InboxesController"][:filters] =
+      [ { kind: "before", name: "authenticate", declared: true } ]
+
+    expect(text(RailsAiContext::Tools::GetRoutes.call)).to include("## activitypub/inboxes (filters: authenticate")
+  end
+
   it "finds the routes it has" do
     expect(text(RailsAiContext::Tools::GetRoutes.call(controller: "ActivityPub::InboxesController")))
       .to include("POST").and(satisfy { |t| !t.include?("No routes") })

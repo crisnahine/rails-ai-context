@@ -339,6 +339,32 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
 
     context "error flagging" do
+      # Postgres words a missing column, a missing table and a missing
+      # database the same way, so "does not exist" answered a real SQL error
+      # with `bin/rails db:create` advice and exit 0.
+      it "flags a Postgres missing column as an error, not a missing database" do
+        allow(described_class).to receive(:execute_sqlite)
+          .and_raise(ActiveRecord::StatementInvalid,
+                     %(PG::UndefinedColumn: ERROR:  column "key_digest" does not exist))
+
+        result = described_class.call(sql: "SELECT key_digest FROM users LIMIT 1")
+
+        expect(result.error?).to be true
+        expect(result.content.first[:text]).to include("SQL error:")
+        expect(result.content.first[:text]).not_to include("Database not found")
+      end
+
+      it "still explains a database that does not exist" do
+        allow(described_class).to receive(:execute_sqlite)
+          .and_raise(ActiveRecord::StatementInvalid,
+                     %(PG::UndefinedDatabase: ERROR:  database "racfix_nope" does not exist))
+
+        result = described_class.call(sql: "SELECT 1")
+
+        expect(result.content.first[:text]).to include("Database not found")
+        expect(result.error?).to be false
+      end
+
       it "flags genuine SQL execution errors as error results" do
         result = described_class.call(sql: "SELECT definitely_not_a_column FROM users")
         text = result.content.first[:text]

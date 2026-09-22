@@ -163,5 +163,53 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
     it "does not read a class variable as an ivar" do
       expect(described_class.ivars_in("<%= @@count %>")).to eq([])
     end
+
+    # `@page` is a CSS at-rule, not an ivar the controller assigned.
+    it "reads only the Ruby inside ERB tags" do
+      erb = "<style>@page { size: A4; }</style>\n<%= render partial: 'x', locals: { p: @prediction } %>"
+
+      expect(described_class.ivars_in(erb)).to eq(%w[prediction])
+    end
+
+    it "still reads a template with no ERB tags" do
+      expect(described_class.ivars_in("%h1= @post.title")).to eq(%w[post])
+    end
+  end
+
+  # An app that keeps a logo or a seed file under app/views had them counted
+  # as templates, with ivar names read out of the image's bytes.
+  describe "a file under app/views that no handler renders" do
+    around do |example|
+      Dir.mktmpdir("view-templates") do |dir|
+        @root = dir
+        FileUtils.mkdir_p(File.join(dir, "app/views/pdfs"))
+        File.write(File.join(dir, "app/views/pdfs/summary.html.erb"), "<style>@page { size: A4; }</style>\n")
+        File.write(File.join(dir, "app/views/pdfs/_fields.html.erb"), "<p><%= prediction.profit %></p>\n")
+        File.binwrite(File.join(dir, "app/views/pdfs/logo.png"), "\x89PNG\r\n\x1A\n@alpha@beta".b)
+        File.write(File.join(dir, "app/views/pdfs/notes.txt"), "Lorem ipsum\n")
+        example.run
+      end
+    end
+
+    let(:result) { described_class.new(RailsAiContext::StaticApp.new(@root)).call }
+
+    it "counts only the templates" do
+      expect(result[:templates].keys).to eq([ "pdfs/summary.html.erb" ])
+      expect(result[:partials].keys).to eq([ "pdfs/_fields.html.erb" ])
+    end
+
+    # Unbooted there is no handler registry to ask, so a template a gem
+    # renders has to be on the static floor or the app reads as having fewer
+    # views than it has.
+    it "keeps a template whose handler comes from a gem" do
+      File.write(File.join(@root, "app/views/pdfs/index.rabl"), "object @post\n")
+
+      expect(described_class.new(RailsAiContext::StaticApp.new(@root)).call[:templates].keys)
+        .to include("pdfs/index.rabl")
+    end
+
+    it "reads no ivars out of an image" do
+      expect(result[:templates]["pdfs/summary.html.erb"][:ivars]).to eq([])
+    end
   end
 end

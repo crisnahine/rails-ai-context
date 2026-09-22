@@ -268,6 +268,60 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
         expect(text).not_to include("11: presave!")
       end
     end
+
+    # The parenthesis the old scan required is optional in Ruby, and a model
+    # whose predicates read `requesting_access? && account.present?` reported
+    # calling nothing at all.
+    it "reads the calls a body makes without parentheses" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      source = <<~RB
+        class Subscription < ApplicationRecord
+          def requires_approval?
+            return false if partner_instant_approval?
+            requesting_access? && account.present?
+          end
+
+          def partner_instant_approval?
+            false
+          end
+
+          def requesting_access?
+            true
+          end
+        end
+      RB
+
+      with_search_app("app/models/subscription.rb" => source) do
+        text = described_class.call(pattern: "requires_approval?", match_type: "trace").content.first[:text]
+
+        expect(text).to include("## Calls internally")
+        expect(text).to include("`partner_instant_approval?`")
+        expect(text).to include("`requesting_access?`")
+      end
+    end
+
+    it "does not count a comment mentioning the method as a call site" do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      source = <<~RB
+        class Models::Subscriptions::Flag
+          def execute
+            account = subscription.account
+            # Brokered accounts are skipped. brokered? is the check for that.
+            errors.add(:subscription, 'is brokered') if account.brokered?
+          end
+        end
+      RB
+
+      with_search_app("app/services/models/subscriptions/flag.rb" => source) do
+        text = described_class.call(pattern: "brokered?", match_type: "trace").content.first[:text]
+
+        expect(text).to include("(1 site)")
+        expect(text).not_to include("Brokered accounts are skipped")
+        expect(text).to include("(Service)")
+      end
+    end
   end
 
   # ripgrep exits 1 when it matched nothing and 2 when the run itself failed,

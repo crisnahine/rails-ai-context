@@ -177,8 +177,12 @@ module RailsAiContext
               ctrl = r[:_ctrl]
               if ctrl != current_ctrl
                 current_ctrl = ctrl
-                ctrl_class = "#{ctrl.camelize}Controller"
-                ctrl_data = ctx.dig(:controllers, :controllers, ctrl_class)
+                # Camelizing the route key knows none of the app's acronyms,
+                # so `api/v1/ai_matches` missed `Api::V1::AIMatchesController`
+                # and that group printed no filters while its siblings did.
+                by_key = RailsAiContext::Payload.controller_for_route_key(ctx, ctrl)
+                ctrl_class = by_key ? by_key.first : "#{ctrl.camelize}Controller"
+                ctrl_data = by_key ? by_key.last : ctx.dig(:controllers, :controllers, ctrl_class)
                 ctrl_summary = ""
                 if ctrl_data
                   filters = filter_hint(ctrl_class, ctx)

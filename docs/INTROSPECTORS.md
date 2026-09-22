@@ -126,7 +126,7 @@ end
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| JobIntrospector | `:jobs` | Background jobs and mailers: queue, retries, schedules, and the `file:` each one is defined in |
+| JobIntrospector | `:jobs` | Background jobs, Sidekiq workers under `app/workers`, and mailers: queue, retries, `sidekiq_options`, schedules, and the `file:` each one is defined in |
 | RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks |
 
 ### Security & Auth

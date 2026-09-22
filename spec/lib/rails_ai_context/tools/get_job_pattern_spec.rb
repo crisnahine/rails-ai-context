@@ -282,7 +282,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       it "says no jobs were found" do
         text = described_class.call.content.first[:text]
         expect(text).to include("No jobs found")
-        expect(text).to include("Sidekiq::Worker in app/workers/")
+        expect(text).to include("not covered by this tool")
       end
 
       it "gives the same answer for a specific job lookup" do
@@ -429,6 +429,41 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       text = described_class.call(detail: "summary").content.first[:text]
       expect(text).to include("# Background Jobs (2)")
       expect(text).to include("- InvoiceJob [billing]")
+    end
+  end
+
+  # An app can run every piece of background work through Sidekiq workers,
+  # which are not ActiveJob descendants and do not live in app/jobs.
+  describe "an app whose background work is Sidekiq workers" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "workers", "billing", "invoices"))
+      File.write(File.join(tmpdir, "app", "workers", "billing", "invoices", "create_worker.rb"), <<~RUBY)
+        class Billing::Invoices::CreateWorker
+          include Sidekiq::Job
+          sidekiq_options queue: :default, retry: 3
+
+          def perform(account_id)
+            Billing::Invoices::Create.run(account: Account.find(account_id))
+          end
+        end
+      RUBY
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      static = RailsAiContext::Introspectors::JobIntrospector.new(RailsAiContext::StaticApp.new(tmpdir)).static_call
+      allow(described_class).to receive(:cached_context).and_return(jobs: static)
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "lists the worker, its options and its perform signature" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Sidekiq Workers (1)")
+      expect(text).to include("**Billing::Invoices::CreateWorker**")
+      expect(text).to include("queue: default")
+      expect(text).to include("retry: 3")
+      expect(text).to include("perform(account_id)")
     end
   end
 end

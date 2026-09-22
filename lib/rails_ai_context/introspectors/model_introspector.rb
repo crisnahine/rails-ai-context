@@ -529,21 +529,49 @@ module RailsAiContext
         # excluded reflection with a broken :through raises, and `call`'s
         # per-model rescue would replace the whole model with one error line.
         model.reflect_on_all_associations.reject { |assoc| excluded_association?(assoc.name) }.map do |assoc|
-          detail = {
-            name: assoc.name.to_s,
-            type: assoc.macro.to_s,
-            class_name: assoc.class_name,
-            foreign_key: assoc.foreign_key.to_s
-          }
-          detail[:through]    = assoc.options[:through].to_s if assoc.options[:through]
-          # Read like `:optional` below: the static tier writes the value the
-          # model declared, so writing only a truthy one here would give the
-          # two tiers different keys for `polymorphic: false`.
-          detail[:polymorphic] = assoc.options[:polymorphic] if assoc.options.key?(:polymorphic)
-          detail[:dependent]  = assoc.options[:dependent].to_s if assoc.options[:dependent]
-          detail[:optional]   = assoc.options[:optional] if assoc.options.key?(:optional)
-          detail.compact
+          association_detail(assoc)
         end
+      end
+
+      # One reflection that cannot resolve costs that reflection, not the
+      # model. `class_name` on a `:through` whose through association does not
+      # exist ends in `nil.klass`, and the per-model rescue in `call` then
+      # replaced the whole model - its callbacks, its table heading, its node
+      # in the graph - with a single error line.
+      def association_detail(assoc)
+        detail = {
+          name: assoc.name.to_s,
+          type: assoc.macro.to_s,
+          class_name: assoc.class_name,
+          foreign_key: assoc.foreign_key.to_s
+        }
+        detail[:through]    = assoc.options[:through].to_s if assoc.options[:through]
+        # Read like `:optional` below: the static tier writes the value the
+        # model declared, so writing only a truthy one here would give the
+        # two tiers different keys for `polymorphic: false`.
+        detail[:polymorphic] = assoc.options[:polymorphic] if assoc.options.key?(:polymorphic)
+        detail[:dependent]  = assoc.options[:dependent].to_s if assoc.options[:dependent]
+        detail[:optional]   = assoc.options[:optional] if assoc.options.key?(:optional)
+        detail.compact
+      rescue StandardError => e
+        {
+          name: assoc.name.to_s,
+          type: assoc.macro.to_s,
+          through: assoc.options[:through]&.to_s,
+          unavailable: unresolvable_reason(assoc, e)
+        }.compact
+      end
+
+      def unresolvable_reason(assoc, error)
+        through = assoc.options[:through]
+        owner = assoc.respond_to?(:active_record) ? assoc.active_record : nil
+        if through && owner.respond_to?(:reflect_on_association) && owner.reflect_on_association(through).nil?
+          "through :#{through} is not an association"
+        else
+          error.message
+        end
+      rescue StandardError
+        error.message
       end
 
       def extract_validations(model)
@@ -926,9 +954,22 @@ module RailsAiContext
         end
       end
 
+      # A value that survives as itself: `in: %w[draft sent]` reached
+      # `generate_test` as the String '["draft", "sent"]', which inspected
+      # again gave shoulda's `in_array` one quoted String where it wants an
+      # Array. Anything else is text, because a payload has to serialize.
+      SANITIZED_SCALARS = [ Array, Numeric, TrueClass, FalseClass, NilClass, Symbol, String ].freeze
+
       def sanitize_options(options)
         options.reject { |_k, v| v.is_a?(Proc) || v.is_a?(Regexp) }
-               .transform_values(&:to_s)
+               .transform_values { |value| sanitize_option_value(value) }
+      end
+
+      def sanitize_option_value(value)
+        return value.map { |element| sanitize_option_value(element) } if value.is_a?(Array)
+        return value if SANITIZED_SCALARS.any? { |type| value.is_a?(type) }
+
+        value.to_s
       end
 
       def static_model_details(path, class_name, file: relative_to_root(path), table_name: nil, inherited_from: [],

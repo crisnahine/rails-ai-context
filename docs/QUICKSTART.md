@@ -23,7 +23,11 @@ rails generate rails_ai_context:install
 The generator asks two questions:
 
 1. **Which AI tools do you use?** - Claude Code, Cursor, GitHub Copilot, OpenCode, Codex CLI, or all
-2. **Do you want MCP server support?** - Yes (MCP mode) or No (CLI-only mode)
+2. **What should rails-ai-context write?** - MCP config + context files (default), context files only (CLI mode), or MCP config only
+
+The third answer is MCP-only: the server and the CLI answer in full, and your
+own `CLAUDE.md`, `AGENTS.md` and rules files are left alone. Non-interactively
+that is `--mcp-only`.
 
 That's it. Your AI tool now has live access to your schema, models, routes, controllers, views, and conventions.
 
