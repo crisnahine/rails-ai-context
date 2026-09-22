@@ -393,6 +393,61 @@ RSpec.describe RailsAiContext::Introspectors::JobIntrospector do
       expect(result[:channels]).to eq([])
       expect(result[:jobs]).to eq([])
     end
+
+    # A worker that inherits from a base worker carries the include on the
+    # parent, so a file that must name a mixin in its own source drops every
+    # one of them: Mastodon reported 97 of its 116 workers, and the missing 19
+    # were exactly the inheriting ones and the three-line IterableJob mixin.
+    describe "workers" do
+      def worker_tree(dir)
+        FileUtils.mkdir_p(File.join(dir, "app", "workers", "fasp"))
+        File.write(File.join(dir, "app", "workers", "fasp", "base_worker.rb"), <<~RUBY)
+          class Fasp::BaseWorker
+            include Sidekiq::Worker
+
+            sidekiq_options queue: 'fasp'
+          end
+        RUBY
+        File.write(File.join(dir, "app", "workers", "fasp", "backfill_worker.rb"), <<~RUBY)
+          class Fasp::BackfillWorker < Fasp::BaseWorker
+            def perform(backfill_request_id); end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "workers", "purge_worker.rb"), <<~RUBY)
+          class PurgeWorker
+            include Sidekiq::IterableJob
+
+            def build_enumerator(domain, cursor:); end
+          end
+        RUBY
+      end
+
+      it "lists a worker that inherits its mixin from a base worker" do
+        workers = static_result { |dir| worker_tree(dir) }[:workers]
+
+        expect(workers.map { |w| w[:name] })
+          .to contain_exactly("Fasp::BackfillWorker", "Fasp::BaseWorker", "PurgeWorker")
+      end
+
+      it "still excludes a file under app/workers that is not a worker" do
+        workers = static_result do |dir|
+          worker_tree(dir)
+          File.write(File.join(dir, "app", "workers", "queue_names.rb"), <<~RUBY)
+            class QueueNames
+              PUSH = 'push'
+            end
+          RUBY
+        end[:workers]
+
+        expect(workers.map { |w| w[:name] }).not_to include("QueueNames")
+      end
+
+      it "answers nothing for an app with no workers" do
+        workers = static_result { |dir| FileUtils.mkdir_p(File.join(dir, "app", "jobs")) }[:workers]
+
+        expect(workers).to eq([])
+      end
+    end
   end
   # ActiveJob::Base.descendants is every job in the process, gems included. The
   # framework name prefixes only cover Rails' own, so a job from any other gem
