@@ -88,6 +88,21 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
       end
     end
 
+    # The auto-attach glob has to name the dump file the app actually committed,
+    # or the rule never fires on a :sql app: db/schema.rb is never opened there.
+    it "names db/structure.sql on an app that dumps SQL" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "db"))
+        File.write(File.join(dir, "db", "structure.sql"), "CREATE TABLE users (id integer);\n")
+        allow(Rails).to receive(:root).and_return(Pathname.new(dir))
+
+        described_class.new(context).call(dir)
+        content = File.read(File.join(dir, ".claude", "rules", "rails-schema.md"))
+        expect(content).to include('- "db/structure.sql"')
+        expect(content).not_to include('- "db/schema.rb"')
+      end
+    end
+
     it "includes paths: frontmatter on models rule" do
       Dir.mktmpdir do |dir|
         described_class.new(context).call(dir)
