@@ -603,10 +603,18 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       )
     end
 
-    it "says how many of the model's methods it is showing" do
+    it "says how many of the listed methods it is showing" do
       text = described_class.call(model: "Widget").content.first[:text]
 
-      expect(text).to include("## Key instance methods (25 of 72)")
+      expect(text).to include("## Key instance methods (25 of 30)")
+    end
+
+    # The heading's two numbers describe the filtered list; the model's own
+    # total is a different set and says so on its own line.
+    it "names the model's whole method count apart from the list" do
+      text = described_class.call(model: "Widget").content.first[:text]
+
+      expect(text).to include("72 instance methods")
     end
   end
 end

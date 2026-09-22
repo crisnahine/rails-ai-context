@@ -32,7 +32,7 @@ module RailsAiContext
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: generated_columns(schema_reader)
-        }.compact)
+        })
       end
 
       # Static tier entry: skip the connection probe entirely and answer from

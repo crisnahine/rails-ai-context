@@ -198,6 +198,32 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       end
     end
 
+    # A concern's methods are reflection's to report, and that list is the
+    # capped one, so a model that includes concerns cannot support a negative
+    # claim about a name its own file does not define.
+    context "a model whose methods can come from a concern" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: {
+            "Post" => {
+              table_name: "posts", associations: [], scopes: [], class_methods: [],
+              concerns: [ "Publishable" ],
+              instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+              source_instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+              instance_method_count: 132
+            }
+          },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+      end
+
+      it "declines to say the method does not exist" do
+        text = described_class.call(error: "NoMethodError: undefined method `publish_later' for an instance of Post").content.first[:text]
+
+        expect(text).not_to include("undefined_method_on_model")
+      end
+    end
+
     # A context written before the source list existed carries no key for it,
     # and a negative claim cannot be read off what is left.
     context "a payload from before the source method list existed" do

@@ -54,7 +54,9 @@ could act on.
 - **A validator under app/models/concerns is not a concern.** The type came
   from the directory alone, so 37 `ActiveModel::Validator` subclasses on one
   app were listed as model concerns used by nothing. They are listed as
-  validators and looked up by the `validates_with` that wires them.
+  validators - following the app's own validator base class, not one level of
+  compare - and looked up by the `validates_with`, or the validation option,
+  that wires them.
 - **dependency_graph counts both header numbers over the same models.** The
   model count was app-wide and the association count covered the fifty nodes
   that survived the cap.
@@ -101,13 +103,20 @@ could act on.
   reflection's, and ActiveRecord defines an attribute method per column the
   moment anything instantiates a model - and `model_details` says how many of
   them it is showing. Both tiers carry the same keys.
-- **The routes MCP resource resolves a CamelCase name** the way the tool
-  does, and answers a name that resolves to nothing with an error naming what
+- **A CamelCase controller name resolves everywhere.** The needle was
+  downcased without being underscored, so "GiftCards" never equalled the
+  route key's own "gift_cards": `Payload.find_controller` missed it, and every
+  tool that resolves a controller through it missed it too. One normalization
+  now serves the payload, the routes tool and the MCP resource, and the
+  resource answers a name that resolves to nothing with an error naming what
   exists rather than a zero-route success document.
-- **security_scan says which thing is true.** Booted, the app's bundle
+- **security_scan runs the brakeman the machine has.** The app's bundle
   narrows the load path, so a machine with brakeman installed was told to add
-  it to the Gemfile while the static tier scanned the same app. The answer
-  distinguishes the two cases and points at `--no-boot`, and the availability
+  it to the Gemfile while the other tier scanned the same app. When the
+  in-process require fails and the gem is installed, the scan runs it as its
+  own process outside the bundle and renders the result the same way, with a
+  line saying which brakeman answered and from where. With no brakeman
+  anywhere, the message says that instead of guessing, and the availability
   answer is keyed by tier rather than decided once per process.
 
 ## [5.28.0] - 2026-09-22

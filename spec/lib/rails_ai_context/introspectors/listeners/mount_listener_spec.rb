@@ -90,6 +90,16 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     expect(results.first[:path]).to be_nil
   end
 
+  it "leaves the path unknown when a scope's own prefix is an expression" do
+    results = parse_and_dispatch(<<~RUBY)
+      scope PREFIX do
+        mount StatsApp => "/stats"
+      end
+    RUBY
+
+    expect(results.first[:path]).to be_nil
+  end
+
   it "ignores a scope that sets a module and no path" do
     results = parse_and_dispatch(<<~RUBY)
       scope module: :admin do

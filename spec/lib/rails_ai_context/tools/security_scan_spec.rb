@@ -28,11 +28,12 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
     # require that succeeds on the static tier raises LoadError here. Both
     # answers used to be "Brakeman is not installed", and editing the Gemfile
     # is not what a reader whose machine already has it needs to do.
-    context "when brakeman is on the machine but outside the app's bundle" do
+    context "when brakeman is on the machine but cannot be run at all" do
       before do
         described_class.instance_variable_set(:@brakeman_available, nil)
         allow(described_class).to receive(:load_brakeman).and_return(false)
         allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
+        allow(described_class).to receive(:run_brakeman_unbundled).and_return(nil)
       end
 
       it "says where it is and how to run it" do
@@ -41,6 +42,71 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).to include("8.0.6")
         expect(text).to include("not in this app's bundle")
         expect(text).to include("--no-boot")
+      end
+    end
+
+    # One machine, one scanner: the gem is installed, the app's bundle does
+    # not carry it, and the scan runs it from outside the bundle rather than
+    # refusing and pointing at another command.
+    context "when brakeman can only be reached outside the app's bundle" do
+      let(:report) do
+        {
+          "scan_info" => { "checks_performed" => %w[BasicAuth CrossSiteScripting SQL] },
+          "warnings" => [
+            {
+              "warning_type" => "Mass Assignment", "message" => "Potentially dangerous key allowed for mass assignment",
+              "file" => "app/controllers/admin/users_controller.rb", "line" => 9, "confidence" => "Medium",
+              "link" => "https://brakemanscanner.org/docs/warning_types/mass_assignment/",
+              "code" => "params.require(:user).permit(:role)", "cwe_id" => [ 915 ]
+            },
+            {
+              "warning_type" => "Unmaintained Dependency", "message" => "Support for Rails 8.0.5.1 ends on 2026-11-07",
+              "file" => "config/routes.rb", "line" => 323, "confidence" => "Weak", "code" => nil, "cwe_id" => [ 1104 ]
+            }
+          ]
+        }
+      end
+
+      before do
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
+        allow(described_class).to receive(:run_brakeman_unbundled).and_return(report)
+      end
+
+      it "reports the warnings the outside scan found" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("**2 warnings** (3 checks run)")
+        expect(text).to include("## Mass Assignment")
+        expect(text).to include("[Medium] app/controllers/admin/users_controller.rb:9")
+      end
+
+      it "sorts them the way the in-process scan does" do
+        text = described_class.call.content.first[:text]
+
+        expect(text.index("Mass Assignment")).to be < text.index("Unmaintained Dependency")
+      end
+
+      it "says which brakeman answered and where it ran from" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("brakeman 8.0.6")
+        expect(text).to include("outside the app's bundle")
+      end
+
+      it "still filters by file" do
+        text = described_class.call(files: [ "config/routes.rb" ]).content.first[:text]
+
+        expect(text).to include("Unmaintained Dependency")
+        expect(text).not_to include("Mass Assignment")
+      end
+
+      it "falls back to the two-ways-out message when the outside run fails" do
+        allow(described_class).to receive(:run_brakeman_unbundled).and_return(nil)
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("not in this app's bundle")
       end
     end
 

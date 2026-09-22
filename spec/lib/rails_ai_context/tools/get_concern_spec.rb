@@ -698,6 +698,25 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       expect(text).to include("Order")
     end
 
+    # An app with its own validator base class is the ordinary shape, and one
+    # level of compare called every such validator a concern used by nothing.
+    it "follows the app's own validator base class" do
+      File.write(File.join(validator_dir, "application_validator.rb"), <<~RUBY)
+        class ApplicationValidator < ActiveModel::EachValidator
+        end
+      RUBY
+      File.write(File.join(validator_dir, "postcode_validator.rb"), <<~RUBY)
+        class PostcodeValidator < ApplicationValidator
+          def validate_each(record, attribute, value); end
+        end
+      RUBY
+
+      text = described_class.call(name: "PostcodeValidator").content.first[:text]
+
+      expect(text).to include("**Type:** validator")
+      expect(text).not_to include("**Type:** model concern")
+    end
+
     it "lists validators apart from concerns" do
       text = described_class.call.content.first[:text]
 

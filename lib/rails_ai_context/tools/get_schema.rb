@@ -271,13 +271,6 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "models_for_table")
       end
 
-      # Rails 8 multi-database apps dump each secondary database (queue,
-      # cache, cable) to its own schema/structure file. This tool targets
-      # the primary database's tables in detail, so secondaries get a
-      # compact one-line-per-database summary rather than full column detail.
-      # Static-parse extras: the SQL dialect the dump was written in, the
-      # schema version recorded by the dump, and migration files it doesn't
-      # cover - the static-tier stand-ins for a live connection's answers.
       # The tables db/schema.rb declares that the connected database does not
       # have. Empty unless both sides are known, which is the booted tier
       # with a schema file to read.
@@ -288,6 +281,9 @@ module RailsAiContext
         declared.map(&:to_s) - (schema[:tables] || {}).keys.map(&:to_s)
       end
 
+      # Static-parse extras: the SQL dialect the dump was written in, the
+      # schema version recorded by the dump, and migration files it doesn't
+      # cover - the static-tier stand-ins for a live connection's answers.
       private_class_method def self.static_source_lines(schema)
         lines = []
         lines << "**Dialect:** #{schema[:dialect]} (db/structure.sql)" if schema[:dialect] && schema[:dialect] != "unknown"
@@ -315,6 +311,10 @@ module RailsAiContext
         lines
       end
 
+      # Rails 8 multi-database apps dump each secondary database (queue,
+      # cache, cable) to its own schema/structure file. This tool targets the
+      # primary database's tables in detail, so secondaries get a compact
+      # one-line-per-database summary rather than full column detail.
       private_class_method def self.secondary_databases_lines(schema)
         secondary = schema[:secondary_databases]
         return [] unless secondary

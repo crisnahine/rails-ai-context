@@ -191,6 +191,14 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(described_class.ivars_in(template, path: "app/views/posts/show.html.haml")).to eq(%w[order user])
     end
 
+    # Two ERB comments with apostrophes in them are not one string literal,
+    # and reading them as one deleted every ivar in between.
+    it "keeps reading ivars around apostrophes in ERB comments" do
+      template = "<% # don't do this %>\n<h1><%= @user.name %></h1>\n<% # it won't work %>\n<p><%= @order.total %></p>\n"
+
+      expect(described_class.ivars_in(template, path: "app/views/posts/show.html.erb")).to eq(%w[order user])
+    end
+
     it "still reads ivars that legally start with an underscore or a capital" do
       expect(described_class.ivars_in("<%= @_private %><%= @Thing %>")).to eq(%w[Thing _private])
     end

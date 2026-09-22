@@ -96,7 +96,7 @@ module RailsAiContext
           # Filter by controller - accepts "posts", "PostsController", "posts_controller", "Api::V1::Posts"
           if controller
             normalized = RailsAiContext::Payload.controller_route_key(ctx, controller)
-            normalized_alt = controller.downcase.delete_suffix("_controller").delete_suffix("controller")
+            normalized_alt = RailsAiContext::Payload.route_needle(controller)
             # Exact first. The loose match is what makes a short name work,
             # and it swept `api/v1/admin/orders/ai_data` in with the fully
             # qualified `api/v1/admin/orders` - a separate class with its own

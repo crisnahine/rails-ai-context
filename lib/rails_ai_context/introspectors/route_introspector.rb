@@ -264,21 +264,25 @@ module RailsAiContext
       # count includes it either way and a header that disagrees with the list
       # below it is the thing this pairing exists to prevent.
       def detect_mounted_engines
-        mounted_routes.filter_map do |r|
+        mounted_routes.map do |r|
           mounted = r.app.respond_to?(:app) ? r.app.app : r.app
           name = mounted.is_a?(Class) ? mounted.name : mounted.class.name
-          next if name.nil?
-
-          { engine: name, path: mount_path(r) }
+          # An app mounted as an instance of an anonymous class has no name to
+          # print and is still one of the endpoints the count counts, so it is
+          # named for what it is rather than dropped into a disagreement
+          # between the two numbers.
+          { engine: name || "(anonymous Rack app)", path: mount_path(r) }
         rescue => e
-          RailsAiContext.debug_fail(e, nil, label: "detect_mounted_engines")
+          RailsAiContext.debug_fail(e, { engine: "(unreadable Rack app)", path: nil }, label: "detect_mounted_engines")
         end
       end
 
       # Routable, controller-less, and not a redirect or a lambda: what is
-      # left is a Rack app attached at a path.
+      # left is a Rack app attached at a path. Walked once: the count and the
+      # list are the same set, and reading it twice is reading the whole route
+      # table twice.
       def mounted_routes
-        controllerless_routes.reject { |r| dynamic_target?(r) }
+        @mounted_routes ||= controllerless_routes.reject { |r| dynamic_target?(r) }
       end
 
       # `match` records the format segment the path spec carries; `mount` does

@@ -59,6 +59,12 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(text).not_to include("ai_data")
     end
 
+    it "answers a short CamelCase name the way the MCP resource does" do
+      text = described_class.call(controller: "Orders").content.first[:text]
+
+      expect(text).to include("# Routes (3 routes)")
+    end
+
     it "still answers a short name with every controller that carries it" do
       text = described_class.call(controller: "orders").content.first[:text]
 

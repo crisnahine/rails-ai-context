@@ -415,8 +415,18 @@ module RailsAiContext
           filtered = data[:instance_methods].reject { |m| assoc_names.include?(m) || m.end_with?("=") }
           if filtered.any?
             listed = filtered.first(LISTED_METHODS)
-            lines << "" << methods_heading(listed.size, data[:instance_method_count])
+            # The heading counts one set: what this page prints, against the
+            # list it printed from. The model's own total is a wider set - it
+            # counts the association and writer methods filtered out here, and
+            # everything past the payload's own cap - so it is said separately
+            # rather than used as the denominator of a different number.
+            lines << "" << methods_heading(listed.size, filtered.size)
             lines << listed.map { |m| "- `#{m}`" }.join("\n")
+            total = data[:instance_method_count]
+            if total.is_a?(Integer) && total > filtered.size
+              lines << "_Reflection reports #{count_phrase(total, "instance method")} on #{name}; " \
+                       "this list is what the payload carries, minus association and writer methods._"
+            end
           end
         end
 

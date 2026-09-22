@@ -13,12 +13,12 @@ module RailsAiContext
       # written with `match` when it must answer one exact path - an
       # unanchored mount at /metrics also answers /metrics-admin - and that
       # form was invisible here, which left the endpoint out of every tool.
-      VERB_MACROS = %i[match get post put patch delete].freeze
-
-      # The blocks that prefix every path drawn inside them.
-      SCOPE_MACROS = %i[namespace scope].freeze
-
       class MountListener < BaseListener
+        VERB_MACROS = %i[match get post put patch delete].freeze
+
+        # The blocks that prefix every path drawn inside them.
+        SCOPE_MACROS = %i[namespace scope].freeze
+
         def initialize
           super
           @scopes = []
@@ -72,10 +72,23 @@ module RailsAiContext
 
             "/#{name.to_s.delete_prefix("/")}"
           else
-            # `scope module: :admin` adds no path segment at all.
+            # `scope module: :admin` and `scope constraints: {...}` add no path
+            # segment at all, and a first argument that is not a literal adds
+            # one this walk cannot read - which is not the same as none.
             path = options[:path] || literal
+            return :unknown if path.nil? && positional_prefix?(node)
+
             path.nil? ? nil : "/#{path.to_s.delete_prefix("/")}"
           end
+        end
+
+        # A first positional argument that is not a literal string or symbol
+        # is a prefix expression: `scope PREFIX do`, `scope "/v#{version}" do`.
+        def positional_prefix?(node)
+          first = node.arguments&.arguments&.first
+          return false if first.nil?
+
+          !first.is_a?(Prism::KeywordHashNode) && !first.is_a?(Prism::HashNode)
         end
 
         def prefixed_path(path)

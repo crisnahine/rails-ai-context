@@ -1057,7 +1057,11 @@ module RailsAiContext
         def generate_file_test(file, framework, tests_data, type)
           case file
           when %r{app/models/(.+)\.rb}
-            generate_model_test(declared_name(file, $1.split("/").last.camelize), framework, tests_data)
+            # The whole path, not its last segment: the declaration that names
+            # this file is the one equal to the path name ignoring case, and a
+            # basename carries no namespace to match a namespaced class
+            # against.
+            generate_model_test(declared_name(file, $1.split("/").map(&:camelize).join("::")), framework, tests_data)
           when %r{app/controllers/(.+)_controller\.rb}
             path_name = "#{$1.split('/').map(&:camelize).join('::')}Controller"
             generate_controller_test(declared_name(file, path_name), framework, tests_data)

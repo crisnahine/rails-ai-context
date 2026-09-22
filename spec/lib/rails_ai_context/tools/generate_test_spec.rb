@@ -674,6 +674,30 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
     end
   end
 
+  # The declaration is the answer for a model too, and the branch handed it a
+  # basename, which carries no namespace to match against.
+  describe "a namespaced model whose constant an inflection renames" do
+    it "names the constant the file declares" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "ai_reports"))
+        File.write(File.join(dir, "app", "models", "ai_reports", "build.rb"), <<~RUBY)
+          class AIReports::Build < ApplicationRecord
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return(
+          tests: { framework: "rspec" },
+          models: { "AIReports::Build" => { table_name: "ai_reports_builds", associations: [], validations: [] } }
+        )
+
+        text = described_class.call(file: "app/models/ai_reports/build.rb").content.first[:text]
+
+        expect(text).to include("AIReports::Build")
+        expect(text).not_to include("AiReports::Build")
+      end
+    end
+  end
+
   describe "an ActiveInteraction service" do
     # The app registers `inflect.acronym "AI"`, so the constant the file
     # declares is AIReports::Build and the path camelizes to AiReports::Build,

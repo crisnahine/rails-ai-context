@@ -428,7 +428,6 @@ module RailsAiContext
 
       private_class_method def self.find_callers(class_name, real_root, own_file = nil)
         callers = Set.new
-        scanned = 0
         search_dirs = %w[app lib].flat_map { |d| PathResolver.dirs_for(real_root, d) }
         # A bare `include?` matched `Billing::Invoices::Create` inside
         # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
@@ -439,23 +438,23 @@ module RailsAiContext
         # is not a caller of this one, so the declaration is not a reference.
         definition = /\b(?:class|module)\s+(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
 
-        search_dirs.each do |dir|
-          safe_glob(dir, "**/*.rb", real_root).each do |real|
-            next if own_file && real == own_file
-            break if scanned >= MAX_CALLER_SCAN_FILES
+        # The paths first, so the ceiling is measured against the files there
+        # are rather than against the files read: a tree of exactly the cap
+        # skipped nothing and used to say it stopped.
+        paths = search_dirs.flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }
+        paths.reject! { |real| real == own_file } if own_file
+        truncated = paths.size > MAX_CALLER_SCAN_FILES
 
-            scanned += 1
-            source = safe_read(real)
-            next unless source
-            next unless source.match?(reference)
-            next unless source.gsub(definition, "").match?(reference)
+        paths.first(MAX_CALLER_SCAN_FILES).each do |real|
+          source = safe_read(real)
+          next unless source
+          next unless source.match?(reference)
+          next unless source.gsub(definition, "").match?(reference)
 
-            callers << real.sub("#{real_root}/", "")
-          end
-          break if scanned >= MAX_CALLER_SCAN_FILES
+          callers << real.sub("#{real_root}/", "")
         end
 
-        [ callers.to_a.sort, scanned >= MAX_CALLER_SCAN_FILES ]
+        [ callers.to_a.sort, truncated ]
       end
 
       private_class_method def self.detect_common_pattern(stats)

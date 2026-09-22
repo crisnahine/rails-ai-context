@@ -246,6 +246,23 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    # The path match put the suite's own directory names in scope, so
+    # "spec" or "test" matched every file in it.
+    it "does not treat the suite's own directory as a feature word" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        spec_dir = File.join(tmp, "spec", "services", "billing")
+        FileUtils.mkdir_p(spec_dir)
+        File.write(File.join(spec_dir, "create_spec.rb"), "require \"rails_helper\"\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "spec").content.first[:text]
+
+        expect(text).not_to include("## Tests")
+      end
+    end
+
     context "DoS cap (v5.8.1 round 2)" do
       it "caps discover_services at MAX_SCAN_FILES and emits truncation note" do
         Dir.mktmpdir("rac_dos_services") do |tmp|

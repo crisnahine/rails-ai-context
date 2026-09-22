@@ -104,8 +104,14 @@ module RailsAiContext
       # quoted string interpolates is code, and an ivar read there is real, so
       # only the interpolations survive.
       def self.strip_string_literals(ruby)
-        ruby.gsub(/'(?:\\.|[^'\\])*'/m, "''")
-            .gsub(/"(?:\\.|[^"\\])*"/m) { |literal| literal.scan(/#\{.*?\}/m).join(" ") }
+        # One line at a time. A Ruby literal may span lines and rarely does in
+        # a template, while an apostrophe in a comment is ordinary: read as an
+        # opening quote it swallowed every line up to the next apostrophe, and
+        # every ivar in between with it.
+        ruby.lines.map { |line|
+          line.gsub(/'(?:\\.|[^'\\\n])*'/, "''")
+              .gsub(/"(?:\\.|[^"\\\n])*"/) { |literal| literal.scan(/#\{.*?\}/).join(" ") }
+        }.join
       end
 
       def extract_ivars(content, path = nil)

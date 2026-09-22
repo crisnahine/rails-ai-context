@@ -34,17 +34,10 @@ module RailsAiContext
         interface object record string symbol time
       ].freeze
 
-      # A chain longer than this is a cycle or a class hierarchy no reader is
-      # following either.
-      MAX_DEPTH = 8
-
       # `nested` is the filters declared inside this one's block; `declared_by`
       # the class that declares it, which is not this file's class for an
       # inherited one.
       Filter = Data.define(:macro, :name, :options, :declared_by, :nested)
-
-      # One link of the chain: the class and the source declaring it.
-      Link = Data.define(:name, :source)
 
       module_function
 
@@ -80,63 +73,17 @@ module RailsAiContext
       # The classes from ActiveInteraction::Base down to this one, nearest
       # first, or empty when the chain never reaches it.
       #
-      # @return [Array<Link>]
-      def chain(source, lookup: nil, seen: [])
-        return [] if source.nil? || seen.size >= MAX_DEPTH
-
-        declarations = DeclaredConstant.declarations(source)
-        return [] if declarations.empty?
-
-        declaration = declarations.find { |d| d.superclass == BASE }
-        return [ Link.new(name: declaration.name, source: source) ] if declaration
-
-        declarations.each do |candidate|
-          parent = candidate.superclass
-          next if parent.nil? || seen.include?(parent)
-
-          parent_source = lookup&.call(parent)
-          next if parent_source.nil?
-
-          rest = chain(parent_source, lookup: lookup, seen: seen + [ candidate.name, parent ])
-          return [ Link.new(name: candidate.name, source: source) ] + rest if rest.any?
-        end
-
-        []
+      # @return [Array<SuperclassChain::Link>]
+      def chain(source, lookup: nil)
+        SuperclassChain.to(source, bases: [ BASE ], lookup: lookup)
       end
 
-      # A callable from a constant name to the source of the file declaring
-      # it, probed against the app's autoload roots rather than a walk over
-      # the tree: Zeitwerk resolves a constant to one path under one root, and
-      # `underscore` is the half of the inflection that is right with or
-      # without the app's own acronyms. A base class at a path its name does
-      # not underscore to is not found, which is the same thing Zeitwerk would
-      # say about it.
-      #
-      # The roots are resolved on the first question, not when the lookup is
-      # built: an app whose interactions all name ActiveInteraction::Base
-      # never asks one.
+      # The lookup the chain walks with: a constant name to the source of the
+      # file declaring it, over the app's autoload roots.
       #
       # @return [Proc]
       def lookup_for(root)
-        roots = nil
-        lambda do |name|
-          roots ||= autoload_roots(root)
-          relative = "#{name.to_s.underscore}.rb"
-          path = roots.lazy.map { |dir| File.join(dir, relative) }.find { |candidate| File.file?(candidate) }
-          path && SafeFile.read(path)
-        end
-      end
-
-      # Every directory Rails autoloads constants from: each app/* directory,
-      # the concerns directories inside them (railties globs `{*,*/concerns}`),
-      # and lib. Packs and in-repo engines come with PathResolver.
-      def autoload_roots(root)
-        app_trees = PathResolver.dirs_for(root, "app")
-        app_trees.flat_map { |tree| Dir.glob(File.join(tree, "*")).select { |dir| File.directory?(dir) } } +
-          ConcernPaths.resolve(root) +
-          PathResolver.dirs_for(root, "lib")
-      rescue StandardError => e
-        RailsAiContext.debug_fail(e, [], label: "Interaction.autoload_roots")
+        SuperclassChain.lookup_for(root)
       end
 
       # `.filters` is a hash keyed by name, so a subclass that redeclares its
@@ -160,30 +107,29 @@ module RailsAiContext
           link.source, { filters: -> { Listeners::GenericMacroListener.new(FILTERS) } }
         )[:filters] || []
 
-        top = []
-        by_offset = {}
+        # Children first, so a filter is built once, with what it holds. One
+        # macro call declares one filter that can take a block (`hash :a, :b
+        # do` is not a shape ActiveInteraction accepts), so the call's own
+        # offset names the parent of everything inside it.
+        children = records.group_by { |record| record[:parent_offset] }
+        build_filters(children[nil] || [], children, link.name)
+      end
 
-        records.each do |record|
-          Array(record[:args]).each do |name|
-            filter = Filter.new(
+      def build_filters(records, children, declared_by)
+        records.flat_map do |record|
+          nested = build_filters(children[record[:offset]] || [], children, declared_by)
+          Array(record[:args]).map do |name|
+            Filter.new(
               macro: record[:macro].to_s,
               name: name.to_s,
               options: record[:options] || {},
-              declared_by: link.name,
-              nested: []
+              declared_by: declared_by,
+              nested: nested
             )
-            parent = record[:parent_offset] && by_offset[record[:parent_offset]]
-            parent ? parent.nested << filter : top << filter
-            # One macro call declares one filter that can take a block
-            # (`hash :a, :b do` is not a shape ActiveInteraction accepts), so
-            # the call's offset names the parent unambiguously.
-            by_offset[record[:offset]] = filter
           end
         end
-
-        top
       end
-      private_class_method :autoload_roots, :own_filters, :one_per_name
+      private_class_method :own_filters, :build_filters, :one_per_name
     end
   end
 end

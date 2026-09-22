@@ -205,15 +205,21 @@ module RailsAiContext
         short_name_match(ctx, keys, input)
     end
 
+    # A controller name as a route key spells it. Underscored, not downcased:
+    # a route key is snake_case, so "GiftCards" has to become "gift_cards" to
+    # equal one, and downcasing alone gives "giftcards", which equals nothing.
+    # Every surface that matches a caller's string against a route key reads
+    # this, so they cannot disagree about what the string means.
+    def route_needle(input)
+      input.to_s.tr("-", "_").underscore.delete_suffix("_controller")
+    end
+
     # `gift_cards` is the name a person types and the one the routes resource
     # already answers to. It camelizes to nothing the payload carries, because
     # the class is namespaced. Only an unambiguous match answers: two
     # controllers of the same basename are a question, not a resolution.
     def short_name_match(ctx, keys, input)
-      # Underscored, not downcased: a route key is snake_case, so "GiftCards"
-      # has to become "gift_cards" to equal one. Downcasing alone gave
-      # "giftcards", which equals nothing.
-      needle = input.to_s.tr("-", "_").underscore.delete_suffix("_controller")
+      needle = route_needle(input)
       return nil if needle.empty? || needle.include?("/") || needle.include?("::")
 
       matches = keys.select do |key|

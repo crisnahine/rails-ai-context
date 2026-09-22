@@ -360,9 +360,17 @@ module RailsAiContext
         end
 
         # --- AF5: Tests ---
-        # The path a test is named by, without the root or the extension.
+        # The path a test is named by: without the root, without the suite
+        # directory it sits in, and without the extension. The suite directory
+        # is every test's own name for itself, so leaving it in made "spec"
+        # and "test" match the whole suite.
         def relative_test_name(path, real_root)
-          path.to_s.sub("#{real_root}/", "").sub(/\.rb\z/, "")
+          path.to_s
+              .sub("#{real_root}/", "")
+              .sub(%r{\A(?:spec|test)/}, "")
+              .sub(/\.rb\z/, "")
+              .sub(/_(?:spec|test)\z/, "")
+              .sub(%r{(?:\A|/)(?:spec|test)_}, "\\1")
         end
 
         def discover_tests(root, pattern, lines)

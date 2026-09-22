@@ -140,7 +140,10 @@ Narrative app walkthrough for getting up to speed.
 
 ### `rails_get_schema`
 
-Database schema with column types, indexes, defaults, encrypted hints.
+Database schema with column types, indexes, defaults, encrypted hints. Booted,
+a table `db/schema.rb` declares and the connected database does not have is
+named as a migration that has not run, and the listing header says when the
+two table counts disagree.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -373,7 +376,11 @@ Application and framework helpers with view cross-references.
 
 ### `rails_get_service_pattern`
 
-Service object interface, dependencies, side effects, callers.
+Service object interface, dependencies, side effects, callers. An
+ActiveInteraction's inputs include the ones it inherits, with the filters
+nested inside a `hash` filter shown under it. Callers are read from every
+`app/` and `lib/` tree, and the page says when the twenty-caller display cap or
+the scan's own file ceiling left the list partial.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

@@ -129,7 +129,7 @@ module RailsAiContext
         return text_response("Could not read concern file: #{file_path}") unless source
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
-        validator = validator_superclass(source)
+        validator = validator_superclass(source, root)
         lines << (validator ? "**Type:** validator (`#{validator}`)" : "**Type:** #{concern_type} concern")
 
         # A second file at the same relative path answers the same name, and
@@ -277,7 +277,7 @@ module RailsAiContext
             all_concerns << {
               name: concern_name,
               type: concern_type,
-              validator: source && validator_superclass(source),
+              validator: source && validator_superclass(source, root),
               path: relative,
               method_count: method_count
             }
@@ -332,13 +332,20 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      # The class a validator file declares as its superclass, or nil for
-      # anything else - a module, a PORO, a class that subclasses something
-      # else entirely.
+      # The validator base a file's class reaches, or nil for anything else -
+      # a module, a PORO, a class that subclasses something else entirely.
+      # Followed through the app's own sources, because an app with its own
+      # `ApplicationValidator < ActiveModel::EachValidator` is the ordinary
+      # shape and one level of compare calls every validator under it a
+      # concern that nothing includes.
       VALIDATOR_BASES = %w[ActiveModel::Validator ActiveModel::EachValidator].freeze
 
-      private_class_method def self.validator_superclass(source)
-        Introspectors::DeclaredConstant.declarations(source)
+      private_class_method def self.validator_superclass(source, root = nil)
+        lookup = root && Introspectors::SuperclassChain.lookup_for(root.to_s)
+        chain = Introspectors::SuperclassChain.to(source, bases: VALIDATOR_BASES, lookup: lookup)
+        return nil if chain.empty?
+
+        Introspectors::DeclaredConstant.declarations(chain.last.source)
           .map(&:superclass)
           .find { |parent| VALIDATOR_BASES.include?(parent) }
       end

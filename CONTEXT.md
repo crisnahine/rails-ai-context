@@ -88,6 +88,19 @@ Three senses inside the gem, and the payload one is wider than either everyday R
 
 The callable interface of a class as this gem reports it: the class's own public instance methods - a class nested in the same file is a separate owner, not part of the interface - minus framework-shaped `_` names, read source-first, with reflection minus the app-owned base as the honest fallback. `ActionResolver` is the one answer; controller and mailer are configurations of it, and a channel's "stream methods" are a narrower selection of the same reading.
 
+## Mounted app
+
+A Rack app the routing table attaches at a path, engine or not. `mount App =>
+"/path"` is `match("/path", to: App, via: :all, anchor: false)` with a name
+derived, so both spellings build the same endpoint and both are this. The
+payload key is `mounted_engines` for the sections that predate the widening;
+what it holds is every controller-less, non-dynamic endpoint the route set
+carries, which is what the count beside it has always counted.
+
+Distinct from a **Rails engine**, which is a `Rails::Engine` subclass whether
+or not anything mounts it, and which `rails_get_engines` lists separately under
+its loaded classes.
+
 ## Interaction filter
 
 What an ActiveInteraction service declares as its interface, and not the

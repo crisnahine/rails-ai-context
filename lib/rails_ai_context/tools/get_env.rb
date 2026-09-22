@@ -22,6 +22,9 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # One wording for the same fact on both detail levels.
+      DEFAULTS_DIFFER = "defaults differ by call site"
+
       def self.call(detail: "standard", server_context: nil)
         root = rails_app.root.to_s
 
@@ -85,18 +88,21 @@ module RailsAiContext
         env_vars.each { |_file, vars| vars.each { |v| all_names << v[:name] } }
 
         if all_names.any?
+          # One pass over the scan, not one per variable: the standard listing
+          # asked every file about every name.
+          defaults_by_variable = defaults_by_name(env_vars)
           grouped = group_env_vars(all_names.to_a)
           grouped.each do |group, vars|
             lines << "## #{group}"
             vars.sort.each do |name|
               # Find default value if any
-              defaults = defaults_for(env_vars, name)
+              defaults = defaults_by_variable[name] || []
               entry = "- `#{name}`"
               entry += if defaults.size > 1
                 # A site with no default argument raises KeyError when the
                 # variable is unset, and one site's fallback labelled as the
                 # variable's said the opposite.
-                " (defaults differ by call site; `detail:\"full\"` names each)"
+                " (#{DEFAULTS_DIFFER}; `detail:\"full\"` names each)"
               elsif defaults.first
                 " (default: `#{defaults.first}`)"
               else
@@ -208,7 +214,7 @@ module RailsAiContext
               }.uniq
               entry = "- `#{v[:name]}`"
               entry += " (default: `#{defaults.first}`)" if defaults.size == 1 && defaults.first
-              entry += " (defaults differ by call site)" if defaults.size > 1
+              entry += " (#{DEFAULTS_DIFFER})" if defaults.size > 1
               entry += " (#{file_locations.join(', ')})"
               lines << entry
             end
@@ -675,12 +681,12 @@ module RailsAiContext
         groups.sort_by { |k, _| CATEGORY_ORDER.index(k) || 99 }
       end
 
-      # Every distinct default the variable is read with, a site that passes
-      # none included as nil. One member means every site agrees.
-      private_class_method def self.defaults_for(env_vars, name)
-        env_vars.each_value.flat_map { |vars|
-          vars.select { |v| v[:name] == name }.map { |v| v[:default] }
-        }.uniq
+      # Every distinct default each variable is read with, a site that passes
+      # none included as nil. One member means every site of that name agrees.
+      private_class_method def self.defaults_by_name(env_vars)
+        env_vars.each_value.with_object(Hash.new { |h, k| h[k] = [] }) do |vars, found|
+          vars.each { |v| found[v[:name]] << v[:default] }
+        end.transform_values(&:uniq)
       end
     end
   end

@@ -554,8 +554,11 @@ module RailsAiContext
         model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
 
-        # Build set of known methods (instance + from source content)
+        # Build set of known methods (instance + from source content). The
+        # capped display list alone made this claim from a partial set; the
+        # model's own methods travel uncapped beside it.
         known = Set.new(model_data[:instance_methods] || [])
+        known.merge(Array(model_data[:source_instance_methods]))
         # Also check the file source for private methods
         source = RailsAiContext::SafeFile.read(rails_app.root.join(file))
         source&.scan(/\bdef\s+(\w+[?!]?)/)&.each { |m| known << m[0] }
