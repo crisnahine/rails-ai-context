@@ -243,13 +243,13 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
         end
       end
 
-      it "caps discover_jobs at MAX_SCAN_FILES" do
+      it "caps the env dependency scan of app/jobs at MAX_SCAN_FILES" do
         Dir.mktmpdir("rac_dos_jobs") do |tmp|
           jobs_dir = File.join(tmp, "app", "jobs")
           FileUtils.mkdir_p(jobs_dir)
           (described_class::MAX_SCAN_FILES + 25).times do |i|
             File.write(File.join(jobs_dir, "dos_job_#{i}.rb"),
-                       "class DosJob#{i}\n  queue_as :default\nend\n")
+                       "class DosJob#{i}\n  def perform; ENV['DOS_JOB_KEY']; end\nend\n")
           end
 
           allow(described_class).to receive(:cached_context).and_return({})
@@ -258,12 +258,11 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
           result = described_class.call(feature: "dos_job")
           text = result.content.first[:text]
 
-          expect(text).to include("first #{described_class::MAX_SCAN_FILES} scanned")
-          expect(text).to include("## Jobs")
+          expect(text).to include("## Environment Dependencies (first #{described_class::MAX_SCAN_FILES} per dir scanned)")
         end
       end
 
-      it "caps discover_mailers, discover_channels, discover_env_dependencies independently" do
+      it "caps discover_services and discover_env_dependencies independently" do
         Dir.mktmpdir("rac_dos_mixed") do |tmp|
           %w[app/mailers app/channels app/services].each do |sub|
             dir = File.join(tmp, sub)
@@ -282,9 +281,10 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
 
           # Each section asserted independently - a regression in any single
           # discover_* method would now fail the spec on its own line.
-          expect(text).to include("## Mailers (#{described_class::MAX_SCAN_FILES} - first #{described_class::MAX_SCAN_FILES} scanned)")
-          expect(text).to include("## Channels (#{described_class::MAX_SCAN_FILES} - first #{described_class::MAX_SCAN_FILES} scanned)")
+          expect(text).to include("## Services (#{described_class::MAX_SCAN_FILES} - first #{described_class::MAX_SCAN_FILES} scanned)")
           expect(text).to include("## Environment Dependencies (first #{described_class::MAX_SCAN_FILES} per dir scanned)")
+          expect(text).not_to include("## Mailers")
+          expect(text).not_to include("## Channels")
         end
       end
 
@@ -475,6 +475,59 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).to include("Status: before_validation [inline_block]")
       expect(text).to include("Status: before_validation :set_slug")
       expect(text).not_to include(":Mastodon")
+    end
+  end
+
+  # The glob tier read queue_as out of the job's own file, so a queue
+  # inherited from ApplicationJob printed as "default".
+  describe "jobs, mailers and channels read from the payload" do
+    let(:jobs_section) do
+      {
+        jobs: [
+          { name: "OrderExportJob", file: "app/jobs/order_export_job.rb", queue: "low",
+            retry_on: [ "Timeout::Error, attempts: 3" ], perform_signature: "order_id" }
+        ],
+        mailers: [
+          { name: "OrderMailer", file: "app/mailers/order_mailer.rb", actions: %w[confirmation] }
+        ],
+        channels: [
+          { name: "OrderChannel", file: "app/channels/order_channel.rb", stream_methods: %w[subscribed] }
+        ]
+      }
+    end
+
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(jobs: jobs_section)
+      allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(Dir.mktmpdir("rac_payload"))))
+    end
+
+    it "reports the resolved queue, not the one the job's own file declares" do
+      text = described_class.call(feature: "order").content.first[:text]
+
+      expect(text).to include("## Jobs (1)")
+      expect(text).to include("`app/jobs/order_export_job.rb` (queue: low, retry_on: Timeout::Error, attempts: 3, perform(order_id))")
+      expect(text).not_to include("queue: default")
+    end
+
+    it "lists mailer actions and channel stream methods from the payload" do
+      text = described_class.call(feature: "order").content.first[:text]
+
+      expect(text).to include("## Mailers (1)")
+      expect(text).to include("`app/mailers/order_mailer.rb` - confirmation")
+      expect(text).to include("## Channels (1)")
+      expect(text).to include("`app/channels/order_channel.rb` - subscribed")
+    end
+
+    it "goes quiet when the jobs section is unavailable" do
+      allow(described_class).to receive(:cached_context).and_return(jobs: { unavailable: true })
+      described_class.reset_cache!
+
+      text = described_class.call(feature: "order").content.first[:text]
+
+      expect(text).not_to include("## Jobs")
+      expect(text).not_to include("## Mailers")
+      expect(text).not_to include("## Channels")
     end
   end
 end
