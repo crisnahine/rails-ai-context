@@ -37,24 +37,9 @@ module RailsAiContext
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
-        lines.concat(SectionFacts.static_notice_lines(context))
-
-        # Compact counts - gems and architecture are already in the root file (CLAUDE.md/AGENTS.md)
-        if (db_line = SectionFacts.database_line(context))
-          lines << db_line
-        end
-        if (models_line = SectionFacts.models_line(context))
-          lines << models_line
-        end
-
-        routes = Payload.section(context, :routes)
-        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes
-
-        lines.concat(full_preset_stack_lines)
-
-        # ApplicationController before_actions - apply to all controllers
-        before_actions = detect_before_actions
-        lines << "" << "**Global before_actions:** #{before_actions.join(', ')}" if before_actions.any?
+        # Gems, architecture, services and jobs are already in the root file
+        # (CLAUDE.md/AGENTS.md), so this overview states the rest.
+        lines.concat(overview_lines(gems: false, architecture: false, app_dirs: false))
 
         lines << ""
         lines << "ALWAYS use MCP tools for context - do NOT read reference files directly."

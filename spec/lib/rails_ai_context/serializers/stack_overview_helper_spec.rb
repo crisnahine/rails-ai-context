@@ -152,6 +152,36 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
   end
   # The logic lives in RailsAiContext::SchemaAdapter and is specced there.
   # What matters here is that the serializers ask it, rather than carrying a
+  describe "#overview_lines" do
+    let(:context) do
+      {
+        schema: { adapter: "postgresql", total_tables: 5 },
+        models: { "User" => {} },
+        routes: { total_routes: 30 },
+        gems: { notable_gems: [ { name: "devise", category: "auth" } ] },
+        conventions: { architecture: %w[service_objects] }
+      }
+    end
+
+    it "states the gems and architecture the full rule files carry" do
+      text = test_class.new(context).overview_lines.join("\n")
+      expect(text).to include("- Database: postgresql - 5 tables")
+      expect(text).to include("- Models: 1")
+      expect(text).to include("- Routes: 30")
+      expect(text).to include("- auth: devise")
+      expect(text).to include("- Service objects pattern (app/services/)")
+    end
+
+    it "drops the facts the root file already states when the caller says so" do
+      text = test_class.new(context).overview_lines(gems: false, architecture: false, app_dirs: false).join("\n")
+      expect(text).to include("- Routes: 30")
+      expect(text).not_to include("- auth: devise")
+      expect(text).not_to include("app/services/")
+      expect(text).not_to include("- Services:")
+      expect(text).not_to include("- Jobs:")
+    end
+  end
+
   # fourth private copy that answers differently.
   describe "#database_adapter_label" do
     let(:host) do
