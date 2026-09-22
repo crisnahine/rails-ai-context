@@ -131,31 +131,6 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       [ standard, quick ].each { |text| expect(text.lines.first(4).join).not_to include("UNAVAILABLE") }
     end
 
-    # The quick sentence lets the inferred purpose be its noun, so a version
-    # clause carrying its own noun gave the sentence two of them: "is a Rails
-    # 8.1 app declaring Ruby 4.0.6 news aggregation app with ...".
-    it "does not put a second noun in front of the purpose it infers" do
-      allow(described_class).to receive(:cached_context).and_return({
-        app_name: "TestApp",
-        rails_version: "8.0",
-        ruby_version: "3.4",
-        models: {
-          "Article" => { associations: [ { type: "belongs_to", name: "site" } ] },
-          "Site" => { associations: [ { type: "has_many", name: "articles" } ] }
-        },
-        jobs: { jobs: [ { name: "RssSiteJob" }, { name: "ArticleJob" } ] },
-        gems: { declared_ruby_version: "3.4" },
-        tier: "static"
-      })
-      allow(described_class).to receive(:extract_service_names).and_return([])
-
-      text = described_class.call(detail: "quick").content.first[:text]
-
-      expect(text).to include("news aggregation app")
-      expect(text).to include("TestApp** is a Rails 8.0 / Ruby 3.4 ")
-      expect(text).not_to include("app declaring")
-    end
-
     it "says a booted run is running that ruby" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",
@@ -194,76 +169,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("Turbo Stream templates: 1.")
     end
 
-    context "quick mode purpose inference" do
-      it "infers news aggregation from article/site models and RSS jobs" do
-        allow(described_class).to receive(:cached_context).and_return({
-          app_name: "AlNews",
-          rails_version: "8.0.5",
-          ruby_version: "3.4.9",
-          schema: { adapter: "PostgreSQL", total_tables: 17 },
-          models: {
-            "Article" => { associations: [ { type: "belongs_to", name: "site" } ] },
-            "Site" => { associations: [ { type: "has_many", name: "articles" } ] },
-            "Post" => { associations: [] }
-          },
-          jobs: { jobs: [
-            { name: "RssSiteJob" },
-            { name: "YoutubeSiteJob" },
-            { name: "HackerNewsSiteJob" },
-            { name: "RedditSiteJob" },
-            { name: "ArticleJob" }
-          ] },
-          conventions: { architecture: %w[hotwire phlex] },
-          gems: { notable_gems: [ { name: "federails" } ] },
-          tests: { framework: "minitest" }
-        })
-        # Stub extract_service_names since it reads the filesystem
-        allow(described_class).to receive(:extract_service_names).and_return(
-          %w[ArticleAgentsService MastodonService ContentService]
-        )
-
-        result = described_class.call(detail: "quick")
-        text = result.content.first[:text]
-
-        expect(text).to include("news aggregation")
-        expect(text).to include("RSS")
-        expect(text).to include("YouTube")
-        expect(text).to include("HackerNews")
-        expect(text).to include("Reddit")
-        expect(text).to include("ActivityPub federation")
-        expect(text).to include("17 tables")
-        expect(text).to include("3 models")
-        expect(text).to include("5 jobs")
-        expect(text).not_to include("static_parse")
-        expect(text).not_to include("(key:")
-      end
-
-      it "infers e-commerce domain from product/order models" do
-        allow(described_class).to receive(:cached_context).and_return({
-          app_name: "ShopApp",
-          rails_version: "7.2",
-          ruby_version: "3.3",
-          schema: { adapter: "PostgreSQL", total_tables: 12 },
-          models: {
-            "Product" => { associations: [] },
-            "Order" => { associations: [] },
-            "Cart" => { associations: [] },
-            "User" => { associations: [] }
-          },
-          jobs: { jobs: [] },
-          conventions: { architecture: %w[hotwire stimulus] },
-          gems: { notable_gems: [ { name: "stripe" } ] },
-          tests: { framework: "rspec" }
-        })
-        allow(described_class).to receive(:extract_service_names).and_return(%w[PaymentService])
-
-        result = described_class.call(detail: "quick")
-        text = result.content.first[:text]
-
-        expect(text).to include("e-commerce")
-        expect(text).to include("payment processing")
-      end
-
+    context "quick mode" do
       it "includes frontend summary from architecture conventions" do
         allow(described_class).to receive(:cached_context).and_return({
           app_name: "MyApp",
@@ -276,34 +182,29 @@ RSpec.describe RailsAiContext::Tools::Onboard do
           gems: { notable_gems: [] },
           tests: { framework: "minitest" }
         })
-        allow(described_class).to receive(:extract_service_names).and_return([])
-
         result = described_class.call(detail: "quick")
         text = result.content.first[:text]
 
         expect(text).to include("Hotwire + Phlex frontend")
       end
 
-      it "omits purpose when no domain signals are detected" do
+      it "names no guessed domain, only the app" do
         allow(described_class).to receive(:cached_context).and_return({
-          app_name: "GenericApp",
+          app_name: "Acme",
           rails_version: "8.0",
           ruby_version: "3.4",
-          schema: { adapter: "SQLite", total_tables: 3 },
-          models: { "User" => { associations: [] } },
+          schema: { adapter: "SQLite", total_tables: 4 },
+          models: { "Message" => { associations: [] }, "User" => { associations: [] } },
           jobs: { jobs: [] },
           conventions: { architecture: [] },
           gems: { notable_gems: [] },
           tests: { framework: "minitest" }
         })
-        allow(described_class).to receive(:extract_service_names).and_return([])
 
-        result = described_class.call(detail: "quick")
-        text = result.content.first[:text]
+        text = described_class.call(detail: "quick").content.first[:text]
 
-        expect(text).to include("GenericApp")
-        expect(text).to include("Rails 8.0 / Ruby 3.4 app")
-        expect(text).not_to include("app with")
+        expect(text).to include("**Acme** is a Rails 8.0 / Ruby 3.4 app -")
+        expect(text).not_to include("messaging")
       end
 
       it "shows actual table count instead of adapter name" do
@@ -318,8 +219,6 @@ RSpec.describe RailsAiContext::Tools::Onboard do
           gems: { notable_gems: [] },
           tests: { framework: "minitest" }
         })
-        allow(described_class).to receive(:extract_service_names).and_return([])
-
         result = described_class.call(detail: "quick")
         text = result.content.first[:text]
 
