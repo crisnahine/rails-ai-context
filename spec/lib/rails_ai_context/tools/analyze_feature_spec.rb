@@ -219,6 +219,33 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    # The gap checker matches on the path and the test lister matched on the
+    # basename, so one of them saw a spec the other did not and the feature
+    # read as untested.
+    it "finds a spec whose feature word is in its directory" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        spec_dir = File.join(tmp, "spec", "services", "billing", "invoices")
+        FileUtils.mkdir_p(spec_dir)
+        File.write(File.join(spec_dir, "create_spec.rb"), <<~RUBY)
+          require "rails_helper"
+
+          RSpec.describe Billing::Invoices::Create do
+            it "runs" do
+              expect(described_class).to be_a(Class)
+            end
+          end
+        RUBY
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "invoice").content.first[:text]
+
+        expect(text).to include("## Tests (1)")
+        expect(text).to include("spec/services/billing/invoices/create_spec.rb")
+      end
+    end
+
     context "DoS cap (v5.8.1 round 2)" do
       it "caps discover_services at MAX_SCAN_FILES and emits truncation note" do
         Dir.mktmpdir("rac_dos_services") do |tmp|

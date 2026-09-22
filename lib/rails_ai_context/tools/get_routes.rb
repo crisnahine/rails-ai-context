@@ -84,7 +84,12 @@ module RailsAiContext
           if controller
             normalized = RailsAiContext::Payload.controller_route_key(ctx, controller)
             normalized_alt = controller.downcase.delete_suffix("_controller").delete_suffix("controller")
-            filtered = by_controller.select { |k, _| k.downcase.include?(normalized) || k.downcase.include?(normalized_alt) }
+            # Exact first. The loose match is what makes a short name work,
+            # and it swept `api/v1/admin/orders/ai_data` in with the fully
+            # qualified `api/v1/admin/orders` - a separate class with its own
+            # filter chain.
+            exact = by_controller.select { |k, _| k.downcase == normalized || k.downcase == normalized_alt }
+            filtered = exact.any? ? exact : by_controller.select { |k, _| k.downcase.include?(normalized) || k.downcase.include?(normalized_alt) }
             return empty_response("No routes for '#{controller}'. Controllers: #{by_controller.keys.sort.join(', ')}") if filtered.empty?
             by_controller = filtered
           end

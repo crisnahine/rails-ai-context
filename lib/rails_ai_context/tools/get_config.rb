@@ -104,13 +104,19 @@ module RailsAiContext
         "wrap_parameters.rb" => "JSON params wrapping"
       }.freeze
 
-      # A short note for a config/initializers file: flags files that are
-      # entirely commented out, otherwise describes known stock initializers.
+      # A short note for a config/initializers file: flags a file that holds
+      # nothing and one that is entirely commented out, otherwise describes
+      # known stock initializers.
       private_class_method def self.initializer_note(name)
         path = rails_app.root.join("config", "initializers", name).to_s
         if File.exist?(path)
           content = RailsAiContext::SafeFile.read(path)
           if content
+            # A zero-byte file has no line to be a comment, which took the
+            # same branch and sent a reader to open it for the config it
+            # supposedly holds.
+            return "empty" if content.strip.empty?
+
             active = content.each_line.any? do |line|
               stripped = line.strip
               !stripped.empty? && !stripped.start_with?("#")

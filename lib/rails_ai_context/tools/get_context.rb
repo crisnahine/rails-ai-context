@@ -93,10 +93,10 @@ module RailsAiContext
         end
 
         # Views for this controller
-        view_ctrl = snake.split("/").last
-        view_result = GetView.call(controller: view_ctrl, detail: "standard")
+        view_result, view_note = controller_views(snake)
         unless empty?(view_result)
           lines << "" << "---" << ""
+          lines << view_note if view_note
           lines << response_text(view_result)
         end
 
@@ -134,6 +134,28 @@ module RailsAiContext
         lines.join("\n")
       rescue => e
         "Error assembling context: #{e.message}"
+      end
+
+      # The templates for a controller, read from the directory Rails would
+      # resolve: the full controller_path, never its last segment. An app that
+      # keeps a flat app/views still gets an answer, and it is labelled,
+      # because those templates are not the ones this controller renders by
+      # convention - on a namespaced app they belong to another component
+      # entirely.
+      #
+      # @return [Array(MCP::Tool::Response, String, nil)] the view section and
+      #   a note when the answer came from the flat directory
+      private_class_method def self.controller_views(snake)
+        namespaced = GetView.call(controller: snake, detail: "standard")
+        return [ namespaced, nil ] unless empty?(namespaced)
+
+        basename = snake.to_s.split("/").last
+        return [ namespaced, nil ] if basename.nil? || basename == snake
+
+        flat = GetView.call(controller: basename, detail: "standard")
+        return [ namespaced, nil ] if empty?(flat)
+
+        [ flat, "_No templates under `app/views/#{snake}`; these are `app/views/#{basename}`, which Rails resolves for this controller only if it sets its own view path._" ]
       end
 
       # The action's body out of the file the payload carried for the
@@ -205,10 +227,11 @@ module RailsAiContext
         end
 
         # Views for this controller
-        view_ctrl = snake.split("/").last
-        view_result = GetView.call(controller: view_ctrl, detail: "standard")
+        view_result, view_note = controller_views(snake)
         unless empty?(view_result)
-          lines << "" << "---" << "" << response_text(view_result)
+          lines << "" << "---" << ""
+          lines << view_note if view_note
+          lines << response_text(view_result)
         end
 
         lines.join("\n")

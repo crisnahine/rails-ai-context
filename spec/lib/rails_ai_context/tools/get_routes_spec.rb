@@ -31,6 +31,42 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     })
   end
 
+  # A controller nested under another controller's name has its own class and
+  # its own filter chain, and a substring filter swept it in with the parent.
+  describe "a fully qualified controller whose name prefixes another" do
+    let(:nested_controllers) do
+      {
+        "api/v1/admin/orders" => [
+          { verb: "POST", path: "/api/v1/admin/orders/edit", action: "edit", name: "api_v1_admin_orders_edit" }
+        ],
+        "api/v1/admin/orders/ai_data" => [
+          { verb: "GET", path: "/api/v1/admin/orders/ai_data/availability", action: "availability", name: nil },
+          { verb: "GET", path: "/api/v1/admin/orders/ai_data/download", action: "download", name: nil }
+        ]
+      }
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 3, by_controller: nested_controllers, api_namespaces: [] }
+      })
+    end
+
+    it "answers the exact key with its own routes only" do
+      text = described_class.call(controller: "api/v1/admin/orders").content.first[:text]
+
+      expect(text).to include("# Routes (1 route)")
+      expect(text).not_to include("ai_data")
+    end
+
+    it "still answers a short name with every controller that carries it" do
+      text = described_class.call(controller: "orders").content.first[:text]
+
+      expect(text).to include("# Routes (3 routes)")
+      expect(text).to include("api/v1/admin/orders/ai_data")
+    end
+  end
+
   describe ".call with no params" do
     it "defaults to standard detail and filters framework routes" do
       result = described_class.call

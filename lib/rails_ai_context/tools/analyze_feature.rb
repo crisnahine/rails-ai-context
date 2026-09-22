@@ -360,6 +360,11 @@ module RailsAiContext
         end
 
         # --- AF5: Tests ---
+        # The path a test is named by, without the root or the extension.
+        def relative_test_name(path, real_root)
+          path.to_s.sub("#{real_root}/", "").sub(/\.rb\z/, "")
+        end
+
         def discover_tests(root, pattern, lines)
           test_dirs = [ File.join(root, "spec"), File.join(root, "test") ]
           real_root = File.realpath(root).to_s
@@ -370,13 +375,17 @@ module RailsAiContext
             next unless Dir.exist?(dir)
             suffix_glob = safe_glob(dir, "**/*_{test,spec}.rb", real_root).first(MAX_SCAN_FILES)
             truncated = true if suffix_glob.size == MAX_SCAN_FILES
+            # The path, not the basename: the gap checker below matches this
+            # way for the same reason, and a spec whose feature word is a
+            # directory (billing/invoices/create_spec.rb) is the normal shape
+            # of a namespaced suite.
             suffix_glob.each do |path|
-              found << path if feature_word_match?(File.basename(path, ".rb"), pattern)
+              found << path if feature_word_match?(relative_test_name(path, real_root), pattern)
             end
             prefix_glob = safe_glob(dir, "**/{test,spec}_*.rb", real_root).first(MAX_SCAN_FILES)
             truncated = true if prefix_glob.size == MAX_SCAN_FILES
             prefix_glob.each do |path|
-              found << path if feature_word_match?(File.basename(path, ".rb"), pattern)
+              found << path if feature_word_match?(relative_test_name(path, real_root), pattern)
             end
           end
           found.uniq!
