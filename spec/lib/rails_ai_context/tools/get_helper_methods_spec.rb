@@ -112,6 +112,25 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
     end
 
+    context "when helpers live only in a pack" do
+      it "lists the pack helper and names its real path" do
+        Dir.mktmpdir do |root|
+          dir = File.join(root, "packs", "billing", "app", "helpers")
+          FileUtils.mkdir_p(dir)
+          File.write(File.join(dir, "invoice_helper.rb"), <<~RUBY)
+            module InvoiceHelper
+              def invoice_total(invoice); end
+            end
+          RUBY
+          allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+          text = described_class.call(helper: "InvoiceHelper").content.first[:text]
+          expect(text).to include("# InvoiceHelper")
+          expect(text).to include("packs/billing/app/helpers/invoice_helper.rb")
+        end
+      end
+    end
+
     context "when an API-only app has no app/helpers directory" do
       it "answers not applicable instead of not found" do
         Dir.mktmpdir do |root|

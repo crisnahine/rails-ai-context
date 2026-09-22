@@ -14,6 +14,40 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       expect(text).to include("No app/services/ directory found")
     end
 
+    context "with services only in a pack" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        pack_services = File.join(tmpdir, "packs", "billing", "app", "services")
+        FileUtils.mkdir_p(pack_services)
+        File.write(File.join(pack_services, "charge_card.rb"), <<~RUBY)
+          class ChargeCard
+            def initialize(amount:)
+              @amount = amount
+            end
+
+            def call
+              Stripe::Charge.create(amount: @amount)
+            end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "lists the pack service and names its real path" do
+        text = described_class.call(detail: "full").content.first[:text]
+        expect(text).to include("ChargeCard")
+        expect(text).to include("packs/billing/app/services/charge_card.rb")
+      end
+
+      it "answers for the pack service by name" do
+        text = described_class.call(service: "ChargeCard").content.first[:text]
+        expect(text).to include("# ChargeCard")
+      end
+    end
+
     context "with service fixtures" do
       let(:tmpdir) { Dir.mktmpdir }
       let(:services_dir) { File.join(tmpdir, "app", "services") }

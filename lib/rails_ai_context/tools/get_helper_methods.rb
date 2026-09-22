@@ -55,10 +55,10 @@ module RailsAiContext
 
       def self.call(helper: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)
         root = rails_app.root.to_s
-        helpers_dir = File.join(root, "app", "helpers")
+        helper_dirs = PathResolver.dirs_for(root, "app/helpers")
         max_size = RailsAiContext.configuration.max_file_size
 
-        unless Dir.exist?(helpers_dir)
+        if helper_dirs.empty?
           # "not found" invites an agent to add helpers to an app that chose
           # not to have any.
           note = api_only_note("app/helpers")
@@ -68,10 +68,8 @@ module RailsAiContext
         end
 
         real_root = File.realpath(root).to_s
-        real_helpers_dir = File.realpath(helpers_dir).to_s
-        helper_files = Dir.glob(File.join(helpers_dir, "**", "*.rb"))
-                         .filter_map { |f| safe_glob_realpath(f, real_helpers_dir, real_root) }
-                         .sort
+        real_helper_dirs = helper_dirs.map { |d| File.realpath(d).to_s }
+        helper_files = helper_dirs.flat_map { |d| safe_glob(d, "**/*.rb", real_root) }.uniq.sort
 
         if helper_files.empty?
           return text_response("No helper files found in app/helpers/.")
@@ -79,11 +77,19 @@ module RailsAiContext
 
         # Specific helper - full detail
         if helper
-          return show_helper(helper, helper_files, real_helpers_dir, real_root, max_size, detail)
+          return show_helper(helper, helper_files, real_helper_dirs, real_root, max_size, detail)
         end
 
         # List all helpers
-        list_helpers(helper_files, real_helpers_dir, real_root, max_size, detail, offset: offset, limit: limit)
+        list_helpers(helper_files, real_helper_dirs, real_root, max_size, detail, offset: offset, limit: limit)
+      end
+
+      # A helper lives under app/helpers, a pack, an in-repo engine or a
+      # configured extra path; only its path under whichever one holds it
+      # carries the namespace.
+      private_class_method def self.relative_under(file_path, helper_dirs)
+        dir = helper_dirs.find { |d| file_path.start_with?("#{d}#{File::SEPARATOR}") }
+        dir ? file_path.delete_prefix("#{dir}#{File::SEPARATOR}") : File.basename(file_path)
       end
 
       # Module name from the path under app/helpers, so nested helpers keep
@@ -91,17 +97,17 @@ module RailsAiContext
       # app/helpers/concerns is its own autoload root (railties globs
       # "{*,*/concerns}"), so concerns/formattable.rb defines Formattable,
       # not Concerns::Formattable.
-      private_class_method def self.module_name_for(file_path, helpers_dir)
-        file_path.sub("#{helpers_dir}/", "").delete_prefix("concerns/").delete_suffix(".rb").camelize
+      private_class_method def self.module_name_for(file_path, helper_dirs)
+        relative_under(file_path, helper_dirs).delete_prefix("concerns/").delete_suffix(".rb").camelize
       end
 
-      private_class_method def self.show_helper(name, helper_files, helpers_dir, root, max_size, detail)
+      private_class_method def self.show_helper(name, helper_files, helper_dirs, root, max_size, detail)
         # Find by module name (with or without namespace) or file name.
         # Exact relative-path matches win before basename fallbacks so a
         # top-level DashboardHelper isn't shadowed by admin/dashboard_helper.
         underscore = name.underscore.delete_suffix("_helper")
         file_path = helper_files.find do |f|
-          rel = f.sub("#{helpers_dir}/", "").delete_suffix(".rb")
+          rel = relative_under(f, helper_dirs).delete_suffix(".rb")
           rel == name.underscore || rel == "#{underscore}_helper"
         end
         file_path ||= helper_files.find do |f|
@@ -110,7 +116,7 @@ module RailsAiContext
         end
 
         unless file_path
-          available = helper_files.map { |f| module_name_for(f, helpers_dir) }
+          available = helper_files.map { |f| module_name_for(f, helper_dirs) }
           return not_found_response("Helper", name, available,
             recovery_tool: "Call rails_get_helper_methods() to see all helpers")
         end
@@ -122,7 +128,7 @@ module RailsAiContext
         source = RailsAiContext::SafeFile.read(file_path)
         return text_response("Could not read helper file: #{file_path}") unless source
         relative_path = file_path.sub("#{root}/", "")
-        module_name = module_name_for(file_path, helpers_dir)
+        module_name = module_name_for(file_path, helper_dirs)
 
         lines = [ "# #{module_name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
@@ -172,10 +178,10 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.list_helpers(helper_files, helpers_dir, root, max_size, detail, offset: 0, limit: nil)
+      private_class_method def self.list_helpers(helper_files, helper_dirs, root, max_size, detail, offset: 0, limit: nil)
         helpers_data = helper_files.filter_map do |file_path|
           relative = file_path.sub("#{root}/", "")
-          module_name = module_name_for(file_path, helpers_dir)
+          module_name = module_name_for(file_path, helper_dirs)
 
           if File.size(file_path) <= max_size
             source = RailsAiContext::SafeFile.read(file_path)
@@ -288,17 +294,13 @@ module RailsAiContext
         gemfile = RailsAiContext::SafeFile.read(gemfile_path) || ""
 
         # Collect all view file content for scanning
-        views_dir = File.join(real_root, "app", "views")
-        helpers_dir = File.join(real_root, "app", "helpers")
         scan_content = ""
 
-        [ views_dir, helpers_dir ].each do |dir|
-          next unless Dir.exist?(dir)
-          real_dir = File.realpath(dir).to_s
-          extensions = dir == views_dir ? "*.{erb,haml,slim}" : "*.rb"
-          Dir.glob(File.join(dir, "**", extensions)).each do |path|
-            real = safe_glob_realpath(path, real_dir, real_root)
-            next unless real
+        scan_dirs = PathResolver.dirs_for(real_root, "app/views").map { |d| [ d, "*.{erb,haml,slim}" ] } +
+                    PathResolver.dirs_for(real_root, "app/helpers").map { |d| [ d, "*.rb" ] }
+
+        scan_dirs.each do |dir, extensions|
+          safe_glob(dir, "**/#{extensions}", real_root).each do |real|
             next if File.size(real) > max_size
             scan_content += (RailsAiContext::SafeFile.read(real) || "")
           end

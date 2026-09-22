@@ -197,6 +197,20 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("Post")
       end
 
+      it "does not follow a symlink out of app/models when listing includers" do
+        outside = File.join(tmpdir, "outside")
+        FileUtils.mkdir_p(outside)
+        File.write(File.join(outside, "smuggled.rb"), <<~RUBY)
+          class Smuggled
+            include Searchable
+          end
+        RUBY
+        File.symlink(File.join(outside, "smuggled.rb"), File.join(models_dir, "smuggled.rb"))
+
+        text = described_class.call(name: "Searchable").content.first[:text]
+        expect(text).not_to include("Smuggled")
+      end
+
       it "finds includers when the concern name is plural" do
         File.write(File.join(model_concerns_dir, "worksheet_imports.rb"), <<~RUBY)
           module WorksheetImports

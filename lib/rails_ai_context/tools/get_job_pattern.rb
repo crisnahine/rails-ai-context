@@ -476,14 +476,11 @@ module RailsAiContext
 
       private_class_method def self.find_enqueuers(class_name, real_root)
         enqueuers = Set.new
-        search_dirs = %w[app/controllers app/models app/services app/jobs app/workers app/mailers].map { |d| File.join(real_root, d) }
+        search_dirs = %w[app/controllers app/models app/services app/jobs app/workers app/mailers]
+                        .flat_map { |d| PathResolver.dirs_for(real_root, d) }
 
         search_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          real_dir = File.realpath(dir).to_s
-          Dir.glob(File.join(dir, "**", "*.rb")).each do |file_path|
-            real = safe_glob_realpath(file_path, real_dir, real_root)
-            next unless real
+          safe_glob(dir, "**/*.rb", real_root).each do |real|
             next if File.size(real) > max_file_size
             source = safe_read(real)
             next unless source

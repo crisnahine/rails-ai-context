@@ -120,7 +120,7 @@ module RailsAiContext
 
         unless file_path
           # Build available list for fuzzy match
-          available = collect_concern_names(concern_dirs)
+          available = collect_concern_names(concern_dirs, File.realpath(root).to_s)
           return not_found_response("Concern", name, available,
             recovery_tool: "Call rails_get_concern() to see all concerns")
         end
@@ -233,23 +233,7 @@ module RailsAiContext
         concern_dirs.each do |dir|
           concern_type = ConcernPaths.type_for(dir)
           real_dir = File.realpath(dir).to_s
-          Dir.glob(File.join(dir, "**", "*.rb")).sort.each do |file_path|
-            # Apply the 5-rule file-reading pattern per CLAUDE.md. Even though
-            # file_path comes from Dir.glob (not caller-supplied), a symlink
-            # planted inside `app/models/concerns/` pointing at
-            # `config/master.key` would otherwise be silently read.
-            real =
-              begin
-                File.realpath(file_path).to_s
-              rescue Errno::ENOENT
-                nil
-              end
-            next unless real
-            next unless real == real_dir || real.start_with?(real_dir + File::SEPARATOR)
-
-            relative_real = real.sub("#{real_root}/", "")
-            next if sensitive_file?(relative_real)
-
+          safe_glob(dir, "**/*.rb", real_root).sort.each do |real|
             relative = real.sub("#{real_root}/", "")
             concern_name = real.sub("#{real_dir}/", "").sub(/\.rb$/, "").camelize
             if ConcernMembership.excluded?(concern_name)
@@ -312,10 +296,11 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.collect_concern_names(concern_dirs)
+      private_class_method def self.collect_concern_names(concern_dirs, real_root)
         concern_dirs.flat_map do |dir|
-          Dir.glob(File.join(dir, "**", "*.rb")).map do |file_path|
-            file_path.sub("#{dir}/", "").sub(/\.rb$/, "").camelize
+          real_dir = File.realpath(dir).to_s
+          safe_glob(dir, "**/*.rb", real_root).map do |real|
+            real.delete_prefix("#{real_dir}/").sub(/\.rb$/, "").camelize
           end
         end.sort
       end
@@ -383,10 +368,10 @@ module RailsAiContext
         # app/*/concerns has no directory to name, so that one searches both
         # of the places a concern is usually included from.
         if concern_type.nil? || concern_type == "other"
-          search_dirs << File.join(root, "app", "models")
-          search_dirs << File.join(root, "app", "controllers")
+          search_dirs.concat(PathResolver.dirs_for(root, "app/models"))
+          search_dirs.concat(PathResolver.dirs_for(root, "app/controllers"))
         else
-          search_dirs << File.join(root, "app", concern_type.pluralize)
+          search_dirs.concat(PathResolver.dirs_for(root, "app/#{concern_type.pluralize}"))
         end
 
         max_size = RailsAiContext.configuration.max_file_size
@@ -398,9 +383,9 @@ module RailsAiContext
         simple_name = concern_name.demodulize.camelize
         pattern = /^\s*include\s+(?:\w+::)*#{Regexp.escape(simple_name)}\b/
 
+        real_root = File.realpath(root).to_s
         search_dirs.each do |dir|
-          next unless Dir.exist?(dir)
-          Dir.glob(File.join(dir, "**", "*.rb")).each do |file_path|
+          safe_glob(dir, "**/*.rb", real_root).each do |file_path|
             # Skip concern files themselves
             next if file_path.include?("/concerns/")
             next if File.size(file_path) > max_size

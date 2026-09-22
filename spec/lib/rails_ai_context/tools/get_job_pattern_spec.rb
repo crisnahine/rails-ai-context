@@ -398,6 +398,20 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("billing")
     end
 
+    it "names a pack service among the enqueuers" do
+      services_dir = File.join(tmpdir, "packs", "billing", "app", "services")
+      FileUtils.mkdir_p(services_dir)
+      File.write(File.join(services_dir, "send_invoice.rb"), <<~RUBY)
+        class SendInvoice
+          def call = InvoiceJob.perform_later(1)
+        end
+      RUBY
+
+      text = described_class.call(job: "InvoiceJob").content.first[:text]
+      expect(text).to include("## Enqueued By")
+      expect(text).to include("packs/billing/app/services/send_invoice.rb")
+    end
+
     it "finds the job by its snake_case name" do
       text = described_class.call(job: "invoice").content.first[:text]
       expect(text).to include("# InvoiceJob")
