@@ -50,7 +50,7 @@ module RailsAiContext
 
     def from_configurations(context)
       multi = context[:multi_database]
-      return nil unless Serializers::SectionGuard.usable?(multi)
+      return nil unless Tools::SectionFetch.usable?(multi)
 
       primary = Array(multi[:databases]).find { |db| db[:name].to_s == "primary" } ||
                 Array(multi[:databases]).first
@@ -75,7 +75,7 @@ module RailsAiContext
     # a loop happened to see last.
     def from_gems(context)
       gems = context[:gems]
-      return nil unless Serializers::SectionGuard.usable?(gems)
+      return nil unless Tools::SectionFetch.usable?(gems)
 
       names = Array(gems[:notable_gems]).map { |g| g[:name].to_s }
       GEM_ADAPTERS.each_key { |gem_name| return GEM_ADAPTERS[gem_name] if names.include?(gem_name) }
