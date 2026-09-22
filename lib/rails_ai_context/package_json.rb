@@ -9,8 +9,6 @@ module RailsAiContext
   # not the app's bundler. A tool reached through its own scope counts, since
   # `@tailwindcss/vite` is how an app depends on tailwindcss.
   module PackageJson
-    MAX_SIZE = 256 * 1024
-
     MUTEX = Mutex.new
     CACHE = {}
     private_constant :MUTEX, :CACHE
@@ -47,7 +45,7 @@ module RailsAiContext
     private_class_method :stamp
 
     def parse(path)
-      content = SafeFile.read(path, max_size: MAX_SIZE)
+      content = SafeFile.read(path)
       return {} unless content
 
       data = JSON.parse(content)

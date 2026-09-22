@@ -434,17 +434,20 @@ module RailsAiContext
 
         def generate_controller_test(ctrl_name, framework, tests_data)
           ctrl_name = ctrl_name.strip
-          # Normalize: "posts" → "PostsController", "PostsController" stays
-          ctrl_class = ctrl_name.end_with?("Controller") ? ctrl_name : "#{ctrl_name.camelize}Controller"
 
           # A spec for a controller the app does not have is a file nothing
           # can run. "No routes found" read as "add routes", not "this class
-          # does not exist".
+          # does not exist". Payload owns the name-to-key rule, so this tool
+          # resolves "gift_cards" to the same controller every other surface
+          # does.
           known = RailsAiContext::Payload.controllers(cached_context)
-          if known.any? && !known.key?(ctrl_class)
+          ctrl_class = RailsAiContext::Payload.find_controller(cached_context, ctrl_name)
+          if known.any? && ctrl_class.nil?
             return not_found_response("Controller", ctrl_name, known.keys.sort,
               recovery_tool: "Call rails_get_controllers(detail:\"summary\") to see all controllers")
           end
+
+          ctrl_class ||= ctrl_name.end_with?("Controller") ? ctrl_name : "#{ctrl_name.camelize}Controller"
 
           snake = RailsAiContext::Payload.controller_route_key(cached_context, ctrl_class)
 
