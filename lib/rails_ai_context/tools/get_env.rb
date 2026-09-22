@@ -186,11 +186,7 @@ module RailsAiContext
             categorized[category] << { name: name, **details }
           end
 
-          category_order = [
-            "API Keys & Secrets", "Mail", "Database", "Infrastructure",
-            "Monitoring", "Push Notifications", "Other"
-          ]
-          sorted_categories = categorized.keys.sort_by { |k| category_order.index(k) || 99 }
+          sorted_categories = categorized.keys.sort_by { |k| CATEGORY_ORDER.index(k) || 99 }
 
           sorted_categories.each do |category|
             vars = categorized[category]
@@ -656,6 +652,14 @@ module RailsAiContext
         [ "Infrastructure", %w[PORT CONCURRENCY THREADS WORKERS TIMEOUT QUEUE PIDFILE] ]
       ].freeze
 
+      # Display order, not declaration order: CATEGORY_SEGMENTS is ordered by
+      # how specific a match is, and reading the order off it would swap
+      # Infrastructure and Monitoring in every answer.
+      CATEGORY_ORDER = [
+        "API Keys & Secrets", "Mail", "Database", "Infrastructure",
+        "Monitoring", "Push Notifications", "Other"
+      ].freeze
+
       private_class_method def self.categorize_env_var(name)
         segments = name.to_s.upcase.split("_")
         CATEGORY_SEGMENTS.each do |category, keys|
@@ -671,12 +675,7 @@ module RailsAiContext
           groups[categorize_env_var(name)] << name
         end
 
-        # Sort groups: important ones first
-        priority = [
-          "API Keys & Secrets", "Mail", "Database", "Infrastructure",
-          "Monitoring", "Push Notifications", "Other"
-        ]
-        groups.sort_by { |k, _| priority.index(k) || 99 }
+        groups.sort_by { |k, _| CATEGORY_ORDER.index(k) || 99 }
       end
 
       private_class_method def self.find_default_value(env_vars, name)

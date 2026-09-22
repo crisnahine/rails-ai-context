@@ -662,4 +662,14 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(trailer.call("full")).to eq(trailer.call("standard"))
     end
   end
+
+  describe "category order across detail levels" do
+    it "keeps Infrastructure ahead of Monitoring at standard and summary" do
+      %w[standard summary].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+
+        expect(text.index("## Infrastructure")).to be < text.index("## Monitoring")
+      end
+    end
+  end
 end
