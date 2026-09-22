@@ -186,4 +186,22 @@ RSpec.describe RailsAiContext::Tools::GetPartialInterface do
       end
     end
   end
+
+  describe "extract_local_variable_references" do
+    def locals_in(source)
+      described_class.send(:extract_local_variable_references, source)
+    end
+
+    it "sees a local rendered through a raw output tag" do
+      expect(locals_in("<%== title %>\n")).to include("title")
+    end
+
+    it "still sees a local rendered through an escaping tag" do
+      expect(locals_in("<%= title %>\n")).to include("title")
+    end
+
+    it "ignores a commented-out tag body" do
+      expect(locals_in("<%# title %>\n")).not_to include("title")
+    end
+  end
 end
