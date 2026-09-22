@@ -37,24 +37,9 @@ module RailsAiContext
           "Rails #{context[:rails_version]} | Ruby #{context[:ruby_version]}",
           ""
         ]
-        lines.concat(SectionFacts.static_notice_lines(context))
-
-        # Compact counts - gems and architecture are already in the root file (CLAUDE.md/AGENTS.md)
-        if (db_line = SectionFacts.database_line(context))
-          lines << db_line
-        end
-        if (models_line = SectionFacts.models_line(context))
-          lines << models_line
-        end
-
-        routes = Payload.section(context, :routes)
-        lines << "- Routes: #{routes[:total_routes]}#{RouteCoverage.suffix(routes)}" if routes
-
-        lines.concat(full_preset_stack_lines)
-
-        # ApplicationController before_actions - apply to all controllers
-        before_actions = detect_before_actions
-        lines << "" << "**Global before_actions:** #{before_actions.join(', ')}" if before_actions.any?
+        # Gems, architecture, services and jobs are already in the root file
+        # (CLAUDE.md/AGENTS.md), so this overview states the rest.
+        lines.concat(overview_lines(gems: false, architecture: false, app_dirs: false))
 
         lines << ""
         lines << "ALWAYS use MCP tools for context - do NOT read reference files directly."
@@ -72,7 +57,9 @@ module RailsAiContext
         lines = [
           "---",
           "paths:",
-          "  - \"#{schema_reference_path}\"",
+          # The glob has to name the dump the app committed, or the rule never
+          # triggers on a :sql app: db/schema.rb is never opened there.
+          "  - \"#{schema_dump_path}\"",
           '  - "db/migrate/**"',
           "---",
           "",
@@ -149,21 +136,6 @@ module RailsAiContext
         end
 
         lines.join("\n")
-      end
-
-      # Apps with `config.active_record.schema_format = :sql` dump the schema
-      # to db/structure.sql instead of db/schema.rb - the auto-attach glob
-      # above must point at whichever file the app actually has, or this
-      # rule never triggers on a :sql app since db/schema.rb is never opened.
-      def schema_reference_path
-        root = defined?(Rails) && Rails.respond_to?(:root) && Rails.root ? Rails.root.to_s : Dir.pwd
-
-        sql_format = if defined?(ActiveRecord::Base) && ActiveRecord::Base.respond_to?(:schema_format)
-          ActiveRecord::Base.schema_format == :sql
-        end
-        sql_format = !File.exist?(File.join(root, "db/schema.rb")) && File.exist?(File.join(root, "db/structure.sql")) if sql_format.nil?
-
-        sql_format ? "db/structure.sql" : "db/schema.rb"
       end
 
       def render_models_reference
