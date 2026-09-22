@@ -63,7 +63,7 @@ module RailsAiContext
         dir ? file.delete_prefix("#{dir}#{File::SEPARATOR}") : File.basename(file)
       end
 
-      private_class_method def self.format_single_service(service, service_files, service_dirs, root, lookup = nil)
+      private_class_method def self.format_single_service(service, service_files, service_dirs, root, lookup)
         matches = match_service_files(service, service_files, service_dirs)
 
         if matches.size > 1
@@ -171,7 +171,7 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup = nil)
+      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup)
         # Detect common pattern across all services
         pattern_stats = { initialize_call: 0, initialize_single_method: 0, class_method_call: 0, result_object: 0, active_interaction: 0, total: 0 }
         service_data = []
@@ -287,12 +287,12 @@ module RailsAiContext
 
       # ActiveInteraction declares its interface as filter macros rather than
       # an `initialize`, so a service that looks argument-less from its
-      # methods alone is documented entirely by these lines.
-      # One line per filter, nested filters indented under the filter whose
-      # block declares them, and an inherited one named with the class that
-      # declares it: it is not in this file, and a reader looking for it
-      # needs somewhere to look.
-      private_class_method def self.interaction_inputs(source, lookup = nil, own_class = nil)
+      # methods alone is documented entirely by these lines. One line per
+      # filter, nested ones indented under the filter whose block declares
+      # them, and an inherited one named with the class that declares it: it
+      # is not in this file, and a reader looking for it needs somewhere to
+      # look.
+      private_class_method def self.interaction_inputs(source, lookup, own_class)
         Introspectors::Interaction.filters(source, lookup: lookup).flat_map do |filter|
           [ "- #{input_line(filter, own_class)}" ] +
             filter.nested.map { |nested| "  - #{input_line(nested, filter.declared_by)}" }

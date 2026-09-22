@@ -327,19 +327,8 @@ module RailsAiContext
         end
 
         # True when the names the model carries cannot answer whether a method
-        # exists.
-        #
-        # Two ways they cannot. A payload from before the uncapped source list
-        # existed has only the capped one. And a method that comes from a
-        # concern or a parent class is not in the model's own source at all:
-        # reflection reports it, and reflection's list is the capped one, so a
-        # model with either can only answer while that list is whole.
-        #
-        # The count beside the list is no substitute for the source list: on
-        # the booted tier it counts reflection's answer, and ActiveRecord
-        # defines an attribute method per column the first time a model is
-        # instantiated, so it passes thirty on an ordinary model the moment
-        # the app is warm.
+        # exists: a method a concern or a parent defines is reflection's to
+        # report, and reflection's list is the capped one.
         def source_methods_missing?(model_data)
           return false unless reflection_list_truncated?(model_data)
           return true unless model_data[:source_instance_methods].is_a?(Array)
@@ -347,6 +336,10 @@ module RailsAiContext
           Array(model_data[:concerns]).any? || !model_data[:sti].nil? || Array(model_data[:inherited_from]).any?
         end
 
+        # Never the count alone: it is reflection's, and ActiveRecord defines
+        # an attribute method per column the first time a model is
+        # instantiated, so it passes the cap on an ordinary model as soon as
+        # the app is warm.
         def reflection_list_truncated?(model_data)
           count = model_data[:instance_method_count]
           count.is_a?(Integer) && count > Array(model_data[:instance_methods]).size

@@ -263,6 +263,23 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    # A minitest suite names its files test_orders.rb, and stripping that
+    # prefix must not take the path separator with it.
+    it "finds a prefix-named test by the directory it sits in" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        test_dir = File.join(tmp, "test", "billing", "invoices")
+        FileUtils.mkdir_p(test_dir)
+        File.write(File.join(test_dir, "test_create.rb"), "require \"test_helper\"\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "invoice").content.first[:text]
+
+        expect(text).to include("test/billing/invoices/test_create.rb")
+      end
+    end
+
     context "DoS cap (v5.8.1 round 2)" do
       it "caps discover_services at MAX_SCAN_FILES and emits truncation note" do
         Dir.mktmpdir("rac_dos_services") do |tmp|

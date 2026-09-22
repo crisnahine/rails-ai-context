@@ -370,7 +370,7 @@ module RailsAiContext
               .sub(%r{\A(?:spec|test)/}, "")
               .sub(/\.rb\z/, "")
               .sub(/_(?:spec|test)\z/, "")
-              .sub(%r{(?:\A|/)(?:spec|test)_}, "\\1")
+              .sub(%r{(\A|/)(?:spec|test)_}, "\\1")
         end
 
         def discover_tests(root, pattern, lines)

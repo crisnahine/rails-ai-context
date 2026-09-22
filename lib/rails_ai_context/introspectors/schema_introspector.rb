@@ -212,7 +212,21 @@ module RailsAiContext
       # Fallback: parse schema file as text when DB isn't connected.
       # Tries db/schema.rb first, then db/structure.sql, then migrations.
       # This enables introspection in CI, Claude Code, etc.
+      # Every key the booted answer carries, answered from the files. The
+      # tables a dump declares are the tables the static tier read, so
+      # `declared_tables` is the list it just built: there is no connection
+      # here for them to disagree with.
       def static_schema_parse
+        declare_tables(static_schema_sources)
+      end
+
+      def declare_tables(result)
+        return result unless result.is_a?(Hash) && result[:tables].is_a?(Hash)
+
+        result.merge(declared_tables: result[:tables].keys.map(&:to_s))
+      end
+
+      def static_schema_sources
         schema_rb_exists = File.exist?(schema_file_path)
 
         if schema_rb_exists

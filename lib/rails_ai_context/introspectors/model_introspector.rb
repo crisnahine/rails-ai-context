@@ -480,9 +480,9 @@ module RailsAiContext
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           scopes:           extract_scopes_from_ast(source_data),
-          class_methods:    class_methods.first(MAX_LISTED_METHODS),
+          class_methods:    class_methods.first(PAYLOAD_METHOD_CAP),
           class_method_count: class_methods.size,
-          instance_methods: instance_methods.first(MAX_LISTED_METHODS),
+          instance_methods: instance_methods.first(PAYLOAD_METHOD_CAP),
           instance_method_count: instance_methods.size,
           source_instance_methods: source_instance_methods
         }
@@ -672,7 +672,7 @@ module RailsAiContext
       # What the payload lists. The count beside it is the whole set: a
       # consumer that reads the list as complete (diagnose did) states a
       # confident negative about a method the model defines.
-      MAX_LISTED_METHODS = 30
+      PAYLOAD_METHOD_CAP = 30
 
       def extract_class_methods_from_ast(model, source_data)
         # Scope names to exclude from class methods (they appear in :scopes already)
@@ -1018,10 +1018,10 @@ module RailsAiContext
           # The same two keys the booted tier carries, so a consumer reading
           # the model's method set gets the same answer in both tiers rather
           # than an empty one here.
-          instance_methods: static_instance_methods.first(MAX_LISTED_METHODS),
+          instance_methods: static_instance_methods.first(PAYLOAD_METHOD_CAP),
           instance_method_count: static_instance_methods.size,
           source_instance_methods: static_instance_methods,
-          class_methods: static_class_methods.first(MAX_LISTED_METHODS),
+          class_methods: static_class_methods.first(PAYLOAD_METHOD_CAP),
           class_method_count: static_class_methods.size,
           file: file,
           sti: sti

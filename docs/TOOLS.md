@@ -116,7 +116,7 @@ Full-stack feature analysis: models + controllers + routes + services + jobs + v
 
 ### `rails_get_context`
 
-Composite context: schema + model + controller + routes + views for a resource.
+Composite context: schema + model + controller + routes + views for a resource. Views come from the directory Rails resolves for the controller; a flat-directory fallback is labelled.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -152,7 +152,7 @@ two table counts disagree.
 
 ### `rails_get_model_details`
 
-AST-parsed model internals. Every result carries `[VERIFIED]` or `[INFERRED]` confidence tag.
+AST-parsed model internals. Every result carries `[VERIFIED]` or `[INFERRED]` confidence tag. The method list says how many of the model's methods it is showing.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -225,7 +225,7 @@ or `match ... to:` are named with the path they answer on.
 
 ### `rails_get_view`
 
-View templates with instance variables, Turbo frames, Stimulus controllers, partial locals. Includes schema hints for detected ivars.
+View templates with instance variables, Turbo frames, Stimulus controllers, partial locals. Includes schema hints for detected ivars. A template directly under `app/views` is grouped as `(app/views root)`, which `path:` reaches and `controller:` does not.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -360,7 +360,7 @@ Notable gems with versions, categories, and config file locations.
 
 ### `rails_get_env`
 
-Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so.
+Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -523,7 +523,7 @@ Reverse file tail with level filtering and sensitive data redaction.
 
 ### `rails_diagnose`
 
-One-call error diagnosis with classification, context, git blame, and log correlation.
+One-call error diagnosis with classification, context, git blame, and log correlation. It does not call a method undefined when the model's method list could be missing one - a concern's, a parent's, or anything past the payload's own cap.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

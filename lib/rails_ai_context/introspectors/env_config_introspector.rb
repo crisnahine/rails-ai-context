@@ -129,7 +129,8 @@ module RailsAiContext
         # Source order, because that is run order: a conditional assignment
         # printed after the unconditional one that follows it reads as the
         # value in force.
-        rendered.sort_by(&:first).map(&:last).uniq.join(", ")
+        rendered.each_with_index.sort_by { |(line, _), index| [ line, index ] }
+                .map { |(_, text), _| text }.uniq.join(", ")
       end
 
       # The booted app has already resolved the branch, and two tools reading

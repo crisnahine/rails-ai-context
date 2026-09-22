@@ -148,16 +148,13 @@ module RailsAiContext
         }
       end
 
-      # Keyed by tier, because the two tiers ask a different question of the
-      # same machine: booted, the app's bundle is set up and the load path
-      # holds the app's gems only, so an app that does not bundle brakeman
-      # cannot require it even though `gem list` shows it. One process-wide
-      # boolean let whichever tier answered first decide for the other.
+      # The file a warning is about, in the shape brakeman's own warning
+      # answers: the renderer asks for `w.file.relative`.
+      WarningFile = Data.define(:relative)
+
       # What the renderer reads off a warning, built from brakeman's JSON so
       # the unbundled scan and the in-process one render identically. Brakeman
       # sorts by a numeric confidence, which the JSON spells as a name.
-      ScannedFile = Data.define(:relative)
-
       ExternalWarning = Data.define(:warning_type, :confidence, :confidence_name, :file, :line,
                                     :message, :cwe_id, :code, :link) do
         def format_code = code
@@ -168,7 +165,7 @@ module RailsAiContext
             warning_type: warning["warning_type"].to_s,
             confidence: CONFIDENCE_NAMES.key(name) || 2,
             confidence_name: name,
-            file: ScannedFile.new(relative: warning["file"].to_s),
+            file: WarningFile.new(relative: warning["file"].to_s),
             line: warning["line"],
             message: warning["message"].to_s,
             cwe_id: Array(warning["cwe_id"]),
@@ -204,7 +201,7 @@ module RailsAiContext
 
       # The gem's own executable, not whatever `brakeman` resolves to on PATH.
       private_class_method def self.brakeman_executable
-        Gem.path.flat_map { |dir| [ File.join(dir, "bin", "brakeman") ] }.find { |path| File.executable?(path) }
+        Gem.path.map { |dir| File.join(dir, "bin", "brakeman") }.find { |path| File.executable?(path) }
       end
 
       # Bundler narrows the environment for child processes as well as for
@@ -236,6 +233,11 @@ module RailsAiContext
         end
       end
 
+      # Keyed by tier, because the two tiers ask a different question of the
+      # same machine: booted, the app's bundle is set up and the load path
+      # holds the app's gems only, so an app that does not bundle brakeman
+      # cannot require it even though `gem list` shows it. One process-wide
+      # boolean let whichever tier answered first decide for the other.
       private_class_method def self.brakeman_available?
         # A Hash, whatever was there before: the memo used to be one boolean,
         # and a stale one would be indexed into.

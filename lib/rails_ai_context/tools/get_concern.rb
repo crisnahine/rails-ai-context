@@ -129,7 +129,7 @@ module RailsAiContext
         return text_response("Could not read concern file: #{file_path}") unless source
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
-        validator = validator_superclass(source, root)
+        validator = validator_superclass(source, Introspectors::SuperclassChain.lookup_for(root.to_s))
         lines << (validator ? "**Type:** validator (`#{validator}`)" : "**Type:** #{concern_type} concern")
 
         # A second file at the same relative path answers the same name, and
@@ -254,6 +254,10 @@ module RailsAiContext
         all_concerns = []
         excluded_count = 0
         real_root = File.realpath(root).to_s
+        # One lookup for the whole listing: it resolves the app's autoload
+        # roots once and keeps every source it reads, so a tree of validators
+        # sharing one base class reads that base once.
+        lookup = Introspectors::SuperclassChain.lookup_for(root.to_s)
 
         concern_dirs.each do |dir|
           concern_type = ConcernPaths.type_for(dir)
@@ -277,7 +281,7 @@ module RailsAiContext
             all_concerns << {
               name: concern_name,
               type: concern_type,
-              validator: source && validator_superclass(source, root),
+              validator: source && validator_superclass(source, lookup),
               path: relative,
               method_count: method_count
             }
@@ -332,16 +336,15 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
+      VALIDATOR_BASES = %w[ActiveModel::Validator ActiveModel::EachValidator].freeze
+
       # The validator base a file's class reaches, or nil for anything else -
       # a module, a PORO, a class that subclasses something else entirely.
       # Followed through the app's own sources, because an app with its own
       # `ApplicationValidator < ActiveModel::EachValidator` is the ordinary
       # shape and one level of compare calls every validator under it a
       # concern that nothing includes.
-      VALIDATOR_BASES = %w[ActiveModel::Validator ActiveModel::EachValidator].freeze
-
-      private_class_method def self.validator_superclass(source, root = nil)
-        lookup = root && Introspectors::SuperclassChain.lookup_for(root.to_s)
+      private_class_method def self.validator_superclass(source, lookup)
         chain = Introspectors::SuperclassChain.to(source, bases: VALIDATOR_BASES, lookup: lookup)
         return nil if chain.empty?
 

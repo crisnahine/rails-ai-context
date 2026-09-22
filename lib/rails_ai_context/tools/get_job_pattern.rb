@@ -27,7 +27,6 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       NOT_COVERED = "Workers the introspector did not see (a Sidekiq worker outside app/workers/, for example) are not covered by this tool."
-      UNSEEN_WORKERS = "Workers the introspector did not see are not covered by this tool."
 
       def self.call(job: nil, detail: "standard", server_context: nil)
         real_root = File.realpath(rails_app.root.to_s).to_s
@@ -73,7 +72,7 @@ module RailsAiContext
         # it gets no sentence about Sidekiq.
         if workers.any? || sidekiq_line
           lines << "" if lines.any?
-          lines << "_#{[ sidekiq_line, UNSEEN_WORKERS ].compact.join(" ")}_"
+          lines << "_#{[ sidekiq_line, NOT_COVERED ].compact.join(" ")}_"
         end
         text_response(lines.join("\n"))
       end
@@ -140,7 +139,7 @@ module RailsAiContext
 
       # The name never rebuilds the path: the file is the one the introspector
       # recorded, which is the only place a pack job's path is written down.
-      private_class_method def self.format_single_job(job, jobs, root, sidekiq_line, workers = [])
+      private_class_method def self.format_single_job(job, jobs, root, sidekiq_line, workers)
         names = jobs.map { |j| j[:name] }
         worker_names = workers.map { |w| w[:name] }.compact
         return text_response(no_job_files_message(sidekiq_line)) if names.empty? && worker_names.empty?

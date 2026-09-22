@@ -126,7 +126,7 @@ end
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| JobIntrospector | `:jobs` | Background jobs, Sidekiq workers under `app/workers`, and mailers: queue, retries, `sidekiq_options`, schedules, and the `file:` each one is defined in |
+| JobIntrospector | `:jobs` | Background jobs, Sidekiq workers under `app/workers`, and mailers: queue, retries, `sidekiq_options`, any `sidekiq_throttle`, schedules, and the `file:` each one is defined in |
 | RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks |
 
 ### Security & Auth
@@ -243,6 +243,7 @@ same wherever it is asked. Those live as their own modules under
 |:-------|:---------------|
 | `DeclaredConstant` | The constant a source file calls its own class, against the one its path camelizes to |
 | `TableName` | The table a model reads, from its own declarations |
+| `SuperclassChain` | What a class inherits from, followed through the app's own sources: the chain from a file's class up to a named base, and the constant-to-source lookup over the app's autoload roots that walks it |
 | `Interaction` | Whether a class runs as an ActiveInteraction, following its superclass chain through the app's own sources, and the filters it takes - inherited ones first, one per name, each carrying the filters nested inside its block. See the **Interaction filter** entry in `CONTEXT.md` |
 
 ### Confidence tagging

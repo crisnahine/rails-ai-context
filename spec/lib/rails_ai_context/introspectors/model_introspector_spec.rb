@@ -2580,7 +2580,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:static_call)
 
-        expect(result["Post"][:instance_methods].size).to eq(described_class::MAX_LISTED_METHODS)
+        expect(result["Post"][:instance_methods].size).to eq(described_class::PAYLOAD_METHOD_CAP)
         expect(result["Post"][:source_instance_methods].size).to eq(35)
         expect(result["Post"][:source_instance_methods]).to include("step_35")
       end

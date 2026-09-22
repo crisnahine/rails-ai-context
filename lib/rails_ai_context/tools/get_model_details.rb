@@ -108,10 +108,11 @@ module RailsAiContext
         end
       end
 
-      # How many methods a page lists, and how many the model has. The payload
-      # caps its own list before this one does, so a reader who takes the page
-      # for the model's whole interface is wrong twice over.
-      LISTED_METHODS = 25
+      # How many methods this page prints. The payload caps its own list
+      # before this one does, which is why the heading counts what was
+      # printed against the list it printed from, and says the model's own
+      # total separately.
+      PAGE_METHOD_CAP = 25
 
       private_class_method def self.methods_heading(shown, total)
         return "## Key instance methods" unless total.is_a?(Integer) && total > shown
@@ -402,7 +403,7 @@ module RailsAiContext
           # Its own total, not the payload's: this branch lists the methods
           # the file declares, and the payload count includes the ones
           # reflection found on top of them.
-          listed = source_instance_methods.first(LISTED_METHODS)
+          listed = source_instance_methods.first(PAGE_METHOD_CAP)
           lines << "" << methods_heading(listed.size, source_instance_methods.size)
           listed.each { |signature| lines << "- `#{signature}`" }
         elsif data[:instance_methods]&.any?
@@ -414,7 +415,7 @@ module RailsAiContext
           end
           filtered = data[:instance_methods].reject { |m| assoc_names.include?(m) || m.end_with?("=") }
           if filtered.any?
-            listed = filtered.first(LISTED_METHODS)
+            listed = filtered.first(PAGE_METHOD_CAP)
             # The heading counts one set: what this page prints, against the
             # list it printed from. The model's own total is a wider set - it
             # counts the association and writer methods filtered out here, and

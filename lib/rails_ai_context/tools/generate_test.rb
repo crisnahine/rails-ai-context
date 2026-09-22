@@ -1118,10 +1118,9 @@ module RailsAiContext
         # ── Helpers ──────────────────────────────────────────────────────
 
         # `ActiveInteraction::Base` defines `.run` and `.run!`, never `.call`,
-        # and its inputs are the filters the class declares.
-        # ActiveInteraction::Base defines .run and .run!, never .call, and a
-        # subclass of the app's own base interaction is one just the same, so
-        # the superclass chain decides this rather than the one `class` line.
+        # and its inputs are the filters the class declares. A subclass of the
+        # app's own base interaction is one just the same, so the superclass
+        # chain decides this rather than the one `class` line.
         def service_entry_point(file)
           source = read_app_file(file)
           lookup = Introspectors::Interaction.lookup_for(rails_app.root.to_s)

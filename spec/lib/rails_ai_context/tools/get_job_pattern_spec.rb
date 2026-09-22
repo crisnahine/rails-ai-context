@@ -351,7 +351,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
         it "says the listing does not cover workers the introspector never saw" do
           text = described_class.call.content.first[:text]
-          expect(text).to include("Workers the introspector did not see are not covered by this tool.")
+          expect(text).to include(described_class::NOT_COVERED)
         end
       end
 
@@ -502,7 +502,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
     it "says the listing does not cover workers it never saw, with no config/sidekiq.yml" do
       text = described_class.call.content.first[:text]
 
-      expect(text).to include("Workers the introspector did not see are not covered by this tool.")
+      expect(text).to include(described_class::NOT_COVERED)
     end
 
     it "answers the worker name the listing just printed" do
