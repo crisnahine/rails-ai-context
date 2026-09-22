@@ -141,7 +141,10 @@ module RailsAiContext
         return nil unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
 
         {
-          warnings: report["warnings"].map { |w| ExternalWarning.from_json(w) },
+          # A report whose warnings array holds anything but objects is not a
+          # report this can read, and one bad entry is not a reason to drop
+          # the rest.
+          warnings: report["warnings"].filter_map { |w| ExternalWarning.from_json(w) if w.is_a?(Hash) },
           checks_run: Array(report.dig("scan_info", "checks_performed")),
           note: "_Scanned with brakeman #{version} from outside the app's bundle, which does not carry it. " \
                 "Add it to the Gemfile to scan in-process._"

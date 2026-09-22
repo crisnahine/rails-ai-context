@@ -101,6 +101,15 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).not_to include("Mass Assignment")
       end
 
+      it "skips an entry the report holds that is not a warning object" do
+        allow(described_class).to receive(:run_brakeman_unbundled)
+          .and_return(report.merge("warnings" => report["warnings"] + [ nil, "oops" ]))
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("**2 warnings**")
+      end
+
       it "falls back to the two-ways-out message when the outside run fails" do
         allow(described_class).to receive(:run_brakeman_unbundled).and_return(nil)
 
