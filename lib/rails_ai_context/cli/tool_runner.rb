@@ -218,9 +218,9 @@ module RailsAiContext
                 # `--files=a.rb b.rb` is the same call as `--files a.rb b.rb`;
                 # honouring only one of the two spellings docs/CLI.md teaches
                 # left the other still dropping every file after the first.
-                trailing = collect_array_values(args, i + 1)
+                trailing, consumed = array_values(args, i + 1)
                 result[key] = Array(coerce_value(value, prop, key)) + trailing
-                i += 1 + values_consumed(args, i + 1)
+                i += 1 + consumed
                 next
               end
               result[key] = coerce_value(value, prop, key)
@@ -244,21 +244,12 @@ module RailsAiContext
                 next
               end
 
-              if prop[:type] == "array"
-                values = collect_array_values(args, i + 1)
-                unless values.empty?
-                  result[key] = values
-                  i += 1 + values_consumed(args, i + 1)
-                  next
-                end
-              end
-
               # A bare `--files` with nothing after it is a mistake, not a
               # request for `files: true` - an array param holding a Boolean
               # reaches the tool as a type it never accepts.
               if prop[:type] == "array"
-                result[key] = []
-                i += 1
+                result[key], consumed = array_values(args, i + 1)
+                i += 1 + consumed
                 next
               end
 
@@ -335,15 +326,12 @@ module RailsAiContext
       # stopping at a rake-style `key=value` token so `--include a model=Post`
       # does not swallow the second parameter. Each token is still
       # comma-split, so the documented `a.rb,b.rb` form keeps working and
-      # mixing the two spellings does not fabricate a path.
-      def collect_array_values(args, from)
-        args[from..].to_a
-            .take_while { |a| !a.start_with?("--") && !a.include?("=") }
-            .flat_map { |a| Array(coerce_value(a, { type: "array" })) }
-      end
-
-      def values_consumed(args, from)
-        args[from..].to_a.take_while { |a| !a.start_with?("--") && !a.include?("=") }.size
+      # mixing the two spellings does not fabricate a path. The token count
+      # comes back with the values because the cursor advances by tokens: a
+      # comma token yields more values than it consumed.
+      def array_values(args, from)
+        tokens = args[from..].to_a.take_while { |a| !a.start_with?("--") && !a.include?("=") }
+        [ tokens.flat_map { |a| Array(coerce_value(a, { type: "array" })) }, tokens.size ]
       end
 
       # Coerce a string value to the type specified in the JSON Schema property.
