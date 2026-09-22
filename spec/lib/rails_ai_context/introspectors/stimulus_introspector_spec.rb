@@ -45,6 +45,15 @@ RSpec.describe RailsAiContext::Introspectors::StimulusIntrospector do
         expect(hello[:outlets]).to contain_exactly("search", "results")
       end
 
+      it "reports exactly the keys a controller's own source answers" do
+        result = introspector.call
+        hello = result[:controllers].find { |c| c[:name] == "hello" }
+        expect(hello.keys).to contain_exactly(
+          :name, :file, :targets, :values, :actions, :outlets, :classes,
+          :lifecycle, :import_graph, :complexity, :turbo_event_listeners
+        )
+      end
+
       it "extracts classes" do
         result = introspector.call
         hello = result[:controllers].find { |c| c[:name] == "hello" }
