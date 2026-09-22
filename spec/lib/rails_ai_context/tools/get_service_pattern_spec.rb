@@ -48,6 +48,42 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
+    context "with the same relative path under two roots" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        app = File.join(tmpdir, "app", "services")
+        pack = File.join(tmpdir, "packs", "billing", "app", "services")
+        [ app, pack ].each { |d| FileUtils.mkdir_p(d) }
+        File.write(File.join(app, "create_order.rb"), "class CreateOrder\n  def call; end\nend\n")
+        File.write(File.join(pack, "create_order.rb"), "class CreateOrder\n  def call; end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names both real paths rather than re-prefixing app/services" do
+        text = described_class.call(service: "CreateOrder").content.first[:text]
+
+        expect(text).to include("matches 2 files")
+        expect(text).to include("- `app/services/create_order.rb`")
+        expect(text).to include("- `packs/billing/app/services/create_order.rb`")
+      end
+
+      it "does not suggest the name it just refused" do
+        text = described_class.call(service: "CreateOrder").content.first[:text]
+
+        expect(text).not_to include("service:\"CreateOrder\"")
+        expect(text).to include("same relative path under different roots")
+      end
+
+      it "lists the shared constant once in the not-found alternatives" do
+        text = described_class.call(service: "Nope").content.first[:text]
+
+        expect(text).to include("Available: CreateOrder\n")
+      end
+    end
+
     context "with service fixtures" do
       let(:tmpdir) { Dir.mktmpdir }
       let(:services_dir) { File.join(tmpdir, "app", "services") }
@@ -481,11 +517,15 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).not_to include("app/services/api/v1/addresses/create.rb")
       end
 
-      it "lists the candidates for an ambiguous bare name" do
+      it "lists the candidates for an ambiguous bare name and names one that resolves" do
         text = described_class.call(service: "Create").content.first[:text]
         expect(text).to include("matches 2 files")
         expect(text).to include("app/services/api/v1/addresses/create.rb")
         expect(text).to include("app/services/billing/invoices/create.rb")
+
+        suggested = text[/service:"([^"]+)"/, 1]
+        expect(described_class.call(service: suggested).content.first[:text])
+          .to include("# #{suggested}")
       end
 
       it "answers not found for a name no file declares" do

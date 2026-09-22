@@ -61,18 +61,29 @@ module RailsAiContext
         matches = match_service_files(service, service_files, service_dirs)
 
         if matches.size > 1
-          names = matches.map { |f| relative_under(f, service_dirs) }
+          # Paths are printed from the app root, not re-prefixed with
+          # `app/services/`: a pack or engine service carries the same relative
+          # path, and the re-prefixed line names a file that exists in neither.
+          names = matches.map { |f| relative_under(f, service_dirs).delete_suffix(".rb") }
+          counts = names.tally
+          unambiguous = names.find { |n| counts[n] == 1 }
+          hint = if unambiguous
+            "_Pass the namespaced name, for example `service:\"#{unambiguous.camelize}\"`._"
+          else
+            "_These sit at the same relative path under different roots, so they declare the same `#{names.first.camelize}`. Open the path you want directly._"
+          end
+
           return text_response(
             [ "Service '#{service}' matches #{count_phrase(matches.size, 'file')}:", "",
-              *names.map { |n| "- `app/services/#{n}`" }, "",
-              "_Pass the namespaced name, for example `service:\"#{names.first.delete_suffix('.rb').camelize}\"`._" ].join("\n")
+              *matches.map { |f| "- `#{f.sub("#{root}/", "")}`" }, "",
+              hint ].join("\n")
           )
         end
 
         file = matches.first
 
         unless file
-          available = service_files.map { |f| constant_for(f, service_dirs) }
+          available = service_files.map { |f| constant_for(f, service_dirs) }.uniq
           return not_found_response("Service", service, available.sort,
             recovery_tool: "Call rails_get_service_pattern(detail:\"summary\") to see all services")
         end
