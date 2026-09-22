@@ -129,6 +129,12 @@ module RailsAiContext
         messages << "  #{result.failure_summary}"
         if ENV["DEBUG"]
           Array(result.error.backtrace).first(15).each { |line| messages << "    #{line}" }
+          # The wrapper's frames stop at the require; the frames that name the
+          # incompatible call are the cause's.
+          if (cause = result.root_cause)
+            messages << "  Raised by:"
+            Array(cause.backtrace).first(15).each { |line| messages << "    #{line}" }
+          end
         else
           messages << "  Run with DEBUG=1 for the full backtrace."
         end

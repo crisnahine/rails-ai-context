@@ -51,6 +51,50 @@ RSpec.describe "Tool input normalization" do
     end
   end
 
+  describe "BaseTool.find_closest_matches" do
+    subject { RailsAiContext::Tools::BaseTool }
+
+    let(:concerns) { %w[Account::FaspConcern Favourite::FaspConcern Status::FaspConcern Account::Search] }
+
+    it "returns every namespace that ends in the name the caller typed" do
+      expect(subject.find_closest_matches("FaspConcern", concerns))
+        .to eq(%w[Status::FaspConcern Account::FaspConcern Favourite::FaspConcern])
+    end
+
+    it "returns one name when only one matches" do
+      expect(subject.find_closest_matches("Post", %w[post_comments posts post_ratings])).to eq(%w[posts])
+    end
+
+    it "returns nothing when the available list is empty" do
+      expect(subject.find_closest_matches("anything", [])).to eq([])
+    end
+
+    it "still answers singular with the same name it always did" do
+      expect(subject.find_closest_match("FaspConcern", concerns)).to eq("Status::FaspConcern")
+    end
+  end
+
+  describe "BaseTool.not_found_response" do
+    subject { RailsAiContext::Tools::BaseTool }
+
+    def text_of(response)
+      response.content.first[:text]
+    end
+
+    it "names every candidate when several namespaces share the name" do
+      text = text_of(subject.send(:not_found_response, "Controller", "ReportsController",
+        %w[Admin::ReportsController Api::V1::ReportsController Api::V1::Admin::ReportsController HomeController]))
+      expect(text).to include("Admin::ReportsController", "Api::V1::ReportsController",
+        "Api::V1::Admin::ReportsController")
+      expect(text).to include("Did you mean one of:")
+    end
+
+    it "keeps the single-candidate sentence unchanged" do
+      text = text_of(subject.send(:not_found_response, "Model", "Post", %w[posts widgets]))
+      expect(text).to include("Did you mean 'posts'?")
+    end
+  end
+
   # ── GetModelDetails: snake_case model lookup ────────────────────
 
   describe "GetModelDetails snake_case resolution" do

@@ -318,11 +318,14 @@ module RailsAiContext
         # Structured not-found error with fuzzy suggestion and recovery hint.
         # Helps AI agents self-correct without retrying blind.
         def not_found_response(type, name, available, recovery_tool: nil)
-          suggestion = find_closest_match(name, available)
           # Don't suggest the exact same string the user typed - that's useless
-          suggestion = nil if suggestion == name
+          suggestions = find_closest_matches(name, available) - [ name ]
           lines = [ "#{type} '#{name}' not found." ]
-          lines << "Did you mean '#{suggestion}'?" if suggestion
+          if suggestions.size == 1
+            lines << "Did you mean '#{suggestions.first}'?"
+          elsif suggestions.any?
+            lines << "Did you mean one of: #{suggestions.join(', ')}? Give the full name."
+          end
           lines << "Available: #{available.first(20).join(', ')}#{"..." if available.size > 20}" if available.any?
           lines << "_Recovery: #{recovery_tool}_" if recovery_tool
           empty_response(lines.join("\n"))
@@ -495,28 +498,37 @@ module RailsAiContext
 
         # Fuzzy match: find the closest available name by exact, underscore, substring, or prefix
         def find_closest_match(input, available)
-          return nil if available.empty?
+          find_closest_matches(input, available).first
+        end
+
+        # Every name that matches as well as the best one does. A bare
+        # `ReportsController` names three real controllers under different
+        # namespaces, and answering with one of them arbitrarily hides the
+        # other two behind a truncated `Available:` list.
+        def find_closest_matches(input, available)
+          return [] if available.empty?
           # A blank query matches everything via substring ("".include? anything),
           # so it would otherwise surface an arbitrary "Did you mean" suggestion
           # for input that isn't a typo at all - just missing.
-          return nil if input.to_s.strip.empty?
+          return [] if input.to_s.strip.empty?
           downcased = input.downcase
           underscored = input.underscore.downcase
+          wanted = [ downcased, underscored ]
 
-          # Exact case-insensitive match (including underscore/classify variants)
-          exact = available.find do |a|
-            a_down = a.downcase
-            a_under = a.underscore.downcase
-            a_down == downcased || a_under == underscored || a_down == underscored || a_under == downcased
+          # Exact case-insensitive match, on the full name and on the
+          # demodulized one, in underscore and classify variants alike.
+          exact = available.select do |a|
+            forms = [ a, a.split("::").last ].flat_map { |f| [ f.downcase, f.underscore.downcase ] }
+            forms.intersect?(wanted)
           end
-          return exact if exact
+          return exact.sort_by { |a| [ a.length, a ] } if exact.any?
 
           # Substring match - prefer shortest (most specific) to avoid post → post_comments
           substring_matches = available.select { |a| a.downcase.include?(downcased) || downcased.include?(a.downcase) }
-          return substring_matches.min_by(&:length) if substring_matches.any?
+          return [ substring_matches.min_by(&:length) ] if substring_matches.any?
 
           # Prefix match
-          available.find { |a| a.downcase.start_with?(downcased[0..2]) }
+          Array(available.find { |a| a.downcase.start_with?(downcased[0..2]) })
         end
 
         # Cache key for paginated responses - lets agents detect stale data between pages

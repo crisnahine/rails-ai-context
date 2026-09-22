@@ -45,6 +45,28 @@ RSpec.describe RailsAiContext::BootManager do
     expect(result.failure_summary).to eq("RuntimeError: missing REDIS_URL")
   end
 
+  # Bundler::GemRequireError names the gem that failed to load and nothing
+  # about why; the reason only lives in `cause`.
+  it "names the cause of a wrapped boot failure" do
+    dir = app_with_environment(<<~RUBY)
+      begin
+        raise ArgumentError, "wrong number of arguments (given 2, expected 1)"
+      rescue ArgumentError
+        raise "There was an error while trying to load the gem 'twitter-text'."
+      end
+    RUBY
+    result = described_class.boot!(app_root: dir)
+    expect(result.root_cause).to be_a(ArgumentError)
+    expect(result.failure_summary)
+      .to eq("RuntimeError: There was an error while trying to load the gem 'twitter-text'. " \
+             "(cause: ArgumentError: wrong number of arguments (given 2, expected 1))")
+  end
+
+  it "reports no cause when the error raised itself" do
+    dir = app_with_environment(%(raise "missing REDIS_URL"\n))
+    expect(described_class.boot!(app_root: dir).root_cause).to be_nil
+  end
+
   it "captures SyntaxError raised during boot" do
     dir = app_with_environment("def broken(\n")
     result = described_class.boot!(app_root: dir)
