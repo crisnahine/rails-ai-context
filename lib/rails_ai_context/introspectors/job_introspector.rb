@@ -159,30 +159,77 @@ module RailsAiContext
 
       # Sidekiq workers, read from source in both tiers: the class is not an
       # ActiveJob descendant, so reflection has no list to walk.
-      WORKER_MIXINS = %w[Sidekiq::Job Sidekiq::Worker].freeze
+      WORKER_MIXINS = %w[Sidekiq::Job Sidekiq::Worker Sidekiq::IterableJob].freeze
 
       def extract_workers
-        SourceScan.each(app.root, kind: "app/workers").filter_map do |record|
-          next unless WORKER_MIXINS.any? { |mixin| record.source.include?(mixin) }
+        candidates = worker_candidates
+        candidates.filter_map do |name, candidate|
+          next unless worker?(name, candidates)
 
-          ast = SourceIntrospector.walk_source(record.source, {
-            macros:  -> { Listeners::GenericMacroListener.new(:sidekiq_options, :include) },
-            methods: Listeners::MethodsListener
-          })
-          next unless ast[:macros].any? { |m| m[:macro] == :include && m[:values].flatten.map(&:to_s).any? { |v| WORKER_MIXINS.include?(v) } }
-
+          ast = candidate[:ast]
           options = ast[:macros].find { |m| m[:macro] == :sidekiq_options }
           perform = ast[:methods].find { |m| m[:name] == "perform" && m[:scope] == :instance }
 
           {
-            name: DeclaredConstant.resolve(record.source, record.path_name),
-            file: record.file,
+            name: name,
+            file: candidate[:file],
             options: options ? (options[:option_values] || {}).transform_keys(&:to_s) : {},
             perform_signature: perform && perform[:params]&.any? ? ActionResolver.parameter_list(perform) : nil
           }.compact
         end.sort_by { |w| w[:name] }
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "extract_workers")
+      end
+
+      # Every class file under app/workers by declared name, with the
+      # superclass it names. Worker-hood is decided over the whole walk
+      # afterwards, because a worker that inherits from a base worker carries
+      # the include on the parent and its own source names no mixin at all.
+      def worker_candidates
+        SourceScan.each(app.root, kind: "app/workers").each_with_object({}) do |record, found|
+          declarations = DeclaredConstant.declarations(record.source)
+          next if declarations.empty?
+
+          name = declarations.map(&:name).find { |n| n.casecmp?(record.path_name) } || record.path_name
+          next if found.key?(name)
+
+          found[name] = {
+            file: record.file,
+            superclass: declarations.find { |d| d.name == name }&.superclass,
+            ast: SourceIntrospector.walk_source(record.source, {
+              macros:  -> { Listeners::GenericMacroListener.new(:sidekiq_options, :include) },
+              methods: Listeners::MethodsListener
+            })
+          }
+        end
+      end
+
+      def worker?(name, candidates, seen = [])
+        return false if seen.include?(name)
+
+        candidate = candidates[name] or return false
+        return true if candidate[:ast][:macros].any? { |m|
+          m[:macro] == :include && m[:values].flatten.map(&:to_s).any? { |v| WORKER_MIXINS.include?(v) }
+        }
+
+        parent = candidate[:superclass] or return false
+        resolved = resolve_worker_superclass(parent, name, candidates)
+        resolved ? worker?(resolved, candidates, seen + [ name ]) : false
+      end
+
+      # Ruby resolves a bare superclass from the enclosing namespace outward,
+      # so `Fasp::BackfillWorker < BaseWorker` means Fasp::BaseWorker.
+      def resolve_worker_superclass(name, from, candidates)
+        return name if candidates.key?(name)
+
+        scope = from.split("::")[0..-2]
+        while scope.any?
+          qualified = (scope + [ name ]).join("::")
+          return qualified if candidates.key?(qualified)
+
+          scope.pop
+        end
+        nil
       end
 
       def extract_solid_queue_recurring
