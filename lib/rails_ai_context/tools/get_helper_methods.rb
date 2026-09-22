@@ -60,7 +60,7 @@ module RailsAiContext
           note = api_only_note("app/helpers")
           return text_response(note) if note
 
-          return text_response("No app/helpers/ directory found.")
+          return text_response("No helpers directory found. Searched app/helpers/, packs/*/app/helpers/ and engines/*/app/helpers/.")
         end
 
         real_root = File.realpath(root).to_s
@@ -68,7 +68,7 @@ module RailsAiContext
         helper_files = helper_dirs.flat_map { |d| safe_glob(d, "**/*.rb", real_root) }.uniq.sort
 
         if helper_files.empty?
-          return text_response("No helper files found in app/helpers/.")
+          return text_response("No helper files found in app/helpers/, packs/*/app/helpers/ or engines/*/app/helpers/.")
         end
 
         # Specific helper - full detail

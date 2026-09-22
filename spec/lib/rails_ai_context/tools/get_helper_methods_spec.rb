@@ -138,6 +138,20 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
     end
 
+    # Packs and engines are searched too, so naming app/helpers/ alone told a
+    # packwerk app to look somewhere the tool had not looked.
+    context "when nothing anywhere holds a helper" do
+      it "names every directory it searched" do
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "packs", "billing", "app", "helpers"))
+          allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+          text = described_class.call.content.first[:text]
+          expect(text).to include("No helper files found in app/helpers/, packs/*/app/helpers/ or engines/*/app/helpers/.")
+        end
+      end
+    end
+
     context "when an engine and a pack hold the same helper path" do
       def two_root_app(root)
         engine = File.join(root, "engines", "billing", "app", "helpers")

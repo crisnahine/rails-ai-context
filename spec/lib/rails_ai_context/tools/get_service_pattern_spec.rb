@@ -8,10 +8,14 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
   before { described_class.reset_cache! }
 
   describe ".call" do
-    it "returns message when no services directory exists" do
+    # Packs and engines are searched too, so naming app/services/ alone told a
+    # packwerk app to look somewhere the tool had not looked.
+    it "names every directory it searched when it found none" do
       result = described_class.call
       text = result.content.first[:text]
-      expect(text).to include("No app/services/ directory found")
+      expect(text).to include("No services directory found")
+      expect(text).to include("packs/*/app/services/")
+      expect(text).to include("engines/*/app/services/")
     end
 
     context "with services only in a pack" do
