@@ -171,51 +171,30 @@ module RailsAiContext
           tables[table][:columns]&.reject! { |c| c[:name] == entry[:column] } if tables[table]
 
         when :rename_column
-          table = entry[:table]
-          if tables[table]
-            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
-            col[:name] = entry[:new_name] if col
-          end
+          col = column_in(tables, entry)
+          col[:name] = entry[:new_name] if col
 
         when :change_column
-          table = entry[:table]
-          if tables[table]
-            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
-            col[:type] = entry[:column_type] if col && entry[:column_type]
-          end
+          col = column_in(tables, entry)
+          col[:type] = entry[:column_type] if col && entry[:column_type]
 
         when :change_column_default
-          table = entry[:table]
-          if tables[table]
-            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
-            if col
-              opts = entry[:options] || {}
-              if opts.key?(:to)
-                raw = opts[:to]
-                col[:default] = raw == nil ? nil : SchemaConventions.format_default(raw)
-              end
-            end
-          end
+          col = column_in(tables, entry)
+          opts = entry[:options] || {}
+          # An explicit `to: nil` drops the default, which is not the same as
+          # a call that names no `to:` at all.
+          col[:default] = SchemaConventions.format_default(opts[:to]) if col && opts.key?(:to)
 
         when :change_column_null
-          table = entry[:table]
-          if tables[table]
-            col = tables[table][:columns].find { |c| c[:name] == entry[:column] }
-            unless col.nil? || entry[:null].nil?
-              # The columns hash marks nullability by presence: only null:
-              # false is stored, so allowing NULL again removes the mark.
-              entry[:null] ? col.delete(:null) : col[:null] = false
-            end
+          col = column_in(tables, entry)
+          unless col.nil? || entry[:null].nil?
+            # The columns hash marks nullability by presence: only null:
+            # false is stored, so allowing NULL again removes the mark.
+            entry[:null] ? col.delete(:null) : col[:null] = false
           end
 
         when :add_index
-          table = entry[:table]
-          return unless tables[table]
-          cols = entry[:columns]&.map(&:to_s) || []
-          opts = entry[:options] || {}
-          unique = opts[:unique] == true
-          idx_name = opts[:name]&.to_s
-          tables[table][:indexes] << { name: idx_name, columns: cols, unique: unique }.compact if cols.any?
+          apply_schema_index(entry, entry[:table], tables)
 
         when :add_reference, :add_belongs_to
           table = entry[:table]
@@ -234,6 +213,12 @@ module RailsAiContext
           opts = entry[:options] || {}
           tables[from][:foreign_keys] << SchemaConventions.foreign_key_entry(from, to, opts[:column], opts[:primary_key])
         end
+      end
+
+      # A column under the table the entry names, or nil when the replay never
+      # saw either of them.
+      def column_in(tables, entry)
+        tables[entry[:table]]&.dig(:columns)&.find { |c| c[:name] == entry[:column] }
       end
 
       def apply_schema_column(entry, current_table, tables, pk_type)

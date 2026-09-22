@@ -60,6 +60,110 @@ RSpec.describe RailsAiContext::Introspectors::MigrationReplay do
     expect(tables["posts_tags"][:columns].map { |c| c[:name] }).to eq(%w[post_id])
   end
 
+  it "renames a column, and leaves a table it does not know alone" do
+    tables = replay([ <<~FIRST, <<~SECOND ])
+      class CreateUsers < ActiveRecord::Migration[7.1]
+        def change
+          create_table :users do |t|
+            t.string :email
+          end
+        end
+      end
+    FIRST
+      class RenameUserEmail < ActiveRecord::Migration[7.1]
+        def change
+          rename_column :users, :email, :email_address
+          rename_column :users, :nope, :still_nope
+          rename_column :ghosts, :email, :email_address
+        end
+      end
+    SECOND
+
+    expect(tables["users"][:columns].map { |c| c[:name] }).to eq(%w[id email_address])
+    expect(tables).not_to have_key("ghosts")
+  end
+
+  it "changes a column type, and leaves the type alone when none is given" do
+    tables = replay([ <<~FIRST, <<~SECOND ])
+      class CreateUsers < ActiveRecord::Migration[7.1]
+        def change
+          create_table :users do |t|
+            t.string :age
+            t.string :name
+          end
+        end
+      end
+    FIRST
+      class RetypeUsers < ActiveRecord::Migration[7.1]
+        def change
+          change_column :users, :age, :integer
+          change_column :users, :name, null: false
+          change_column :users, :nope, :integer
+        end
+      end
+    SECOND
+
+    age = tables["users"][:columns].find { |c| c[:name] == "age" }
+    name = tables["users"][:columns].find { |c| c[:name] == "name" }
+    expect(age[:type]).to eq("integer")
+    expect(name[:type]).to eq("string")
+  end
+
+  it "sets and clears a column default" do
+    tables = replay([ <<~FIRST, <<~SECOND ])
+      class CreateUsers < ActiveRecord::Migration[7.1]
+        def change
+          create_table :users do |t|
+            t.string :role, default: "member"
+            t.string :plan, default: "free"
+            t.string :tier, default: "basic"
+          end
+        end
+      end
+    FIRST
+      class RedefaultUsers < ActiveRecord::Migration[7.1]
+        def change
+          change_column_default :users, :role, to: "admin"
+          change_column_default :users, :plan, to: nil
+          change_column_default :users, :tier, from: "basic"
+          change_column_default :users, :nope, to: "x"
+        end
+      end
+    SECOND
+
+    cols = tables["users"][:columns].to_h { |c| [ c[:name], c ] }
+    expect(cols["role"][:default]).to eq("admin")
+    expect(cols["plan"]).to have_key(:default)
+    expect(cols["plan"][:default]).to be_nil
+    expect(cols["tier"][:default]).to eq("basic")
+  end
+
+  it "records a standalone add_index the way a create_table block one is recorded" do
+    tables = replay([ <<~FIRST, <<~SECOND ])
+      class CreateUsers < ActiveRecord::Migration[7.1]
+        def change
+          create_table :users do |t|
+            t.string :email
+            t.string :handle
+            t.index :handle, unique: true
+          end
+        end
+      end
+    FIRST
+      class IndexUserEmail < ActiveRecord::Migration[7.1]
+        def change
+          add_index :users, :email, unique: true, name: "index_users_on_email"
+          add_index :ghosts, :email
+        end
+      end
+    SECOND
+
+    expect(tables["users"][:indexes]).to contain_exactly(
+      { columns: [ "handle" ], unique: true },
+      { name: "index_users_on_email", columns: [ "email" ], unique: true }
+    )
+  end
+
   it "applies change_column_null in both directions" do
     tables = replay([ <<~FIRST, <<~SECOND ])
       class CreateUsers < ActiveRecord::Migration[7.1]

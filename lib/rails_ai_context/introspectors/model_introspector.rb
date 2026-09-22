@@ -285,17 +285,6 @@ module RailsAiContext
           namespace_affix(class_name, candidates, :table_name_suffix) ].join
       end
 
-      # The STI bases above this class, nearest first: the ones it shares a
-      # table with. What it inherits declarations from is a longer chain,
-      # which `declaring_bases` answers.
-      def sti_bases(class_name, candidates, seen = [])
-        parent = sti_parent(class_name, candidates, seen)
-        return [] unless parent && candidates.dig(parent, :path)
-
-        [ [ parent, candidates[parent][:path] ] ] +
-          sti_bases(parent, candidates, seen + [ class_name ])
-      end
-
       # Every class this one inherits declarations from: the superclass chain
       # up to the model base, abstract bases included. Rails runs what an
       # abstract base declares in each of its children; only the table stops
