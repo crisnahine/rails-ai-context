@@ -35,8 +35,7 @@ module RailsAiContext
           initializers: extract_initializers,
           credentials_configured: credentials_configured?,
           current_attributes: detect_current_attributes,
-          error_monitoring: detect_error_monitoring,
-          job_processor: detect_job_processor_config
+          error_monitoring: detect_error_monitoring
         }
 
         # Extract cache store options when configured as an Array
@@ -137,28 +136,9 @@ module RailsAiContext
         target_bases = %w[ActiveSupport::CurrentAttributes Rails::CurrentAttributes]
 
         SourceScan.classes(root, kind: "app/models").filter_map do |name, record|
-          class_node = find_first_class_node(AstCache.parse_string(record.source).value)
-          next unless class_node&.superclass
-
-          name if target_bases.include?(constant_path_to_string(class_node.superclass))
-        rescue => _e
-          next
+          declared = DeclaredConstant.declarations(record.source).first
+          name if declared && target_bases.include?(declared.superclass)
         end
-      end
-
-      def find_first_class_node(node)
-        return node if node.is_a?(Prism::ClassNode)
-        node.child_nodes.compact.each do |child|
-          found = find_first_class_node(child)
-          return found if found
-        end
-        nil
-      end
-
-      def constant_path_to_string(node)
-        return nil unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
-
-        node.slice.delete_prefix("::")
       end
 
       def detect_error_monitoring
@@ -169,23 +149,6 @@ module RailsAiContext
         tools.empty? ? nil : tools
       rescue => e
         $stderr.puts "[rails-ai-context] detect_error_monitoring failed: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      def detect_job_processor_config
-        config = {}
-        sidekiq_path = File.join(app.root, "config", "sidekiq.yml")
-        if File.exist?(sidekiq_path)
-          content = RailsAiContext::SafeFile.read(sidekiq_path)
-          if content
-            config[:processor] = "sidekiq"
-            config[:concurrency] = $1.to_i if content.match(/concurrency:\s*(\d+)/)
-            config[:queues] = content.scan(/-\s+(\w+)/).flatten.uniq
-          end
-        end
-        config.empty? ? nil : config
-      rescue => e
-        $stderr.puts "[rails-ai-context] detect_job_processor_config failed: #{e.message}" if ENV["DEBUG"]
         nil
       end
     end

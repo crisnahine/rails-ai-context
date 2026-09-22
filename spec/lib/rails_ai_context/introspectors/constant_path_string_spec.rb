@@ -2,7 +2,7 @@
 
 require "spec_helper"
 
-# Five places reconstruct a namespaced constant name from a Prism node. They must
+# Three places reconstruct a namespaced constant name from a Prism node. They must
 # all answer the same string, and that string is the source text with the root
 # scope operator dropped.
 RSpec.describe "constant path to string" do
@@ -18,20 +18,12 @@ RSpec.describe "constant path to string" do
     RailsAiContext::Introspectors::ComponentIntrospector.allocate.send(:constant_path_to_string, node)
   end
 
-  def config(node)
-    RailsAiContext::Introspectors::ConfigIntrospector.allocate.send(:constant_path_to_string, node)
-  end
-
-  def convention(node)
-    RailsAiContext::Introspectors::ConventionIntrospector.allocate.send(:constant_path_to_string, node)
-  end
-
   def class_definition(node)
     RailsAiContext::Introspectors::Listeners::ClassDefinitionListener.allocate.send(:superclass_name, node)
   end
 
   def every_form(node)
-    [ base_listener(node), component(node), config(node), convention(node), class_definition(node) ]
+    [ base_listener(node), component(node), class_definition(node) ]
   end
 
   {
@@ -67,6 +59,5 @@ RSpec.describe "constant path to string" do
     node = superclass_node("class X < Struct.new(:a)\nend")
     expect(class_definition(node)).to be_nil
     expect(component(node)).to be_nil
-    expect(config(node)).to be_nil
   end
 end

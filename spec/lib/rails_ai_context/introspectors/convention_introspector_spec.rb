@@ -199,6 +199,24 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
       end
     end
 
+    context "when a model file declares more than one class" do
+      it "reads past a first class that names no superclass" do
+        patterns = patterns_for(
+          models: { "widget.rb" => "class WidgetSupport\nend\n\nclass Widget < ActiveSupport::CurrentAttributes\nend\n" }
+        )
+
+        expect(patterns).to include("current_attributes")
+      end
+
+      it "sees a class nested inside another class" do
+        patterns = patterns_for(
+          models: { "gadget.rb" => "class Gadget\n  class Inner < ActiveSupport::CurrentAttributes\n  end\nend\n" }
+        )
+
+        expect(patterns).to include("current_attributes")
+      end
+    end
+
     context "single table inheritance" do
       let(:models) do
         {
