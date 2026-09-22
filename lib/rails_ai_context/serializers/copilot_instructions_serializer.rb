@@ -56,7 +56,7 @@ module RailsAiContext
 
         notable = Payload.notable_gems(context)
         if notable.any?
-          notable.group_by { |g| g[:category]&.to_s || "other" }.first(6).each do |cat, gem_list|
+          notable.group_by { |g| g[:category]&.to_s || "other" }.each do |cat, gem_list|
             lines << "- #{cat}: #{gem_list.map { |g| g[:name] }.join(', ')}"
           end
         end
