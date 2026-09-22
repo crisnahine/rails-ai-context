@@ -198,7 +198,6 @@ Result: controller and view tools automatically include relevant schema informat
 | `ToolGuideHelper` | MCP/CLI tool reference sections |
 | `TestCommandDetection` | Test framework detection |
 | `SectionFacts` | The facts every surface states about an app - auth, assets, associations, the filter chain, an unread entry's row, the static-tier notice - each rendered in one place |
-| `SectionGuard` | Whether a section resolved, so a refused one is not rendered |
 | `SectionMarkerWriter` | Writes a managed section into a file the user also owns |
 | `ContextModeDispatch` | Picks full or compact rendering for a run |
 
