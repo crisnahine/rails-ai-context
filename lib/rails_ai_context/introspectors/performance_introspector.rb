@@ -198,7 +198,7 @@ module RailsAiContext
       def extract_controller_actions(source)
         ActionResolver.own_methods_in(source, nil)
           .select { |m| m[:scope] == :instance && m[:visibility] == :public }
-          .to_h { |m| [ m[:name], ActionResolver.method_body(source, m[:name])&.dig(:code).to_s ] }
+          .to_h { |m| [ m[:name], ActionResolver.body_of(source, m)&.dig(:code).to_s ] }
       end
 
       # Extract the full query chain for an instance variable assignment.

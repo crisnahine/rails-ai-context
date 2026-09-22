@@ -119,14 +119,45 @@ module RailsAiContext
         signature(method)[/\A[^(]*\((.*)\)\z/m, 1].to_s
       end
 
+      # The lines a walked method occupies, cut out of the source it was
+      # walked from. A caller that already holds the method hash cuts the body
+      # with this rather than searching the file again for the name.
+      def body_of(source, method)
+        start_line = method[:location]
+        end_line = method[:end_location]
+        return nil unless start_line && end_line
+
+        lines = source.to_s.lines[(start_line - 1)..(end_line - 1)]
+        return nil unless lines
+
+        { code: lines.map(&:rstrip).join("\n"), start_line: start_line, end_line: end_line }
+      end
+
       # One method's body out of a file's source, with the lines it occupies.
-      # The `end` that closes a `def` sits at the `def`'s own indentation,
-      # which reads more reliably than counting block depth.
+      # The owner decides which `def` answers: a class nested in the file can
+      # define the same name earlier, and a whole-file search for the name
+      # would hand back that one instead.
       #
       # The name matches ignoring case, so an action asked for as "Show"
       # reaches `def show` here the way it does in the controller listing.
-      def method_body(source, method_name)
-        lines = source.to_s.lines
+      #
+      # A name no walked method carries at all falls back to reading lines,
+      # which is what answers for a `def` the walk does not record (`initialize`)
+      # or a file it could not parse. The `end` that closes a `def` sits at the
+      # `def`'s own indentation, which reads more reliably than block depth.
+      def method_body(source, method_name, owner: nil)
+        methods = methods_in(source)
+        named = methods.select { |m| m[:name].to_s.casecmp?(method_name.to_s) }
+        own = own_methods(named, owner || default_owner(source, methods))
+        return body_of(source, own.first) if own.any?
+        return nil if named.any?
+
+        scanned_body(source.to_s.lines, method_name)
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "ActionResolver.method_body")
+      end
+
+      def scanned_body(lines, method_name)
         start_idx = lines.index { |l| l.match?(/^\s*def\s+#{Regexp.escape(method_name.to_s)}\b/i) }
         return nil unless start_idx
 
@@ -140,8 +171,6 @@ module RailsAiContext
         end
 
         { code: body.join("\n"), start_line: start_idx + 1, end_line: end_idx + 1 }
-      rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "ActionResolver.method_body")
       end
 
       # What an action body assigns and what it renders. One owner for the

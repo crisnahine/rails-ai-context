@@ -699,6 +699,25 @@ end
       expect(actions.keys).to contain_exactly("index")
     end
 
+    it "takes the action's own body when a nested class defines the same name first" do
+      source = <<~RUBY
+        class FooController < ApplicationController
+          class Decorator
+            def index
+              @nothing = 1
+            end
+          end
+
+          def index
+            @posts = Post.all
+          end
+        end
+      RUBY
+      actions = introspector.send(:extract_controller_actions, source)
+      expect(actions["index"]).to include("Post.all")
+      expect(actions["index"]).not_to include("@nothing")
+    end
+
     it "keeps a one-line private def out of the preceding action" do
       source = <<~RUBY
         class FooController < ApplicationController
