@@ -63,6 +63,28 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       end
     end
 
+    # A file the reader refuses used to be listed with a key count and its
+    # locales while the coverage pass skipped it, so the same file was both
+    # read and not read in one answer.
+    context "with a locale file above the size the reader accepts" do
+      let(:es_locale) { File.join(Rails.root, "config/locales/es.yml") }
+
+      before do
+        File.write(es_locale, "es:\n" + (1..200).map { |i| "  key#{i}: \"#{'x' * 20}\"\n" }.join)
+        allow(RailsAiContext.configuration).to receive(:max_file_size).and_return(1_000)
+        allow(I18n).to receive(:available_locales).and_return([ :en, :es ])
+      end
+
+      after { FileUtils.rm_f(es_locale) }
+
+      it "reports the refusal the same way everywhere" do
+        big_file = result[:locale_files].find { |f| f[:file] == "es.yml" }
+        expect(big_file[:parse_error]).to be true
+        expect(big_file).not_to have_key(:key_count)
+        expect(result[:locale_coverage]["es"][:keys]).to eq(0)
+      end
+    end
+
     # en.yml carries hello, posts.index.title and posts.show.title.
     context "with a locale that translates one key and adds four of its own" do
       let(:es_locale) { File.join(Rails.root, "config/locales/es.yml") }

@@ -23,6 +23,10 @@ module RailsAiContext
       CONFIG_AVAILABLE_LOCALES = [ [ :i18n, :available_locales ] ].freeze
       I18N_AVAILABLE_LOCALES = [ [ :available_locales ], [ :config, :available_locales ] ].freeze
 
+      REFUSED_LOCALE_FILE = {
+        parse_error: true, locales: [], key_count: 0, key_paths: [], key_paths_by_locale: {}
+      }.freeze
+
       attr_reader :app
 
       def initialize(app)
@@ -80,22 +84,7 @@ module RailsAiContext
       # fallback, then: for an app that never assigns the list, and for one
       # whose assignment is there but cannot be evaluated from source.
       def locales_from_files
-        dir = File.join(root, "config/locales")
-        return [] unless Dir.exist?(dir)
-
-        Dir.glob(File.join(dir, "**/*.{yml,yaml}")).flat_map do |path|
-          content = RailsAiContext::SafeFile.read(path)
-          next [] unless content
-
-          # aliases: true, like extract_locale_files. Sharing formats through a
-          # YAML anchor is ordinary, and without the flag Psych raises, the
-          # rescue swallows it, and every locale in that file disappears while
-          # the Locale Files section still lists it.
-          data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
-          data.is_a?(Hash) ? data.keys.map(&:to_s) : []
-        rescue StandardError
-          []
-        end.uniq.sort
+        locale_file_paths.flat_map { |path| locale_index[path][:locales] }.uniq.sort
       end
 
       # Rails' own default is :en, so "en" is the right answer when the app
@@ -214,14 +203,13 @@ module RailsAiContext
           info = { file: relative }
 
           if path.end_with?(".yml", ".yaml")
-            begin
-              data = YAML.load_file(path, permitted_classes: [ Symbol ], aliases: true) || {}
-              info[:key_count] = count_keys(data)
+            entry = locale_index[path]
+            if entry && !entry[:parse_error]
+              info[:key_count] = entry[:key_count]
               # Which locales this file actually serves. The filename is only a
               # convention, and a gem-provided file is named for the gem.
-              info[:locales] = data.is_a?(Hash) ? data.keys.map(&:to_s) : []
-            rescue => e
-              $stderr.puts "[rails-ai-context] extract_locale_files failed: #{e.message}" if ENV["DEBUG"]
+              info[:locales] = entry[:locales]
+            else
               info[:parse_error] = true
             end
           end
@@ -234,10 +222,6 @@ module RailsAiContext
         dir = File.join(root, "config/locales")
         return 0 unless Dir.exist?(dir)
         Dir.glob(File.join(dir, "**/*.{yml,yaml,rb}")).size
-      end
-
-      def count_keys(hash)
-        nested_key_paths(hash).size
       end
 
       def detect_fallback_config
@@ -305,17 +289,12 @@ module RailsAiContext
       def key_paths_for_locale(locale)
         loc = locale.to_s
         find_locale_paths(locale).flat_map do |path|
-          content = RailsAiContext::SafeFile.read(path)
-          next [] unless content
-          data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
-          next [] unless data.is_a?(Hash)
+          entry = locale_index[path] or next []
 
           # A locale root may be written `en:` or `:en:` - both load, and both
           # have to be stripped or this locale's paths compare against nothing.
-          root = data.key?(loc) ? data[loc] : data.fetch(locale.to_sym, data)
-          nested_key_paths(root)
-        rescue StandardError
-          []
+          # A file that names no root for this locale contributes whole paths.
+          entry[:key_paths_by_locale].fetch(loc) { entry[:key_paths] }
         end.uniq
       rescue => e
         $stderr.puts "[rails-ai-context] key_paths_for_locale failed: #{e.message}" if ENV["DEBUG"]
@@ -363,18 +342,44 @@ module RailsAiContext
       # minutes.
       def paths_by_declared_locale
         @paths_by_declared_locale ||= locale_file_paths.each_with_object({}) do |path, index|
-          top_level_locales(path).each { |loc| (index[loc] ||= []) << path }
+          locale_index[path][:locales].each { |loc| (index[loc] ||= []) << path }
         end
       end
 
-      def top_level_locales(path)
-        content = RailsAiContext::SafeFile.read(path)
-        return [] unless content
+      # Every locale file, parsed once. Four readers used to parse the same
+      # file for the same three facts, each carrying its own copy of the
+      # permitted_classes/aliases incantation and its own rescue, and one of
+      # them read through YAML.load_file, so a file SafeFile refused was
+      # counted in the file list and skipped everywhere else.
+      #
+      # The parsed document is derived from and dropped: holding every locale
+      # YAML resident would trade an i18n-heavy app's CPU spike for a memory
+      # one. Only the key paths survive.
+      def locale_index
+        @locale_index ||= locale_file_paths.to_h { |path| [ path, index_locale_file(path) ] }
+      end
 
+      def index_locale_file(path)
+        content = RailsAiContext::SafeFile.read(path)
+        return REFUSED_LOCALE_FILE unless content
+
+        # aliases: true - sharing formats through a YAML anchor is ordinary,
+        # and without the flag Psych raises and every locale in that file
+        # disappears while the Locale Files section still lists it.
         data = YAML.safe_load(content, permitted_classes: [ Symbol ], aliases: true)
-        data.is_a?(Hash) ? data.keys.map(&:to_s) : []
-      rescue StandardError
-        []
+        data = {} unless data.is_a?(Hash)
+        key_paths = nested_key_paths(data)
+
+        {
+          parse_error: false,
+          locales: data.keys.map(&:to_s),
+          key_count: key_paths.size,
+          key_paths: key_paths,
+          key_paths_by_locale: data.to_h { |locale, subtree| [ locale.to_s, nested_key_paths(subtree) ] }
+        }
+      rescue StandardError => e
+        $stderr.puts "[rails-ai-context] i18n parse of #{path} failed: #{e.message}" if ENV["DEBUG"]
+        REFUSED_LOCALE_FILE
       end
 
       def nested_key_paths(hash, prefix = nil, paths = [])
