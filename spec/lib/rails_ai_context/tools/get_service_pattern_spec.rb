@@ -596,6 +596,36 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
+    context "with the same short name declared in a pack" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        app = File.join(tmpdir, "app", "services")
+        pack = File.join(tmpdir, "packs", "billing", "app", "services", "billing")
+        controllers = File.join(tmpdir, "app", "controllers")
+        [ app, pack, controllers ].each { |d| FileUtils.mkdir_p(d) }
+        File.write(File.join(app, "report_builder.rb"), "class ReportBuilder\n  def call; :app_report; end\nend\n")
+        File.write(File.join(pack, "report_builder.rb"),
+          "module Billing\n  class ReportBuilder\n    def call; :pack_report; end\n  end\nend\n")
+        File.write(File.join(controllers, "reports_controller.rb"),
+          "class ReportsController\n  def show\n    ReportBuilder.new.call\n  end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "does not count a declaration of the same name as a caller" do
+        text = described_class.call(service: "ReportBuilder").content.first[:text]
+        expect(text).not_to include("packs/billing/app/services/billing/report_builder.rb")
+      end
+
+      it "still names the file that calls it" do
+        text = described_class.call(service: "ReportBuilder").content.first[:text]
+        expect(text).to include("## Called By")
+        expect(text).to include("app/controllers/reports_controller.rb")
+      end
+    end
+
     context "with empty services directory" do
       let(:tmpdir) { Dir.mktmpdir }
 

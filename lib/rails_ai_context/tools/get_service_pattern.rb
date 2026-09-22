@@ -411,6 +411,9 @@ module RailsAiContext
         # underscored-path skip dropped the one real caller, whose path
         # contains the service's own path as a prefix.
         reference = /(?<![\w:])(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
+        # A second file declaring the same short name under its own namespace
+        # is not a caller of this one, so the declaration is not a reference.
+        definition = /\b(?:class|module)\s+(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
 
         search_dirs.each do |dir|
           safe_glob(dir, "**/*.rb", real_root).each do |real|
@@ -418,6 +421,7 @@ module RailsAiContext
             source = safe_read(real)
             next unless source
             next unless source.match?(reference)
+            next unless source.gsub(definition, "").match?(reference)
 
             callers << real.sub("#{real_root}/", "")
           end
