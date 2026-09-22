@@ -25,8 +25,7 @@ module RailsAiContext
           automatic_shard_selector: detect_automatic_shard_selector
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] ConnectionPoolIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "ConnectionPoolIntrospector#call")
       end
 
       private
@@ -49,8 +48,7 @@ module RailsAiContext
           entry[:adapter_options] = adapter_opts if adapter_opts.any?
           entry
         rescue => e
-          $stderr.puts "[rails-ai-context] extract_databases entry failed: #{e.message}" if ENV["DEBUG"]
-          { name: cfg.name, error: e.message }
+          RailsAiContext.debug_fail(e, { name: cfg.name, error: e.message }, label: "extract_databases entry")
         end
       end
 
@@ -86,8 +84,7 @@ module RailsAiContext
           {}
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] config_hash failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "config_hash")
       end
 
       def serializable(value)
@@ -111,8 +108,7 @@ module RailsAiContext
         roles << { role: "reading", pool_count: handler.connection_pool_list(:reading).size } if can_list?(handler, :reading)
         roles
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_pool_handlers failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_pool_handlers")
       end
 
       def can_list?(handler, role)
@@ -134,8 +130,7 @@ module RailsAiContext
           content.include?("ShardSelector") || content.include?("connected_to role:")
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_automatic_shard_selector failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext.debug_fail(e, false, label: "detect_automatic_shard_selector")
       end
     end
   end

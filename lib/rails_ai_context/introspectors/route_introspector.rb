@@ -214,8 +214,7 @@ module RailsAiContext
         constraints = route.constraints.to_s
         constraints.empty? ? nil : constraints
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_constraints failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_constraints")
       end
 
       def group_by_controller(routes)
@@ -232,15 +231,13 @@ module RailsAiContext
       def count_unrouted_mounts
         controllerless_routes.count { |r| !dynamic_target?(r) }
       rescue => e
-        $stderr.puts "[rails-ai-context] count_unrouted_mounts failed: #{e.message}" if ENV["DEBUG"]
-        0
+        RailsAiContext.debug_fail(e, 0, label: "count_unrouted_mounts")
       end
 
       def count_controllerless_constructs
         controllerless_routes.count { |r| dynamic_target?(r) }
       rescue => e
-        $stderr.puts "[rails-ai-context] count_controllerless_constructs failed: #{e.message}" if ENV["DEBUG"]
-        0
+        RailsAiContext.debug_fail(e, 0, label: "count_controllerless_constructs")
       end
 
       def controllerless_routes
@@ -269,8 +266,7 @@ module RailsAiContext
               path: r.path.spec.to_s
             }
           rescue => e
-            $stderr.puts "[rails-ai-context] detect_mounted_engines failed: #{e.message}" if ENV["DEBUG"]
-            nil
+            RailsAiContext.debug_fail(e, nil, label: "detect_mounted_engines")
           end
       end
 

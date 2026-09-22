@@ -24,8 +24,7 @@ module RailsAiContext
           referenced_in_code: scan_env_references
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] EnvIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "EnvIntrospector#call")
       end
 
       private
@@ -138,8 +137,7 @@ module RailsAiContext
         end
         refs.map { |name, files| { name: name, files: files, set: ENV.key?(name) && !ENV[name].to_s.empty? } }.sort_by { |h| h[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] scan_env_references failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "scan_env_references")
       end
     end
   end

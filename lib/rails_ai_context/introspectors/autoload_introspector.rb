@@ -30,8 +30,7 @@ module RailsAiContext
           custom_inflections: extract_custom_inflections
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] AutoloadIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "AutoloadIntrospector#call")
       end
 
       private
@@ -66,8 +65,7 @@ module RailsAiContext
           entry[:root_dirs] = relativize(extract_root_dirs(loader))
           entry
         rescue => e
-          $stderr.puts "[rails-ai-context] extract autoloader #{kind} failed: #{e.message}" if ENV["DEBUG"]
-          { name: kind.to_s, error: e.message }
+          RailsAiContext.debug_fail(e, { name: kind.to_s, error: e.message }, label: "extract autoloader #{kind}")
         end
       end
 
@@ -76,8 +74,7 @@ module RailsAiContext
         return [] unless collapsed
         collapsed.respond_to?(:to_a) ? collapsed.to_a.map(&:to_s) : []
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_collapsed failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_collapsed")
       end
 
       def extract_ignored(loader)
@@ -85,8 +82,7 @@ module RailsAiContext
         return [] unless ignored
         ignored.respond_to?(:to_a) ? ignored.to_a.map(&:to_s) : []
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_ignored failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_ignored")
       end
 
       def extract_root_dirs(loader)
@@ -95,8 +91,7 @@ module RailsAiContext
         return roots.keys.map(&:to_s) if roots.respond_to?(:keys)
         []
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_root_dirs failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_root_dirs")
       end
 
       # Collect `inflect` blocks and `Zeitwerk::Inflector` customizations
@@ -126,8 +121,7 @@ module RailsAiContext
         end
         inflections.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_custom_inflections failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_custom_inflections")
       end
 
       def directive_rule(hit)

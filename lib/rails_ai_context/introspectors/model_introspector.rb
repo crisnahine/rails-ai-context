@@ -614,8 +614,7 @@ module RailsAiContext
           sti_children: children.empty? ? nil : children
         }.compact
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_sti_info failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_sti_info")
       end
 
       # ── AST-based extraction (replaces all regex parsing) ──────────
@@ -902,8 +901,7 @@ module RailsAiContext
         end
         methods
       rescue => e
-        $stderr.puts "[rails-ai-context] generated_association_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "generated_association_methods")
       end
 
       # The listener names an association with a Symbol and reflection with a

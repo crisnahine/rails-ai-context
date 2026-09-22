@@ -227,8 +227,7 @@ module RailsAiContext
 
         []
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_filters failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_filters")
       end
 
       # A compiled callback keeps only:/except: in private ivars, so the
@@ -252,8 +251,7 @@ module RailsAiContext
         end
         constraints
       rescue => e
-        $stderr.puts "[rails-ai-context] collect_source_constraints failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "collect_source_constraints")
       end
 
       # Reflection hands every class the whole chain and no skips at all, so
@@ -316,15 +314,13 @@ module RailsAiContext
         return false unless defined?(::DeviseController)
         ctrl < ::DeviseController || ctrl.ancestors.any? { |a| a.name&.start_with?("Devise::") }
       rescue => e
-        $stderr.puts "[rails-ai-context] devise_controller? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext.debug_fail(e, false, label: "devise_controller?")
       end
 
       def extract_concerns(ctrl)
         ConcernMembership.from_ancestors(ctrl)
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_concerns failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_concerns")
       end
 
       # Through MixinsListener rather than a hand walk: the listener knows
@@ -334,8 +330,7 @@ module RailsAiContext
         walked = SourceIntrospector.walk_source(source, { mixins: Listeners::MixinsListener })
         ConcernMembership.from_mixins(walked[:mixins])
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_concerns_from_source AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_concerns_from_source AST")
       end
 
       def extract_strong_params(source)
@@ -346,8 +341,7 @@ module RailsAiContext
         find_param_methods(parse_result.value, param_methods)
         param_methods
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_strong_params AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_strong_params AST")
       end
 
       def find_param_methods(node, results)
@@ -536,8 +530,7 @@ module RailsAiContext
         respond_to_blocks.each { |block| find_format_calls(block, formats) }
         formats.uniq.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_respond_to AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_respond_to AST")
       end
 
       def find_respond_to_blocks(node, blocks)
@@ -578,8 +571,7 @@ module RailsAiContext
           exceptions.map { |ex| { exception: ex, handler: handler }.compact }
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_rescue_from AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_rescue_from AST")
       end
 
       def rate_limit_entry(source)
@@ -590,8 +582,7 @@ module RailsAiContext
         })
         (ast_result[:rate_limit] || []).first
       rescue => e
-        $stderr.puts "[rails-ai-context] rate_limit_entry failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "rate_limit_entry")
       end
 
       def extract_rate_limit(source, entry)
@@ -604,8 +595,7 @@ module RailsAiContext
         raw_line = lines[line_num - 1].strip
         raw_line.sub(/\Arate_limit\s+/, "")
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_rate_limit AST failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_rate_limit AST")
       end
 
       def parse_rate_limit(entry)
@@ -621,8 +611,7 @@ module RailsAiContext
 
         parsed.empty? ? nil : parsed
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_rate_limit failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "parse_rate_limit")
       end
 
       def extract_turbo_stream_actions(source)
@@ -633,8 +622,7 @@ module RailsAiContext
         find_turbo_stream_in_defs(parse_result.value, nil, actions)
         actions.uniq.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_turbo_stream_actions AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_turbo_stream_actions AST")
       end
 
       # Walk AST tracking which DefNode we're inside,

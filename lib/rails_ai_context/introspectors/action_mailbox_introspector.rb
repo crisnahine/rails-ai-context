@@ -51,8 +51,7 @@ module RailsAiContext
           entry[:callbacks] = callbacks if callbacks.any?
           entry
         rescue => e
-          $stderr.puts "[rails-ai-context] extract_mailboxes failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "extract_mailboxes")
         end.compact.sort_by { |m| m[:name] }
       end
     end

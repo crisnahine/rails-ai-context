@@ -57,8 +57,7 @@ module RailsAiContext
 
         { adapter: "postgresql", tables: tables, total_tables: tables.size }
       rescue => e
-        $stderr.puts "[rails-ai-context] collect_postgresql_stats failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "collect_postgresql_stats")
       end
 
       def collect_mysql_stats
@@ -77,8 +76,7 @@ module RailsAiContext
 
         { adapter: "mysql", tables: tables, total_tables: tables.size }
       rescue => e
-        $stderr.puts "[rails-ai-context] collect_mysql_stats failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "collect_mysql_stats")
       end
 
       def collect_sqlite_stats
@@ -93,8 +91,7 @@ module RailsAiContext
 
         { adapter: "sqlite", tables: tables, total_tables: tables.size }
       rescue => e
-        $stderr.puts "[rails-ai-context] collect_sqlite_stats failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "collect_sqlite_stats")
       end
     end
   end

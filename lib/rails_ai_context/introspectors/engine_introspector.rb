@@ -109,12 +109,10 @@ module RailsAiContext
           entry[:model_count] = Dir.glob(File.join(models_dir, "**/*.rb")).size if Dir.exist?(models_dir)
           entry.compact
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_rails_engines failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_rails_engines")
         end.sort_by { |e| e[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] discover_rails_engines failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "discover_rails_engines")
       end
     end
   end

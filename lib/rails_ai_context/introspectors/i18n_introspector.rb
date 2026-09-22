@@ -177,8 +177,7 @@ module RailsAiContext
       # One initializer this introspector cannot parse must not take the whole
       # I18n answer down through static_call's rescue.
       rescue StandardError => e
-        $stderr.puts "[rails-ai-context] i18n available_locales walk of #{path} failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "i18n available_locales walk of #{path}")
       end
 
       # Only a literal list of names answers the question. `+= [...]`, a method
@@ -229,8 +228,7 @@ module RailsAiContext
         config[:fallbacks] = I18n.fallbacks.to_h.transform_values { |v| v.map(&:to_s) } if I18n.respond_to?(:fallbacks) && I18n.fallbacks
         config
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_fallback_config failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "detect_fallback_config")
       end
 
       # @return [Array(Hash, Array<String>)] coverage per locale, and the
@@ -280,8 +278,7 @@ module RailsAiContext
         end
         [ coverage, untranslated ]
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_locale_coverage failed: #{e.message}" if ENV["DEBUG"]
-        [ {}, [] ]
+        RailsAiContext.debug_fail(e, [ {}, [] ], label: "detect_locale_coverage")
       end
 
       # Dotted key paths a locale defines, with the locale root stripped so
@@ -297,8 +294,7 @@ module RailsAiContext
           entry[:key_paths_by_locale].fetch(loc) { entry[:key_paths] }
         end.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] key_paths_for_locale failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "key_paths_for_locale")
       end
 
       # Finds all YAML files contributing translations for the given locale:
@@ -378,8 +374,7 @@ module RailsAiContext
           key_paths_by_locale: data.to_h { |locale, subtree| [ locale.to_s, nested_key_paths(subtree) ] }
         }
       rescue StandardError => e
-        $stderr.puts "[rails-ai-context] i18n parse of #{path} failed: #{e.message}" if ENV["DEBUG"]
-        REFUSED_LOCALE_FILE
+        RailsAiContext.debug_fail(e, REFUSED_LOCALE_FILE, label: "i18n parse of #{path}")
       end
 
       def nested_key_paths(hash, prefix = nil, paths = [])

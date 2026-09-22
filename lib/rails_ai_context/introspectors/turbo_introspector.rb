@@ -64,8 +64,7 @@ module RailsAiContext
         end
         frames
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_turbo_frames failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_turbo_frames")
       end
 
       def extract_stream_subscriptions
@@ -77,8 +76,7 @@ module RailsAiContext
         end
         subscriptions
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_stream_subscriptions failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_stream_subscriptions")
       end
 
       # Views are not Ruby, so they are read line by line. Files are yielded
@@ -186,8 +184,7 @@ module RailsAiContext
         end
         actions
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_stream_actions failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_stream_actions")
       end
 
       # One parse per file: a model file feeds both lists. Concerns stay in,
@@ -207,8 +204,7 @@ module RailsAiContext
 
         { models: models.sort_by { |b| [ b[:model], b[:line] ] }, explicit: explicit }
       rescue => e
-        $stderr.puts "[rails-ai-context] scan_broadcasts failed: #{e.message}" if ENV["DEBUG"]
-        { models: [], explicit: [] }
+        RailsAiContext.debug_fail(e, { models: [], explicit: [] }, label: "scan_broadcasts")
       end
 
       def model_entries(record, hits)
@@ -280,8 +276,7 @@ module RailsAiContext
           content.include?('name="turbo-refresh-method"') && content.include?('content="morph"')
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_morph_meta failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext.debug_fail(e, false, label: "detect_morph_meta")
       end
 
       def extract_permanent_elements
@@ -300,8 +295,7 @@ module RailsAiContext
 
         elements.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_permanent_elements failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_permanent_elements")
       end
 
       def extract_turbo_drive_settings
@@ -319,8 +313,7 @@ module RailsAiContext
 
         counts
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_turbo_drive_settings failed: #{e.message}" if ENV["DEBUG"]
-        { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 }
+        RailsAiContext.debug_fail(e, { "data-turbo-false": 0, "data-turbo-action": 0, "data-turbo-preload": 0 }, label: "extract_turbo_drive_settings")
       end
 
       # Concerns stay in: a native include or a turbo_stream response can
@@ -366,23 +359,20 @@ module RailsAiContext
           turbo_stream_responses: responses
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] scan_controllers failed: #{e.message}" if ENV["DEBUG"]
-        { native_include: false, native_helpers: [], native_navigation: [], turbo_stream_responses: [] }
+        RailsAiContext.debug_fail(e, { native_include: false, native_helpers: [], native_navigation: [], turbo_stream_responses: [] }, label: "scan_controllers")
       end
 
       # One collector raising costs its own list, not the section.
       def guarded
         yield
       rescue => e
-        $stderr.puts "[rails-ai-context] scan_controllers collector failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "scan_controllers collector")
       end
 
       def each_controller_record(&block)
         controller_sources.each(&block)
       rescue => e
-        $stderr.puts "[rails-ai-context] scan_controllers failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "scan_controllers")
       end
 
       def native_navigation_included?(source)
@@ -420,8 +410,7 @@ module RailsAiContext
           native_conditionals: detect_native_conditionals
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_turbo_native failed: #{e.message}" if ENV["DEBUG"]
-        { detected: false, native_helpers: [], native_navigation: [], native_conditionals: 0 }
+        RailsAiContext.debug_fail(e, { detected: false, native_helpers: [], native_navigation: [], native_conditionals: 0 }, label: "detect_turbo_native")
       end
 
       def detect_native_conditionals
@@ -435,8 +424,7 @@ module RailsAiContext
 
         count
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_native_conditionals failed: #{e.message}" if ENV["DEBUG"]
-        0
+        RailsAiContext.debug_fail(e, 0, label: "detect_native_conditionals")
       end
 
       def extract_turbo_stream_responses

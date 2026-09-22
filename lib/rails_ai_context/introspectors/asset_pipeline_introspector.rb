@@ -78,8 +78,7 @@ module RailsAiContext
 
         pin_names.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_importmap_pins failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_importmap_pins")
       end
 
       def detect_css_framework

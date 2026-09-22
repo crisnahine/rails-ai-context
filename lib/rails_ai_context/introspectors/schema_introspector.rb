@@ -59,15 +59,13 @@ module RailsAiContext
         ActiveRecord::Base.connection.select_value("SELECT 1")
         true
       rescue => e
-        $stderr.puts "[rails-ai-context] active_record_connected? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext.debug_fail(e, false, label: "active_record_connected?")
       end
 
       def adapter_name
         ActiveRecord::Base.connection.adapter_name
       rescue => e
-        $stderr.puts "[rails-ai-context] adapter_name failed: #{e.message}" if ENV["DEBUG"]
-        "unknown"
+        RailsAiContext.debug_fail(e, "unknown", label: "adapter_name")
       end
 
       def connection
@@ -142,8 +140,7 @@ module RailsAiContext
       def parse_schema_defaults_for_table(table)
         schema_reader.defaults_for(table)
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_schema_defaults_for_table failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "parse_schema_defaults_for_table")
       end
 
       def schema_reader
@@ -163,8 +160,7 @@ module RailsAiContext
       def current_schema_version
         RailsAiContext::SchemaVersion.current(app.root.to_s)
       rescue => e
-        $stderr.puts "[rails-ai-context] current_schema_version failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "current_schema_version")
       end
 
       # Reads the version stamp from the schema.rb file actually being parsed,
@@ -175,8 +171,7 @@ module RailsAiContext
       def schema_version_for(path)
         RailsAiContext::SchemaVersion.from_schema_rb(path)
       rescue => e
-        $stderr.puts "[rails-ai-context] schema_version_for failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "schema_version_for")
       end
 
       def schema_file_path
@@ -384,8 +379,7 @@ module RailsAiContext
           }
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] generated_columns failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "generated_columns")
       end
 
       # Reconstruct schema by replaying migrations in order.

@@ -16,8 +16,7 @@ module RailsAiContext
           load_dir(path)
         end
       rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] eager load of #{kind} failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "eager load of #{kind}")
       end
 
       # eager_load_dir returns silently for a directory the loader manages

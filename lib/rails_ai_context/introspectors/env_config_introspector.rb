@@ -43,8 +43,7 @@ module RailsAiContext
           environments: files
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] EnvConfigIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "EnvConfigIntrospector#call")
       end
 
       private
@@ -64,8 +63,7 @@ module RailsAiContext
           notable: extract_notable(assignments, environment: name)
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] summarize environment #{path} failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "summarize environment #{path}")
       end
 
       # Assigned `config.*` paths at any depth, mapped to their value source:
@@ -126,8 +124,7 @@ module RailsAiContext
           target.public_send(segment)
         end
       rescue StandardError => e
-        $stderr.puts "[rails-ai-context] EnvConfigIntrospector live value for #{key} failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "EnvConfigIntrospector live value for #{key}")
       end
 
       # A node slice spans as many lines as the expression did, and the value

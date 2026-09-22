@@ -71,8 +71,7 @@ module RailsAiContext
 
         nil
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_framework_from_lockfile failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_framework_from_lockfile")
       end
 
       # First listed wins: an app holding the same thing under spec/ and test/
@@ -210,8 +209,7 @@ module RailsAiContext
         end
         nil
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_factory_traits failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_factory_traits")
       end
 
       def detect_shared_examples
@@ -232,8 +230,7 @@ module RailsAiContext
         end
         shared.sort_by { |s| s[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_shared_examples failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_shared_examples")
       end
 
       def detect_database_cleaner
@@ -253,8 +250,7 @@ module RailsAiContext
           { detected: true, strategy: strategy }.compact
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_database_cleaner failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_database_cleaner")
       end
 
       # Kept for the .ai-context.json dump, whose keys are read back by
@@ -301,8 +297,7 @@ module RailsAiContext
           .sort_by { |cat, row| [ -row[:count], cat ] }
           .to_h
       rescue => e
-        $stderr.puts "[rails-ai-context] test_categories failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "test_categories")
       end
     end
   end

@@ -98,8 +98,7 @@ module RailsAiContext
             includes_calls: includes_calls
           }
         rescue => e
-          $stderr.puts "[rails-ai-context] load_model_data failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "load_model_data")
         end
       end
 
@@ -284,8 +283,7 @@ module RailsAiContext
         end
         @app_written_counter_columns = writers
       rescue StandardError => e
-        $stderr.puts "[rails-ai-context] app_written_counter_columns failed: #{e.message}" if ENV["DEBUG"]
-        @app_written_counter_columns = Set.new
+        RailsAiContext.debug_fail(e, @app_written_counter_columns = Set.new, label: "app_written_counter_columns")
       end
 
       def detect_missing_counter_cache(model_data, schema_data)

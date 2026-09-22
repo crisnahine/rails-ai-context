@@ -26,8 +26,7 @@ module RailsAiContext
           cache_usage: detect_cache_usage
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] ActiveSupportIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "ActiveSupportIntrospector#call")
       end
 
       # Concerns, MessageVerifier usage and tagged logging are read off disk.
@@ -45,8 +44,7 @@ module RailsAiContext
           cache_usage: unavailable
         }
       rescue => e
-        $stderr.puts "[rails-ai-context] ActiveSupportIntrospector#static_call failed: #{e.message}" if ENV["DEBUG"]
-        { error: e.message }
+        RailsAiContext.debug_fail(e, { error: e.message }, label: "ActiveSupportIntrospector#static_call")
       end
 
       private
@@ -89,8 +87,7 @@ module RailsAiContext
         end
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_concerns failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_concerns")
       end
 
       # Rails 7.1+ registers deprecators per gem/component via
@@ -109,8 +106,7 @@ module RailsAiContext
         end
         keys.compact.sort.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_deprecators failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_deprecators")
       end
 
       # Scan `lib/` + `app/` for calls into ActiveSupport::MessageEncryptor and
@@ -134,8 +130,7 @@ module RailsAiContext
         end
         hits
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_message_verifier_usage failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_message_verifier_usage")
       end
 
       def detect_tagged_logging
@@ -157,8 +152,7 @@ module RailsAiContext
         end
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_tagged_logging failed: #{e.message}" if ENV["DEBUG"]
-        { configured: false }
+        RailsAiContext.debug_fail(e, { configured: false }, label: "detect_tagged_logging")
       end
 
       # The canonical lazy hooks that Railties expose. Report which have at
@@ -182,8 +176,7 @@ module RailsAiContext
           { hook: name.to_s, callbacks: callback_count } if callback_count > 0
         end.sort_by { |h| h[:hook] }
       rescue => e
-        $stderr.puts "[rails-ai-context] common_on_load_hooks failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "common_on_load_hooks")
       end
 
       def detect_cache_usage
@@ -196,8 +189,7 @@ module RailsAiContext
         end
         entry
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_cache_usage failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "detect_cache_usage")
       end
     end
   end

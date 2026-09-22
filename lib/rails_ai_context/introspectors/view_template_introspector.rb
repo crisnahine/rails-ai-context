@@ -233,8 +233,7 @@ module RailsAiContext
       def extract_slot_refs(content)
         content.scan(/\b(?:renders_one|renders_many)\s+:(\w+)/).flatten
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_slot_refs failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_slot_refs")
       end
     end
   end

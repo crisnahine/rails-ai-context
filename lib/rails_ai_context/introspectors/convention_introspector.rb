@@ -183,8 +183,7 @@ module RailsAiContext
           end
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] uses_async_queries? failed: #{e.message}" if ENV["DEBUG"]
-        false
+        RailsAiContext.debug_fail(e, false, label: "uses_async_queries?")
       end
 
       def scan_directory_structure
@@ -220,8 +219,7 @@ module RailsAiContext
           .map { |child| "app/#{child}" }
           .sort
       rescue StandardError => e
-        $stderr.puts "[rails-ai-context] app_child_dirs failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "app_child_dirs")
       end
 
       def detect_config_files
@@ -256,8 +254,7 @@ module RailsAiContext
           .reject { |d| STANDARD_APP_DIRS.include?(d) }
           .sort
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_custom_directories failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_custom_directories")
       end
 
       # A superclass written without its namespace, inside `module Admin`,

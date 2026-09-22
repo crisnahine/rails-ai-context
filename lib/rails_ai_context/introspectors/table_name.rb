@@ -85,8 +85,7 @@ module RailsAiContext
         body = body_of(root, [], name.to_s)
         body && yield(body)
       rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] TableName failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "TableName")
       end
 
       # The statements of the class or module declared under this exact

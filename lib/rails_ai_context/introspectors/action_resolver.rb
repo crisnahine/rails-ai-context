@@ -82,8 +82,7 @@ module RailsAiContext
       def actions_from_source(source, class_name:, skip_underscored: true)
         own_actions(methods_in(source), class_name: class_name, skip_underscored: skip_underscored)
       rescue => e
-        $stderr.puts "[rails-ai-context] ActionResolver.actions_from_source failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "ActionResolver.actions_from_source")
       end
 
       # The same reading with signatures, for the tools that show a file's
@@ -142,8 +141,7 @@ module RailsAiContext
 
         { code: body.join("\n"), start_line: start_idx + 1, end_line: end_idx + 1 }
       rescue => e
-        $stderr.puts "[rails-ai-context] ActionResolver.method_body failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "ActionResolver.method_body")
       end
 
       # What an action body assigns and what it renders. One owner for the
@@ -183,8 +181,7 @@ module RailsAiContext
         methods = methods_in(source)
         own_methods(methods, owner || default_owner(source, methods))
       rescue => e
-        $stderr.puts "[rails-ai-context] ActionResolver.own_methods_in failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "ActionResolver.own_methods_in")
       end
 
       # The outermost owner the methods sit in: the file's class, or its
@@ -215,8 +212,7 @@ module RailsAiContext
 
         []
       rescue => e
-        $stderr.puts "[rails-ai-context] ActionResolver.resolve failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "ActionResolver.resolve")
       end
 
       # The nearest ancestor in the app that defines actions of its own.

@@ -133,8 +133,7 @@ module RailsAiContext
         end
         imports
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_import_graph failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_import_graph")
       end
 
       JS_KEYWORDS = %w[if else for while switch catch function].freeze
@@ -145,24 +144,21 @@ module RailsAiContext
         method_count = methods.count { |m| !JS_KEYWORDS.include?(m) }
         { loc: loc, method_count: method_count }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_complexity failed: #{e.message}" if ENV["DEBUG"]
-        { loc: 0, method_count: 0 }
+        RailsAiContext.debug_fail(e, { loc: 0, method_count: 0 }, label: "extract_complexity")
       end
 
       def extract_turbo_event_listeners(content)
         events = content.scan(/["']turbo:([\w:-]+)["']/).flatten.uniq
         events.map { |e| "turbo:#{e}" }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_turbo_event_listeners failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_turbo_event_listeners")
       end
 
       def extract_lifecycle(content)
         hooks = content.scan(/\b(connect|disconnect|initialize)\s*\(\s*\)/).flatten.uniq
         hooks.any? ? hooks : nil
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_lifecycle failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_lifecycle")
       end
 
       def extract_cross_controller_composition(root)
@@ -183,8 +179,7 @@ module RailsAiContext
 
         compositions.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_cross_controller_composition failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_cross_controller_composition")
       end
     end
   end

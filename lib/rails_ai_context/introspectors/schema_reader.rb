@@ -143,8 +143,7 @@ module RailsAiContext
 
         schema
       rescue => e
-        $stderr.puts "[rails-ai-context] SchemaReader failed: #{e.message}" if ENV["DEBUG"]
-        empty_schema
+        RailsAiContext.debug_fail(e, empty_schema, label: "SchemaReader")
       end
 
       # AstCache caps parses below the configured schema limit, so a dump

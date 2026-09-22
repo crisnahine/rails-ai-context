@@ -72,8 +72,7 @@ module RailsAiContext
           }.compact
         end.sort_by { |j| j[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_jobs failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_jobs")
       end
 
       # `descendants` is every ActiveJob subclass in the process, and the name
@@ -155,8 +154,7 @@ module RailsAiContext
           job
         end.sort_by { |j| j[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_jobs_from_source failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_jobs_from_source")
       end
 
       # Sidekiq workers, read from source in both tiers: the class is not an
@@ -184,8 +182,7 @@ module RailsAiContext
           }.compact
         end.sort_by { |w| w[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_workers failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_workers")
       end
 
       def extract_solid_queue_recurring
@@ -204,8 +201,7 @@ module RailsAiContext
         end
         jobs
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_solid_queue_recurring failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_solid_queue_recurring")
       end
 
       def extract_sidekiq_config
@@ -220,8 +216,7 @@ module RailsAiContext
         config[:queues] = queues if queues.any?
         config.empty? ? nil : config
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_sidekiq_config failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_sidekiq_config")
       end
 
       def extract_mailers
@@ -250,8 +245,7 @@ module RailsAiContext
           }.compact
         end.sort_by { |m| m[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_mailers failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_mailers")
       end
 
       # A mailer's actions are its public instance methods, and the AST sees
@@ -371,8 +365,7 @@ module RailsAiContext
           }.compact
         end.sort_by { |c| c[:name] }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_channels failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_channels")
       end
 
       def channel_source(channel)
@@ -387,8 +380,7 @@ module RailsAiContext
         location = channel.instance_method(method_source).source_location
         location&.first
       rescue => e
-        $stderr.puts "[rails-ai-context] channel_absolute_path failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "channel_absolute_path")
       end
 
       def channel_macros(source, macro)

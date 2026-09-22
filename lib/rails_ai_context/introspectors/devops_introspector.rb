@@ -54,8 +54,7 @@ module RailsAiContext
 
         config.empty? ? nil : config
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_puma_config failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_puma_config")
       end
 
       # The puma macros are receiverless, so a `config.port` on some other
@@ -108,8 +107,7 @@ module RailsAiContext
         return true if content.match?(%r{["']/?(?:up|health|ping|status|healthz|alive|liveness|readiness)["']})
         nil
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_health_check failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "detect_health_check")
       end
 
       def extract_docker_info
@@ -129,8 +127,7 @@ module RailsAiContext
 
         info
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_docker_info failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_docker_info")
       end
 
       def detect_deployment_tool

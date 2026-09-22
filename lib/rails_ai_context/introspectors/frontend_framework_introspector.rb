@@ -435,15 +435,13 @@ module RailsAiContext
       def detect_api_clients(all_deps)
         API_CLIENT_MARKERS.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_api_clients failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_api_clients")
       end
 
       def detect_component_libraries(all_deps)
         COMPONENT_LIB_MARKERS.filter_map { |pkg, label| label if all_deps.key?(pkg) }.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_component_libraries failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_component_libraries")
       end
     end
   end
