@@ -22,7 +22,11 @@ module RailsAiContext
             option_values: extract_keyword_sources(node),
             option_nodes:  extract_keyword_nodes(node),
             nested_in:     @enclosing.last&.name,
-            parent_location: @enclosing.last&.location&.start_line,
+            # Offsets, not line numbers: a one-line block puts the parent and
+            # its nested calls on one line, and a consumer pairing them by
+            # line then attaches the second child to the first.
+            offset:        node.location.start_offset,
+            parent_offset: @enclosing.last&.location&.start_offset,
             location:      node.location.start_line,
             confidence:    confidence_for(node)
           }

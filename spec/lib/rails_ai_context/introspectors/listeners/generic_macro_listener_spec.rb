@@ -62,7 +62,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
 
     nested = results.find { |r| r[:macro] == :string }
     expect(nested[:nested_in]).to eq(:hash)
-    expect(nested[:parent_location]).to eq(1)
+    expect(nested[:parent_offset]).to eq(results.find { |r| r[:macro] == :hash }[:offset])
     expect(results.find { |r| r[:macro] == :hash }[:nested_in]).to be_nil
     expect(results.find { |r| r[:macro] == :object }[:nested_in]).to be_nil
   end

@@ -77,6 +77,17 @@ RSpec.describe RailsAiContext::Introspectors::Interaction do
       expect(filters.first.nested.map(&:macro)).to eq(%w[string integer])
     end
 
+    # A one-line block puts the parent and both children on the same line, so
+    # a line number cannot say which call a nested filter belongs to.
+    it "keeps two filters nested in a one-line block under their parent" do
+      source = "class Orders::Create < ActiveInteraction::Base\n  hash(:params) { string :title; integer :quantity }\n  object :account\nend\n"
+
+      filters = described_class.filters(source)
+
+      expect(filters.map(&:name)).to eq(%w[params account])
+      expect(filters.first.nested.map(&:name)).to eq(%w[title quantity])
+    end
+
     it "carries the options a filter declares" do
       source = <<~RUBY
         class Orders::Create < ActiveInteraction::Base

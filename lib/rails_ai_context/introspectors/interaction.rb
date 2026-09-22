@@ -140,15 +140,15 @@ module RailsAiContext
       end
 
       # The filters one class declares, nested ones attached to the filter
-      # whose block they sit in. Records arrive in source order, so the parent
-      # of a nested record is the last record opened with that macro name.
+      # whose block they sit in, paired by the parent call's own offset in the
+      # source.
       def own_filters(link)
         records = SourceIntrospector.walk_source(
           link.source, { filters: -> { Listeners::GenericMacroListener.new(FILTERS) } }
         )[:filters] || []
 
         top = []
-        by_line = {}
+        by_offset = {}
 
         records.each do |record|
           Array(record[:args]).each do |name|
@@ -159,12 +159,12 @@ module RailsAiContext
               declared_by: link.name,
               nested: []
             )
-            parent = record[:parent_location] && by_line[record[:parent_location]]
+            parent = record[:parent_offset] && by_offset[record[:parent_offset]]
             parent ? parent.nested << filter : top << filter
             # One macro call declares one filter that can take a block
             # (`hash :a, :b do` is not a shape ActiveInteraction accepts), so
-            # the call's line names the parent unambiguously.
-            by_line[record[:location]] = filter
+            # the call's offset names the parent unambiguously.
+            by_offset[record[:offset]] = filter
           end
         end
 
