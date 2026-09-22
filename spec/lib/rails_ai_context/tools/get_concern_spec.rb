@@ -705,5 +705,4 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       expect(text).not_to include("## Model Concerns (2)")
     end
   end
-
 end

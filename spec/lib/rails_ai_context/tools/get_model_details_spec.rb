@@ -609,5 +609,4 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to include("## Key instance methods (25 of 72)")
     end
   end
-
 end

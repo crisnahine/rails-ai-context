@@ -642,6 +642,41 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    # The booted answer read its table list off the connection and its version
+    # stamp off db/schema.rb, and joined neither, so a branch pulled without
+    # running db:migrate looked like a misspelled table.
+    context "when db/schema.rb declares a table the connection does not have" do
+      before do
+        allow(introspector).to receive(:active_record_connected?).and_return(true)
+        allow(introspector).to receive(:adapter_name).and_return("postgresql")
+        allow(introspector).to receive(:table_names).and_return([ "users" ])
+        allow(introspector).to receive(:extract_tables).and_return({ "users" => { columns: [], indexes: [], foreign_keys: [] } })
+      end
+
+      it "carries the tables the dump declares alongside the live ones" do
+        db_dir = File.join(fixture_path, "db")
+        FileUtils.mkdir_p(db_dir)
+        File.write(File.join(db_dir, "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 2026_09_20_000000) do
+            create_table "users", force: :cascade do |t|
+              t.string "email"
+            end
+
+            create_table "order_comments", force: :cascade do |t|
+              t.text "body"
+            end
+          end
+        RUBY
+
+        result = introspector.call
+
+        expect(result[:declared_tables]).to contain_exactly("users", "order_comments")
+        expect(result[:tables].keys).to eq([ "users" ])
+      ensure
+        FileUtils.rm_rf(db_dir)
+      end
+    end
+
     context "with a secondary database dump and ActiveRecord not connected" do
       it "still attaches secondary_databases through the static fallback" do
         Dir.mktmpdir do |dir|

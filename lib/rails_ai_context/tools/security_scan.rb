@@ -68,13 +68,7 @@ module RailsAiContext
         refused = refuse_unsafe_paths(files)
         return refused if refused
 
-        unless brakeman_available?
-          return text_response(
-            "Brakeman is not installed. Add it to your Gemfile:\n\n" \
-            "```ruby\ngem 'brakeman', group: :development\n```\n\n" \
-            "Then run `bundle install` and try again."
-          )
-        end
+        return text_response(unavailable_message) unless brakeman_available?
 
         min_confidence = CONFIDENCE_MAP[confidence] || 2
 
@@ -117,15 +111,57 @@ module RailsAiContext
         format_response(warnings, tracker, detail, files)
       end
 
+      # Keyed by tier, because the two tiers ask a different question of the
+      # same machine: booted, the app's bundle is set up and the load path
+      # holds the app's gems only, so an app that does not bundle brakeman
+      # cannot require it even though `gem list` shows it. One process-wide
+      # boolean let whichever tier answered first decide for the other.
       private_class_method def self.brakeman_available?
-        return @brakeman_available unless @brakeman_available.nil?
+        @brakeman_available ||= {}
+        key = RailsAiContext.static_tier? ? :static : :runtime
+        return @brakeman_available[key] unless @brakeman_available[key].nil?
 
-        @brakeman_available = begin
-          require "brakeman"
-          true
-        rescue LoadError
-          false
-        end
+        @brakeman_available[key] = load_brakeman
+      end
+
+      private_class_method def self.load_brakeman
+        require "brakeman"
+        true
+      rescue LoadError
+        false
+      end
+
+      # The remedy has to match what is actually wrong. "Add it to your
+      # Gemfile" is the wrong instruction for a machine that already has the
+      # gem and an app whose bundle simply does not carry it.
+      private_class_method def self.unavailable_message
+        version = brakeman_on_machine
+        return (
+          "Brakeman #{version} is installed on this machine but not in this app's bundle, so it cannot load " \
+          "under the app's load path.\n\n" \
+          "Scan with it by running `rails-ai-context tool security_scan --no-boot`, which reads the source " \
+          "without booting the app, or add it to the Gemfile:\n\n" \
+          "```ruby\ngem 'brakeman', group: :development\n```\n\n" \
+          "Then run `bundle install`."
+        ) if version
+
+        "Brakeman is not installed. Add it to your Gemfile:\n\n" \
+        "```ruby\ngem 'brakeman', group: :development\n```\n\n" \
+        "Then run `bundle install` and try again."
+      end
+
+      # The newest brakeman installed on this machine, read off the gem
+      # directories rather than asked of Gem::Specification: under Bundler the
+      # spec set is the app's bundle, which is exactly the set that does not
+      # have it.
+      private_class_method def self.brakeman_on_machine
+        versions = Gem.path.flat_map { |dir|
+          Dir.glob(File.join(dir, "specifications", "brakeman-*.gemspec"))
+        }.filter_map { |path| File.basename(path)[/\Abrakeman-(.+)\.gemspec\z/, 1] }
+
+        versions.max_by { |v| Gem::Version.new(v) rescue Gem::Version.new("0") }
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, nil, label: "brakeman_on_machine")
       end
 
       private_class_method def self.format_response(warnings, tracker, detail, files)

@@ -12,7 +12,8 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
   describe ".call" do
     context "when Brakeman is not installed" do
       before do
-        described_class.instance_variable_set(:@brakeman_available, false)
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return(nil)
       end
 
       it "returns installation instructions" do
@@ -21,6 +22,53 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).to include("Brakeman is not installed")
         expect(text).to include("gem 'brakeman'")
       end
+    end
+
+    # Booted, the app's bundle is set up and narrows the load path, so a
+    # require that succeeds on the static tier raises LoadError here. Both
+    # answers used to be "Brakeman is not installed", and editing the Gemfile
+    # is not what a reader whose machine already has it needs to do.
+    context "when brakeman is on the machine but outside the app's bundle" do
+      before do
+        described_class.instance_variable_set(:@brakeman_available, nil)
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
+      end
+
+      it "says where it is and how to run it" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("8.0.6")
+        expect(text).to include("not in this app's bundle")
+        expect(text).to include("--no-boot")
+      end
+    end
+
+    context "when brakeman is nowhere on the machine" do
+      before do
+        described_class.instance_variable_set(:@brakeman_available, nil)
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return(nil)
+      end
+
+      it "gives the Gemfile instructions" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("Brakeman is not installed")
+        expect(text).to include("gem 'brakeman'")
+      end
+    end
+
+    # The memo was one process-wide boolean, so whichever tier answered first
+    # decided for every later call in the process.
+    it "does not reuse one tier's availability answer for the other" do
+      described_class.instance_variable_set(:@brakeman_available, nil)
+      allow(described_class).to receive(:load_brakeman).and_return(false, true)
+      allow(described_class).to receive(:brakeman_on_machine).and_return(nil)
+      allow(RailsAiContext).to receive(:static_tier?).and_return(false, true)
+
+      expect(described_class.send(:brakeman_available?)).to be(false)
+      expect(described_class.send(:brakeman_available?)).to be(true)
     end
 
     context "when Brakeman is available" do
@@ -87,7 +135,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       end
 
       before do
-        described_class.instance_variable_set(:@brakeman_available, true)
+        allow(described_class).to receive(:load_brakeman).and_return(true)
         stub_const("Brakeman", brakeman_stub)
         allow(Brakeman).to receive(:run).and_return(mock_tracker)
       end

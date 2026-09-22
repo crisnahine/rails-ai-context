@@ -369,5 +369,4 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       expect(text).to include("- `view_annotations.rb` - all commented out")
     end
   end
-
 end

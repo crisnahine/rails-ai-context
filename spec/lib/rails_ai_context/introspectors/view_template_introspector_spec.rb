@@ -175,12 +175,12 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
     end
 
     it "does not read one inside a double-quoted string either" do
-      expect(described_class.ivars_in(%{<%= "ping @U12345ABC" %>})).to eq([])
+      expect(described_class.ivars_in(%(<%= "ping @U12345ABC" %>))).to eq([])
     end
 
     # Interpolation is code, and an ivar read inside it is a real read.
     it "still reads an ivar interpolated into a string" do
-      expect(described_class.ivars_in(%{<%= "hello #{'#'}{@user.name}" %>})).to eq(%w[user])
+      expect(described_class.ivars_in(%(<%= "hello #{'#'}{@user.name}" %>))).to eq(%w[user])
     end
 
     it "still reads ivars that legally start with an underscore or a capital" do

@@ -24,10 +24,15 @@ module RailsAiContext
           tables: extract_tables,
           total_tables: table_names.size,
           schema_version: current_schema_version,
+          # The version stamp is read off db/schema.rb and the tables off the
+          # connection, so the two can be one migration apart. The tables the
+          # dump declares are what lets a consumer say so rather than call a
+          # declared table a typo.
+          declared_tables: declared_table_names,
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: generated_columns(schema_reader)
-        })
+        }.compact)
       end
 
       # Static tier entry: skip the connection probe entirely and answer from
@@ -155,6 +160,21 @@ module RailsAiContext
 
       def enum_types
         schema_reader.enums
+      end
+
+      # The tables db/schema.rb (or db/structure.sql) declares, or nil when
+      # there is no dump to read - nil is "unknown", which is not the claim
+      # that the dump declares nothing.
+      def declared_table_names
+        return nil unless File.exist?(schema_file_path) || File.exist?(structure_file_path)
+
+        names = schema_reader.tables.keys.map(&:to_s)
+        return names if names.any?
+
+        static = static_schema_parse
+        static[:tables].is_a?(Hash) ? static[:tables].keys.map(&:to_s) : nil
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "declared_table_names")
       end
 
       def current_schema_version

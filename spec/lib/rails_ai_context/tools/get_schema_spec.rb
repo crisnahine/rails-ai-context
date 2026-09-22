@@ -211,6 +211,47 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     end
   end
 
+  # The ordinary state after pulling a branch and not running db:migrate:
+  # db/schema.rb declares a table the connected database does not have. The
+  # answer read as a misspelling, and the header paired the live table count
+  # with the file's version stamp.
+  describe "a table db/schema.rb declares and the database does not have" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: {
+          adapter: "sqlite3",
+          tables: tables,
+          total_tables: 3,
+          schema_version: "20260920000000",
+          declared_tables: tables.keys + [ "order_comments" ],
+          pending_migrations: [ { version: "20260920000000", name: "CreateOrderComments" } ]
+        },
+        models: {}
+      })
+    end
+
+    it "says the migration has not been run rather than guessing a typo" do
+      text = described_class.call(table: "order_comments").content.first[:text]
+
+      expect(text).to include("declared in db/schema.rb")
+      expect(text).to include("rails db:migrate")
+      expect(text).not_to include("Did you mean")
+    end
+
+    it "still suggests a spelling for a table nothing declares" do
+      text = described_class.call(table: "userz").content.first[:text]
+
+      expect(text).to include("Did you mean")
+    end
+
+    it "says the two table counts disagree in the listing header" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("db/schema.rb declares 4")
+      expect(text).to include("rails db:migrate")
+    end
+  end
+
   describe ".call with model name normalization" do
     it "resolves model name to pluralized table name" do
       result = described_class.call(table: "User")

@@ -210,7 +210,10 @@ module RailsAiContext
     # the class is namespaced. Only an unambiguous match answers: two
     # controllers of the same basename are a question, not a resolution.
     def short_name_match(ctx, keys, input)
-      needle = input.to_s.tr("-", "_").delete_suffix("_controller").downcase
+      # Underscored, not downcased: a route key is snake_case, so "GiftCards"
+      # has to become "gift_cards" to equal one. Downcasing alone gave
+      # "giftcards", which equals nothing.
+      needle = input.to_s.tr("-", "_").underscore.delete_suffix("_controller")
       return nil if needle.empty? || needle.include?("/") || needle.include?("::")
 
       matches = keys.select do |key|
