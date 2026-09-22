@@ -24,7 +24,7 @@ module RailsAiContext
       I18N_AVAILABLE_LOCALES = [ [ :available_locales ], [ :config, :available_locales ] ].freeze
 
       REFUSED_LOCALE_FILE = {
-        parse_error: true, locales: [], key_count: 0, key_paths: [], key_paths_by_locale: {}
+        parse_error: true, locales: [], key_count: 0, key_paths: []
       }.freeze
 
       attr_reader :app
@@ -291,7 +291,10 @@ module RailsAiContext
           # A locale root may be written `en:` or `:en:` - both load, and both
           # have to be stripped or this locale's paths compare against nothing.
           # A file that names no root for this locale contributes whole paths.
-          entry[:key_paths_by_locale].fetch(loc) { entry[:key_paths] }
+          next entry[:key_paths] unless entry[:locales].include?(loc)
+
+          prefix = "#{loc}."
+          entry[:key_paths].filter_map { |path| path.delete_prefix(prefix) if path.start_with?(prefix) }
         end.uniq
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "key_paths_for_locale")
@@ -360,12 +363,15 @@ module RailsAiContext
         data = {} unless data.is_a?(Hash)
         key_paths = nested_key_paths(data)
 
+        # Only the locale-rooted paths are kept. The per-locale lists are the
+        # same strings without their root, so holding both doubled what an
+        # app with a hundred locale files kept resident; key_paths_for_locale
+        # strips the root instead.
         {
           parse_error: false,
           locales: data.keys.map(&:to_s),
           key_count: key_paths.size,
-          key_paths: key_paths,
-          key_paths_by_locale: data.to_h { |locale, subtree| [ locale.to_s, nested_key_paths(subtree) ] }
+          key_paths: key_paths
         }
       rescue StandardError => e
         RailsAiContext.debug_fail(e, REFUSED_LOCALE_FILE, label: "i18n parse of #{path}")

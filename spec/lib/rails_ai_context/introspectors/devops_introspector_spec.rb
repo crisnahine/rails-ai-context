@@ -86,8 +86,24 @@ RSpec.describe RailsAiContext::Introspectors::DevOpsIntrospector do
         expect(result[:puma]).to eq(threads_min: 5, threads_max: 5)
       end
 
-      it "reads a macro called inside a block" do
+      # The generated puma.rb sets workers only in production, so refusing to
+      # look inside a block would answer "no workers configured" for the
+      # config most apps ship.
+      it "reads a setting the generated puma.rb guards behind a conditional" do
         File.write(puma_config, <<~RUBY)
+          if ENV.fetch("RAILS_ENV", "development") == "production"
+            workers ENV.fetch("WEB_CONCURRENCY", 3)
+          end
+        RUBY
+
+        expect(result[:puma]).to eq(workers: 3)
+      end
+
+      # The price of reading nested settings: nesting no longer hides one, so
+      # a name set twice reports the last, wherever it sits.
+      it "takes the last setting of a name, block-nested or not" do
+        File.write(puma_config, <<~RUBY)
+          workers 2
           on_worker_boot do
             workers 3
           end
