@@ -55,6 +55,48 @@ RSpec.describe RailsAiContext::Introspectors::DevOpsIntrospector do
       end
     end
 
+    context "with a Puma config the digit reader can trip over" do
+      let(:puma_config) { File.join(Rails.root, "config/puma.rb") }
+
+      after { FileUtils.rm_f(puma_config) }
+
+      it "reads the default, not a digit out of the ENV name" do
+        File.write(puma_config, %(port ENV.fetch("PORT_2", 3000)\n))
+
+        expect(result[:puma][:port]).to eq(3000)
+      end
+
+      it "ignores a call that has a receiver" do
+        File.write(puma_config, "config.port 9292\n")
+
+        expect(result[:puma]).to be_nil
+      end
+
+      it "leaves threads unset when only one number is given" do
+        File.write(puma_config, "threads 5\n")
+
+        expect(result[:puma]).to be_nil
+      end
+
+      it "reads the numbers out of ENV fetch blocks" do
+        File.write(puma_config, <<~RUBY)
+          threads ENV.fetch("RAILS_MIN_THREADS") { 5 }, ENV.fetch("RAILS_MAX_THREADS") { 5 }
+        RUBY
+
+        expect(result[:puma]).to eq(threads_min: 5, threads_max: 5)
+      end
+
+      it "reads a macro called inside a block" do
+        File.write(puma_config, <<~RUBY)
+          on_worker_boot do
+            workers 3
+          end
+        RUBY
+
+        expect(result[:puma]).to eq(workers: 3)
+      end
+    end
+
     context "with a Procfile" do
       let(:procfile) { File.join(Rails.root, "Procfile") }
 
