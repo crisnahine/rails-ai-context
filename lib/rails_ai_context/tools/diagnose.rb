@@ -499,8 +499,7 @@ module RailsAiContext
 
           lines
         rescue => e
-          $stderr.puts "[rails-ai-context] gather_git_context failed: #{e.message}" if ENV["DEBUG"]
-          []
+          RailsAiContext.debug_fail(e, [], label: "gather_git_context")
         end
 
         # A `.git` entry is a file in a worktree and a submodule, so ask git
@@ -521,8 +520,7 @@ module RailsAiContext
 
             [ "## Recent Error Logs", response_text(result), "" ]
           rescue => e
-            $stderr.puts "[rails-ai-context] gather_log_context failed: #{e.message}" if ENV["DEBUG"]
-            []
+            RailsAiContext.debug_fail(e, [], label: "gather_log_context")
           end
         end
 

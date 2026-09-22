@@ -125,8 +125,7 @@ module RailsAiContext
           table_form = begin
             model_filter.underscore.pluralize.downcase
           rescue => e
-            $stderr.puts "[rails-ai-context] filter_items failed: #{e.message}" if ENV["DEBUG"]
-            filter_lower
+            RailsAiContext.debug_fail(e, filter_lower, label: "filter_items")
           end
           items.select { |i|
             (i[:model]&.downcase == filter_lower) ||

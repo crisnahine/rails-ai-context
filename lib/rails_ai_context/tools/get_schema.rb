@@ -248,15 +248,13 @@ module RailsAiContext
           end
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] habtm_join_tables failed: #{e.message}" if ENV["DEBUG"]
-        Set.new
+        RailsAiContext.debug_fail(e, Set.new, label: "habtm_join_tables")
       end
 
       private_class_method def self.models_for_table(table_name, models)
         models.select { |_, d| d.is_a?(Hash) && d[:table_name] == table_name }.keys
       rescue => e
-        $stderr.puts "[rails-ai-context] models_for_table failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "models_for_table")
       end
 
       # Rails 8 multi-database apps dump each secondary database (queue,

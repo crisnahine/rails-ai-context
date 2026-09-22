@@ -242,8 +242,7 @@ module RailsAiContext
           path.sub("#{real_views_dir}/", "")
         end.first(10)
       rescue => e
-        $stderr.puts "[rails-ai-context] find_views_using failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "find_views_using")
       end
     end
   end

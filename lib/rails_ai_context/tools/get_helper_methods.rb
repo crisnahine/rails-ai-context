@@ -270,8 +270,7 @@ module RailsAiContext
 
         references
       rescue => e
-        $stderr.puts "[rails-ai-context] find_view_references failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "find_view_references")
       end
 
       private_class_method def self.detect_framework_helpers(real_root)
@@ -322,8 +321,7 @@ module RailsAiContext
 
         detected
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_framework_helpers failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "detect_framework_helpers")
       end
     end
   end

@@ -573,8 +573,7 @@ module RailsAiContext
 
           { code: result.join("\n"), start_line: start_idx + 1, end_line: end_idx + 1 }
         rescue => e
-          $stderr.puts "[rails-ai-context] extract_method_source_from_string failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "extract_method_source_from_string")
         end
 
         # Extract method source from a file path. Reads file safely. Returns hash or nil.
@@ -854,8 +853,7 @@ module RailsAiContext
             safe_glob_realpath(file_path, real_dir, real_root)
           end
         rescue Errno::ENOENT, Errno::EACCES => e
-          $stderr.puts "[rails-ai-context] safe_glob failed: #{e.message}" if ENV["DEBUG"]
-          []
+          RailsAiContext.debug_fail(e, [], label: "safe_glob")
         end
 
         # Merge duplicate PUT/PATCH entries for the same path+action into a

@@ -369,8 +369,7 @@ module RailsAiContext
 
         lines
       rescue => e
-        $stderr.puts "[rails-ai-context] generate_test_template failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "generate_test_template")
       end
 
       # Parse factory file to extract attributes and traits
@@ -405,8 +404,7 @@ module RailsAiContext
 
         lines.any? ? lines.join("\n") : nil
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_factory_details failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "parse_factory_details")
       end
 
       # Parse a single fixture YAML file, returning a hash of entry_name => filtered attributes

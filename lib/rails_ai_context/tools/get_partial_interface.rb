@@ -264,8 +264,7 @@ module RailsAiContext
 
         locals.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_magic_comment_locals failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_magic_comment_locals")
       end
 
       # Extract local variable references from ERB source.
@@ -333,8 +332,7 @@ module RailsAiContext
         # Filter out things that are clearly method definitions or blocks
         locals.reject { |l| l.match?(/\A(each|map|select|reject|find|collect|do|end)\z/) }.to_a.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_local_variable_references failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_local_variable_references")
       end
 
       # Find all views that render this partial and extract the locals they pass.
@@ -431,8 +429,7 @@ module RailsAiContext
 
         sites
       rescue => e
-        $stderr.puts "[rails-ai-context] find_render_sites failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "find_render_sites")
       end
 
       # Extract local variable names from a render call line.
@@ -459,8 +456,7 @@ module RailsAiContext
 
         locals.uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_locals_from_render failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_locals_from_render")
       end
 
       # Extract method calls made on each local variable within the partial.
@@ -489,8 +485,7 @@ module RailsAiContext
 
         calls
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_method_calls_on_locals failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_method_calls_on_locals")
       end
 
       # Find available partials for fuzzy matching in not_found_response.
@@ -503,8 +498,7 @@ module RailsAiContext
           parts.join("/")
         end.uniq.sort.first(30)
       rescue => e
-        $stderr.puts "[rails-ai-context] find_available_partials failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "find_available_partials")
       end
     end
   end

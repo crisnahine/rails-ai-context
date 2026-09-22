@@ -467,8 +467,7 @@ module RailsAiContext
         end
         bodies
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_custom_validate_bodies failed: #{e.message}" if ENV["DEBUG"]
-        {}
+        RailsAiContext.debug_fail(e, {}, label: "extract_custom_validate_bodies")
       end
 
       # The model's own source, nil when the file is missing or too large.
@@ -559,8 +558,7 @@ module RailsAiContext
 
         { path: path, total_lines: source_lines.size, sections: sections }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_model_structure failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_model_structure")
       end
     end
   end

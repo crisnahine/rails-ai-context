@@ -302,8 +302,7 @@ module RailsAiContext
         owner = primary_owner(methods, expected_constant)
         Introspectors::ActionResolver.own_methods(methods, owner)
       rescue => e
-        $stderr.puts "[rails-ai-context] owned_methods AST failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "owned_methods AST")
       end
 
       # A service that defines no constructor answers `.new` with no arguments.

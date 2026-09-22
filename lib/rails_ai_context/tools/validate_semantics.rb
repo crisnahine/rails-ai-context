@@ -282,8 +282,7 @@ module RailsAiContext
         result.value.accept(visitor)
         visitor
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_and_visit failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "parse_and_visit")
       end
 
       # ── CHECK 1: Partial existence (AST) ─────────────────────────────
@@ -766,8 +765,7 @@ module RailsAiContext
         end
         warnings
       rescue => e
-        $stderr.puts "[rails-ai-context] check_instance_variable_usage failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_instance_variable_usage")
       end
 
       # ── CHECK 11: Turbo Stream channel matching ────────────────────
@@ -801,8 +799,7 @@ module RailsAiContext
         end
         warnings
       rescue => e
-        $stderr.puts "[rails-ai-context] check_turbo_stream_channels failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_turbo_stream_channels")
       end
 
       # ── CHECK 12: respond_to template existence ────────────────────
@@ -827,8 +824,7 @@ module RailsAiContext
         end
         warnings
       rescue => e
-        $stderr.puts "[rails-ai-context] check_respond_to_template_existence failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_respond_to_template_existence")
       end
 
       # ── CHECK: Memory-loading anti-pattern ───────────────────────────
@@ -853,8 +849,7 @@ module RailsAiContext
         end
         warnings.first(3) # cap at 3 to avoid noise
       rescue => e
-        $stderr.puts "[rails-ai-context] check_memory_loading failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_memory_loading")
       end
 
       # ── CHECK 13+14: Performance warnings from introspector ────────
@@ -883,8 +878,7 @@ module RailsAiContext
 
         warnings.first(5)
       rescue => e
-        $stderr.puts "[rails-ai-context] check_performance_warnings failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_performance_warnings")
       end
 
       # ── Brakeman security scan (runs once for all files) ───────────
@@ -915,8 +909,7 @@ module RailsAiContext
           "[#{w.confidence_name}] #{w.warning_type} - #{loc}: #{w.message}"
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] check_brakeman_security failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "check_brakeman_security")
       end
 
       private_class_method def self.brakeman_available?

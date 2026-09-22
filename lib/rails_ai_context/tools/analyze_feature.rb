@@ -264,8 +264,7 @@ module RailsAiContext
           end
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_services failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_services")
         end
 
         # --- AF2: Jobs ---
@@ -325,8 +324,7 @@ module RailsAiContext
           end
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_views failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_views")
         end
 
         # --- AF4: Stimulus Controllers ---
@@ -397,8 +395,7 @@ module RailsAiContext
           lines << ""
           [ found, truncated ]
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_tests failed: #{e.message}" if ENV["DEBUG"]
-          [ [], false ]
+          RailsAiContext.debug_fail(e, [ [], false ], label: "discover_tests")
         end
 
         # --- Test coverage gaps ---
@@ -466,8 +463,7 @@ module RailsAiContext
           gaps.each { |g| lines << "- #{g}" }
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_test_gaps failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_test_gaps")
         end
 
         # --- AF6: Related Models via Associations ---
@@ -511,8 +507,7 @@ module RailsAiContext
           concerns.sort.each { |name, count| lines << "- **#{name}** (used by #{count_phrase(count, 'model')})" }
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_concerns failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_concerns")
         end
 
         # --- AF13: Callback Chains ---
@@ -571,8 +566,7 @@ module RailsAiContext
           end
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_components failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_components")
         end
 
         # --- AF9: Environment Dependencies ---
@@ -601,8 +595,7 @@ module RailsAiContext
           env_vars.sort.each { |v| lines << "- `#{v}`" }
           lines << ""
         rescue => e
-          $stderr.puts "[rails-ai-context] discover_env_dependencies failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "discover_env_dependencies")
         end
       end
     end

@@ -168,8 +168,7 @@ module RailsAiContext
 
           rows.reject { |r| INTERNAL_TABLES.include?(r[:name]) }
         rescue => e
-          $stderr.puts "[rails-ai-context] gather_table_sizes failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "gather_table_sizes")
         end
 
         def gather_sqlite_table_sizes(conn)
@@ -212,8 +211,7 @@ module RailsAiContext
             nil
           end
         rescue => e
-          $stderr.puts "[rails-ai-context] gather_index_usage failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "gather_index_usage")
         end
 
         # ── Cache section ────────────────────────────────────────────────
@@ -278,8 +276,7 @@ module RailsAiContext
             name = ActiveJob::Base.queue_adapter_name
             name.empty? ? "not configured" : name
           rescue => e
-            $stderr.puts "[rails-ai-context] gather_jobs failed: #{e.message}" if ENV["DEBUG"]
-            "not available"
+            RailsAiContext.debug_fail(e, "not available", label: "gather_jobs")
           end
           lines << "**Adapter:** #{adapter_name}"
 

@@ -336,8 +336,7 @@ module RailsAiContext
           { name: method_name, code: body[:code], start_line: body[:start_line], end_line: body[:end_line] }
         end.first(5) # Limit to 5 to avoid overwhelming response
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_called_private_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_called_private_methods")
       end
 
       # The params methods this action can reach: the ones its own body names,
@@ -422,8 +421,7 @@ module RailsAiContext
 
         { redirects: redirects.uniq, renders: renders.uniq, side_effects: side_effects.uniq }
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_render_map failed: #{e.message}" if ENV["DEBUG"]
-        { redirects: [], renders: [], side_effects: [] }
+        RailsAiContext.debug_fail(e, { redirects: [], renders: [], side_effects: [] }, label: "extract_render_map")
       end
 
       private_class_method def self.extract_method_with_lines(file_path, method_name, source: nil)
@@ -435,8 +433,7 @@ module RailsAiContext
           source || RailsAiContext::SafeFile.read(file_path) || "", method_name
         )
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_method_with_lines failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_method_with_lines")
       end
 
       private_class_method def self.format_controller(name, info, ctx)

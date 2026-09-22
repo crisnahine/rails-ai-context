@@ -371,8 +371,7 @@ module RailsAiContext
 
         result
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_view_metadata failed: #{e.message}" if ENV["DEBUG"]
-        { ivars: [], turbo: [], components: [], helpers: [] }
+        RailsAiContext.debug_fail(e, { ivars: [], turbo: [], components: [], helpers: [] }, label: "extract_view_metadata")
       end
 
       # Detect if content is a Phlex view class
@@ -422,8 +421,7 @@ module RailsAiContext
 
         locals.to_a.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_partial_locals failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_partial_locals")
       end
 
       private_class_method def self.read_from_disk(controller:, path:, detail:)

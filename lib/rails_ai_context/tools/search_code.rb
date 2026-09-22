@@ -592,8 +592,7 @@ module RailsAiContext
         end
         nil
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_class_context failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_class_context")
       end
 
       # Extract sibling methods in the same file (other public methods)
@@ -612,8 +611,7 @@ module RailsAiContext
         end
         methods
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_sibling_methods failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "extract_sibling_methods")
       end
 
       # Extract which action a controller caller is in
@@ -638,8 +636,7 @@ module RailsAiContext
         # Show the first 2 routes as hints
         ctrl_routes.first(2).map { |r| "`#{r[:verb]} #{r[:path]}`" }.join(", ")
       rescue => e
-        $stderr.puts "[rails-ai-context] find_routes_for_controller failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "find_routes_for_controller")
       end
 
       # The methods a body calls on itself, off the AST: a receiver-less call
@@ -654,8 +651,7 @@ module RailsAiContext
         collect_internal_calls(root, calls)
         calls.uniq
       rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] internal_calls_in failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "internal_calls_in")
       end
 
       private_class_method def self.collect_internal_calls(node, found)
@@ -683,8 +679,7 @@ module RailsAiContext
 
         result.join("\n")
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_method_body failed: #{e.message}" if ENV["DEBUG"]
-        nil
+        RailsAiContext.debug_fail(e, nil, label: "extract_method_body")
       end
     end
   end

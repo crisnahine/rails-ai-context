@@ -454,8 +454,7 @@ module RailsAiContext
 
         info
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_locale_info failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_locale_info")
       end
 
       private_class_method def self.detect_test_pattern
@@ -531,8 +530,7 @@ module RailsAiContext
 
         sections
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_test_pattern failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_test_pattern")
       end
     end
   end

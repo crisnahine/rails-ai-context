@@ -309,8 +309,7 @@ module RailsAiContext
           var
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] env_references failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "env_references")
       end
 
       private_class_method def self.scan_env_example(root)
@@ -512,8 +511,7 @@ module RailsAiContext
 
         services.uniq { |s| "#{s[:name]}:#{s[:file]}" }
       rescue => e
-        $stderr.puts "[rails-ai-context] detect_http_clients failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "detect_http_clients")
       end
 
       private_class_method def self.extract_service_name_from_url(url)
@@ -530,8 +528,7 @@ module RailsAiContext
           # Use the main domain part
           parts[-2]&.capitalize
         rescue => e
-          $stderr.puts "[rails-ai-context] extract_service_name_from_url failed: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "extract_service_name_from_url")
         end
       end
 

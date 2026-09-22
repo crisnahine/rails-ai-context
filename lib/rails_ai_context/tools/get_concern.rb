@@ -328,8 +328,7 @@ module RailsAiContext
 
         macros
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_concern_macros failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "parse_concern_macros")
       end
 
       # The listener knows every callback macro Rails has, so the section no
@@ -342,8 +341,7 @@ module RailsAiContext
           .map { |cb| callback_declaration(cb) }
           .uniq
       rescue => e
-        $stderr.puts "[rails-ai-context] parse_concern_callbacks failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "parse_concern_callbacks")
       end
 
       # Names the directories find_includers actually searched, so the empty
@@ -394,8 +392,7 @@ module RailsAiContext
 
         includers.sort
       rescue => e
-        $stderr.puts "[rails-ai-context] find_includers failed: #{e.message}" if ENV["DEBUG"]
-        []
+        RailsAiContext.debug_fail(e, [], label: "find_includers")
       end
     end
   end
