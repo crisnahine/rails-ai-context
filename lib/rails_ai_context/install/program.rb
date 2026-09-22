@@ -111,14 +111,15 @@ module RailsAiContext
         to_remove.each do |key|
           tool = AiTool.find(key)
 
-          removed_paths = Cleanup.remove(tools: [ key ], keeping: selected.map(&:to_sym), root: root)
-          removed_paths.each { |path| surface.say "  Removed #{path}", :warn }
+          outcome = Cleanup.remove(tools: [ key ], keeping: selected.map(&:to_sym), root: root)
+          outcome[:removed].each { |path| surface.say "  Removed #{path}", :warn }
+          outcome[:failed].each { |path| surface.say "Could not remove #{path} - check its permissions", :warn }
 
           # Merge-safe MCP config cleanup - removes only the rails-ai-context entry
           cleaned = RailsAiContext::McpConfigGenerator.remove(tools: [ key ], output_dir: root.to_s)
           cleaned.each { |f| surface.say "  Removed MCP entry from #{relative_to(f, root)}", :warn }
 
-          surface.say "  #{tool.name} files removed", :ok if tool
+          surface.say "  #{tool.name} files removed", :ok if tool && outcome[:failed].empty?
         end
       end
 

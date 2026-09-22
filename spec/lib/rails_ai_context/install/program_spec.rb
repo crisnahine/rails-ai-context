@@ -103,6 +103,24 @@ RSpec.describe RailsAiContext::Install::Program do
       described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: ".")
       expect(surface.text).to include("These AI tools were removed from your selection:")
     end
+
+    it "warns about a path it could not remove instead of claiming it went" do
+      skip "root can remove anything" if Process.uid.zero?
+
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, ".cursorrules"), "x")
+        File.chmod(0o500, root)
+
+        surface = surface_class.new("y")
+        described_class.cleanup_removed_tools(surface, previous: %i[claude cursor], selected: %i[claude], root: root)
+
+        expect(surface.lines).to include([ :warn, a_string_including("Could not remove .cursorrules") ])
+        expect(surface.text).not_to include("Removed .cursorrules")
+        expect(surface.text).not_to include("Cursor files removed")
+      ensure
+        File.chmod(0o700, root)
+      end
+    end
   end
 
   describe ".mark_gitignore" do

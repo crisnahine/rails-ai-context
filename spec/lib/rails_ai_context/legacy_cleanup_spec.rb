@@ -119,6 +119,25 @@ RSpec.describe RailsAiContext::LegacyCleanup do
       end
     end
 
+    it "says a file could not be removed rather than claiming it went" do
+      skip "root can remove anything" if Process.uid.zero?
+
+      allow($stdin).to receive(:tty?).and_return(true)
+      allow($stdin).to receive(:gets).and_return("y\n")
+      Dir.mktmpdir do |dir|
+        create(dir, UI_CLAUDE)
+        parent = File.dirname(File.join(dir, UI_CLAUDE))
+        File.chmod(0o500, parent)
+
+        described_class.prompt_legacy_files(nil, root: dir, io: io)
+
+        expect(io.string).to include("Could not remove #{UI_CLAUDE}")
+        expect(io.string).not_to include("  Removed #{UI_CLAUDE}")
+      ensure
+        File.chmod(0o700, parent)
+      end
+    end
+
     it "deletes files when TTY user answers yes" do
       allow($stdin).to receive(:tty?).and_return(true)
       allow($stdin).to receive(:gets).and_return("yes\n")

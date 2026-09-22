@@ -48,8 +48,10 @@ module RailsAiContext
       if input == "y" || input == "yes"
         require "fileutils"
         present.each do |(rel, full)|
+          # rm_f swallows a permission error, so ask the filesystem rather
+          # than claiming the file went.
           FileUtils.rm_f(full)
-          io.puts "  Removed #{rel}"
+          io.puts(File.exist?(full) ? "  Could not remove #{rel} - check its permissions" : "  Removed #{rel}")
         end
       else
         io.puts "  Kept. Delete manually when ready:"
