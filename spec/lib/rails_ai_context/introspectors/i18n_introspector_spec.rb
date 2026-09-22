@@ -299,6 +299,25 @@ RSpec.describe RailsAiContext::Introspectors::I18nIntrospector do
       expect(result[:locale_coverage]["es"]).to include(coverage_pct: 100.0, extra: 1)
     end
 
+    # Only the locale-rooted key paths are kept per file; a locale's own paths
+    # are derived by stripping that root. These numbers are what that derivation
+    # has to reproduce, across files holding one root and files holding several.
+    it "scores every locale the same whether its root shares a file or not" do
+      result = static_result(
+        "en.yml"     => "en:\n  a: A\n  b: B\n  c: C\n  d: D\n",
+        "fr.yml"     => "fr:\n  a: A\n  b: B\n",
+        "shared.yml" => "de:\n  a: A\nes:\n  a: A\n  b: B\n  c: C\nfr:\n  c: C\n  own: X\n"
+      )
+
+      expect(result[:available_locales]).to eq(%w[de en es fr])
+      expect(result[:locale_coverage]).to eq(
+        "de" => { keys: 1, missing: 3, extra: 0, coverage_pct: 25.0 },
+        "es" => { keys: 3, missing: 1, extra: 0, coverage_pct: 75.0 },
+        "fr" => { keys: 4, missing: 1, extra: 1, coverage_pct: 75.0 }
+      )
+      expect(result[:locales_without_translations]).to be_empty
+    end
+
     # Reading every file to answer "which files hold locale X" once per locale
     # is O(locales x files): on Discourse, 187 locales over 108 files took the
     # introspector from under a second to four and a half minutes.
