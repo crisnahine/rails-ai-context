@@ -126,9 +126,7 @@ module RailsAiContext
             # Cross-controller composition
             if data[:cross_controller_composition]&.any?
               lines << "" << "## Cross-Controller Composition"
-              data[:cross_controller_composition].first(10).each do |comp|
-                lines << "- #{comp}"
-              end
+              lines.concat(composition_lines(data[:cross_controller_composition]))
             end
 
             lines << pagination_hint unless pagination_hint.empty?
@@ -144,15 +142,19 @@ module RailsAiContext
             # Cross-controller composition
             if data[:cross_controller_composition]&.any?
               lines << "## Cross-Controller Composition"
-              data[:cross_controller_composition].first(10).each do |comp|
-                lines << "- #{comp}"
-              end
+              lines.concat(composition_lines(data[:cross_controller_composition]))
               lines << ""
             end
 
             text_response(lines.join("\n"))
 
           end
+        end
+      end
+
+      private_class_method def self.composition_lines(compositions)
+        compositions.first(10).map do |comp|
+          "- `#{comp[:file]}` - #{Array(comp[:controllers]).join(' + ')}"
         end
       end
 
