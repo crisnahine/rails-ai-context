@@ -193,7 +193,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 
 | Listener | What it detects |
 |:---------|:---------------|
-| GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes |
+| GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes, plus the nesting: `nested_in` names the target macro whose block the call sits in, and `offset`/`parent_offset` pair a nested call to that call rather than to its line |
 | ChainedCallListener | Calls on a receiver: `ChainedCallListener.new(:includes)`, or `receiver: :inflect` to pin the receiver. Reports the receiver name |
 | ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers and `config/environments/*.rb`, plus bare `config.jwt do ... end` section references. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`) |
 | ClassDefinitionListener | Class definitions with their superclass, namespaces resolved |
@@ -202,7 +202,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | SchemaDslListener | `schema.rb`: `create_table`, `t.string`, `t.index`, `add_foreign_key`, `create_enum` |
 | MigrationDslListener | Migration DSL: `create_table`, `add_column`, `add_index`, `add_reference`, and friends |
 | RoutesDslListener | `config/routes.rb`, resolving namespace/scope/resources nesting into flat routes; routing concerns (`concern` definitions replayed at each `concerns:` site), `with_options` defaults merged under each inner call, and the `as:`, `param:`, `module:`, `path:` and `only:`/`except:` options |
-| MountListener | `mount Sidekiq::Web, at: "/sidekiq"` and the hash form |
+| MountListener | `mount Sidekiq::Web, at: "/sidekiq"`, the hash form, and a Rack app attached with `match "/metrics", to: MetricsApp` - `mount` is that call with a name derived. Paths carry the enclosing `namespace`/`scope` prefix; a scope whose own name is an expression yields no path rather than an unprefixed one |
 | GemfileDslListener | `gem "name", "version"` and `group :development do ... end` |
 | RakeTaskDslListener | `namespace`, `desc`, `task` in `.rake` files |
 | EnvAccessListener | `ENV["KEY"]`, `ENV.fetch("KEY")`, `ENV.fetch("KEY", default)` |
@@ -232,6 +232,18 @@ Regex is the right tool, and stays, for:
 - **Anything the listeners cannot scope.** Tying a call to the enclosing action or `namespace` block needs block scope the listeners do not track, so those fall back to line scanning.
 
 Every remaining regex over `.rb` content carries a one-line comment saying which of these it is. If you add one without a reason, convert it instead.
+
+### Readers built on the listeners
+
+Some questions take more than one walk to answer, and the answer has to be the
+same wherever it is asked. Those live as their own modules under
+`Introspectors/`, and a tool calls one rather than repeating the walk:
+
+| Module | What it answers |
+|:-------|:---------------|
+| `DeclaredConstant` | The constant a source file calls its own class, against the one its path camelizes to |
+| `TableName` | The table a model reads, from its own declarations |
+| `Interaction` | Whether a class runs as an ActiveInteraction, following its superclass chain through the app's own sources, and the filters it takes - inherited ones first, one per name, each carrying the filters nested inside its block. See the **Interaction filter** entry in `CONTEXT.md` |
 
 ### Confidence tagging
 

@@ -44,7 +44,7 @@ could act on.
 - **service_pattern looks for callers where the app keeps code.** The scan
   named six `app/` directories, so a caller in `app/tools` or under `lib/` was
   invisible. It reads every `app/` and `lib/` tree, and says when the
-  twenty-entry cap left the list partial.
+  twenty-entry cap or its own file ceiling left the list partial.
 - **schema tells a missing migration from a typo.** Booted, a table declared
   in `db/schema.rb` and absent from the connected database answered "Did you
   mean 'comments'?". The payload carries the declared tables beside the live
@@ -88,14 +88,19 @@ could act on.
   with a name derived, and the exact-path form is what an app writes when an
   unanchored mount would swallow a sibling path. It reaches `engines` and
   `routes`, which names the mounted apps it counts instead of calling them
-  engine mounts.
+  engine mounts, and the booted tier lists every Rack endpoint rather than
+  `Rails::Engine` subclasses alone. A mount inside a `namespace` or `scope`
+  carries that prefix; one whose enclosing scope is an expression is listed
+  with no path rather than an unprefixed one.
 - **config calls a zero-byte initializer empty** rather than "all commented
   out".
 - **diagnose stops reading a display cap as a model's whole interface.** A
   method past the thirtieth was reported as not existing, in the same answer
-  whose Method Trace printed its definition. The payload carries the whole
-  count beside the capped list, `model_details` says how many it is showing,
-  and the static tier carries the same two keys the booted tier does.
+  whose Method Trace printed its definition. The model's own methods travel
+  uncapped beside the capped display list - the count next to that list is
+  reflection's, and ActiveRecord defines an attribute method per column the
+  moment anything instantiates a model - and `model_details` says how many of
+  them it is showing. Both tiers carry the same keys.
 - **The routes MCP resource resolves a CamelCase name** the way the tool
   does, and answers a name that resolves to nothing with an error naming what
   exists rather than a zero-route success document.
