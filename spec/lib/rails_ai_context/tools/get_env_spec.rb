@@ -638,4 +638,28 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       end
     end
   end
+
+  describe "credentials and encrypted-columns trailer" do
+    let(:credentials_keys) { %w[secret_key_base aws/access_key_id] }
+    let(:encrypted_columns) { { "Keypair" => %w[private_key] } }
+
+    it "reads the same at standard and full" do
+      trailer = lambda do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+        text[text.index("## Credentials Keys (values hidden)")..]
+      end
+
+      expect(trailer.call("standard")).to eq(<<~TEXT.chomp)
+        ## Credentials Keys (values hidden)
+        - `secret_key_base`
+        - `aws/access_key_id`
+
+        ## Encrypted Model Columns
+        - **Keypair:** private_key
+
+        #{described_class::SCAN_NOTE}
+      TEXT
+      expect(trailer.call("full")).to eq(trailer.call("standard"))
+    end
+  end
 end

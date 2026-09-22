@@ -129,7 +129,17 @@ module RailsAiContext
           lines << ""
         end
 
-        # Credentials keys
+        lines.concat(credentials_and_encrypted_lines(credentials_keys, encrypted_columns))
+
+        lines << SCAN_NOTE
+        text_response(lines.join("\n"))
+      end
+
+      # Both `standard` and `full` end with these two sections, so a wording
+      # change cannot land in one detail level and miss the other.
+      private_class_method def self.credentials_and_encrypted_lines(credentials_keys, encrypted_columns)
+        lines = []
+
         if credentials_keys.any?
           lines << "## Credentials Keys (values hidden)"
           credentials_keys.each { |k| lines << "- `#{k}`" }
@@ -140,7 +150,6 @@ module RailsAiContext
           lines << ""
         end
 
-        # Encrypted columns
         if encrypted_columns.any?
           lines << "## Encrypted Model Columns"
           encrypted_columns.each do |model, cols|
@@ -149,8 +158,7 @@ module RailsAiContext
           lines << ""
         end
 
-        lines << SCAN_NOTE
-        text_response(lines.join("\n"))
+        lines
       end
 
       private_class_method def self.format_full(env_vars, env_example, dockerfile_vars, external_services, credentials_keys, encrypted_columns, root)
@@ -234,25 +242,7 @@ module RailsAiContext
           lines << ""
         end
 
-        # Credentials keys
-        if credentials_keys.any?
-          lines << "## Credentials Keys (values hidden)"
-          credentials_keys.each { |k| lines << "- `#{k}`" }
-          lines << ""
-        elsif credentials_file_present?
-          lines << "## Credentials Keys (values hidden)"
-          lines << RailsAiContext::Confidence.unavailable("credentials are encrypted; reading the key names needs a booted app with its master key")
-          lines << ""
-        end
-
-        # Encrypted columns
-        if encrypted_columns.any?
-          lines << "## Encrypted Model Columns"
-          encrypted_columns.each do |model, cols|
-            lines << "- **#{model}:** #{cols.join(', ')}"
-          end
-          lines << ""
-        end
+        lines.concat(credentials_and_encrypted_lines(credentials_keys, encrypted_columns))
 
         lines << SCAN_NOTE
         text_response(lines.join("\n"))
