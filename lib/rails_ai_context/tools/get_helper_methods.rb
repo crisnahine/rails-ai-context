@@ -134,9 +134,17 @@ module RailsAiContext
 
         # Two roots can hold the same relative path, so one module name can have
         # more than one file behind it. Everything below is this file only.
-        if matches.size > 1
-          others = matches.drop(1).map { |f| "`#{f.sub("#{root}/", "")}`" }
+        # A basename selector also matches same-named helpers in other
+        # namespaces; those declare a different module, so they are named
+        # apart rather than counted as this one.
+        same_module, other_modules = matches.partition { |f| module_name_for(f, helper_dirs) == module_name }
+        if same_module.size > 1
+          others = same_module.drop(1).map { |f| "`#{f.sub("#{root}/", "")}`" }
           lines << "**Also defined in:** #{others.join(', ')}"
+        end
+        if other_modules.any?
+          named = other_modules.map { |f| "`#{module_name_for(f, helper_dirs)}` (`#{f.sub("#{root}/", "")}`)" }
+          lines << "**Same file name, different module:** #{named.join(', ')}"
         end
 
         # Parse method signatures

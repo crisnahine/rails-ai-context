@@ -179,6 +179,52 @@ RSpec.describe RailsAiContext::Tools::GetHelperMethods do
       end
     end
 
+    context "when two namespaces hold the same helper file name" do
+      def two_namespace_app(root)
+        helpers = File.join(root, "app", "helpers")
+        FileUtils.mkdir_p(File.join(helpers, "admin"))
+        FileUtils.mkdir_p(File.join(helpers, "reports"))
+        File.write(File.join(helpers, "admin", "dashboard_helper.rb"), <<~RUBY)
+          module Admin
+            module DashboardHelper
+              def admin_total; end
+            end
+          end
+        RUBY
+        File.write(File.join(helpers, "reports", "dashboard_helper.rb"), <<~RUBY)
+          module Reports
+            module DashboardHelper
+              def reports_total; end
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+      end
+
+      it "does not claim the other namespace defines the module in the heading" do
+        Dir.mktmpdir do |root|
+          two_namespace_app(root)
+
+          text = described_class.call(helper: "DashboardHelper").content.first[:text]
+
+          expect(text).to include("# Admin::DashboardHelper")
+          expect(text).not_to include("Also defined in")
+        end
+      end
+
+      it "names the other module and its path instead of dropping it" do
+        Dir.mktmpdir do |root|
+          two_namespace_app(root)
+
+          text = described_class.call(helper: "DashboardHelper").content.first[:text]
+
+          expect(text).to include("Same file name, different module")
+          expect(text).to include("Reports::DashboardHelper")
+          expect(text).to include("app/helpers/reports/dashboard_helper.rb")
+        end
+      end
+    end
+
     context "when an API-only app has no app/helpers directory" do
       it "answers not applicable instead of not found" do
         Dir.mktmpdir do |root|
