@@ -72,13 +72,6 @@ module RailsAiContext
         setup
       end
 
-      # The tool-mode half of the same question, for a caller that predates
-      # the setup struct. It cannot express "MCP config only", so every
-      # entry point in this gem calls `select_setup` instead.
-      def select_tool_mode(surface)
-        select_setup(surface).tool_mode
-      end
-
       def setup_label(setup)
         return "MCP config only (no context files)" unless setup.context_files
 
