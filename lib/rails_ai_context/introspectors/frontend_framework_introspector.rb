@@ -74,11 +74,11 @@ module RailsAiContext
         state = detect_state_management(all_deps)
         testing = detect_testing(all_deps)
         pkg_mgr = detect_package_manager
-        ts = detect_typescript
         mono = detect_monorepo(all_deps)
         build = detect_build_tool
         vite_fw = detect_vite_config_frameworks
         roots = detect_frontend_roots
+        ts = detect_typescript(roots)
 
         # Merge vite config detected frameworks into main frameworks hash
         vite_fw.each { |sym| frameworks[sym] ||= nil unless frameworks.key?(sym) }
@@ -168,9 +168,12 @@ module RailsAiContext
 
       # ---- TypeScript ----
 
-      def detect_typescript
-        path = File.join(root, "tsconfig.json")
-        return { enabled: false } unless File.exist?(path)
+      # An app whose TypeScript lives under frontend/ has no tsconfig.json at
+      # its root, so the frontend roots are searched too. The root one wins.
+      def detect_typescript(roots)
+        dirs = [ root ] + roots.map { |fr| File.join(root, fr[:path]) }
+        path = dirs.map { |dir| File.join(dir, "tsconfig.json") }.find { |p| File.exist?(p) }
+        return { enabled: false } unless path
 
         data = parse_json(path)
         return { enabled: false } unless data.is_a?(Hash)
@@ -313,7 +316,7 @@ module RailsAiContext
         end
 
         # 5. Common directories
-        %w[app/frontend app/javascript frontend client].filter_map do |dir|
+        RailsAiContext::PackageJson::FRONTEND_DIRS.filter_map do |dir|
           full = File.join(root, dir)
           next unless Dir.exist?(full)
           next unless safe_path?(full)

@@ -2,6 +2,7 @@
 
 require "spec_helper"
 require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::PackageJson do
   around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
@@ -47,6 +48,57 @@ RSpec.describe RailsAiContext::PackageJson do
 
     expect(File.size(File.join(@root, "package.json"))).to be > 256 * 1024
     expect(described_class.present?(@root, "bulma")).to be(true)
+  end
+
+  # A Rails app can keep a root package.json for importmap and a whole Vue
+  # app under frontend/. Both are the app's dependencies.
+  describe "a manifest outside the app root" do
+    def write_frontend(dir, contents)
+      FileUtils.mkdir_p(File.join(@root, dir))
+      File.write(File.join(@root, dir, "package.json"), contents)
+    end
+
+    it "reads a conventional frontend directory's manifest" do
+      write_frontend("frontend", JSON.generate(
+        "dependencies" => { "vue" => "3.4.0" },
+        "devDependencies" => { "typescript" => "5.4.0" }
+      ))
+
+      expect(described_class.deps(@root).keys).to contain_exactly("vue", "typescript")
+      expect(described_class.present?(@root, "vue")).to be(true)
+    end
+
+    it "reads a directory the app declared through frontend_paths" do
+      write_frontend("web", JSON.generate("dependencies" => { "svelte" => "4.0.0" }))
+      allow(RailsAiContext.configuration).to receive(:frontend_paths).and_return([ "web" ])
+
+      expect(described_class.present?(@root, "svelte")).to be(true)
+    end
+
+    it "lets the root manifest win a version disagreement" do
+      write(JSON.generate("dependencies" => { "vue" => "2.7.0" }))
+      write_frontend("frontend", JSON.generate("dependencies" => { "vue" => "3.4.0" }))
+
+      expect(described_class.deps(@root)["vue"]).to eq("2.7.0")
+    end
+
+    it "still refuses an overrides pin in a frontend manifest" do
+      write_frontend("frontend", JSON.generate(
+        "dependencies" => { "vue" => "3.4.0" },
+        "overrides" => { "esbuild" => "^0.25.0" }
+      ))
+
+      expect(described_class.present?(@root, "esbuild")).to be(false)
+    end
+
+    it "does not follow a frontend directory that resolves outside the app root" do
+      outside = File.join(Dir.mktmpdir, "elsewhere")
+      FileUtils.mkdir_p(outside)
+      File.write(File.join(outside, "package.json"), JSON.generate("dependencies" => { "vue" => "3.4.0" }))
+      File.symlink(outside, File.join(@root, "frontend"))
+
+      expect(described_class.present?(@root, "vue")).to be(false)
+    end
   end
 
   it "answers an empty hash for a missing or unparseable file" do

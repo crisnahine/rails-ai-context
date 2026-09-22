@@ -314,6 +314,40 @@ RSpec.describe RailsAiContext::Introspectors::FrontendFrameworkIntrospector do
     end
   end
 
+  # An app whose whole frontend lives under frontend/ has neither a manifest
+  # nor a tsconfig at its root, and used to be answered as having no
+  # framework and TypeScript disabled in the same breath as naming the root.
+  describe "an app whose frontend root holds the manifest" do
+    def build(root)
+      FileUtils.mkdir_p(File.join(root, "frontend"))
+      File.write(File.join(root, "frontend/package.json"), JSON.generate(
+        "dependencies" => { "vue" => "3.4.0" },
+        "devDependencies" => { "typescript" => "5.4.0" },
+        "overrides" => { "esbuild" => "0.25.0" }
+      ))
+      File.write(File.join(root, "frontend/tsconfig.json"), JSON.generate(
+        "compilerOptions" => { "strict" => true }
+      ))
+      described_class.new(RailsAiContext::StaticApp.new(root)).call
+    end
+
+    it "names the framework and finds the TypeScript config" do
+      Dir.mktmpdir do |tmp|
+        result = build(File.realpath(tmp))
+
+        expect(result[:frameworks]).to include(vue: "3.4.0")
+        expect(result[:typescript]).to include(enabled: true, strict: true)
+        expect(result[:summary][:stack]).to include("Vue", "TypeScript")
+      end
+    end
+
+    it "does not let an overrides pin name the build tool" do
+      Dir.mktmpdir do |tmp|
+        expect(build(File.realpath(tmp))[:build_tool]).to be_nil
+      end
+    end
+  end
+
   describe "frontend roots" do
     it "does not count a frontend root that resolves outside the app root" do
       Dir.mktmpdir("frontend") do |dir|
