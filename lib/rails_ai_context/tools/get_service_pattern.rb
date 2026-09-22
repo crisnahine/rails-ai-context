@@ -69,8 +69,13 @@ module RailsAiContext
           unambiguous = names.find { |n| counts[n] == 1 }
           hint = if unambiguous
             "_Pass the namespaced name, for example `service:\"#{unambiguous.camelize}\"`._"
-          else
+          elsif counts.size == 1
             "_These sit at the same relative path under different roots, so they declare the same `#{names.first.camelize}`. Open the path you want directly._"
+          else
+            # No name is unique, but several distinct ones are here: narrowing
+            # shortens the list without ever reaching a single file.
+            constants = counts.keys.map { |n| "`#{n.camelize}`" }.join(", ")
+            "_Each of #{constants} sits under more than one root. Pass one to narrow the list, then open the path you want directly._"
           end
 
           return text_response(

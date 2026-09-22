@@ -84,6 +84,45 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       end
     end
 
+    context "with two namespaces duplicated across two roots" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        app = File.join(tmpdir, "app", "services")
+        pack = File.join(tmpdir, "packs", "billing", "app", "services")
+        [ app, pack ].each do |dir|
+          FileUtils.mkdir_p(File.join(dir, "admin"))
+          FileUtils.mkdir_p(File.join(dir, "billing"))
+          File.write(File.join(dir, "admin", "report.rb"), "module Admin\n  class Report\n    def call; end\n  end\nend\n")
+          File.write(File.join(dir, "billing", "report.rb"), "module Billing\n  class Report\n    def call; end\n  end\nend\n")
+        end
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "does not claim every match declares the same constant" do
+        text = described_class.call(service: "Report").content.first[:text]
+
+        expect(text).to include("matches 4 files")
+        expect(text).not_to include("they declare the same")
+      end
+
+      it "names both constants so the list can be narrowed" do
+        text = described_class.call(service: "Report").content.first[:text]
+
+        expect(text).to include("`Admin::Report`")
+        expect(text).to include("`Billing::Report`")
+      end
+
+      it "still says the paths are equal once one constant is named" do
+        text = described_class.call(service: "Billing::Report").content.first[:text]
+
+        expect(text).to include("matches 2 files")
+        expect(text).to include("they declare the same `Billing::Report`")
+      end
+    end
+
     context "with service fixtures" do
       let(:tmpdir) { Dir.mktmpdir }
       let(:services_dir) { File.join(tmpdir, "app", "services") }
