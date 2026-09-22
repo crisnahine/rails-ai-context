@@ -31,7 +31,8 @@ module RailsAiContext
         service_dirs = PathResolver.dirs_for(root, "app/services")
 
         if service_dirs.empty?
-          return text_response("No app/services/ directory found. This app may not use the service objects pattern.")
+          return text_response("No services directory found. Searched app/services/, packs/*/app/services/ and engines/*/app/services/. " \
+            "This app may not use the service objects pattern.")
         end
 
         real_root = File.realpath(root).to_s
@@ -39,7 +40,7 @@ module RailsAiContext
 
         service_files = service_dirs.flat_map { |d| safe_glob(d, "**/*.rb", real_root) }.uniq.sort
         if service_files.empty?
-          return text_response("app/services/ directory exists but contains no Ruby files.")
+          return text_response("A services directory exists but contains no Ruby files.")
         end
 
         if service
