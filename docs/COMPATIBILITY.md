@@ -200,7 +200,10 @@ Proof sources:
    (Rails 8.1, Ruby 3.4) in the v5.25.0 release QA, booted and static tiers,
    standalone and in-Gemfile installs; Mastodon again in the v5.26.0 release QA,
    with packs, in-repo engines, Postgres and concurrent tool calls covered by
-   hand where no lab shape plants them.
+   hand where no lab shape plants them; a private Rails 8.0.5.1 API-only app
+   (Ruby 3.4.10, 133 models, 102 controllers, 1630 ActiveInteraction services,
+   516 Sidekiq workers) in the v5.27.0 QA round, booted and static tiers, with
+   every report rebuilt on a minimal Rails 8.0.5.1 fixture before it was filed.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
