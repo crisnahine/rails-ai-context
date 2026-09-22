@@ -137,28 +137,9 @@ module RailsAiContext
         target_bases = %w[ActiveSupport::CurrentAttributes Rails::CurrentAttributes]
 
         SourceScan.classes(root, kind: "app/models").filter_map do |name, record|
-          class_node = find_first_class_node(AstCache.parse_string(record.source).value)
-          next unless class_node&.superclass
-
-          name if target_bases.include?(constant_path_to_string(class_node.superclass))
-        rescue => _e
-          next
+          declared = DeclaredConstant.declarations(record.source).first
+          name if declared && target_bases.include?(declared.superclass)
         end
-      end
-
-      def find_first_class_node(node)
-        return node if node.is_a?(Prism::ClassNode)
-        node.child_nodes.compact.each do |child|
-          found = find_first_class_node(child)
-          return found if found
-        end
-        nil
-      end
-
-      def constant_path_to_string(node)
-        return nil unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)
-
-        node.slice.delete_prefix("::")
       end
 
       def detect_error_monitoring

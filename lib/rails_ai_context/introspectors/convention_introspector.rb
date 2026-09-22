@@ -273,44 +273,10 @@ module RailsAiContext
         [ parent.demodulize.underscore.pluralize, parent.underscore.tr("/", "_").pluralize ].uniq
       end
 
-      # Extract the full superclass path (e.g. "ActiveSupport::CurrentAttributes").
+      # The full superclass path (e.g. "ActiveSupport::CurrentAttributes") of
+      # the first class in the file that names one.
       def extract_superclass_path(source)
-        parse_result = AstCache.parse_string(source)
-        find_superclass_path(parse_result.value)
-      rescue => e
-        $stderr.puts "[rails-ai-context] extract_superclass_path failed: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      def find_superclass_path(node)
-        case node
-        when Prism::ProgramNode
-          find_superclass_path(node.statements)
-        when Prism::StatementsNode
-          node.body.each do |child|
-            result = find_superclass_path(child)
-            return result if result
-          end
-          nil
-        when Prism::ClassNode
-          superclass = node.superclass
-          case superclass
-          when Prism::ConstantReadNode then superclass.name.to_s
-          when Prism::ConstantPathNode then constant_path_to_string(superclass)
-          else nil
-          end
-        when Prism::ModuleNode
-          node.body&.body&.each do |child|
-            result = find_superclass_path(child)
-            return result if result
-          end
-          nil
-        else nil
-        end
-      end
-
-      def constant_path_to_string(node)
-        node.slice.delete_prefix("::")
+        DeclaredConstant.declarations(source).filter_map(&:superclass).first
       end
 
       def dir_exists?(relative_path)
