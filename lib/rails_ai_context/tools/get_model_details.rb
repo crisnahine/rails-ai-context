@@ -245,6 +245,7 @@ module RailsAiContext
 
         # Custom validate methods (business rules) - show method body when possible
         if data[:custom_validates]&.any?
+          lines << "" << "## Validations" unless data[:validations]&.any?
           bodies = extract_custom_validate_bodies(name, data[:custom_validates])
           data[:custom_validates].each do |v|
             if bodies[v]
