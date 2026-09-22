@@ -57,6 +57,49 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     expect(results).to be_empty
   end
 
+  # Rails serves /admin/stats, and a path read off the call alone says
+  # /stats - a wrong path is worse than no path.
+  it "carries the namespace a Rack app is attached inside" do
+    results = parse_and_dispatch(<<~RUBY)
+      namespace :admin do
+        match "/stats", to: StatsApp, via: :all
+      end
+    RUBY
+
+    expect(results.first).to include(engine: "StatsApp", path: "/admin/stats")
+  end
+
+  it "carries a scope's path the same way" do
+    results = parse_and_dispatch(<<~RUBY)
+      scope "/internal" do
+        mount StatsApp => "/stats"
+      end
+    RUBY
+
+    expect(results.first).to include(engine: "StatsApp", path: "/internal/stats")
+  end
+
+  it "leaves the path unknown when the enclosing scope's name cannot be read" do
+    results = parse_and_dispatch(<<~RUBY)
+      namespace SECTION do
+        mount StatsApp => "/stats"
+      end
+    RUBY
+
+    expect(results.first).to include(engine: "StatsApp")
+    expect(results.first[:path]).to be_nil
+  end
+
+  it "ignores a scope that sets a module and no path" do
+    results = parse_and_dispatch(<<~RUBY)
+      scope module: :admin do
+        mount StatsApp => "/stats"
+      end
+    RUBY
+
+    expect(results.first).to include(path: "/stats")
+  end
+
   it "detects multiple mounts" do
     results = parse_and_dispatch(<<~RUBY)
       mount Sidekiq::Web, at: "/sidekiq"

@@ -791,6 +791,16 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).to include("app/tools/invoice_tool.rb")
       end
 
+      # The scan reads every file under app/ and lib/, so on a large app it
+      # has to stop somewhere and say that it did.
+      it "says so when the scan stopped at its file ceiling" do
+        stub_const("#{described_class}::MAX_CALLER_SCAN_FILES", 1)
+
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("stopped after 1 file")
+      end
+
       it "names a caller under lib/" do
         text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
 

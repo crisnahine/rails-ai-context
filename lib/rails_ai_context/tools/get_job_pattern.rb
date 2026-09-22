@@ -66,12 +66,15 @@ module RailsAiContext
           lines << "" if lines.any?
           lines.concat(format_channels_section(channels))
         end
-        # A count of the jobs and workers the introspector saw is still a claim
-        # about the app's async work, and an app that names its Sidekiq config
-        # anything but config/sidekiq.yml used to get the count with no caveat
-        # at all. The queues are a bonus when that file does exist.
-        lines << "" if lines.any?
-        lines << "_#{[ sidekiq_line, UNSEEN_WORKERS ].compact.join(" ")}_"
+        # A worker count is a claim about the app's async work, and an app that
+        # names its Sidekiq config anything but config/sidekiq.yml used to get
+        # that count with no caveat at all: the sentence hung off the file
+        # rather than off the section it qualifies. An app with no Sidekiq in
+        # it gets no sentence about Sidekiq.
+        if workers.any? || sidekiq_line
+          lines << "" if lines.any?
+          lines << "_#{[ sidekiq_line, UNSEEN_WORKERS ].compact.join(" ")}_"
+        end
         text_response(lines.join("\n"))
       end
 
@@ -135,6 +138,7 @@ module RailsAiContext
         class_name = fuzzy_find_key(names, query) ||
                      fuzzy_find_key(names, "#{query.underscore.delete_suffix("_job")}_job")
         relative = class_name && RailsAiContext::Payload.job_file(cached_context, class_name)
+        worker = nil
         unless relative
           # A Sidekiq worker is not in the ActiveJob list, and the listing
           # above it prints both, so the name a reader copied is in either.
@@ -160,9 +164,12 @@ module RailsAiContext
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
 
-        # Queue
-        queue = extract_queue(source)
+        # Queue. A worker declares its own in `sidekiq_options`, which the
+        # introspector already read, and the throttle that governs it is on
+        # the same record - the listing shows both, so this page shows both.
+        queue = extract_queue(source) || (worker && (worker[:options] || {})["queue"])
         lines << "**Queue:** `#{queue}`" if queue
+        lines << "**Throttle:** #{worker[:throttle]}" if worker && worker[:throttle]
 
         # Retry/discard configuration
         retry_config = extract_retry_config(source)

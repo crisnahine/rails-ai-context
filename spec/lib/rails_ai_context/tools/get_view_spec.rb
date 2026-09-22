@@ -223,6 +223,15 @@ RSpec.describe RailsAiContext::Tools::GetView do
         expect(text).to include("`controller:\"pdfs\"`")
         expect(text).not_to include("`controller:\"notice.text.erb\"`")
       end
+
+      # The root bucket is not a directory, so offering it as a filter is the
+      # same dead end the filename group was.
+      it "does not offer the root bucket as a controller to filter by" do
+        text = described_class.call(detail: "full").content.first[:text]
+
+        expect(text).not_to include("controller:\"(app/views root)\"")
+        expect(text).to include("`path:")
+      end
     end
 
     context "when the app is API-only" do

@@ -238,6 +238,13 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(text).not_to include("Did you mean")
     end
 
+    it "answers the same way for the model name the tool advertises" do
+      text = described_class.call(table: "OrderComments").content.first[:text]
+
+      expect(text).to include("declared in db/schema.rb")
+      expect(text).not_to include("Did you mean")
+    end
+
     it "still suggests a spelling for a table nothing declares" do
       text = described_class.call(table: "userz").content.first[:text]
 

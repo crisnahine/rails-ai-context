@@ -74,9 +74,12 @@ module RailsAiContext
               # is not a misspelling: the migration that adds it has not run
               # here, and "Did you mean 'comments'?" sends the reader to fix
               # the wrong thing.
-              if declared_not_connected(schema).include?(table_key)
+              # The key is the caller's own string when nothing matched, and
+              # the declared names are table names: `OrderComments` and
+              # `order_comments` are the same request.
+              if declared_not_connected(schema).include?(table_key.to_s.underscore)
                 return text_response(
-                  "Table '#{table_key}' is declared in db/schema.rb and missing from the connected database. " \
+                  "Table '#{table_key.to_s.underscore}' is declared in db/schema.rb and missing from the connected database. " \
                   "Run `rails db:migrate`, or pass `--no-boot` to read the declaration instead."
                 )
               end

@@ -229,7 +229,7 @@ module RailsAiContext
       end
 
       def count_unrouted_mounts
-        controllerless_routes.count { |r| !dynamic_target?(r) }
+        mounted_routes.size
       rescue => e
         RailsAiContext.debug_fail(e, 0, label: "count_unrouted_mounts")
       end
@@ -255,30 +255,30 @@ module RailsAiContext
         rack_app.is_a?(Proc)
       end
 
-      # Every Rack app the route set carries, engine or not. `mount App => path`
-      # is `match(path, to: app, via: :all, anchor: false)` with a name
-      # derived, so the two forms build the same endpoint, and keeping only
-      # Rails::Engine subclasses left a plain Rack app counted in the header
-      # and named nowhere. A controller route is told apart by its dispatcher
-      # and by the controller its defaults carry.
+      # Every Rack app the route set carries, engine or not, read off the same
+      # set the count reads: `mount App => path` is `match(path, to: app,
+      # via: :all, anchor: false)` with a name derived, so the two forms build
+      # the same endpoint, and keeping only Rails::Engine subclasses left a
+      # plain Rack app counted in the header and named nowhere. An app mounted
+      # as an instance (propshaft's Server) is named by its class, because the
+      # count includes it either way and a header that disagrees with the list
+      # below it is the thing this pairing exists to prevent.
       def detect_mounted_engines
-        app.routes.routes
-          .reject { |r| r.respond_to?(:internal) && r.internal }
-          .select { |r| r.app.respond_to?(:app) && r.app.app.is_a?(Class) }
-          .filter_map do |r|
-            next if r.defaults[:controller].present?
-            next if r.app.respond_to?(:dispatcher?) && r.app.dispatcher?
+        mounted_routes.filter_map do |r|
+          mounted = r.app.respond_to?(:app) ? r.app.app : r.app
+          name = mounted.is_a?(Class) ? mounted.name : mounted.class.name
+          next if name.nil?
 
-            mounted = r.app.app
-            next if mounted.name.nil?
+          { engine: name, path: mount_path(r) }
+        rescue => e
+          RailsAiContext.debug_fail(e, nil, label: "detect_mounted_engines")
+        end
+      end
 
-            {
-              engine: mounted.name,
-              path: mount_path(r)
-            }
-          rescue => e
-            RailsAiContext.debug_fail(e, nil, label: "detect_mounted_engines")
-          end
+      # Routable, controller-less, and not a redirect or a lambda: what is
+      # left is a Rack app attached at a path.
+      def mounted_routes
+        controllerless_routes.reject { |r| dynamic_target?(r) }
       end
 
       # `match` records the format segment the path spec carries; `mount` does

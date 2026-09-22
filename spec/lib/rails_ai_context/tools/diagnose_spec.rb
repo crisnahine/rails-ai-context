@@ -171,6 +171,42 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
               scopes: [],
               class_methods: [],
               instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+              # The model's own methods, uncapped: the display list stops at
+              # thirty and `title_present?` is the thirty-second in the file.
+              source_instance_methods: (1..31).map { |i| "step_#{format('%02d', i)}" } + %w[title_present?],
+              instance_method_count: 132
+            }
+          },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+      end
+
+      it "does not claim a method the model's own source defines does not exist" do
+        text = described_class.call(error: "NoMethodError: undefined method `title_present?' for an instance of Post").content.first[:text]
+
+        expect(text).not_to include("undefined_method_on_model")
+        expect(text).not_to include("the method does not exist")
+      end
+
+      # The reflection list is capped and attribute methods inflate its count
+      # the moment anything instantiates a model, so a guard keyed on that
+      # count alone switches the classification off app-wide.
+      it "still names a method that is in neither the source nor the schema" do
+        text = described_class.call(error: "NoMethodError: undefined method `bogus_assoc' for an instance of Post").content.first[:text]
+
+        expect(text).to include("undefined_method_on_model")
+      end
+    end
+
+    # A context written before the source list existed carries no key for it,
+    # and a negative claim cannot be read off what is left.
+    context "a payload from before the source method list existed" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: {
+            "Post" => {
+              table_name: "posts", associations: [], scopes: [], class_methods: [],
+              instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
               instance_method_count: 32
             }
           },
@@ -178,11 +214,10 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
         )
       end
 
-      it "does not claim a method does not exist when the list was cut" do
+      it "declines to classify rather than guess" do
         text = described_class.call(error: "NoMethodError: undefined method `title_present?' for an instance of Post").content.first[:text]
 
         expect(text).not_to include("undefined_method_on_model")
-        expect(text).not_to include("the method does not exist")
       end
     end
 

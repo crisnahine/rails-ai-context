@@ -74,7 +74,7 @@ module RailsAiContext
         links = chain(source, lookup: lookup)
         return nil if links.empty?
 
-        links.reverse.flat_map { |link| own_filters(link) }
+        one_per_name(links.reverse.flat_map { |link| own_filters(link) })
       end
 
       # The classes from ActiveInteraction::Base down to this one, nearest
@@ -139,6 +139,19 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "Interaction.autoload_roots")
       end
 
+      # `.filters` is a hash keyed by name, so a subclass that redeclares its
+      # parent's filter replaces it and keeps the parent's position. Rendering
+      # both printed the name twice, and generating `run(token: nil, token:
+      # nil)` from it is a duplicate keyword argument.
+      def one_per_name(filters)
+        slots = {}
+        filters.each_with_index do |filter, index|
+          existing = slots[filter.name]
+          slots[filter.name] = [ existing ? existing.first : index, filter ]
+        end
+        slots.values.sort_by(&:first).map(&:last)
+      end
+
       # The filters one class declares, nested ones attached to the filter
       # whose block they sit in, paired by the parent call's own offset in the
       # source.
@@ -170,7 +183,7 @@ module RailsAiContext
 
         top
       end
-      private_class_method :autoload_roots, :own_filters
+      private_class_method :autoload_roots, :own_filters, :one_per_name
     end
   end
 end

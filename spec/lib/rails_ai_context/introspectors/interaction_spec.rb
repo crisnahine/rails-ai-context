@@ -112,6 +112,20 @@ RSpec.describe RailsAiContext::Introspectors::Interaction do
       expect(filters.last.declared_by).to eq("Billing::Charge")
     end
 
+    # ActiveInteraction keeps one filter per name: a subclass that narrows a
+    # parent's filter replaces it, in the parent's position.
+    it "keeps one filter per name when a subclass redeclares its parent's" do
+      base = "class Billing::BaseRequest < ActiveInteraction::Base\n  string :token\n  object :account\nend\n"
+      source = "class Billing::Charge < Billing::BaseRequest\n  string :token, default: nil\nend\n"
+      lookup = ->(name) { base if name == "Billing::BaseRequest" }
+
+      filters = described_class.filters(source, lookup: lookup)
+
+      expect(filters.map(&:name)).to eq(%w[token account])
+      expect(filters.first.declared_by).to eq("Billing::Charge")
+      expect(filters.first.options).to include(default: nil)
+    end
+
     it "is empty for a class that is not an interaction" do
       expect(described_class.filters("class ChargeCard\n  string :nope\nend\n")).to eq([])
     end

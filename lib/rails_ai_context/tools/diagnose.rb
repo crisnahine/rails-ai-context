@@ -289,11 +289,12 @@ module RailsAiContext
           model_data = models[receiver]
           return nil unless model_data.is_a?(Hash) && !model_data[:error]
 
-          # The payload's method lists are capped for display, and a negative
-          # claim cannot be read off a partial list: a method past the cap was
-          # reported as not existing in the same answer that printed its
-          # definition.
-          return nil if method_lists_truncated?(model_data)
+          # A negative claim cannot be read off a partial list: a method past
+          # the display cap was reported as not existing in the same answer
+          # that printed its definition. The model's own methods arrive
+          # uncapped for exactly this; a payload that predates them carries no
+          # such key, and there the cap is still a reason to say nothing.
+          return nil if source_methods_missing?(model_data)
 
           known = known_model_methods(model_data)
           # "published?" / "save!" resolve through the bare attribute name, so
@@ -325,14 +326,19 @@ module RailsAiContext
           nil
         end
 
-        # Whether either method list the model carries is shorter than the
-        # count beside it. A payload from before those counts existed carries
-        # neither, and is read as complete.
-        def method_lists_truncated?(model_data)
-          [ [ :instance_methods, :instance_method_count ], [ :class_methods, :class_method_count ] ].any? do |list_key, count_key|
-            count = model_data[count_key]
-            count.is_a?(Integer) && count > Array(model_data[list_key]).size
-          end
+        # True when the model carries no uncapped source list and its display
+        # list was cut, which is the case where the names it does carry cannot
+        # answer whether a method exists.
+        #
+        # The count beside the list is no substitute: on the booted tier it
+        # counts reflection's answer, and ActiveRecord defines an attribute
+        # method per column the first time a model is instantiated, so it
+        # passes thirty on an ordinary model the moment the app is warm.
+        def source_methods_missing?(model_data)
+          return false if model_data[:source_instance_methods].is_a?(Array)
+
+          count = model_data[:instance_method_count]
+          count.is_a?(Integer) && count > Array(model_data[:instance_methods]).size
         end
 
         # Everything legitimately callable on the model that introspection
@@ -340,6 +346,8 @@ module RailsAiContext
         def known_model_methods(model_data)
           names = Array(model_data[:associations]).filter_map { |a| (a[:name] || a["name"])&.to_s }
           names += Array(model_data[:instance_methods]).map(&:to_s)
+          # Uncapped, and the half of the set a display cap must never decide.
+          names += Array(model_data[:source_instance_methods]).map(&:to_s)
           names += Array(model_data[:class_methods]).map(&:to_s)
           names += Array(model_data[:scopes]).filter_map { |s| s.is_a?(Hash) ? (s[:name] || s["name"])&.to_s : s.to_s }
 

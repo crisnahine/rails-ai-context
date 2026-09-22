@@ -320,7 +320,8 @@ module RailsAiContext
 
         if validators.any?
           lines << "## Validators (#{validators.size})"
-          lines << "_Not concerns: each subclasses `ActiveModel::Validator` and is wired with `validates_with`._"
+          lines << "_Not concerns: each subclasses `ActiveModel::Validator` or `ActiveModel::EachValidator`, " \
+                   "and is wired with `validates_with` or a validation option rather than with `include`._"
           validators.each do |v|
             lines << "- **#{v[:name]}** - #{count_phrase(v[:method_count], "method")} (`#{v[:path]}`)"
           end

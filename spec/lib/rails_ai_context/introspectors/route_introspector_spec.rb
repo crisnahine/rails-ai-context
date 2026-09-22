@@ -92,6 +92,20 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
       )
     end
 
+    # The header count and the list have to describe the same set: the count
+    # included a Rack app attached as an instance, and the list held classes
+    # only, so one line of output disagreed with the next.
+    it "names an endpoint attached as an instance too" do
+      server = Class.new { def call(_env) = [ 200, {}, [ "ok" ] ] }
+      stub_const("Propshaft::Server", server)
+      set = ActionDispatch::Routing::RouteSet.new
+      set.draw { mount Propshaft::Server.new => "/assets" }
+      result = described_class.new(double("app", routes: set, routes_reloader: nil, root: Rails.root)).call
+
+      expect(result[:mounted_engines].map { |m| m[:path] }).to include("/assets")
+      expect(result[:unrouted_mounts]).to eq(result[:mounted_engines].size)
+    end
+
     it "counts them as the mounts they are, and leaves the controller route alone" do
       result = described_class.new(app_double).call
 

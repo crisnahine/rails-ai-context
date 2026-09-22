@@ -110,17 +110,26 @@ module RailsAiContext
         unconditional, conditional = entries.partition { |entry| entry[:condition].nil? }
         rendered = conditional.map { |entry|
           value = one_line(entry[:source].to_s)
-          entry[:condition] == "else" ? "else #{value}" : "#{value} if #{entry[:condition]}"
+          text = entry[:condition] == "else" ? "else #{value}" : "#{value} if #{entry[:condition]}"
+          [ entry[:location].to_i, text ]
         }
 
         if unconditional.any?
-          values = unconditional.map { |entry| one_line(entry[:source].to_s) }.uniq
-          last = values.last
-          overridden = values[0..-2]
-          rendered.unshift(overridden.any? ? "#{last} (overrides #{overridden.join(', ')})" : last)
+          # The last line the file runs is the value in force, whatever ran
+          # before it, so the winner is taken before any de-duplication - a
+          # value that repeats is still the one that ran last.
+          winner = unconditional.last
+          overridden = unconditional[0..-2].map { |entry| one_line(entry[:source].to_s) }.uniq
+          overridden -= [ one_line(winner[:source].to_s) ]
+          text = one_line(winner[:source].to_s)
+          text += " (overrides #{overridden.join(', ')})" if overridden.any?
+          rendered << [ winner[:location].to_i, text ]
         end
 
-        rendered.uniq.join(", ")
+        # Source order, because that is run order: a conditional assignment
+        # printed after the unconditional one that follows it reads as the
+        # value in force.
+        rendered.sort_by(&:first).map(&:last).uniq.join(", ")
       end
 
       # The booted app has already resolved the branch, and two tools reading

@@ -513,6 +513,15 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).not_to include("No jobs found")
     end
 
+    # The listing shows the queue and the throttle; asking about the same
+    # worker by name showed less than the list it was copied from.
+    it "carries the worker's queue and throttle into its own page" do
+      text = described_class.call(job: "Billing::Invoices::CreateWorker").content.first[:text]
+
+      expect(text).to include("**Queue:** `default`")
+      expect(text).to include("**Throttle:** concurrency { limit: 1 }, threshold { limit: 10, period: 1.minute }")
+    end
+
     it "lists the worker among the known names when the query matches nothing" do
       text = described_class.call(job: "NoSuchThing").content.first[:text]
 

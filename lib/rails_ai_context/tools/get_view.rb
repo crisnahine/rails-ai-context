@@ -212,8 +212,11 @@ module RailsAiContext
             lines << combined
             text_response(lines.join("\n"))
           else
-            # List available controllers when no controller specified
-            all_dirs = view_groups(templates, partials)
+            # List available controllers when no controller specified.
+            # Directories only: the root bucket is not a name `controller:`
+            # accepts, and offering it is the dead end this grouping exists to
+            # end. The `path:` line below is what reaches those files.
+            all_dirs = view_directories(templates, partials)
             lines = [ "# Views - Full Detail", "", "_Specify a controller to see template content:_", "" ]
             all_dirs.each do |ctrl|
               count = views_in_group(templates, ctrl).size + views_in_group(partials, ctrl).size

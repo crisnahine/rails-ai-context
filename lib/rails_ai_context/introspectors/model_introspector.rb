@@ -456,6 +456,11 @@ module RailsAiContext
 
         class_methods = extract_class_methods_from_ast(model, source_data)
         instance_methods = extract_instance_methods_from_ast(model, source_data)
+        # The model's own public instance methods, uncapped: a display cap
+        # decides what a page prints, never whether a method exists, and
+        # reflection's own list is inflated by an attribute method per column
+        # as soon as anything instantiates the model.
+        source_instance_methods = own_source_methods(model, source_data)
 
         details = {
           table_name:       model.table_name,
@@ -478,7 +483,8 @@ module RailsAiContext
           class_methods:    class_methods.first(MAX_LISTED_METHODS),
           class_method_count: class_methods.size,
           instance_methods: instance_methods.first(MAX_LISTED_METHODS),
-          instance_method_count: instance_methods.size
+          instance_method_count: instance_methods.size,
+          source_instance_methods: source_instance_methods
         }
 
         sti_info = extract_sti_info(model)
@@ -696,13 +702,18 @@ module RailsAiContext
         source_methods + (all_methods - source_methods)
       end
 
+      # The model's own public instance methods, from its source alone.
+      def own_source_methods(model, source_data)
+        ActionResolver.own_methods(source_data[:methods], model.name)
+          .select { |m| m[:scope] == :instance && m[:visibility] == :public }
+          .map { |m| m[:name].to_s }
+      end
+
       def extract_instance_methods_from_ast(model, source_data)
         generated = generated_association_methods(model)
 
         # Source-defined instance methods (AST), the model's own.
-        source_methods = ActionResolver.own_methods(source_data[:methods], model.name)
-          .select { |m| m[:scope] == :instance && m[:visibility] == :public }
-          .map { |m| m[:name] }
+        source_methods = own_source_methods(model, source_data)
 
         # Reflection-discovered instance methods
         all_methods = (model.instance_methods - ActiveRecord::Base.instance_methods - Object.instance_methods)
@@ -1009,6 +1020,7 @@ module RailsAiContext
           # than an empty one here.
           instance_methods: static_instance_methods.first(MAX_LISTED_METHODS),
           instance_method_count: static_instance_methods.size,
+          source_instance_methods: static_instance_methods,
           class_methods: static_class_methods.first(MAX_LISTED_METHODS),
           class_method_count: static_class_methods.size,
           file: file,

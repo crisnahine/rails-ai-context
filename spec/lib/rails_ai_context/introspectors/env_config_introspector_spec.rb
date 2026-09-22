@@ -308,6 +308,33 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
       expect(notable["action_mailer.delivery_method"]).to eq(":smtp (overrides :file)")
     end
 
+    # Rails runs every line, so the last one wins however many times the key
+    # was set before it.
+    it "names the last assignment even when an earlier value repeats" do
+      File.write(File.join(tmpdir, "config", "environments", "production.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.action_mailer.delivery_method = :file
+          config.action_mailer.delivery_method = :smtp
+          config.action_mailer.delivery_method = :file
+        end
+      RUBY
+
+      expect(notable["action_mailer.delivery_method"]).to eq(":file (overrides :smtp)")
+    end
+
+    # The unconditional assignment runs after the conditional one, so reading
+    # it first says the conditional value is the one in force.
+    it "keeps the assignments in the order the file runs them" do
+      File.write(File.join(tmpdir, "config", "environments", "production.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.cache_store = :null_store if ENV["NO_CACHE"]
+          config.cache_store = :mem_cache_store
+        end
+      RUBY
+
+      expect(notable["cache_store"]).to eq(":null_store if ENV[\"NO_CACHE\"], :mem_cache_store")
+    end
+
     it "leaves a single assignment whose value holds a comma unchanged" do
       expect(notable["cache_store"]).to eq(":mem_cache_store, { pool_size: 5 }")
     end

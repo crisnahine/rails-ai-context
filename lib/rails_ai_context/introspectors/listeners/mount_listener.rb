@@ -15,9 +15,23 @@ module RailsAiContext
       # form was invisible here, which left the endpoint out of every tool.
       VERB_MACROS = %i[match get post put patch delete].freeze
 
+      # The blocks that prefix every path drawn inside them.
+      SCOPE_MACROS = %i[namespace scope].freeze
+
       class MountListener < BaseListener
+        def initialize
+          super
+          @scopes = []
+        end
+
         def on_call_node_enter(node)
           return unless node.receiver.nil?
+
+          if node.block && SCOPE_MACROS.include?(node.name)
+            @scopes << { node: node, prefix: scope_prefix(node) }
+            return
+          end
+
           return unless node.name == :mount || VERB_MACROS.include?(node.name)
 
           args = node.arguments&.arguments || []
@@ -28,12 +42,49 @@ module RailsAiContext
 
           @results << {
             engine:   engine,
-            path:     path,
+            path:     prefixed_path(path),
             location: node.location.start_line
           }
         end
 
+        def on_call_node_leave(node)
+          @scopes.pop if @scopes.last && @scopes.last[:node].equal?(node)
+        end
+
         private
+
+        # `namespace :admin` and `scope "/internal"` prefix what they wrap, so
+        # a path read off the mount call alone names a path the app does not
+        # serve. A scope whose own name is an expression prefixes an unknown
+        # amount, and the honest answer there is no path at all rather than
+        # the unprefixed one.
+        def scope_prefix(node)
+          first = node.arguments&.arguments&.first
+          options = extract_keyword_options(node)
+          literal = case first
+          when Prism::SymbolNode then first.value
+          when Prism::StringNode then first.unescaped
+          end
+
+          if node.name == :namespace
+            name = options[:path] || literal
+            return :unknown if name.nil?
+
+            "/#{name.to_s.delete_prefix("/")}"
+          else
+            # `scope module: :admin` adds no path segment at all.
+            path = options[:path] || literal
+            path.nil? ? nil : "/#{path.to_s.delete_prefix("/")}"
+          end
+        end
+
+        def prefixed_path(path)
+          prefixes = @scopes.filter_map { |scope| scope[:prefix] }
+          return nil if prefixes.include?(:unknown)
+          return path if prefixes.empty? || path.nil?
+
+          "#{prefixes.join.chomp("/")}/#{path.to_s.delete_prefix("/")}"
+        end
 
         # `match "/metrics", to: MetricsApp`: a constant as the `to:` value is
         # a Rack app. A string ("orders#edit") is a controller action, which

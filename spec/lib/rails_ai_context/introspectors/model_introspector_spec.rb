@@ -2569,4 +2569,21 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
                                            unavailable: "through :reader is not an association")
     end
   end
+  # A display cap must not decide whether a method exists, so the model's own
+  # methods travel uncapped beside the capped list every renderer reads.
+  describe "the model's own methods" do
+    it "carries them uncapped on the static tier" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        bodies = (1..35).map { |i| "  def step_#{format('%02d', i)}; end" }.join("\n")
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\n#{bodies}\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:static_call)
+
+        expect(result["Post"][:instance_methods].size).to eq(described_class::MAX_LISTED_METHODS)
+        expect(result["Post"][:source_instance_methods].size).to eq(35)
+        expect(result["Post"][:source_instance_methods]).to include("step_35")
+      end
+    end
+  end
 end

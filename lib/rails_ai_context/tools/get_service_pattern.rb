@@ -152,13 +152,17 @@ module RailsAiContext
         end
 
         # Cross-reference: who calls this service
-        callers = find_callers(class_name, root, file)
+        callers, scan_truncated = find_callers(class_name, root, file)
         if callers.any?
           lines << "" << "## Called By"
           callers.first(CALLER_LIMIT).each { |c| lines << "- `#{c}`" }
           if callers.size > CALLER_LIMIT
             lines << "_#{callers.size} callers in all; the #{CALLER_LIMIT} listed are the first by path._"
           end
+        end
+        if scan_truncated
+          lines << "" << "_The caller scan stopped after #{count_phrase(MAX_CALLER_SCAN_FILES, "file")}; " \
+                        "run `rails_search_code(pattern:\"#{class_name}\")` for the rest._"
         end
 
         # Cross-reference hints
@@ -417,8 +421,14 @@ module RailsAiContext
       # is one pass over the tree per named service.
       CALLER_LIMIT = 20
 
+      # The scan is raw file reading with no cache behind it, so on a monorepo
+      # it is the most expensive thing this tool does. It stops here and says
+      # so, the way analyze_feature states its own scan cap.
+      MAX_CALLER_SCAN_FILES = 5_000
+
       private_class_method def self.find_callers(class_name, real_root, own_file = nil)
         callers = Set.new
+        scanned = 0
         search_dirs = %w[app lib].flat_map { |d| PathResolver.dirs_for(real_root, d) }
         # A bare `include?` matched `Billing::Invoices::Create` inside
         # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
@@ -432,6 +442,9 @@ module RailsAiContext
         search_dirs.each do |dir|
           safe_glob(dir, "**/*.rb", real_root).each do |real|
             next if own_file && real == own_file
+            break if scanned >= MAX_CALLER_SCAN_FILES
+
+            scanned += 1
             source = safe_read(real)
             next unless source
             next unless source.match?(reference)
@@ -439,9 +452,10 @@ module RailsAiContext
 
             callers << real.sub("#{real_root}/", "")
           end
+          break if scanned >= MAX_CALLER_SCAN_FILES
         end
 
-        callers.to_a.sort
+        [ callers.to_a.sort, scanned >= MAX_CALLER_SCAN_FILES ]
       end
 
       private_class_method def self.detect_common_pattern(stats)
