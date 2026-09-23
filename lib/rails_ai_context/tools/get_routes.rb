@@ -79,8 +79,8 @@ module RailsAiContext
           # the listing reads it once and hands the copy down.
           ctx = cached_context
 
-          # Routes with no controller#action (engine mounts like propshaft's
-          # /assets) never enter by_controller; surface their count so the
+          # Routes with no controller#action (a mounted engine or Rack app)
+          # never enter by_controller; surface their count so the
           # header's arithmetic adds up instead of silently dropping them.
           unattributed_count = routes[:unrouted_mounts] || Array(routes[:mounted_engines]).size
 

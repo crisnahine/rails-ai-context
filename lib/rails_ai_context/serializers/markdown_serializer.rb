@@ -456,7 +456,8 @@ module RailsAiContext
         if data[:mounted_engines]&.any?
           data[:mounted_engines].each do |e|
             desc = e[:description] ? " - #{e[:description]}" : ""
-            lines << "- `#{e[:engine]}` at `#{e[:path]}`#{desc}"
+            at = e[:path] ? " at `#{e[:path]}`" : ""
+            lines << "- `#{e[:engine]}`#{at}#{desc}"
           end
         else
           lines << "- Nothing mounted"

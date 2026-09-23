@@ -93,6 +93,15 @@ RSpec.describe RailsAiContext::Serializers::MarkdownSerializer do
     end
   end
 
+  describe "the Mounted Apps section" do
+    it "names a mount with no known path without inventing one" do
+      output = described_class.new({ engines: { mounted_engines: [ { engine: "Sidekiq::Web", path: nil } ] } }).call
+
+      expect(output).to include("- `Sidekiq::Web`\n")
+      expect(output).not_to include("Sidekiq::Web` at")
+    end
+  end
+
   describe "the Internationalization section" do
     def i18n_output(source)
       described_class.new({ i18n: { default_locale: "en", available_locales: %w[en fr], available_locales_source: source } }).call

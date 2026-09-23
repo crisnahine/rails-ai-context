@@ -154,6 +154,18 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("Sidekiq::Web")
     end
 
+    it "names a mounted app with no known path without inventing one" do
+      allow(described_class).to receive(:cached_context).and_return({
+        app_name: "TestApp",
+        rails_version: "8.0",
+        ruby_version: "3.4",
+        engines: { mounted_engines: [ { engine: "Sidekiq::Web", path: nil } ] }
+      })
+      text = described_class.call(detail: "full").content.first[:text]
+      expect(text).to include("- **Sidekiq::Web**\n")
+      expect(text).not_to include("Sidekiq::Web** at")
+    end
+
     it "renders real-time features from the introspector's own keys" do
       allow(described_class).to receive(:cached_context).and_return({
         app_name: "TestApp",

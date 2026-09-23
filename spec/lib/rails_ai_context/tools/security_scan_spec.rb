@@ -97,6 +97,18 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).to include("outside the app's bundle")
       end
 
+      # With several installed, the newest on disk is not always the one the
+      # binstub ran, and the report says which one did.
+      it "names the version the report says ran" do
+        allow(described_class).to receive(:run_brakeman_unbundled)
+          .and_return(report.merge("scan_info" => report["scan_info"].merge("brakeman_version" => "7.1.0")))
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("brakeman 7.1.0")
+        expect(text).not_to include("8.0.6")
+      end
+
       it "still filters by file" do
         text = described_class.call(files: [ "config/routes.rb" ]).content.first[:text]
 

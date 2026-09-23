@@ -118,6 +118,28 @@ RSpec.describe RailsAiContext::Introspectors::EngineIntrospector do
     end
   end
 
+  # A scope whose prefix is an expression leaves the mount's path unknown,
+  # and a placeholder in its place reads as a path named "unknown".
+  describe "a mount whose path the source does not spell out" do
+    it "carries no path" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            scope ENV.fetch("ADMIN_PREFIX") do
+              mount Sidekiq::Web => "/sidekiq"
+            end
+          end
+        RUBY
+
+        mounted = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mounted_engines]
+
+        expect(mounted.map { |m| m[:engine] }).to eq([ "Sidekiq::Web" ])
+        expect(mounted.first[:path]).to be_nil
+      end
+    end
+  end
+
   describe "#static_call" do
     subject(:result) { described_class.new(RailsAiContext::StaticApp.new(Dir.pwd)).static_call }
 

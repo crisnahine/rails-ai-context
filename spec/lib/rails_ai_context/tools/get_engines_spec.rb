@@ -31,6 +31,16 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
       expect(text).to include("**Blazer::Engine** at `/blazer`")
     end
 
+    it "names a mount with no known path without inventing one" do
+      allow(described_class).to receive(:cached_context)
+        .and_return({ engines: engines_data.merge(mounted_engines: [ { engine: "Sidekiq::Web", path: nil } ]) })
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- **Sidekiq::Web**\n")
+      expect(text).not_to include("at `")
+    end
+
     it "lists loaded engine classes with route and model counts" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Loaded Engine Classes")

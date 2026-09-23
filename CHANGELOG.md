@@ -99,9 +99,11 @@ could act on.
   engine mounts, and the booted tier lists every Rack endpoint rather than
   `Rails::Engine` subclasses alone. A mount inside a `namespace` or `scope`
   carries that prefix; one whose enclosing scope is an expression is listed
-  with no path rather than an unprefixed one. `engines` follows every file
-  `config/routes.rb` draws, through the same walk `routes` uses, so the two
-  name one set of mounted apps. `engines`, `onboard` and the
+  with no path rather than an unprefixed one, and every list prints it
+  without one. `engines` follows every file `config/routes.rb` draws,
+  through the walk the static `routes` answer uses, so on the static tier
+  the two name one set of mounted apps; booted, `routes` reads the live
+  route table. `engines`, `onboard`, the MCP resource and the
   generated context files head the same list "Mounted Apps", because half of
   what it holds are not engines. On the static tier a `match ... to: SomeApp`
   is counted once, as the mount it is, rather than also as a construct the

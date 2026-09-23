@@ -58,7 +58,7 @@ module RailsAiContext
         # MountListener names with its path. Counting it here as well, as a
         # construct this walk could not expand, described one endpoint twice.
         def rack_app_target?(node)
-          return false unless node.name == :match || VERB_METHODS.include?(node.name)
+          return false unless MountListener::VERB_MACROS.include?(node.name)
 
           !rack_app_constant(node.arguments&.arguments || []).nil?
         end

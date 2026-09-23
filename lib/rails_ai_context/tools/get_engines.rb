@@ -30,7 +30,7 @@ module RailsAiContext
           lines << "" << "## Mounted Apps (config/routes.rb)"
           if mounted.any?
             mounted.each do |e|
-              line = "- **#{e[:engine]}** at `#{e[:path]}`"
+              line = e[:path] ? "- **#{e[:engine]}** at `#{e[:path]}`" : "- **#{e[:engine]}**"
               line += " (#{e[:category]})" if e[:category]
               line += " - #{e[:description]}" if e[:description]
               lines << line

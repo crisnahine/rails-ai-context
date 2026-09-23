@@ -141,6 +141,8 @@ module RailsAiContext
         report = run_brakeman_unbundled(min_confidence, resolved_checks)
         return nil unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
 
+        # The newest on disk is not always the one the binstub ran.
+        version = report.dig("scan_info", "brakeman_version") || version
         {
           # A report whose warnings array holds anything but objects is not a
           # report this can read, and one bad entry is not a reason to drop
