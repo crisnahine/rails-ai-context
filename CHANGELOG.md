@@ -95,8 +95,11 @@ could act on.
   engine mounts, and the booted tier lists every Rack endpoint rather than
   `Rails::Engine` subclasses alone. A mount inside a `namespace` or `scope`
   carries that prefix; one whose enclosing scope is an expression is listed
-  with no path rather than an unprefixed one. `engines` heads the same list
-  "Mounted apps", because half of what it holds are not engines.
+  with no path rather than an unprefixed one. `engines`, `onboard` and the
+  generated context files head the same list "Mounted apps", because half of
+  what it holds are not engines. On the static tier a `match ... to: SomeApp`
+  is counted once, as the mount it is, rather than also as a construct the
+  walk could not expand.
 - **config calls a zero-byte initializer empty** rather than "all commented
   out".
 - **Smaller corrections in the same pass.** `validate_semantics` reads the
@@ -123,10 +126,12 @@ could act on.
   narrows the load path, so a machine with brakeman installed was told to add
   it to the Gemfile while the other tier scanned the same app. When the
   in-process require fails and the gem is installed, the scan runs it as its
-  own process outside the bundle and renders the result the same way, with a
-  line saying which brakeman answered and from where. With no brakeman
-  anywhere, the message says that instead of guessing, and the availability
-  answer is keyed by tier rather than decided once per process.
+  own process outside the bundle - reading the report from a file of its own,
+  since a gem manager's binstub can print to stdout first - and renders the
+  result the same way, with a line saying which brakeman answered and from
+  where. With no brakeman anywhere, the message says that instead of
+  guessing, and the availability answer is keyed by tier rather than decided
+  once per process.
 
 ## [5.28.0] - 2026-09-22
 
