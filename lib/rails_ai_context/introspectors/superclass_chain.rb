@@ -16,8 +16,8 @@ module RailsAiContext
     # a callable from a constant name to that class's source, and nil to stop
     # at the one file. `lookup_for` builds the one this gem uses.
     module SuperclassChain
-      # One link: the class and the source declaring it.
-      Link = Data.define(:name, :source)
+      # One link: the class, the superclass it names, and the source declaring it.
+      Link = Data.define(:name, :superclass, :source)
 
       # Hops, not names: a chain longer than this is a cycle, or a hierarchy
       # no reader is following either.
@@ -39,7 +39,7 @@ module RailsAiContext
         return [] if declarations.empty?
 
         declaration = declarations.find { |d| bases.include?(d.superclass) }
-        return [ Link.new(name: declaration.name, source: source) ] if declaration
+        return [ Link.new(name: declaration.name, superclass: declaration.superclass, source: source) ] if declaration
 
         declarations.each do |candidate|
           parent = candidate.superclass
@@ -49,7 +49,7 @@ module RailsAiContext
           next if parent_source.nil?
 
           rest = to(parent_source, bases: bases, lookup: lookup, seen: seen + [ parent ])
-          return [ Link.new(name: candidate.name, source: source) ] + rest if rest.any?
+          return [ Link.new(name: candidate.name, superclass: parent, source: source) ] + rest if rest.any?
         end
 
         []

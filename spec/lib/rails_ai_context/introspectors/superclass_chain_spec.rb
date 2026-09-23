@@ -72,6 +72,17 @@ RSpec.describe RailsAiContext::Introspectors::SuperclassChain do
       expect(chain.map(&:name)).to eq(%w[EmailValidator Level1 Level2 Level3 Level4])
     end
 
+    # A caller asking which of several bases the chain reached reads it off
+    # the last link rather than parsing that file again.
+    it "names each link's superclass, ending at the base it reached" do
+      base = "class ApplicationValidator < ActiveModel::EachValidator\nend\n"
+      chain = described_class.to("class EmailValidator < ApplicationValidator\nend\n",
+                                 bases: %w[ActiveModel::Validator ActiveModel::EachValidator],
+                                 lookup: ->(name) { base if name == "ApplicationValidator" })
+
+      expect(chain.map(&:superclass)).to eq(%w[ApplicationValidator ActiveModel::EachValidator])
+    end
+
     it "gives up past the depth cap rather than walking forever" do
       sources = (1..20).to_h { |i| [ "Level#{i}", "class Level#{i} < Level#{i + 1}\nend\n" ] }
       chain = described_class.to("class Deep < Level1\nend\n",

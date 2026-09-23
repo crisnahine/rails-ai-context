@@ -698,6 +698,26 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       expect(text).to include("Order")
     end
 
+    # A concern that wires the validator in its `included` block is how a
+    # validator shared by several models is usually attached.
+    it "names a concern that wires it, as a concern" do
+      File.write(File.join(tmpdir, "app", "models", "order.rb"), "class Order < ApplicationRecord\nend\n")
+      File.write(File.join(validator_dir, "addressable.rb"), <<~RUBY)
+        module Addressable
+          extend ActiveSupport::Concern
+
+          included do
+            validates_with AddressValidator
+          end
+        end
+      RUBY
+
+      text = described_class.call(name: "AddressValidator").content.first[:text]
+
+      expect(text).to include("- Addressable (concern)")
+      expect(text).not_to include("No model or concern in app/models wires this validator")
+    end
+
     # An app with its own validator base class is the ordinary shape, and one
     # level of compare called every such validator a concern used by nothing.
     it "follows the app's own validator base class" do

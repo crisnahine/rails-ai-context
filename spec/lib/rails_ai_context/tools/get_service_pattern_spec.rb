@@ -791,8 +791,6 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).to include("app/tools/invoice_tool.rb")
       end
 
-      # The scan reads every file under app/ and lib/, so on a large app it
-      # has to stop somewhere and say that it did.
       # Booted, the app's own load paths are the direct answer, and an app
       # that autoloads a directory outside app/ and lib/ still has callers in
       # it.
@@ -812,6 +810,22 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).to include("extras/nightly_run.rb")
       end
 
+      # Booted, the load paths repeat app/'s own subdirectories, and a file
+      # read once per directory naming it hit the ceiling at half the tree.
+      it "counts a file the load paths name twice as one file" do
+        files = Dir.glob(File.join(tmpdir, "{app,lib}", "**", "*.rb")).size - 1
+        stub_const("#{described_class}::MAX_CALLER_SCAN_FILES", files)
+        allow(described_class).to receive(:configured_load_paths)
+          .and_return(Dir.glob(File.join(tmpdir, "app", "*")).select { |dir| File.directory?(dir) })
+
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("lib/reporting/nightly.rb")
+        expect(text).not_to include("stopped after")
+      end
+
+      # The scan reads every file under app/ and lib/, so on a large app it
+      # has to stop somewhere and say that it did.
       it "says so when the scan stopped at its file ceiling" do
         stub_const("#{described_class}::MAX_CALLER_SCAN_FILES", 1)
 

@@ -116,6 +116,26 @@ module RailsAiContext
           parts.map(&:unescaped).join
         end
 
+        # The Rack app a route call attaches: a constant as its `to:` value
+        # (`match "/metrics", to: MetricsApp`). A string there is a controller
+        # action. MountListener names the app and RoutesDslListener skips the
+        # call, so both read it here or one endpoint is counted twice.
+        def rack_app_constant(args)
+          args.reverse_each do |arg|
+            next unless arg.is_a?(Prism::KeywordHashNode) || arg.is_a?(Prism::HashNode)
+
+            arg.elements.reverse_each do |assoc|
+              next unless assoc.is_a?(Prism::AssocNode) && extract_key(assoc.key) == :to
+
+              case assoc.value
+              when Prism::ConstantReadNode then return assoc.value.name.to_s
+              when Prism::ConstantPathNode then return constant_path_string(assoc.value)
+              end
+            end
+          end
+          nil
+        end
+
         # The name is the source text: `::Foo::Bar` and `Foo::Bar` are the same
         # constant, so only the root scope operator comes off.
         def constant_path_string(node)

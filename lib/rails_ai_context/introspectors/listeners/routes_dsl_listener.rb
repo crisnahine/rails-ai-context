@@ -60,14 +60,7 @@ module RailsAiContext
         def rack_app_target?(node)
           return false unless node.name == :match || VERB_METHODS.include?(node.name)
 
-          (node.arguments&.arguments || []).any? do |arg|
-            next false unless arg.is_a?(Prism::KeywordHashNode) || arg.is_a?(Prism::HashNode)
-
-            arg.elements.any? do |assoc|
-              assoc.is_a?(Prism::AssocNode) && extract_key(assoc.key) == :to &&
-                (assoc.value.is_a?(Prism::ConstantReadNode) || assoc.value.is_a?(Prism::ConstantPathNode))
-            end
-          end
+          !rack_app_constant(node.arguments&.arguments || []).nil?
         end
 
         def push_frame(node, **attrs)

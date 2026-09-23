@@ -97,6 +97,38 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     end
   end
 
+  # A fetch whose fallback is an expression has a default all the same: it
+  # never raises, so labelling it "no default" named the wrong site as the
+  # one that raises KeyError.
+  describe "a fetch whose fallback is an expression" do
+    let(:env_vars) do
+      {
+        "#{root}/config/puma.rb" => described_class.send(:env_references, %(port ENV.fetch("PORT", defaults[:port])\n)),
+        "#{root}/config/web.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", "3000")\n)),
+        "#{root}/config/strict.rb" => described_class.send(:env_references, %(ENV.fetch("PORT")\n))
+      }
+    end
+
+    it "says the site has a default it cannot print" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("config/puma.rb:1 default computed at runtime")
+      expect(text).to include("config/web.rb:1 default: `3000`")
+      expect(text).to include("config/strict.rb:1 no default")
+    end
+
+    it "prints no default when that is every site's" do
+      allow(described_class).to receive(:scan_env_vars).and_return(
+        "#{root}/config/puma.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", defaults[:port])\n))
+      )
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- `PORT`\n")
+      expect(text).not_to include("computed")
+    end
+  end
+
   describe "categorize_env_var" do
     it "categorizes API key variables" do
       result = described_class.send(:categorize_env_var, "GEMINI_API_KEY")
@@ -505,12 +537,12 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     it "does not print a Ruby expression where a default value belongs" do
       vars = scan(%{PORT = ENV.fetch("PORT", defaults[:port])\n})
       expect(vars.first[:name]).to eq("PORT")
-      expect(vars.first[:default]).to be_nil
+      expect(vars.first[:default]).to eq(described_class::COMPUTED_DEFAULT)
     end
 
     it "does not print a method call as a default" do
       vars = scan(%{PW = ENV.fetch("REDIS_PASSWORD", default_password)\n})
-      expect(vars.first[:default]).to be_nil
+      expect(vars.first[:default]).to eq(described_class::COMPUTED_DEFAULT)
     end
 
     it "ignores an ENV reference that only appears in a comment" do

@@ -111,7 +111,7 @@ module RailsAiContext
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
 
-        inputs = interaction_inputs(source, lookup, class_name)
+        inputs = interaction_input_lines(source, lookup, class_name)
         if inputs.any?
           lines << "" << "## Inputs (ActiveInteraction)"
           lines.concat(inputs)
@@ -292,7 +292,7 @@ module RailsAiContext
       # them, and an inherited one named with the class that declares it: it
       # is not in this file, and a reader looking for it needs somewhere to
       # look.
-      private_class_method def self.interaction_inputs(source, lookup, own_class)
+      private_class_method def self.interaction_input_lines(source, lookup, own_class)
         Introspectors::Interaction.filters(source, lookup: lookup).flat_map do |filter|
           [ "- #{input_line(filter, own_class)}" ] +
             filter.nested.map { |nested| "  - #{input_line(nested, filter.declared_by)}" }
@@ -300,7 +300,7 @@ module RailsAiContext
       end
 
       private_class_method def self.input_line(filter, own_class)
-        options = filter.options || {}
+        options = filter.options
         suffix = options.any? ? " (#{options.map { |k, v| "#{k}: #{v.nil? ? 'nil' : v}" }.join(', ')})" : ""
         origin = own_class && filter.declared_by != own_class ? " - from `#{filter.declared_by}`" : ""
         "`#{filter.macro} :#{filter.name}`#{suffix}#{origin}"
@@ -453,7 +453,7 @@ module RailsAiContext
         # The paths first, so the ceiling is measured against the files there
         # are rather than the files read: a tree of exactly the cap skips
         # nothing and must not say it stopped.
-        paths = search_dirs.flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }
+        paths = search_dirs.flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }.uniq
         paths.reject! { |real| real == own_file } if own_file
         truncated = paths.size > MAX_CALLER_SCAN_FILES
 

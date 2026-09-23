@@ -115,7 +115,7 @@ module RailsAiContext
             Filter.new(
               macro: record[:macro].to_s,
               name: name.to_s,
-              options: record[:options] || {},
+              options: record[:option_values] || {},
               declared_by: declared_by,
               nested: nested
             )

@@ -99,29 +99,12 @@ module RailsAiContext
           "#{prefixes.join.chomp("/")}/#{path.to_s.delete_prefix("/")}"
         end
 
-        # `match "/metrics", to: MetricsApp`: a constant as the `to:` value is
-        # a Rack app. A string ("orders#edit") is a controller action, which
-        # is not this listener's business.
         def resolve_rack_endpoint(args)
-          target = nil
-          args.each do |arg|
-            next unless arg.is_a?(Prism::KeywordHashNode) || arg.is_a?(Prism::HashNode)
-
-            arg.elements.each do |assoc|
-              next unless assoc.is_a?(Prism::AssocNode)
-              next unless extract_key(assoc.key) == :to
-
-              case assoc.value
-              when Prism::ConstantReadNode then target = assoc.value.name.to_s
-              when Prism::ConstantPathNode then target = constant_path_string(assoc.value)
-              end
-            end
-          end
+          target = rack_app_constant(args)
           return [ nil, nil ] unless target
 
           first = args.first
-          path = first.is_a?(Prism::StringNode) ? first.unescaped : nil
-          [ target, path ]
+          [ target, first.is_a?(Prism::StringNode) ? first.unescaped : nil ]
         end
 
         def resolve_engine(args)

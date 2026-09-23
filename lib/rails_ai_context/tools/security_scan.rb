@@ -327,17 +327,16 @@ module RailsAiContext
           check_names = checks.map { |c| c.to_s.gsub(/([a-z])([A-Z])/, '\1 \2') }
           categories = check_names.first(6).join(", ")
           categories += ", ..." if check_names.size > 6
-          return text_response([ "No security warnings found#{scope}. (#{count_phrase(checks_run, "check")} run: #{categories})", note ].compact.join("\n\n"))
+          body = "No security warnings found#{scope}. (#{count_phrase(checks_run, "check")} run: #{categories})"
+        else
+          body = case detail
+          when "summary" then format_summary(warnings, checks_run)
+          when "full" then format_full(warnings, checks_run)
+          else format_standard(warnings, checks_run)
+          end
         end
 
-        case detail
-        when "summary"
-          format_summary(warnings, checks_run, note)
-        when "full"
-          format_full(warnings, checks_run, note)
-        else
-          format_standard(warnings, checks_run, note)
-        end
+        text_response([ body, note ].compact.join("\n\n"))
       end
 
       # Three detail levels open with the same headline.
@@ -345,7 +344,7 @@ module RailsAiContext
         "**#{count_phrase(warnings.size, "warning")}** (#{count_phrase(checks_run, "check")} run)"
       end
 
-      private_class_method def self.format_summary(warnings, checks_run, note = nil)
+      private_class_method def self.format_summary(warnings, checks_run)
         by_type = warnings.group_by(&:warning_type)
         by_confidence = warnings.group_by { |w| w.confidence_name }
 
@@ -363,12 +362,10 @@ module RailsAiContext
           lines << "- #{type}: #{ws.size}"
         end
         lines << "" << "_Use `detail:\"standard\"` for file locations, or `detail:\"full\"` for code and remediation._"
-        lines << "" << note if note
-
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
-      private_class_method def self.format_standard(warnings, checks_run, note = nil)
+      private_class_method def self.format_standard(warnings, checks_run)
         lines = [ "# Security Scan Results", "" ]
         lines << scan_headline(warnings, checks_run)
 
@@ -381,12 +378,10 @@ module RailsAiContext
           loc = w.line ? "#{w.file.relative}:#{w.line}" : w.file.relative
           lines << "- [#{w.confidence_name}] #{loc} - #{w.message}"
         end
-        lines << "" << note if note
-
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
-      private_class_method def self.format_full(warnings, checks_run, note = nil)
+      private_class_method def self.format_full(warnings, checks_run)
         lines = [ "# Security Scan Results (Full)", "" ]
         lines << scan_headline(warnings, checks_run)
 
@@ -407,9 +402,7 @@ module RailsAiContext
 
           lines << "- **More info:** #{w.link}" if w.link
         end
-        lines << "" << note if note
-
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
     end
   end

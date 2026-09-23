@@ -220,7 +220,7 @@ module RailsAiContext
             lines << "" << "## Validated By (#{users.size})"
             users.each { |u| lines << "- #{u}" }
           else
-            lines << "" << "_No model in app/models wires this validator with `validates_with`._"
+            lines << "" << "_No model or concern in app/models wires this validator._"
           end
 
           lines << "" << "_Next: `rails_search_code(pattern:\"#{name.demodulize.camelize}\")` for every use_"
@@ -353,12 +353,7 @@ module RailsAiContext
       # shape and one level of compare calls every validator under it a
       # concern that nothing includes.
       private_class_method def self.validator_superclass(source, lookup)
-        chain = Introspectors::SuperclassChain.to(source, bases: VALIDATOR_BASES, lookup: lookup)
-        return nil if chain.empty?
-
-        Introspectors::DeclaredConstant.declarations(chain.last.source)
-          .map(&:superclass)
-          .find { |parent| VALIDATOR_BASES.include?(parent) }
+        Introspectors::SuperclassChain.to(source, bases: VALIDATOR_BASES, lookup: lookup).last&.superclass
       end
 
       # The models that wire a validator: `validates_with TheValidator`, and
@@ -373,14 +368,13 @@ module RailsAiContext
         real_root = File.realpath(root).to_s
         PathResolver.dirs_for(root, "app/models").flat_map { |dir|
           safe_glob(dir, "**/*.rb", real_root).filter_map do |file_path|
-            next if file_path.include?("/concerns/")
-
             source = RailsAiContext::SafeFile.read(file_path) or next
             next unless wires_validator?(source, simple, option_key)
 
-            Introspectors::DeclaredConstant.declared_names(source).first ||
+            name = Introspectors::DeclaredConstant.declared_names(source).first ||
               Introspectors::DeclaredConstant.declared_module_names(source).first ||
               File.basename(file_path, ".rb").camelize
+            file_path.include?("/concerns/") ? "#{name} (concern)" : name
           end
         }.uniq.sort
       rescue => e

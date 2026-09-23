@@ -112,6 +112,18 @@ RSpec.describe RailsAiContext::Introspectors::Interaction do
       expect(described_class.filters(source).first.options).to include(default: nil)
     end
 
+    # A default the walk cannot evaluate is still what the reader needs to
+    # see, so it comes through as its source rather than a placeholder.
+    it "carries an option it cannot evaluate as its source" do
+      source = <<~RUBY
+        class Orders::Create < ActiveInteraction::Base
+          string :token, default: -> { SecureRandom.hex }
+        end
+      RUBY
+
+      expect(described_class.filters(source).first.options).to eq(default: "-> { SecureRandom.hex }")
+    end
+
     # ActiveInteraction defines the parent's filters first, so a spec that
     # calls .run has to pass them in that order to read like the real call.
     it "puts an inherited filter before the subclass's own" do

@@ -25,6 +25,10 @@ module RailsAiContext
       # One wording for the same fact on both detail levels.
       DEFAULTS_DIFFER = "defaults differ by call site"
 
+      # `ENV.fetch("PORT", defaults[:port])`: a fallback with no printable
+      # value, which is still a site that never raises KeyError.
+      COMPUTED_DEFAULT = :computed
+
       def self.call(detail: "standard", server_context: nil)
         root = rails_app.root.to_s
 
@@ -103,7 +107,7 @@ module RailsAiContext
                 # variable is unset, and one site's fallback labelled as the
                 # variable's said the opposite.
                 " (#{DEFAULTS_DIFFER}; `detail:\"full\"` names each)"
-              elsif defaults.first
+              elsif defaults.first.is_a?(String)
                 " (default: `#{defaults.first}`)"
               else
                 ""
@@ -210,10 +214,14 @@ module RailsAiContext
               file_locations = v[:files].map { |f|
                 at = f[:line] ? "#{f[:file]}:#{f[:line]}" : f[:file]
                 next at if defaults.size <= 1
-                f[:default] ? "#{at} default: `#{f[:default]}`" : "#{at} no default"
+                case f[:default]
+                when String then "#{at} default: `#{f[:default]}`"
+                when COMPUTED_DEFAULT then "#{at} default computed at runtime"
+                else "#{at} no default"
+                end
               }.uniq
               entry = "- `#{v[:name]}`"
-              entry += " (default: `#{defaults.first}`)" if defaults.size == 1 && defaults.first
+              entry += " (default: `#{defaults.first}`)" if defaults.size == 1 && defaults.first.is_a?(String)
               entry += " (#{DEFAULTS_DIFFER})" if defaults.size > 1
               entry += " (#{file_locations.join(', ')})"
               lines << entry
@@ -329,7 +337,11 @@ module RailsAiContext
           var = { name: name, line: entry[:location] }
           # The listener writes a `nil` default as the string "nil", which
           # redaction then treated as a value worth hiding.
-          var[:default] = entry[:default] == "nil" ? "nil" : RailsAiContext::Redaction.value(name, entry[:default]) if entry[:default]
+          if entry[:default]
+            var[:default] = entry[:default] == "nil" ? "nil" : RailsAiContext::Redaction.value(name, entry[:default])
+          elsif entry[:has_default]
+            var[:default] = COMPUTED_DEFAULT
+          end
           var
         end
       rescue => e
