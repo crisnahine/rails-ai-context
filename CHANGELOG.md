@@ -5,10 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.29.0] - 2026-09-23
 
 Twenty-three QA reports against v5.27.0, each one a wrong answer a reader
-could act on.
+could act on, plus what eight review rounds found in the fixes themselves.
+
+### Added
+
+- **Model payloads carry method counts and the model's own methods
+  uncapped.** `instance_method_count`, `class_method_count` and
+  `source_instance_methods` sit beside the capped `instance_methods` and
+  `class_methods` lists, on both tiers, so a reader can tell a cut list from
+  a whole one.
+- **The schema payload carries `declared_tables`**, what `db/schema.rb`
+  declares, on both tiers: nil for an app whose tables come from
+  `structure.sql` or the migrations.
+
+### Changed
+
+- **"Mounted Engines" is "Mounted Apps" everywhere it is printed**: the
+  `engines`, `routes` and `onboard` tools, the generated context files, and
+  the MCP `rails://engines` resource name. The stack overview line reads
+  `Mounted:` rather than `Engines:`. Half of what the list holds are plain
+  Rack apps. The payload key stays `mounted_engines`.
+- **A mount whose path the source does not spell out carries `path: nil`**
+  rather than the string `"unknown"`, and is printed without a path.
+- **`routes` reads a blank `controller` as no filter**, and a name that
+  normalizes to nothing (`_controller`) as matching nothing, where the empty
+  string used to match every route key.
 
 ### Fixed
 
