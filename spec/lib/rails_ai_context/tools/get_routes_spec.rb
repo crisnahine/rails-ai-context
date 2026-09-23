@@ -96,6 +96,15 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(text).to include("- **MetricsAdminApp** at `/metrics-admin`")
     end
 
+    it "names them at every detail level" do
+      %w[summary standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+
+        expect(text).to include("## Mounted Apps (2)"), detail
+        expect(text).to include("- **MetricsApp** at `/metrics`"), detail
+      end
+    end
+
     it "counts them in the header without calling them engines" do
       text = described_class.call.content.first[:text]
 

@@ -132,6 +132,17 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).to include("config/loose.rb:1 nil when unset")
     end
 
+    # Neither raises and both answer nil, so they agree.
+    it "does not call a bracket read and a nil fetch a disagreement" do
+      allow(described_class).to receive(:scan_env_vars).and_return(
+        "#{root}/config/a.rb" => described_class.send(:env_references, %(ENV["SITE"]\n)),
+        "#{root}/config/b.rb" => described_class.send(:env_references, %(ENV.fetch("SITE", nil)\n))
+      )
+
+      expect(described_class.call.content.first[:text]).not_to include("defaults differ")
+      expect(described_class.call(detail: "full").content.first[:text]).not_to include("defaults differ")
+    end
+
     it "prints no default when that is every site's" do
       allow(described_class).to receive(:scan_env_vars).and_return(
         "#{root}/config/puma.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", defaults[:port])\n))

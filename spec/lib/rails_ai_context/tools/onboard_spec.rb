@@ -275,6 +275,15 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         expect(text).to include("Billing::Invoices::CreateWorker")
       end
 
+      it "counts the workers in the one-line overview" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "TestApp",
+          jobs: { jobs: [], mailers: [], channels: [], workers: [ { name: "Billing::Invoices::CreateWorker" } ] }
+        })
+
+        expect(described_class.call(detail: "quick").content.first[:text]).to include("1 Sidekiq worker")
+      end
+
       it "leaves the caveat off when the workers are the background work" do
         allow(described_class).to receive(:cached_context).and_return({
           app_name: "TestApp",

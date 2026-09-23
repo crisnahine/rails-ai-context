@@ -692,6 +692,24 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       expect(text).not_to include("Nothing in app/models includes this concern")
     end
 
+    # The pre-parse filter skips a file naming neither the class nor its key;
+    # these shapes name them only partly and still wire the validator.
+    it "finds the namespaced and hash-rocket wirings" do
+      File.write(File.join(tmpdir, "app", "models", "order.rb"), <<~RUBY)
+        class Order < ApplicationRecord
+          validates_with Checks::AddressValidator
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "models", "account.rb"), <<~RUBY)
+        class Account < ApplicationRecord
+          validates :email, :email => true
+        end
+      RUBY
+
+      expect(described_class.call(name: "AddressValidator").content.first[:text]).to include("- Order")
+      expect(described_class.call(name: "EmailValidator").content.first[:text]).to include("- Account")
+    end
+
     it "names the model that wires an EachValidator by its option key" do
       text = described_class.call(name: "EmailValidator").content.first[:text]
 

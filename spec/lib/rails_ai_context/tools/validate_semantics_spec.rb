@@ -167,6 +167,21 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
         expect(warnings_for(context_with(40))).not_to include("normalize_email")
       end
 
+      # Callbacks run private methods, and a base class usually keeps them
+      # private.
+      it "counts a private method the class inherits" do
+        parent = Class.new(ActiveRecord::Base) do
+          self.abstract_class = true
+
+          private
+
+          def normalize_email; end
+        end
+        stub_const("CallbackWidget", Class.new(parent))
+
+        expect(warnings_for(context_with(40))).not_to include("normalize_email")
+      end
+
       it "still flags a method the loaded class lacks" do
         stub_const("CallbackWidget", Class.new(ActiveRecord::Base))
 

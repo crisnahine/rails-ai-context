@@ -805,6 +805,23 @@ RSpec.describe RailsAiContext::Tools::GenerateTest do
         expect(text).not_to include("described_class.call")
       end
     end
+
+    # Only an interaction runs with .run: a plain service generated as one
+    # would call a method it does not have.
+    it "calls a plain service with .call" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "services"))
+        File.write(File.join(dir, "app", "services", "plain_thing.rb"), "class PlainThing\n  def call; end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({ tests: { framework: "rspec" } })
+
+        text = described_class.call(file: "app/services/plain_thing.rb").content.first[:text]
+
+        expect(text).to include("describe \".call\"")
+        expect(text).to include("be_truthy")
+        expect(text).not_to include("be_valid")
+      end
+    end
   end
 
   # The generated setup line follows the app's own specs: an app that assigns

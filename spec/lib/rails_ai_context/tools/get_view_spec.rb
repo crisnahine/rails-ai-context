@@ -210,6 +210,14 @@ RSpec.describe RailsAiContext::Tools::GetView do
         expect(text).not_to include("## notice.text.erb/")
       end
 
+      # "(" sorts before every letter, so a plain sort put the bucket that is
+      # not a directory ahead of every directory.
+      it "lists the root group after the directories" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text.index("## pdfs")).to be < text.index("## (app/views root)")
+      end
+
       it "does not offer the filename as a directory to filter by" do
         text = described_class.call(controller: "notice").content.first[:text]
 
