@@ -58,7 +58,9 @@ could act on.
   app were listed as model concerns used by nothing. They are listed as
   validators - following the app's own validator base class, not one level of
   compare - and looked up by the `validates_with`, or the validation option,
-  that wires them, in a model or in a concern's `included` block.
+  that wires them, in a model or in a concern's `included` block. The keys
+  `validates` reads for itself (`on:`, `if:` and the like) name no
+  validator.
 - **dependency_graph counts both header numbers over the same models.** The
   model count was app-wide and the association count covered the fifty nodes
   that survived the cap.
@@ -95,7 +97,9 @@ could act on.
 - **env keeps one default per call site.** One label for every site said a
   variable was optional while one of its reads was `ENV.fetch` with no
   default, which raises `KeyError`. A fetch whose fallback is an expression
-  says its default is computed at runtime rather than claiming it has none.
+  says its default is computed at runtime rather than claiming it has none,
+  and an `ENV["X"]` read says it is nil when unset, apart from the fetch
+  that raises.
 - **A Rack app attached with `match ... to:` is found.** `mount` is that call
   with a name derived, and the exact-path form is what an app writes when an
   unanchored mount would swallow a sibling path. It reaches `engines` and
@@ -144,9 +148,10 @@ could act on.
   own process outside the bundle - reading the report from a file of its own,
   since a gem manager's binstub can print to stdout first - and renders the
   result the same way, with a line saying which brakeman answered and from
-  where. With no brakeman anywhere, the message says that instead of
-  guessing, and the availability answer is keyed by tier rather than decided
-  once per process.
+  where. When the outside run writes no report, the answer carries the last
+  line brakeman printed about why. With no brakeman anywhere, the message
+  says that instead of guessing, and the availability answer is keyed by
+  tier rather than decided once per process.
 - **An exact search with a space keeps its context lines on ripgrep 13.**
   The literal was escaped with Ruby's `\ `, which ripgrep 13 (Ubuntu 22.04,
   Debian 12) rejects, so the search fell back to the Ruby scan and dropped

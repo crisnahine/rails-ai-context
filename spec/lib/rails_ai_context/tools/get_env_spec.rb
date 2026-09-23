@@ -117,6 +117,21 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
       expect(text).to include("config/strict.rb:1 no default")
     end
 
+    # A bracket read returns nil when the variable is unset and never raises,
+    # which is the one thing "no default" is there to warn about.
+    it "tells a bracket read from a fetch that raises" do
+      allow(described_class).to receive(:scan_env_vars).and_return(
+        "#{root}/config/web.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", "3000")\n)),
+        "#{root}/config/strict.rb" => described_class.send(:env_references, %(ENV.fetch("PORT")\n)),
+        "#{root}/config/loose.rb" => described_class.send(:env_references, %(ENV["PORT"]\n))
+      )
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("config/strict.rb:1 no default")
+      expect(text).to include("config/loose.rb:1 nil when unset")
+    end
+
     it "prints no default when that is every site's" do
       allow(described_class).to receive(:scan_env_vars).and_return(
         "#{root}/config/puma.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", defaults[:port])\n))

@@ -824,6 +824,19 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).not_to include("stopped after")
       end
 
+      # Most load paths sit inside app/, which the scan already walks: each
+      # one walked again was the tree read once per load path.
+      it "does not walk a load path inside a directory it already walks" do
+        real_app = File.realpath(File.join(tmpdir, "app"))
+        allow(described_class).to receive(:configured_load_paths)
+          .and_return(Dir.glob(File.join(real_app, "*")).select { |dir| File.directory?(dir) })
+        allow(described_class).to receive(:safe_glob).and_call_original
+
+        described_class.call(service: "Billing::Invoices::Create")
+
+        expect(described_class).not_to have_received(:safe_glob).with(File.join(real_app, "services"), anything, anything)
+      end
+
       # The scan reads every file under app/ and lib/, so on a large app it
       # has to stop somewhere and say that it did.
       it "says so when the scan stopped at its file ceiling" do
@@ -832,6 +845,16 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
 
         expect(text).to include("stopped after 1 file")
+      end
+
+      # A list that stops at the limit with no word reads as complete.
+      it "says how many callers there are when it lists fewer" do
+        stub_const("#{described_class}::CALLER_LIMIT", 1)
+
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to match(/_\d+ callers in all; the 1 listed are the first by path\._/)
+        expect(text.scan(/^- `(?:app|lib)\//).size).to eq(1)
       end
 
       it "names a caller under lib/" do

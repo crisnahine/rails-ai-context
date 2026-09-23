@@ -130,7 +130,7 @@ module RailsAiContext
         total, noun, omitted = reflected
         if total.is_a?(Integer) && total > methods.size
           source = RailsAiContext.static_tier? ? "The source defines" : "Reflection reports"
-          lines << "_#{source} #{count_phrase(total, noun)} on #{model}; this list is what the payload carries, #{omitted}._"
+          lines << "" << "_#{source} #{count_phrase(total, noun)} on #{model}; this list is what the payload carries, #{omitted}._"
         end
         lines
       end

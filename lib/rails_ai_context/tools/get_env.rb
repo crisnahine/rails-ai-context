@@ -189,7 +189,7 @@ module RailsAiContext
             relative = file.sub("#{root}/", "")
             vars.each do |v|
               var_details[v[:name]] ||= { files: [], defaults: [] }
-              var_details[v[:name]][:files] << { file: relative, line: v[:line], default: v[:default] }
+              var_details[v[:name]][:files] << { file: relative, line: v[:line], default: v[:default], bracket: v[:bracket] }
               var_details[v[:name]][:defaults] << v[:default]
             end
           end
@@ -217,7 +217,7 @@ module RailsAiContext
                 case f[:default]
                 when String then "#{at} default: `#{f[:default]}`"
                 when COMPUTED_DEFAULT then "#{at} default computed at runtime"
-                else "#{at} no default"
+                else f[:bracket] ? "#{at} nil when unset" : "#{at} no default"
                 end
               }.uniq
               entry = "- `#{v[:name]}`"
@@ -335,6 +335,8 @@ module RailsAiContext
           next unless name.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
 
           var = { name: name, line: entry[:location] }
+          # `ENV["X"]` answers nil when unset; only a fetch without a default raises.
+          var[:bracket] = true if entry[:method] == "[]"
           # The listener writes a `nil` default as the string "nil", which
           # redaction then treated as a value worth hiding.
           if entry[:default]

@@ -35,7 +35,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         described_class.instance_variable_set(:@brakeman_available, nil)
         allow(described_class).to receive(:load_brakeman).and_return(false)
         allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
-        allow(described_class).to receive(:run_brakeman_unbundled).and_return(nil)
+        allow(described_class).to receive(:run_brakeman_unbundled).and_return([ nil, nil ])
       end
 
       it "names the version it found and says the outside run failed too" do
@@ -73,7 +73,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       before do
         allow(described_class).to receive(:load_brakeman).and_return(false)
         allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
-        allow(described_class).to receive(:run_brakeman_unbundled).and_return(report)
+        allow(described_class).to receive(:run_brakeman_unbundled).and_return([ report, nil ])
       end
 
       it "reports the warnings the outside scan found" do
@@ -101,7 +101,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       # binstub ran, and the report says which one did.
       it "names the version the report says ran" do
         allow(described_class).to receive(:run_brakeman_unbundled)
-          .and_return(report.merge("scan_info" => report["scan_info"].merge("brakeman_version" => "7.1.0")))
+          .and_return([ report.merge("scan_info" => report["scan_info"].merge("brakeman_version" => "7.1.0")), nil ])
 
         text = described_class.call.content.first[:text]
 
@@ -118,7 +118,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
 
       it "skips an entry the report holds that is not a warning object" do
         allow(described_class).to receive(:run_brakeman_unbundled)
-          .and_return(report.merge("warnings" => report["warnings"] + [ nil, "oops" ]))
+          .and_return([ report.merge("warnings" => report["warnings"] + [ nil, "oops" ]), nil ])
 
         text = described_class.call.content.first[:text]
 
@@ -126,7 +126,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       end
 
       it "falls back to the two-ways-out message when the outside run fails" do
-        allow(described_class).to receive(:run_brakeman_unbundled).and_return(nil)
+        allow(described_class).to receive(:run_brakeman_unbundled).and_return([ nil, nil ])
 
         text = described_class.call.content.first[:text]
 
@@ -194,10 +194,62 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         File.chmod(0o755, script)
         allow(described_class).to receive(:brakeman_executable).and_return(script)
 
-        report = described_class.send(:run_brakeman_unbundled, 2, nil)
+        report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
+
+        expect(failure).to be_nil
 
         expect(report).to include("warnings" => [])
         expect(report.dig("scan_info", "checks_performed")).to eq([ "SQL" ])
+      end
+    end
+
+    # The API counts confidence up from high and the CLI's -w counts down
+    # from weak, and the CLI rejects a level it does not know: an uninverted
+    # level answered "installed but produced no report" for confidence:"high".
+    describe "the command the outside run is given" do
+      let(:bin_dir) { Dir.mktmpdir }
+
+      after { FileUtils.remove_entry(bin_dir) }
+
+      def fake_brakeman(body)
+        script = File.join(bin_dir, "brakeman")
+        File.write(script, "#!/bin/sh\n#{body}\n")
+        File.chmod(0o755, script)
+        described_class.instance_variable_set(:@brakeman_available, nil)
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
+        allow(described_class).to receive(:brakeman_executable).and_return(script)
+      end
+
+      it "passes the CLI's confidence level and the resolved checks" do
+        args_file = File.join(bin_dir, "args")
+        fake_brakeman(<<~SH)
+          printf '%s\n' "$@" > "#{args_file}"
+          out=""
+          while [ $# -gt 0 ]; do
+            if [ "$1" = "--output" ]; then out="$2"; fi
+            shift
+          done
+          printf '%s' '{"scan_info":{"checks_performed":["SQL"]},"warnings":[]}' > "$out"
+        SH
+
+        described_class.call(confidence: "high", checks: [ "sql" ])
+        args = File.read(args_file).split("\n")
+
+        expect(args.each_cons(2).to_a).to include([ "--confidence-level", "3" ], [ "--test", "CheckSQL" ])
+        expect(args).to include("--no-exit-on-warn", "--no-exit-on-error")
+      end
+
+      # Every way the outside run can fail used to read the same, so the one
+      # line brakeman printed about why is the line the answer carries.
+      it "carries what brakeman said when it wrote no report" do
+        fake_brakeman(%(echo "noise" >&2\necho "invalid argument: --confidence-level 0" >&2\nexit 1))
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("installed on this machine but not in this app's bundle")
+        expect(text).to include("invalid argument: --confidence-level 0")
+        expect(text).not_to include("noise")
       end
     end
 

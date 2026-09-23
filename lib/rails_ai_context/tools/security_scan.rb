@@ -83,7 +83,7 @@ module RailsAiContext
           # can still answer - from outside the bundle, which is where it is.
           unbundled_scan(min_confidence, resolved_checks)
         end
-        return text_response(unavailable_message) unless scan
+        return text_response(unavailable_message(scan&.dig(:unavailable))) if scan.nil? || scan.key?(:unavailable)
         return text_response("Brakeman scan failed: #{scan[:error]}") if scan[:error]
 
         warnings = scan[:warnings]
@@ -138,8 +138,8 @@ module RailsAiContext
         version = brakeman_on_machine
         return nil unless version
 
-        report = run_brakeman_unbundled(min_confidence, resolved_checks)
-        return nil unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
+        report, failure = run_brakeman_unbundled(min_confidence, resolved_checks)
+        return { unavailable: failure } unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
 
         # The newest on disk is not always the one the binstub ran.
         version = report.dig("scan_info", "brakeman_version") || version
@@ -195,14 +195,15 @@ module RailsAiContext
       # `-w` counts the other direction from the API's min_confidence: level 3
       # is high-only, level 1 is everything.
       #
-      # @return [Hash, nil] the parsed report, or nil when it could not run
+      # @return [Array(Hash, nil), Array(nil, String)] the parsed report, or
+      #   nil and the last line brakeman printed about why there is none
       #
       # The report goes to a file of its own rather than stdout: the binstub a
       # gem manager installs can print there first (RVM's executable-hooks
       # writes "Resolving dependencies..."), and a report parsed off stdout
       # died on that first byte.
       private_class_method def self.run_brakeman_unbundled(min_confidence, resolved_checks)
-        executable = brakeman_executable or return nil
+        executable = brakeman_executable or return [ nil, nil ]
 
         Dir.mktmpdir("rails-ai-context-brakeman") do |dir|
           report_path = File.join(dir, "report.json")
@@ -211,13 +212,14 @@ module RailsAiContext
                       "--confidence-level", (3 - min_confidence).to_s, "--path", rails_app.root.to_s ]
           command += [ "--test", resolved_checks.join(",") ] if resolved_checks&.any?
 
-          with_unbundled_env { capture_with_timeout(command) } or next nil
-          next nil unless File.file?(report_path) && File.size?(report_path)
+          _out, err = with_unbundled_env { capture_with_timeout(command) }
+          next [ nil, "no report after #{SCAN_TIMEOUT} seconds" ] if err.nil?
+          next [ nil, err.lines.map(&:strip).reject(&:empty?).last ] unless File.file?(report_path) && File.size?(report_path)
 
-          JSON.parse(File.read(report_path))
+          [ JSON.parse(File.read(report_path)), nil ]
         end
       rescue StandardError => e
-        RailsAiContext.debug_fail(e, nil, label: "run_brakeman_unbundled")
+        RailsAiContext.debug_fail(e, [ nil, e.message ], label: "run_brakeman_unbundled")
       end
 
       # The gem's own executable, not whatever `brakeman` resolves to on PATH.
@@ -236,6 +238,8 @@ module RailsAiContext
       # Readers drain both pipes, so a report larger than the pipe buffer
       # cannot deadlock the wait, and a scan that never ends is killed rather
       # than waited on.
+      #
+      # @return [Array(String, String), nil] stdout and stderr, or nil on timeout
       private_class_method def self.capture_with_timeout(command)
         Open3.popen3(*command) do |stdin, stdout, stderr, wait|
           stdin.close
@@ -249,8 +253,7 @@ module RailsAiContext
             next nil
           end
 
-          err.value
-          out.value
+          [ out.value, err.value ]
         end
       end
 
@@ -287,11 +290,12 @@ module RailsAiContext
       # The remedy has to match what is actually wrong. "Add it to your
       # Gemfile" is the wrong instruction for a machine that already has the
       # gem and an app whose bundle simply does not carry it.
-      private_class_method def self.unavailable_message
+      private_class_method def self.unavailable_message(failure = nil)
         version = brakeman_on_machine
+        said = failure ? " It said: `#{failure}`." : ""
         return (
           "Brakeman #{version} is installed on this machine but not in this app's bundle, and running it from " \
-          "outside the bundle produced no report either.\n\n" \
+          "outside the bundle produced no report either.#{said}\n\n" \
           "Add it to the Gemfile so the scan runs in this process:\n\n" \
           "```ruby\ngem 'brakeman', group: :development\n```\n\n" \
           "Then run `bundle install`. Running `brakeman` in the app directory shows what the outside run hit."

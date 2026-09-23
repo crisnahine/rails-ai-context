@@ -757,6 +757,25 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       expect(text).not_to include("- Post")
     end
 
+    # `on:`, `if:` and the other keys `validates` reads for itself never look
+    # up a validator class.
+    it "does not claim one of validates' own option keys" do
+      File.write(File.join(validator_dir, "on_validator.rb"), <<~RUBY)
+        class OnValidator < ActiveModel::EachValidator
+          def validate_each(record, attribute, value); end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "models", "post.rb"), <<~RUBY)
+        class Post < ApplicationRecord
+          validates :title, presence: true, on: :create
+        end
+      RUBY
+
+      text = described_class.call(name: "OnValidator").content.first[:text]
+
+      expect(text).not_to include("- Post")
+    end
+
     it "lists validators apart from concerns" do
       text = described_class.call.content.first[:text]
 

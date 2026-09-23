@@ -346,6 +346,9 @@ module RailsAiContext
         inclusion length numericality presence uniqueness
       ].freeze
 
+      # The keys `validates` reads for itself, which never name a validator.
+      VALIDATES_OWN_KEYS = %w[if unless on allow_blank allow_nil strict].freeze
+
       # The validator base a file's class reaches, or nil for anything else -
       # a module, a PORO, a class that subclasses something else entirely.
       # Followed through the app's own sources, because an app with its own
@@ -369,6 +372,9 @@ module RailsAiContext
         PathResolver.dirs_for(root, "app/models").flat_map { |dir|
           safe_glob(dir, "**/*.rb", real_root).filter_map do |file_path|
             source = RailsAiContext::SafeFile.read(file_path) or next
+            # A file naming neither the class nor the key cannot wire it, and
+            # this skips the parse for nearly every model.
+            next unless source.include?(simple) || (!option_key.empty? && source.include?(option_key))
             next unless wires_validator?(source, simple, option_key)
 
             name = Introspectors::DeclaredConstant.declared_names(source).first ||
@@ -392,6 +398,7 @@ module RailsAiContext
             Array(macro[:values]).flatten.map(&:to_s).any? { |value| value.split("::").last == simple }
           when :validates
             !option_key.empty? && !FRAMEWORK_VALIDATION_KEYS.include?(option_key) &&
+              !VALIDATES_OWN_KEYS.include?(option_key) &&
               macro[:options].key?(option_key.to_sym)
           end
         end

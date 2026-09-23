@@ -440,7 +440,11 @@ module RailsAiContext
 
       private_class_method def self.find_callers(class_name, real_root, own_file = nil)
         callers = Set.new
-        search_dirs = (%w[app lib].flat_map { |d| PathResolver.dirs_for(real_root, d) } + configured_load_paths(real_root)).uniq
+        base_dirs = %w[app lib].flat_map { |d| PathResolver.dirs_for(real_root, d) }
+        extra_dirs = configured_load_paths(real_root).reject do |dir|
+          base_dirs.any? { |base| dir == base || dir.start_with?("#{base}/") }
+        end
+        search_dirs = (base_dirs + extra_dirs).uniq
         # A bare `include?` matched `Billing::Invoices::Create` inside
         # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
         # underscored-path skip dropped the one real caller, whose path

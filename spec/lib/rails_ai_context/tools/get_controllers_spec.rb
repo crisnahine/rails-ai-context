@@ -201,6 +201,20 @@ RSpec.describe RailsAiContext::Tools::GetControllers do
       expect(text).to include("# Admin::GiftCardsController")
     end
 
+    # Rails resolves a namespaced controller's templates under its full
+    # path; the basename is another component's directory.
+    it "points the view hint at the controller's full path" do
+      allow(described_class).to receive(:cached_context).and_return(
+        controllers: { controllers: {
+          "Admin::GiftCardsController" => { actions: %w[index], file: "app/controllers/admin/gift_cards_controller.rb" }
+        } }
+      )
+
+      text = described_class.call(controller: "Admin::GiftCardsController").content.first[:text]
+
+      expect(text).to include(%(`rails_get_view(controller:"admin/gift_cards")`))
+    end
+
     it "resolves a controller by the route key Rails serves it under" do
       allow(described_class).to receive(:cached_context).and_return(
         controllers: { controllers: {

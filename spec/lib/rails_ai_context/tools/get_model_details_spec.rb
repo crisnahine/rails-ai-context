@@ -633,6 +633,8 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       text = described_class.call(model: "Widget").content.first[:text]
 
       expect(text).to include("72 instance methods")
+      # Markdown folds a line straight after a bullet into that bullet.
+      expect(text).to include("`\n\n_Reflection reports 72 instance methods")
     end
 
     # The static count comes from the source parse, so crediting it to
