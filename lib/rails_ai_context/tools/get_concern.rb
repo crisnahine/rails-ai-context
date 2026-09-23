@@ -338,6 +338,14 @@ module RailsAiContext
 
       VALIDATOR_BASES = %w[ActiveModel::Validator ActiveModel::EachValidator].freeze
 
+      # The option keys ActiveModel and ActiveRecord answer with their own
+      # validators, which the model's ancestry reaches before any app class of
+      # the same name: `presence: true` never runs an app PresenceValidator.
+      FRAMEWORK_VALIDATION_KEYS = %w[
+        absence acceptance associated comparison confirmation exclusion format
+        inclusion length numericality presence uniqueness
+      ].freeze
+
       # The validator base a file's class reaches, or nil for anything else -
       # a module, a PORO, a class that subclasses something else entirely.
       # Followed through the app's own sources, because an app with its own
@@ -389,7 +397,8 @@ module RailsAiContext
           when :validates_with
             Array(macro[:values]).flatten.map(&:to_s).any? { |value| value.split("::").last == simple }
           when :validates
-            !option_key.empty? && macro[:options].key?(option_key.to_sym)
+            !option_key.empty? && !FRAMEWORK_VALIDATION_KEYS.include?(option_key) &&
+              macro[:options].key?(option_key.to_sym)
           end
         end
       end

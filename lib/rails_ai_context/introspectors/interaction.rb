@@ -71,19 +71,12 @@ module RailsAiContext
       end
 
       # The classes from ActiveInteraction::Base down to this one, nearest
-      # first, or empty when the chain never reaches it.
+      # first, or empty when the chain never reaches it. Callers build the
+      # lookup with `SuperclassChain.lookup_for`.
       #
       # @return [Array<SuperclassChain::Link>]
       def chain(source, lookup: nil)
         SuperclassChain.to(source, bases: [ BASE ], lookup: lookup)
-      end
-
-      # The lookup the chain walks with: a constant name to the source of the
-      # file declaring it, over the app's autoload roots.
-      #
-      # @return [Proc]
-      def lookup_for(root)
-        SuperclassChain.lookup_for(root)
       end
 
       # `.filters` is a hash keyed by name, so a subclass that redeclares its

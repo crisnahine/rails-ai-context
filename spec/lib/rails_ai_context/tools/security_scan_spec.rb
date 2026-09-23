@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::SecurityScan do
   before do
@@ -36,12 +38,13 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         allow(described_class).to receive(:run_brakeman_unbundled).and_return(nil)
       end
 
-      it "says where it is and how to run it" do
+      it "names the version it found and says the outside run failed too" do
         text = described_class.call.content.first[:text]
 
         expect(text).to include("8.0.6")
         expect(text).to include("not in this app's bundle")
-        expect(text).to include("--no-boot")
+        expect(text).to include("outside the bundle produced no report")
+        expect(text).to include("gem 'brakeman'")
       end
     end
 
@@ -151,6 +154,37 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         text = described_class.call.content.first[:text]
 
         expect(text).not_to include("outside the app's bundle")
+      end
+    end
+
+    # The binstub a gem manager installs can print to stdout before brakeman
+    # does (RVM's executable-hooks writes "Resolving dependencies..."), so a
+    # report parsed off stdout died on its first byte and the scan answered
+    # "not installed" on a machine that has it. This runs a real child.
+    describe "the report the outside run writes" do
+      let(:bin_dir) { Dir.mktmpdir }
+
+      after { FileUtils.remove_entry(bin_dir) }
+
+      it "reads the report even when the executable prints before it" do
+        script = File.join(bin_dir, "brakeman")
+        File.write(script, <<~SH)
+          #!/bin/sh
+          echo "Resolving dependencies..."
+          out=""
+          while [ $# -gt 0 ]; do
+            if [ "$1" = "--output" ]; then out="$2"; fi
+            shift
+          done
+          printf '%s' '{"scan_info":{"checks_performed":["SQL"]},"warnings":[]}' > "$out"
+        SH
+        File.chmod(0o755, script)
+        allow(described_class).to receive(:brakeman_executable).and_return(script)
+
+        report = described_class.send(:run_brakeman_unbundled, 2, nil)
+
+        expect(report).to include("warnings" => [])
+        expect(report.dig("scan_info", "checks_performed")).to eq([ "SQL" ])
       end
     end
 

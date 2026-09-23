@@ -150,7 +150,7 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         engines: { mounted_engines: [ { engine: "Sidekiq::Web", path: "/sidekiq" } ] }
       })
       text = described_class.call(detail: "full").content.first[:text]
-      expect(text).to include("## Mounted Engines")
+      expect(text).to include("## Mounted Apps")
       expect(text).to include("Sidekiq::Web")
     end
 

@@ -2,6 +2,7 @@
 
 require "open3"
 require "json"
+require "tmpdir"
 
 module RailsAiContext
   module Tools
@@ -193,17 +194,26 @@ module RailsAiContext
       # is high-only, level 1 is everything.
       #
       # @return [Hash, nil] the parsed report, or nil when it could not run
+      #
+      # The report goes to a file of its own rather than stdout: the binstub a
+      # gem manager installs can print there first (RVM's executable-hooks
+      # writes "Resolving dependencies..."), and a report parsed off stdout
+      # died on that first byte.
       private_class_method def self.run_brakeman_unbundled(min_confidence, resolved_checks)
         executable = brakeman_executable or return nil
 
-        command = [ executable, "--format", "json", "--quiet", "--no-exit-on-warn", "--no-exit-on-error",
-                    "--confidence-level", (3 - min_confidence).to_s, "--path", rails_app.root.to_s ]
-        command += [ "--test", resolved_checks.join(",") ] if resolved_checks&.any?
+        Dir.mktmpdir("rails-ai-context-brakeman") do |dir|
+          report_path = File.join(dir, "report.json")
+          command = [ executable, "--format", "json", "--output", report_path, "--quiet",
+                      "--no-exit-on-warn", "--no-exit-on-error",
+                      "--confidence-level", (3 - min_confidence).to_s, "--path", rails_app.root.to_s ]
+          command += [ "--test", resolved_checks.join(",") ] if resolved_checks&.any?
 
-        output = with_unbundled_env { capture_with_timeout(command) }
-        return nil if output.nil? || output.empty?
+          with_unbundled_env { capture_with_timeout(command) } or next nil
+          next nil unless File.file?(report_path) && File.size?(report_path)
 
-        JSON.parse(output)
+          JSON.parse(File.read(report_path))
+        end
       rescue StandardError => e
         RailsAiContext.debug_fail(e, nil, label: "run_brakeman_unbundled")
       end
@@ -281,12 +291,11 @@ module RailsAiContext
       private_class_method def self.unavailable_message
         version = brakeman_on_machine
         return (
-          "Brakeman #{version} is installed on this machine but not in this app's bundle, so it cannot load " \
-          "under the app's load path.\n\n" \
-          "Scan with it by running `rails-ai-context tool security_scan --no-boot`, which reads the source " \
-          "without booting the app, or add it to the Gemfile:\n\n" \
+          "Brakeman #{version} is installed on this machine but not in this app's bundle, and running it from " \
+          "outside the bundle produced no report either.\n\n" \
+          "Add it to the Gemfile so the scan runs in this process:\n\n" \
           "```ruby\ngem 'brakeman', group: :development\n```\n\n" \
-          "Then run `bundle install`."
+          "Then run `bundle install`. Running `brakeman` in the app directory shows what the outside run hit."
         ) if version
 
         "Brakeman is not installed. Add it to your Gemfile:\n\n" \

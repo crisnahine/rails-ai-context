@@ -114,6 +114,32 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
     end
   end
 
+  # The mount listener names `match "/x", to: SomeApp` as a mounted Rack app,
+  # so the routes listener must not also count it as a construct it could not
+  # expand: the header said "1 dynamic construct not expanded" about an
+  # endpoint named two lines further down.
+  describe "a Rack app attached with a verb and a constant to: on the static tier" do
+    it "counts it once, as a mount" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            match "/metrics", to: MetricsApp, via: :all
+            get "/health", to: Health::App
+            mount MetricsAdminApp => "/metrics-admin"
+            get "orders" => "orders#index"
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:unrouted_mounts]).to eq(3)
+        expect(result[:dynamic_routes]).to be_nil
+        expect(result[:by_controller].keys).to eq([ "orders" ])
+      end
+    end
+  end
+
   # Both tiers answer the same question, so they answer it with the same rule.
   describe "api namespaces on both tiers" do
     let(:route_set) do

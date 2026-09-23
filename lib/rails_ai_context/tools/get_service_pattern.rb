@@ -46,7 +46,7 @@ module RailsAiContext
         # One lookup for the whole call: it walks the service tree on first
         # use and only a class whose superclass is not ActiveInteraction::Base
         # ever asks it anything.
-        lookup = Introspectors::Interaction.lookup_for(root)
+        lookup = Introspectors::SuperclassChain.lookup_for(root)
 
         if service
           return format_single_service(service, service_files, real_service_dirs, real_root, lookup)

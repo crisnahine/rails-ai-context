@@ -51,7 +51,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
   # A macro call inside another target macro's block is nested in it:
   # `string :title` inside `hash :order_params do ... end` is a key of that
   # hash, not a filter of the class.
-  it "records the target macro a nested call sits inside" do
+  it "records the call whose block a nested call sits in" do
     results = parse_and_dispatch(<<~RUBY, :hash, :string, :object)
       hash :order_params do
         string :title, default: nil
@@ -61,10 +61,9 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
     RUBY
 
     nested = results.find { |r| r[:macro] == :string }
-    expect(nested[:nested_in]).to eq(:hash)
     expect(nested[:parent_offset]).to eq(results.find { |r| r[:macro] == :hash }[:offset])
-    expect(results.find { |r| r[:macro] == :hash }[:nested_in]).to be_nil
-    expect(results.find { |r| r[:macro] == :object }[:nested_in]).to be_nil
+    expect(results.find { |r| r[:macro] == :hash }[:parent_offset]).to be_nil
+    expect(results.find { |r| r[:macro] == :object }[:parent_offset]).to be_nil
   end
 
   it "leaves a call in a block that is not a target macro unnested" do
@@ -74,7 +73,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
       end
     RUBY
 
-    expect(results.first).to include(nested_in: nil, parent_offset: nil)
+    expect(results.first).to include(parent_offset: nil)
     expect(results.first[:offset]).to be_a(Integer)
   end
 

@@ -193,7 +193,7 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 
 | Listener | What it detects |
 |:---------|:---------------|
-| GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes, plus the nesting: `nested_in` names the target macro whose block the call sits in, and `offset`/`parent_offset` pair a nested call to that call rather than to its line |
+| GenericMacroListener | Any receiver-less macro you name: `GenericMacroListener.new(:devise, :rate_limit)`. Returns args, values (with a source-slice fallback), options, option values and option nodes, plus the nesting: `parent_offset` is the offset of the target macro call whose block this one sits in, paired against each call's own `offset` rather than its line |
 | ChainedCallListener | Calls on a receiver: `ChainedCallListener.new(:includes)`, or `receiver: :inflect` to pin the receiver. Reports the receiver name |
 | ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers and `config/environments/*.rb`, plus bare `config.jwt do ... end` section references. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`) |
 | ClassDefinitionListener | Class definitions with their superclass, namespaces resolved |

@@ -1123,7 +1123,7 @@ module RailsAiContext
         # chain decides this rather than the one `class` line.
         def service_entry_point(file)
           source = read_app_file(file)
-          lookup = Introspectors::Interaction.lookup_for(rails_app.root.to_s)
+          lookup = Introspectors::SuperclassChain.lookup_for(rails_app.root.to_s)
           filters = source && Introspectors::Interaction.interface(source, lookup: lookup)
           return { method: "call", call: "call", expectation: "be_truthy" } unless filters
 

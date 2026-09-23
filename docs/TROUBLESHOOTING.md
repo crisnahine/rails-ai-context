@@ -258,11 +258,15 @@ Without it, the tool reports "not installed" but the gem works fine otherwise.
 
 ### "Installed on this machine but not in this app's bundle"
 
-A booted scan runs under the app's own bundle, so a brakeman installed globally
-is not on the load path. Either add it to the Gemfile, or scan without booting:
+The scan runs under the app's own bundle, so a brakeman installed globally is
+not on its load path. The tool falls back on its own: it runs the installed
+brakeman as a separate process outside the bundle and says so under the
+results. This message means that fallback produced no report either - the gem
+is there and the run failed. Run `brakeman` in the app directory to see what
+it hit, or add it to the Gemfile so the scan runs in-process:
 
 ```bash
-rails-ai-context tool security_scan --no-boot
+bundle add brakeman --group development
 ```
 
 ---

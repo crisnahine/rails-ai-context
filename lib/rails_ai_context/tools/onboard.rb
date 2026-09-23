@@ -550,7 +550,7 @@ module RailsAiContext
           mounted = Payload.mounted_engines(ctx)
           return [] if mounted.empty?
 
-          lines = [ "## Mounted Engines", "" ]
+          lines = [ "## Mounted Apps", "" ]
           mounted.each do |e|
             name = e[:engine]
             path = e[:path]

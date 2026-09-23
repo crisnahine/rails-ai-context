@@ -717,6 +717,26 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       expect(text).not_to include("**Type:** model concern")
     end
 
+    # `presence:` names ActiveModel's own validator, which the model's
+    # ancestry reaches before any app class, so an app PresenceValidator is
+    # not what `validates :x, presence: true` runs.
+    it "does not claim a framework option key for an app validator of the same name" do
+      File.write(File.join(validator_dir, "presence_validator.rb"), <<~RUBY)
+        class PresenceValidator < ActiveModel::EachValidator
+          def validate_each(record, attribute, value); end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "models", "post.rb"), <<~RUBY)
+        class Post < ApplicationRecord
+          validates :title, presence: true
+        end
+      RUBY
+
+      text = described_class.call(name: "PresenceValidator").content.first[:text]
+
+      expect(text).not_to include("- Post")
+    end
+
     it "lists validators apart from concerns" do
       text = described_class.call.content.first[:text]
 

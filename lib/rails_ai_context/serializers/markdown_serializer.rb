@@ -452,14 +452,14 @@ module RailsAiContext
       def engines_section
         data = Payload.section(context, :engines)
 
-        lines = [ "## Mounted Engines" ]
+        lines = [ "## Mounted Apps" ]
         if data[:mounted_engines]&.any?
           data[:mounted_engines].each do |e|
             desc = e[:description] ? " - #{e[:description]}" : ""
             lines << "- `#{e[:engine]}` at `#{e[:path]}`#{desc}"
           end
         else
-          lines << "- No mounted engines"
+          lines << "- Nothing mounted"
         end
 
         lines.join("\n")

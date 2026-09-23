@@ -34,7 +34,8 @@ could act on.
   subclass of the app's own base interaction is an interaction too, with its
   parent's filters first, so `generate_test` stops emitting `.call`, which
   `ActiveInteraction::Base` does not define. `GenericMacroListener` records
-  the macro a nested call sits inside, which is what both tools read.
+  each call's own offset and its enclosing call's, which is what both tools
+  pair filters by.
 - **generate_test names the constant the file declares.** A path camelizes
   through Ruby's inflector, which has not read the app's
   `config/initializers/inflections.rb` on the static tier, so
@@ -98,6 +99,12 @@ could act on.
   "Mounted apps", because half of what it holds are not engines.
 - **config calls a zero-byte initializer empty** rather than "all commented
   out".
+- **Smaller corrections in the same pass.** `validate_semantics` reads the
+  model's uncapped method list too, so a callback method past the payload's
+  cap is no longer reported as missing. `get_controllers` points
+  `rails_get_view` at the controller's full path rather than its last segment,
+  which is the directory Rails resolves. The stack overview's `Engines:` line
+  is `Mounted:`, because half of what it lists are plain Rack apps.
 - **diagnose stops reading a display cap as a model's whole interface.** A
   method past the thirtieth was reported as not existing, in the same answer
   whose Method Trace printed its definition. The model's own methods travel

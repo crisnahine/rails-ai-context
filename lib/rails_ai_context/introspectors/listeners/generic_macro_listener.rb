@@ -21,7 +21,6 @@ module RailsAiContext
             options:       extract_keyword_options(node),
             option_values: extract_keyword_sources(node),
             option_nodes:  extract_keyword_nodes(node),
-            nested_in:     @enclosing.last&.name,
             # Offsets, not line numbers: a one-line block puts the parent and
             # its nested calls on one line, and a consumer pairing them by
             # line then attaches the second child to the first.
