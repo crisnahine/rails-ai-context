@@ -124,7 +124,7 @@ module RailsAiContext
         tracker = Brakeman.run(options)
         {
           warnings: tracker.filtered_warnings,
-          checks_run: tracker.checks.checks_run.map { |c| c.to_s.sub(/\ABrakeman::Checks::Check/, "") }
+          checks_run: tracker.checks.checks_run.map(&:to_s)
         }
       rescue => e
         { error: e.message }

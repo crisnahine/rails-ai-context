@@ -133,7 +133,8 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
                             file: file.new(relative: "app/controllers/admin/users_controller.rb"), line: 9,
                             message: "Potentially dangerous key allowed for mass assignment",
                             cwe_id: [ 915 ], code: nil, link: nil)
-        checks = Class.new { def checks_run = [ "Brakeman::Checks::CheckSQL", "Brakeman::Checks::CheckMassAssignment" ] }.new
+        # The short names brakeman's own tracker reports (6.x through 8.x).
+        checks = Class.new { def checks_run = %w[SQL MassAssignment] }.new
         tracker = Struct.new(:filtered_warnings, :checks, keyword_init: true)
                         .new(filtered_warnings: [ found ], checks: checks)
 
