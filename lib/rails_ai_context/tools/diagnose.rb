@@ -289,12 +289,15 @@ module RailsAiContext
           model_data = models[receiver]
           return nil unless model_data.is_a?(Hash) && !model_data[:error]
 
-          # A negative claim cannot be read off a partial list: a method past
-          # the display cap was reported as not existing in the same answer
-          # that printed its definition. The model's own methods arrive
-          # uncapped for exactly this; a payload that predates them carries no
-          # such key, and there the cap is still a reason to say nothing.
-          return nil if source_methods_missing?(model_data)
+          # Booted, the loaded class is the whole answer: it carries a
+          # concern's methods and a gem's, which no payload list does.
+          live = live_method_defined?(receiver, method_name)
+          return nil if live == true
+
+          # Otherwise a negative claim cannot be read off a partial list: a
+          # method past the display cap was reported as not existing in the
+          # same answer that printed its definition.
+          return nil if live.nil? && source_methods_missing?(model_data)
 
           known = known_model_methods(model_data)
           # "published?" / "save!" resolve through the bare attribute name, so
@@ -324,6 +327,34 @@ module RailsAiContext
             end
           end
           nil
+        end
+
+        # Whether the loaded model class defines the method: true, false, or
+        # nil when there is no loaded class to ask (the static tier, a name
+        # that is not a model). A private method counts as defined, since the
+        # error for calling one says so rather than "undefined".
+        def live_method_defined?(receiver, method_name)
+          return nil if RailsAiContext.static_tier?
+          return nil unless defined?(ActiveRecord::Base)
+
+          klass = receiver.to_s.safe_constantize
+          return nil unless klass.is_a?(Class) && klass < ActiveRecord::Base
+
+          define_attribute_methods(klass)
+          name = method_name.to_s
+          klass.method_defined?(name) || klass.private_method_defined?(name)
+        rescue StandardError, ScriptError => e
+          RailsAiContext.debug_fail(e, nil, label: "live_method_defined?")
+        end
+
+        # Attribute methods are defined lazily. A table the database lacks -
+        # a migration not yet run - raises here, and the answer still holds
+        # for every method that is not an attribute: the columns the schema
+        # declares cover those.
+        def define_attribute_methods(klass)
+          klass.define_attribute_methods
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, nil, label: "define_attribute_methods")
         end
 
         # True when the names the model carries cannot answer whether a method

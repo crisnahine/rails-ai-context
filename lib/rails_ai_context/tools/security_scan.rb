@@ -252,11 +252,6 @@ module RailsAiContext
         end
       end
 
-      # Keyed by tier, because the two tiers ask a different question of the
-      # same machine: booted, the app's bundle is set up and the load path
-      # holds the app's gems only, so an app that does not bundle brakeman
-      # cannot require it even though `gem list` shows it. One process-wide
-      # boolean let whichever tier answered first decide for the other.
       # A child that is already gone raises ESRCH, which is the outcome asked
       # for either way.
       private_class_method def self.stop(wait)
@@ -268,9 +263,11 @@ module RailsAiContext
         nil
       end
 
+      # Keyed by tier, because the two tiers ask a different question of the
+      # same machine: booted, the app's bundle is set up and the load path
+      # holds the app's gems only, so an app that does not bundle brakeman
+      # cannot require it even though `gem list` shows it.
       private_class_method def self.brakeman_available?
-        # A Hash, whatever was there before: the memo used to be one boolean,
-        # and a stale one would be indexed into.
         @brakeman_available = {} unless @brakeman_available.is_a?(Hash)
         key = RailsAiContext.static_tier? ? :static : :runtime
         return @brakeman_available[key] unless @brakeman_available[key].nil?

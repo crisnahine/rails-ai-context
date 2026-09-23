@@ -66,18 +66,12 @@ module RailsAiContext
 
       private
 
-      def root
-        app.root.to_s
-      end
-
+      # The route introspector's walk, which follows every `draw`, so this
+      # section and the routes section name the same mounted apps.
       def discover_mounted_engines
-        routes_path = File.join(root, "config/routes.rb")
-        return [] unless File.exist?(routes_path)
-
-        ast_data = SourceIntrospector.walk(routes_path, { mounts: -> { Listeners::MountListener.new } })
         engines = []
 
-        ast_data[:mounts].each do |mount|
+        RouteIntrospector.new(app).static_mounts.each do |mount|
           engine_name = mount[:engine]
           path = mount[:path] || "unknown"
           info = { engine: engine_name, path: path }

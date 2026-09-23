@@ -92,6 +92,7 @@ module RailsAiContext
       rescue StandardError => e
         RailsAiContext.debug_fail(e, [], label: "SuperclassChain.autoload_roots")
       end
+      private_class_method :autoload_roots
     end
   end
 end

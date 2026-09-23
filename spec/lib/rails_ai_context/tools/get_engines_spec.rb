@@ -26,7 +26,7 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
     it "lists mounted engines with paths, categories, and descriptions" do
       text = described_class.call.content.first[:text]
       expect(text).to include("# Engines")
-      expect(text).to include("## Mounted apps (config/routes.rb)")
+      expect(text).to include("## Mounted Apps (config/routes.rb)")
       expect(text).to include("**Sidekiq::Web** at `/sidekiq` (admin) - Sidekiq background job dashboard")
       expect(text).to include("**Blazer::Engine** at `/blazer`")
     end
@@ -99,7 +99,7 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
 
       it "still reports the mounted engines it read from routes" do
         text = described_class.call.content.first[:text]
-        expect(text).to include("## Mounted apps (config/routes.rb)")
+        expect(text).to include("## Mounted Apps (config/routes.rb)")
       end
     end
   end

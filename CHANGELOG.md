@@ -68,7 +68,10 @@ could act on.
   renders. A flat-directory fallback is labelled as one.
 - **analyze_feature finds a test by its path.** A spec whose feature word is a
   directory (`spec/services/billing/invoices/create_spec.rb`) was dropped,
-  while the gap checker beside it already matched on the path.
+  while the gap checker beside it already matched on the path. The suite's
+  own words stay out of the match - the `spec/` root, the type directory it
+  files a test under (`models/`, `requests/`), and the `_spec` suffix - so
+  `--feature models` is not every model spec.
 - **routes answers an exact controller key with its own routes.** A substring
   filter returned a nested sibling's routes too (`api/v1/admin/orders` swept
   in `api/v1/admin/orders/ai_data`), and `get_context` inherited it. A short
@@ -95,8 +98,10 @@ could act on.
   engine mounts, and the booted tier lists every Rack endpoint rather than
   `Rails::Engine` subclasses alone. A mount inside a `namespace` or `scope`
   carries that prefix; one whose enclosing scope is an expression is listed
-  with no path rather than an unprefixed one. `engines`, `onboard` and the
-  generated context files head the same list "Mounted apps", because half of
+  with no path rather than an unprefixed one. `engines` follows every file
+  `config/routes.rb` draws, through the same walk `routes` uses, so the two
+  name one set of mounted apps. `engines`, `onboard` and the
+  generated context files head the same list "Mounted Apps", because half of
   what it holds are not engines. On the static tier a `match ... to: SomeApp`
   is counted once, as the mount it is, rather than also as a construct the
   walk could not expand.
@@ -110,11 +115,12 @@ could act on.
   is `Mounted:`, because half of what it lists are plain Rack apps.
 - **diagnose stops reading a display cap as a model's whole interface.** A
   method past the thirtieth was reported as not existing, in the same answer
-  whose Method Trace printed its definition. The model's own methods travel
-  uncapped beside the capped display list - the count next to that list is
-  reflection's, and ActiveRecord defines an attribute method per column the
-  moment anything instantiates a model - and `model_details` says how many of
-  them it is showing. Both tiers carry the same keys.
+  whose Method Trace printed its definition. Booted, diagnose asks the loaded
+  model class, which knows a concern's methods and a gem's as well as the
+  model's own. Statically, the model's own methods travel uncapped beside the
+  capped display list, and where a concern or a parent could define the
+  method the answer declines rather than guesses. `model_details` says how
+  many of the model's methods it is showing.
 - **A CamelCase controller name resolves everywhere.** The needle was
   downcased without being underscored, so "GiftCards" never equalled the
   route key's own "gift_cards": `Payload.find_controller` missed it, and every

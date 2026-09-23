@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::EngineIntrospector do
   let(:app) { Rails.application }
@@ -92,6 +94,30 @@ RSpec.describe RailsAiContext::Introspectors::EngineIntrospector do
   # Testing `defined?(Rails::Engine)` answered from the half-finished boot that
   # entered the static tier, so the marker never fired where it mattered. The
   # tier decides, per ADR 0002.
+  # routes lists what every drawn file mounts; this list read
+  # config/routes.rb alone, so the two tools named different sets for one app.
+  describe "a routes file split with draw" do
+    it "names what a drawn file mounts" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "routes"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            mount Sidekiq::Web => "/sidekiq"
+            draw :extra
+          end
+        RUBY
+        File.write(File.join(dir, "config", "routes", "extra.rb"), <<~RUBY)
+          mount DrawnApp => "/drawn-app"
+        RUBY
+
+        mounted = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:mounted_engines]
+
+        expect(mounted.map { |m| m[:engine] }).to contain_exactly("DrawnApp", "Sidekiq::Web")
+        expect(mounted.find { |m| m[:engine] == "DrawnApp" }[:path]).to eq("/drawn-app")
+      end
+    end
+  end
+
   describe "#static_call" do
     subject(:result) { described_class.new(RailsAiContext::StaticApp.new(Dir.pwd)).static_call }
 

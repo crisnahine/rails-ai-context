@@ -280,6 +280,22 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    # spec/models/account_spec.rb is a test of Account, not of a "models"
+    # feature: the suite's type directory is how it files every spec.
+    it "does not treat a suite type directory as a feature word" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "spec", "models"))
+        File.write(File.join(tmp, "spec", "models", "account_spec.rb"), "require \"rails_helper\"\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "models").content.first[:text]
+
+        expect(text).not_to include("## Tests")
+      end
+    end
+
     # A file named by both conventions keeps its own words: stripping the
     # `spec_` prefix from spec_runner_spec.rb left "runner".
     it "keeps a feature word that only looks like the suite's prefix" do

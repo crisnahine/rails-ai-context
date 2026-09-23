@@ -75,8 +75,8 @@ module RailsAiContext
         # Limit nodes. The cut used to be silent, so a 133-model app read as a
         # 50-model app with no edges to the other 83.
         total_nodes = subgraph.size
-        # Both numbers in the stats line are taken here, before the cut: one
-        # of them used to be, and the two read as one scope.
+        # Both numbers in the stats line are taken here, before the cut, so
+        # they describe the same models.
         total_edges = subgraph.values.sum { |edges| edges.size }
         subgraph = subgraph.first(MAX_NODES).to_h if subgraph.size > MAX_NODES
 

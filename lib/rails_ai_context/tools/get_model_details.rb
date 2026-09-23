@@ -114,10 +114,24 @@ module RailsAiContext
       # total separately.
       PAGE_METHOD_CAP = 25
 
-      private_class_method def self.methods_heading(shown, total, kind: "Key instance methods")
-        return "## #{kind}" unless total.is_a?(Integer) && total > shown
+      # One method list: the heading counts what this page prints against the
+      # list it printed from, and the model's own total - a wider set, taken
+      # by reflection before the payload's cap and this page's filter - is
+      # said on its own line rather than used as the denominator of a
+      # different number.
+      #
+      # @param reflected [Array(Integer, String, String), nil] the payload's
+      #   count, the noun it counts, and what this list leaves out of it
+      private_class_method def self.method_section(methods, kind:, reflected: nil, model: nil)
+        listed = methods.first(PAGE_METHOD_CAP)
+        heading = methods.size > listed.size ? "## #{kind} (#{listed.size} of #{methods.size})" : "## #{kind}"
+        lines = [ "", heading ] + listed.map { |m| "- `#{m}`" }
 
-        "## #{kind} (#{shown} of #{total})"
+        total, noun, omitted = reflected
+        if total.is_a?(Integer) && total > methods.size
+          lines << "_Reflection reports #{count_phrase(total, noun)} on #{model}; this list is what the payload carries, #{omitted}._"
+        end
+        lines
       end
 
       private_class_method def self.unavailable_row(name, data)
@@ -386,33 +400,22 @@ module RailsAiContext
         # Class methods - only show methods defined in the actual model file
         source_class_methods = extract_source_class_methods(name)
         if source_class_methods&.any?
-          listed = source_class_methods.first(PAGE_METHOD_CAP)
-          lines << "" << methods_heading(listed.size, source_class_methods.size, kind: "Class methods")
-          listed.each { |m| lines << "- `#{m}`" }
+          lines.concat(method_section(source_class_methods, kind: "Class methods"))
         elsif data[:class_methods]&.any?
           # Fallback: filter obvious framework methods
           app_class_methods = data[:class_methods].reject { |m| m.match?(/\A(find_for_|find_or_|devise_|new_with_session|http_auth|params_auth|case_insensitive|expire_all|extend_remember|strip_whitespace|email_regexp|omniauth_providers)/) }
           if app_class_methods.any?
-            listed = app_class_methods.first(PAGE_METHOD_CAP)
-            lines << "" << methods_heading(listed.size, app_class_methods.size, kind: "Class methods")
-            listed.each { |m| lines << "- `#{m}`" }
-            total = data[:class_method_count]
-            if total.is_a?(Integer) && total > app_class_methods.size
-              lines << "_Reflection reports #{count_phrase(total, "class method")} on #{name}; " \
-                       "this list is what the payload carries, minus framework ones._"
-            end
+            lines.concat(method_section(app_class_methods, kind: "Class methods",
+              reflected: [ data[:class_method_count], "class method", "minus framework ones" ], model: name))
           end
         end
 
-        # Key instance methods - only from source file, not framework-inherited
+        # Key instance methods - only from source file, not framework-inherited.
+        # Its own total, not the payload's: the file's methods, where the
+        # payload count includes the ones reflection found on top of them.
         source_instance_methods = extract_method_signatures(name)
         if source_instance_methods&.any?
-          # Its own total, not the payload's: this branch lists the methods
-          # the file declares, and the payload count includes the ones
-          # reflection found on top of them.
-          listed = source_instance_methods.first(PAGE_METHOD_CAP)
-          lines << "" << methods_heading(listed.size, source_instance_methods.size)
-          listed.each { |signature| lines << "- `#{signature}`" }
+          lines.concat(method_section(source_instance_methods, kind: "Key instance methods"))
         elsif data[:instance_methods]&.any?
           # Fallback: filter association-generated and framework methods
           assoc_names = (data[:associations] || []).flat_map do |a|
@@ -422,19 +425,8 @@ module RailsAiContext
           end
           filtered = data[:instance_methods].reject { |m| assoc_names.include?(m) || m.end_with?("=") }
           if filtered.any?
-            listed = filtered.first(PAGE_METHOD_CAP)
-            # The heading counts one set: what this page prints, against the
-            # list it printed from. The model's own total is a wider set - it
-            # counts the association and writer methods filtered out here, and
-            # everything past the payload's own cap - so it is said separately
-            # rather than used as the denominator of a different number.
-            lines << "" << methods_heading(listed.size, filtered.size)
-            lines << listed.map { |m| "- `#{m}`" }.join("\n")
-            total = data[:instance_method_count]
-            if total.is_a?(Integer) && total > filtered.size
-              lines << "_Reflection reports #{count_phrase(total, "instance method")} on #{name}; " \
-                       "this list is what the payload carries, minus association and writer methods._"
-            end
+            lines.concat(method_section(filtered, kind: "Key instance methods",
+              reflected: [ data[:instance_method_count], "instance method", "minus association and writer methods" ], model: name))
           end
         end
 

@@ -27,7 +27,7 @@ module RailsAiContext
           # Engines and plain Rack apps both: `mount App => path` and
           # `match path, to: App` build the same endpoint, and neither the
           # heading nor the empty line calls one of them the other.
-          lines << "" << "## Mounted apps (config/routes.rb)"
+          lines << "" << "## Mounted Apps (config/routes.rb)"
           if mounted.any?
             mounted.each do |e|
               line = "- **#{e[:engine]}** at `#{e[:path]}`"

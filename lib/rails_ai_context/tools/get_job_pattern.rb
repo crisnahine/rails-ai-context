@@ -65,11 +65,10 @@ module RailsAiContext
           lines << "" if lines.any?
           lines.concat(format_channels_section(channels))
         end
-        # A worker count is a claim about the app's async work, and an app that
-        # names its Sidekiq config anything but config/sidekiq.yml used to get
-        # that count with no caveat at all: the sentence hung off the file
-        # rather than off the section it qualifies. An app with no Sidekiq in
-        # it gets no sentence about Sidekiq.
+        # A worker count is a claim about the app's async work, so the caveat
+        # belongs to the workers section, not to config/sidekiq.yml existing:
+        # an app that names its config anything else still gets it. An app
+        # with no Sidekiq in it gets no sentence about Sidekiq.
         if workers.any? || sidekiq_line
           lines << "" if lines.any?
           lines << "_#{[ sidekiq_line, NOT_COVERED ].compact.join(" ")}_"

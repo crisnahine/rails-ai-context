@@ -451,8 +451,8 @@ module RailsAiContext
         definition = /\b(?:class|module)\s+(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
 
         # The paths first, so the ceiling is measured against the files there
-        # are rather than against the files read: a tree of exactly the cap
-        # skipped nothing and used to say it stopped.
+        # are rather than the files read: a tree of exactly the cap skips
+        # nothing and must not say it stopped.
         paths = search_dirs.flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }
         paths.reject! { |real| real == own_file } if own_file
         truncated = paths.size > MAX_CALLER_SCAN_FILES

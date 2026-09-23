@@ -32,9 +32,8 @@ module RailsAiContext
           by_controller: group_by_controller(routes),
           api_namespaces: api_namespaces(routes),
           mounted_engines: detect_mounted_engines,
-          # Everything routable that has no controller#action: Engine mounts
-          # AND bare rack apps (propshaft's /assets mounts a Server instance,
-          # which detect_mounted_engines' Class check can't see).
+          # Everything routable that has no controller#action and is not a
+          # redirect or a lambda: the same set the list above names.
           unrouted_mounts: count_unrouted_mounts,
           root_route: root ? "#{root[:controller]}##{root[:action]}" : nil
         }.tap do |result|
@@ -85,6 +84,19 @@ module RailsAiContext
         result
       rescue => e
         { error: e.message }
+      end
+
+      # What config/routes.rb and every file it draws mount, from source. The
+      # engines section reads this rather than walking config/routes.rb on its
+      # own, so the two sections name one set of mounted apps.
+      #
+      # @return [Array<Hash>] { engine:, path:, location: } per mounted app
+      def static_mounts
+        routes_path = File.join(app.root.to_s, "config", "routes.rb")
+        return [] unless File.exist?(routes_path)
+
+        _records, mounts, _files = walk_routes_file(routes_path)
+        mounts
       end
 
       private

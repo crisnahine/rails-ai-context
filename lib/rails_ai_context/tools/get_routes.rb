@@ -57,13 +57,13 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
-      # A mounted Rack app answers on a path and has no controller#action, so
+      # A mounted app answers on a path and has no controller#action, so
       # no controller group can hold it. Counting it and then dropping it left
       # the one endpoint a reader was looking for named nowhere.
       private_class_method def self.mounted_apps_lines(mounted_apps)
         return [] if mounted_apps.empty?
 
-        lines = [ "", "## Mounted Rack apps (#{mounted_apps.size})" ]
+        lines = [ "", "## Mounted Apps (#{mounted_apps.size})" ]
         mounted_apps.each do |app|
           lines << (app[:path] ? "- **#{app[:engine]}** at `#{app[:path]}`" : "- **#{app[:engine]}**")
         end
@@ -117,9 +117,11 @@ module RailsAiContext
           # "engine mount" named the wrong thing: a plain Rack app attached
           # with `mount` or with `match ... to:` is not an engine, and both
           # land in this count.
-          mounted_apps = Array(routes[:mounted_engines]).select { |m| m.is_a?(Hash) && m[:engine] }
+          # A filtered answer is about one controller, and no mounted app
+          # belongs to one.
+          mounted_apps = controller ? [] : Array(routes[:mounted_engines]).select { |m| m.is_a?(Hash) && m[:engine] }
           if unattributed_count > 0 && controller.nil?
-            count_label += " and #{count_phrase(unattributed_count, "mounted Rack app")}"
+            count_label += " and #{count_phrase(unattributed_count, "mounted app")}"
           end
           # Dropping the count of what the static tier could not expand let a
           # partial list read as the whole routing table, which is the one
@@ -168,9 +170,7 @@ module RailsAiContext
               lines << "- _#{fw_names} framework routes: #{total_fw} total_"
             end
 
-            unless controller
-              lines.concat(mounted_apps_lines(mounted_apps))
-            end
+            lines.concat(mounted_apps_lines(mounted_apps))
 
             if routes[:api_namespaces]&.any?
               lines << "" << "API namespaces: #{routes[:api_namespaces].join(', ')}"
@@ -228,7 +228,7 @@ module RailsAiContext
               lines << "- `#{r[:verb]}` `#{r[:path]}` → #{r[:action]}#{helper_part}#{params_part}"
             end
 
-            lines.concat(mounted_apps_lines(mounted_apps)) unless controller
+            lines.concat(mounted_apps_lines(mounted_apps))
 
             if excluded_framework_count > 0 && controller.nil?
               lines << "" << "_#{count_phrase(excluded_framework_count, "framework route")} hidden. " \
@@ -248,7 +248,7 @@ module RailsAiContext
             page[:items].each do |r|
               lines << "| #{r[:verb]} | `#{r[:path]}` | #{r[:_ctrl]}##{r[:action]} | #{r[:name] || '-'} |"
             end
-            lines.concat(mounted_apps_lines(mounted_apps)) unless controller
+            lines.concat(mounted_apps_lines(mounted_apps))
 
             if routes[:api_namespaces]&.any?
               lines << "" << "## API namespaces: #{routes[:api_namespaces].join(', ')}"

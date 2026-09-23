@@ -91,7 +91,7 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     it "names each mounted app and the path it answers on" do
       text = described_class.call.content.first[:text]
 
-      expect(text).to include("## Mounted Rack apps (2)")
+      expect(text).to include("## Mounted Apps (2)")
       expect(text).to include("- **MetricsApp** at `/metrics`")
       expect(text).to include("- **MetricsAdminApp** at `/metrics-admin`")
     end
@@ -99,14 +99,14 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     it "counts them in the header without calling them engines" do
       text = described_class.call.content.first[:text]
 
-      expect(text).to include("2 mounted Rack apps")
+      expect(text).to include("2 mounted apps")
       expect(text).not_to include("engine mount")
     end
 
     it "leaves them out of a filtered answer" do
       text = described_class.call(controller: "posts").content.first[:text]
 
-      expect(text).not_to include("Mounted Rack apps")
+      expect(text).not_to include("Mounted Apps")
     end
   end
 

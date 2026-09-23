@@ -122,7 +122,7 @@ module RailsAiContext
           end
         end
       end
-      private_class_method :own_filters, :build_filters, :one_per_name
+      private_class_method :chain, :own_filters, :build_filters, :one_per_name
     end
   end
 end

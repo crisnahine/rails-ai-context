@@ -201,8 +201,10 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
     # A concern's methods are reflection's to report, and that list is the
     # capped one, so a model that includes concerns cannot support a negative
     # claim about a name its own file does not define.
-    context "a model whose methods can come from a concern" do
+    context "a model whose methods can come from a concern, on the static tier" do
       before do
+        # No loaded class to ask: the payload is all there is.
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
         allow(described_class).to receive(:cached_context).and_return(
           models: {
             "Post" => {
@@ -224,10 +226,50 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       end
     end
 
+    # Booted, the loaded class is the whole answer: it carries what the
+    # payload's capped list and the model's own file cannot, a concern's
+    # methods and a gem's included.
+    context "a booted app whose model class is loaded" do
+      let(:truncated_post) do
+        {
+          table_name: "posts", associations: [], scopes: [], class_methods: [],
+          concerns: [ "Publishable" ],
+          instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+          source_instance_methods: %w[display_url],
+          instance_method_count: 132
+        }
+      end
+
+      it "still names a real typo on a model whose list was cut" do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: { "Post" => truncated_post },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+
+        text = described_class.call(error: "NoMethodError: undefined method `nope_xyz' for an instance of Post").content.first[:text]
+
+        expect(text).to include("undefined_method_on_model")
+      end
+
+      # `to_param` comes from ActiveRecord, is in no payload list, and exists
+      # on every model: the negative claim read "the method does not exist".
+      it "does not claim a method the loaded class defines is missing" do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: { "Post" => truncated_post.merge(concerns: [], instance_method_count: 30) },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+
+        text = described_class.call(error: "NoMethodError: undefined method `to_param' for an instance of Post").content.first[:text]
+
+        expect(text).not_to include("undefined_method_on_model")
+      end
+    end
+
     # A context written before the source list existed carries no key for it,
     # and a negative claim cannot be read off what is left.
-    context "a payload from before the source method list existed" do
+    context "a payload from before the source method list existed, on the static tier" do
       before do
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
         allow(described_class).to receive(:cached_context).and_return(
           models: {
             "Post" => {

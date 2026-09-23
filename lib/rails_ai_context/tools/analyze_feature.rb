@@ -38,6 +38,12 @@ module RailsAiContext
       # the filesystem. Tool output notes when the cap is hit so the AI agent knows
       # to narrow its feature keyword. v5.8.1 hardening; all glob sites in r2.
       MAX_SCAN_FILES = 500
+
+      # The directories rspec-rails and minitest file tests under by kind.
+      SUITE_TYPE_DIRS = %w[
+        channels components controllers features functional helpers integration jobs lib mailboxes
+        mailers models policies requests routing serializers services system unit views workers
+      ].freeze
       AUTH_GEM_NAMES = %w[devise omniauth rodauth sorcery clearance authlogic warden jwt].freeze
 
       def self.call(feature:, server_context: nil)
@@ -362,10 +368,13 @@ module RailsAiContext
         # --- AF5: Tests ---
         # The path a test is named by: without the root, without the suite
         # directory it sits in, and without the extension. The suite directory
-        # is every test's own name for itself, so leaving it in made "spec"
-        # and "test" match the whole suite.
+        # is every test's own name for itself; left in, "spec" and "test"
+        # would match the whole suite.
         def relative_test_name(path, real_root)
           relative = path.to_s.sub("#{real_root}/", "").sub(%r{\A(?:spec|test)/}, "").sub(/\.rb\z/, "")
+          # The type directory a suite files a test under is the suite's word
+          # too: spec/models/account_spec.rb tests Account, not "models".
+          relative = relative.sub(%r{\A(?:#{SUITE_TYPE_DIRS.join("|")})/}, "")
           without_suffix = relative.sub(/_(?:spec|test)\z/, "")
           # One convention or the other, never both: stripping a `spec_`
           # prefix from a file already named `..._spec` takes a word out of
