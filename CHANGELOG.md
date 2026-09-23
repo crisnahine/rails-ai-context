@@ -138,6 +138,11 @@ could act on.
   where. With no brakeman anywhere, the message says that instead of
   guessing, and the availability answer is keyed by tier rather than decided
   once per process.
+- **An exact search with a space keeps its context lines on ripgrep 13.**
+  The literal was escaped with Ruby's `\ `, which ripgrep 13 (Ubuntu 22.04,
+  Debian 12) rejects, so the search fell back to the Ruby scan and dropped
+  context lines and files with no listed extension. The space goes through
+  unescaped now, which both engines read the same way.
 
 ## [5.28.0] - 2026-09-22
 
