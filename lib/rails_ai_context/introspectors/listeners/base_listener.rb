@@ -117,7 +117,8 @@ module RailsAiContext
         end
 
         # The Rack app a route call attaches: a constant as its `to:` value
-        # (`match "/metrics", to: MetricsApp`). A string there is a controller
+        # (`match "/metrics", to: MetricsApp`) or as the value of the
+        # path => app form (`get "/metrics" => MetricsApp`). A string there is a controller
         # action. MountListener names the app and RoutesDslListener skips the
         # call, so both read it here or one endpoint is counted twice.
         def rack_app_constant(args)
@@ -125,15 +126,28 @@ module RailsAiContext
             next unless arg.is_a?(Prism::KeywordHashNode) || arg.is_a?(Prism::HashNode)
 
             arg.elements.reverse_each do |assoc|
-              next unless assoc.is_a?(Prism::AssocNode) && extract_key(assoc.key) == :to
+              next unless assoc.is_a?(Prism::AssocNode)
+              # `to: App`, or the path => App form, whose key is the path.
+              next unless extract_key(assoc.key) == :to || assoc.key.is_a?(Prism::StringNode)
 
-              case assoc.value
-              when Prism::ConstantReadNode then return assoc.value.name.to_s
-              when Prism::ConstantPathNode then return constant_path_string(assoc.value)
-              end
+              name = app_name(assoc.value)
+              return name if name
             end
           end
           nil
+        end
+
+        # A Rack app as a route names it: a constant, or a call on one with no
+        # arguments (`ActionCable.server`). Anything else is not readable here.
+        def app_name(node)
+          case node
+          when Prism::ConstantReadNode then node.name.to_s
+          when Prism::ConstantPathNode then constant_path_string(node)
+          when Prism::CallNode
+            receiver = node.receiver
+            constant = receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
+            node.slice.delete_prefix("::") if constant && node.arguments.nil? && node.block.nil?
+          end
         end
 
         # The name is the source text: `::Foo::Bar` and `Foo::Bar` are the same

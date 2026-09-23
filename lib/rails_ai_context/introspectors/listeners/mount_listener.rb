@@ -60,7 +60,12 @@ module RailsAiContext
         # the unprefixed one.
         def scope_prefix(node)
           first = node.arguments&.arguments&.first
-          options = extract_keyword_options(node)
+          path_node = extract_keyword_nodes(node)[:path]
+          # `path: ADMIN_PATH` or `path: "/v#{n}"` is a prefix too, and one this
+          # walk cannot read.
+          return :unknown if path_node && !path_node.is_a?(Prism::StringNode) && !path_node.is_a?(Prism::SymbolNode)
+
+          options = { path: path_node && extract_value(path_node) }
           literal = case first
           when Prism::SymbolNode then first.value
           when Prism::StringNode then first.unescaped
@@ -96,7 +101,8 @@ module RailsAiContext
           return nil if prefixes.include?(:unknown)
           return path if prefixes.empty? || path.nil?
 
-          "#{prefixes.join.chomp("/")}/#{path.to_s.delete_prefix("/")}"
+          joined = "#{prefixes.join.chomp("/")}/#{path.to_s.delete_prefix("/")}"
+          joined == "/" ? joined : joined.chomp("/")
         end
 
         def resolve_rack_endpoint(args)
@@ -104,29 +110,32 @@ module RailsAiContext
           return [ nil, nil ] unless target
 
           first = args.first
-          [ target, first.is_a?(Prism::StringNode) ? first.unescaped : nil ]
+          path = first.is_a?(Prism::StringNode) ? first.unescaped : rocket_path(args)
+          [ target, path ]
+        end
+
+        # `get "/metrics" => MetricsApp`: the key is the path.
+        def rocket_path(args)
+          args.each do |arg|
+            next unless arg.is_a?(Prism::KeywordHashNode) || arg.is_a?(Prism::HashNode)
+
+            arg.elements.each do |assoc|
+              return assoc.key.unescaped if assoc.is_a?(Prism::AssocNode) && assoc.key.is_a?(Prism::StringNode) && app_name(assoc.value)
+            end
+          end
+          nil
         end
 
         def resolve_engine(args)
           first = args.first
           case first
-          when Prism::ConstantReadNode
-            first.name.to_s
-          when Prism::ConstantPathNode
-            constant_path_string(first)
           when Prism::KeywordHashNode, Prism::HashNode
             # Hash rocket syntax: mount Engine => "/path"
             # The engine is the key of the first assoc
             assoc = first.elements.first
-            return nil unless assoc.is_a?(Prism::AssocNode)
-
-            case assoc.key
-            when Prism::ConstantReadNode then assoc.key.name.to_s
-            when Prism::ConstantPathNode then constant_path_string(assoc.key)
-            else nil
-            end
+            assoc.is_a?(Prism::AssocNode) ? app_name(assoc.key) : nil
           else
-            nil
+            app_name(first)
           end
         end
 
@@ -153,7 +162,7 @@ module RailsAiContext
             arg.elements.each do |assoc|
               next unless assoc.is_a?(Prism::AssocNode)
 
-              if assoc.key.is_a?(Prism::ConstantReadNode) || assoc.key.is_a?(Prism::ConstantPathNode)
+              if app_name(assoc.key)
                 val = extract_value(assoc.value)
                 return val.is_a?(String) ? val : nil
               end

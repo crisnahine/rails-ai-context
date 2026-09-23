@@ -182,6 +182,27 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:tables]).not_to have_key("schema_migrations")
       end
 
+      # `declared_tables` names what db/schema.rb declares on both tiers, and
+      # a structure.sql app has no such list: the booted tier answers nil.
+      it "names what db/schema.rb declares on the static tier" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"),
+                     %(ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table "users" do |t|\n    t.string "email"\n  end\nend\n))
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:static_schema_parse)
+
+          expect(result[:declared_tables]).to eq([ "users" ])
+        end
+      end
+
+      it "claims no db/schema.rb declaration for a structure.sql app" do
+        result = introspector.call
+
+        expect(result).to have_key(:declared_tables)
+        expect(result[:declared_tables]).to be_nil
+      end
+
       it "extracts columns with normalized types" do
         result = introspector.call
         user_cols = result[:tables]["users"][:columns]

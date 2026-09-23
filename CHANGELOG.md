@@ -107,7 +107,7 @@ could act on.
   `routes`, which names the mounted apps it counts instead of calling them
   engine mounts, and the booted tier lists every Rack endpoint rather than
   `Rails::Engine` subclasses alone. A mount inside a `namespace` or `scope`
-  carries that prefix; one whose enclosing scope is an expression is listed
+  carries that prefix; one whose enclosing scope, or its `path:`, is an expression is listed
   with no path rather than an unprefixed one, and every list prints it
   without one. `engines` follows every file `config/routes.rb` draws,
   through the walk the static `routes` answer uses, so on the static tier
@@ -116,7 +116,8 @@ could act on.
   generated context files head the same list "Mounted Apps", because half of
   what it holds are not engines. On the static tier a `match ... to: SomeApp`
   is counted once, as the mount it is, rather than also as a construct the
-  walk could not expand.
+  walk could not expand, and so are `get "/status" => StatusApp` and
+  `mount ActionCable.server => "/cable"`, which the walk did not see at all.
 - **config calls a zero-byte initializer empty** rather than "all commented
   out".
 - **Smaller corrections in the same pass.** `validate_semantics` asks the

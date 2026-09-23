@@ -61,6 +61,7 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
     RUBY
 
     nested = results.find { |r| r[:macro] == :string }
+    expect(nested[:parent_offset]).to be_an(Integer)
     expect(nested[:parent_offset]).to eq(results.find { |r| r[:macro] == :hash }[:offset])
     expect(results.find { |r| r[:macro] == :hash }[:parent_offset]).to be_nil
     expect(results.find { |r| r[:macro] == :object }[:parent_offset]).to be_nil

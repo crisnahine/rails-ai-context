@@ -127,13 +127,16 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
             match "/metrics", to: MetricsApp, via: :all
             get "/health", to: Health::App
             mount MetricsAdminApp => "/metrics-admin"
+            mount ActionCable.server => "/cable"
+            get "/status" => StatusApp
             get "orders" => "orders#index"
           end
         RUBY
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
-        expect(result[:unrouted_mounts]).to eq(3)
+        expect(result[:unrouted_mounts]).to eq(5)
+        expect(result[:mounted_engines]).to include({ engine: "ActionCable.server", path: "/cable" }, { engine: "StatusApp", path: "/status" })
         expect(result[:dynamic_routes]).to be_nil
         expect(result[:by_controller].keys).to eq([ "orders" ])
       end

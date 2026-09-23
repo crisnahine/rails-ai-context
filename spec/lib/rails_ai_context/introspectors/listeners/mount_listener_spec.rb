@@ -100,6 +100,50 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     expect(results.first[:path]).to be_nil
   end
 
+  # A `path:` option is a prefix like the positional one, and a constant or
+  # an interpolation there names a segment this walk cannot read.
+  it "leaves the path unknown when a path: option is an expression" do
+    [
+      "namespace :admin, path: ADMIN_PATH do\n  mount StatsApp => \"/stats\"\nend\n",
+      "scope path: PREFIX do\n  mount StatsApp => \"/stats\"\nend\n",
+      "scope path: \"/v\#{version}\" do\n  mount StatsApp => \"/stats\"\nend\n"
+    ].each do |source|
+      results = parse_and_dispatch(source)
+
+      expect(results.first).to include(engine: "StatsApp")
+      expect(results.first[:path]).to be_nil, source
+    end
+  end
+
+  it "still reads a literal path: option" do
+    results = parse_and_dispatch("namespace :admin, path: \"backoffice\" do\n  mount StatsApp => \"/stats\"\nend\n")
+
+    expect(results.first).to include(path: "/backoffice/stats")
+  end
+
+  # The mount most Rails apps carry: the receiver call names the app.
+  it "detects an app named by a call on a constant" do
+    results = parse_and_dispatch('mount ActionCable.server => "/cable"')
+
+    expect(results.first).to include(engine: "ActionCable.server", path: "/cable")
+  end
+
+  it "detects a Rack app attached with the path => app form" do
+    results = parse_and_dispatch('get "/metrics" => MetricsApp')
+
+    expect(results.first).to include(engine: "MetricsApp", path: "/metrics")
+  end
+
+  it "does not take a controller action in the path => form for an app" do
+    expect(parse_and_dispatch('get "/posts" => "posts#index"')).to be_empty
+  end
+
+  it "does not leave a trailing slash on a mount at the scope's root" do
+    results = parse_and_dispatch("namespace :admin do\n  mount StatsApp, at: \"/\"\nend\n")
+
+    expect(results.first).to include(path: "/admin")
+  end
+
   it "ignores a scope that sets a module and no path" do
     results = parse_and_dispatch(<<~RUBY)
       scope module: :admin do

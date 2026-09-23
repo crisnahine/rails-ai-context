@@ -66,8 +66,10 @@ module RailsAiContext
 
       private
 
-      # The route introspector's walk, which follows every `draw`, so this
-      # section and the routes section name the same mounted apps.
+      # What config/routes.rb and the files it draws mount, on both tiers,
+      # through the route introspector's own walk: on the static tier the
+      # routes section reads the same walk, and booted it reads the live
+      # route table, which also holds what a gem mounts for itself.
       def discover_mounted_engines
         engines = []
 
