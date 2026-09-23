@@ -63,7 +63,8 @@ could act on.
   validator.
 - **dependency_graph counts both header numbers over the same models.** The
   model count was app-wide and the association count covered the fifty nodes
-  that survived the cap.
+  that survived the cap. Both are app-wide now, and the truncation note says
+  how many of the associations the cut graph draws.
 - **get_context reads the views Rails would resolve.** It handed `GetView`
   the last segment of the controller path, so `Api::V1::Admin::OrdersController`
   picked up `app/views/orders`, a directory of templates a background service

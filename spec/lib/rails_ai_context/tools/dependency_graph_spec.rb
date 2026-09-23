@@ -439,6 +439,16 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
         expect(text).to include("Showing 50 of 61 models")
       end
 
+      # The header counts every association; a reader counting the edges the
+      # cut graph draws needs the note to say it drew fewer.
+      it "says how many of the associations the cut graph draws" do
+        text = described_class.call(format: "text").content.first[:text]
+        drawn = text.lines.count { |line| line.match?(/^  belongs_to /) }
+
+        expect(drawn).to be < 60
+        expect(text).to include("Showing 50 of 61 models and #{drawn} of 60 associations")
+      end
+
       it "counts them the same way in the mermaid rendering" do
         text = described_class.call(format: "mermaid").content.first[:text]
 

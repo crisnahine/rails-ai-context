@@ -379,7 +379,7 @@ module RailsAiContext
           stats << "**Cycles:** #{cycles.size}" if cycles.any?
           stats << "**STI hierarchies:** #{sti_groups.size}" if sti_groups.any?
           lines << stats.join(" | ")
-          lines.concat(truncation_notes(graph, total_nodes, skipped))
+          lines.concat(truncation_notes(graph, total_nodes, skipped, total_edges))
 
           # Cycles section
           if cycles.any?
@@ -441,18 +441,20 @@ module RailsAiContext
           stats << "**Cycles:** #{cycles.size}" if cycles.any?
           stats << "**STI hierarchies:** #{sti_groups.size}" if sti_groups.any?
           lines << stats.join(" | ")
-          lines.concat(truncation_notes(graph, total_nodes, skipped))
+          lines.concat(truncation_notes(graph, total_nodes, skipped, total_edges))
 
           lines.join("\n")
         end
 
         # Both a node cap and a model whose reflections could not be read
         # used to leave the graph looking complete.
-        def truncation_notes(graph, total_nodes, skipped)
+        def truncation_notes(graph, total_nodes, skipped, total_edges = nil)
           notes = []
           if total_nodes && total_nodes > graph.keys.size
+            drawn = graph.values.sum(&:size)
+            edges = total_edges && total_edges > drawn ? " and #{drawn} of #{count_phrase(total_edges, "association")}" : ""
             notes << ""
-            notes << "_Showing #{graph.keys.size} of #{total_nodes} models; pass `model:` to focus the graph._"
+            notes << "_Showing #{graph.keys.size} of #{total_nodes} models#{edges}; pass `model:` to focus the graph._"
           end
           if skipped.any?
             notes << ""
