@@ -554,22 +554,26 @@ module RailsAiContext
         model_name, model_data = RailsAiContext::Payload.model_for_file(context, file)
         return warnings unless model_data
 
-        # Build set of known methods (instance + from source content). The
-        # capped display list alone made this claim from a partial set; the
-        # model's own methods travel uncapped beside it.
+        # Build set of known methods (instance + from source content)
         known = Set.new(model_data[:instance_methods] || [])
-        known.merge(Array(model_data[:source_instance_methods]))
         # Also check the file source for private methods
         source = RailsAiContext::SafeFile.read(rails_app.root.join(file))
         source&.scan(/\bdef\s+(\w+[?!]?)/)&.each { |m| known << m[0] }
 
         # Skip check if model has concerns (method may be in concern)
         has_concerns = (model_data[:concerns] || []).any?
+        # The payload's list is capped, so past the cap an inherited method
+        # is not in it and its absence says nothing.
+        truncated = model_data[:instance_method_count].to_i > Array(model_data[:instance_methods]).size
 
         visitor.callback_registrations.each do |reg|
           reg[:methods].each do |method_name|
             next if known.include?(method_name)
             next if has_concerns # uncertain - method may come from concern
+
+            live = live_method_defined?(model_name, method_name)
+            next if live || (live.nil? && truncated)
+
             warnings << "#{reg[:type]} :#{method_name} - method not found in #{model_name}"
           end
         end

@@ -858,6 +858,34 @@ module RailsAiContext
           RailsAiContext.debug_fail(e, [], label: "safe_glob")
         end
 
+        # Whether the loaded model class defines the method: true, false, or
+        # nil when there is no loaded class to ask (the static tier, a name
+        # that is not a model). A private method counts as defined, since the
+        # error for calling one says so rather than "undefined".
+        def live_method_defined?(receiver, method_name)
+          return nil if RailsAiContext.static_tier?
+          return nil unless defined?(ActiveRecord::Base)
+
+          klass = receiver.to_s.safe_constantize
+          return nil unless klass.is_a?(Class) && klass < ActiveRecord::Base
+
+          define_attribute_methods(klass)
+          name = method_name.to_s
+          klass.method_defined?(name) || klass.private_method_defined?(name)
+        rescue StandardError, ScriptError => e
+          RailsAiContext.debug_fail(e, nil, label: "live_method_defined?")
+        end
+
+        # Attribute methods are defined lazily. A table the database lacks -
+        # a migration not yet run - raises here, and the answer still holds
+        # for every method that is not an attribute: the columns the schema
+        # declares cover those.
+        def define_attribute_methods(klass)
+          klass.define_attribute_methods
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, nil, label: "define_attribute_methods")
+        end
+
         # Merge duplicate PUT/PATCH entries for the same path+action into a
         # single "PATCH|PUT" entry (Rails generates both for every `resources`
         # update route). Public: the VFS routes resource uses it too, so route

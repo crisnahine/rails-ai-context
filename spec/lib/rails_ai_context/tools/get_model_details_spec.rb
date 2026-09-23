@@ -634,5 +634,16 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
 
       expect(text).to include("72 instance methods")
     end
+
+    # The static count comes from the source parse, so crediting it to
+    # reflection claims a boot that never happened.
+    it "credits the count to the source on the static tier" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+      text = described_class.call(model: "Widget").content.first[:text]
+
+      expect(text).to include("The source defines 72 instance methods on Widget")
+      expect(text).not_to include("Reflection reports")
+    end
   end
 end

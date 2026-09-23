@@ -108,9 +108,11 @@ could act on.
   walk could not expand.
 - **config calls a zero-byte initializer empty** rather than "all commented
   out".
-- **Smaller corrections in the same pass.** `validate_semantics` reads the
-  model's uncapped method list too, so a callback method past the payload's
-  cap is no longer reported as missing. `get_controllers` points
+- **Smaller corrections in the same pass.** `validate_semantics` asks the
+  loaded model class before calling a callback method missing, and on the
+  static tier makes no claim once the payload's method list was cut at its
+  cap, so an inherited method past the cap is no longer reported as missing.
+  `get_controllers` points
   `rails_get_view` at the controller's full path rather than its last segment,
   which is the directory Rails resolves. The stack overview's `Engines:` line
   is `Mounted:`, because half of what it lists are plain Rack apps.

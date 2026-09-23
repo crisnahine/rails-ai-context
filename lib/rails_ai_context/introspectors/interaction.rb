@@ -18,7 +18,7 @@ module RailsAiContext
     # `.filters` answers in. Following that chain needs the parent's source,
     # which only the caller can find, so it comes in as `lookup` - a callable
     # from a constant name to that class's source, or nil to stop at the one
-    # file.
+    # file. `SuperclassChain.lookup_for` builds the one both consumers pass.
     #
     # Reading the loaded constant's `.filters` would answer both on a booted
     # app, but the two consumers (rails_get_service_pattern, rails_generate_test)
@@ -71,8 +71,7 @@ module RailsAiContext
       end
 
       # The classes from ActiveInteraction::Base down to this one, nearest
-      # first, or empty when the chain never reaches it. Callers build the
-      # lookup with `SuperclassChain.lookup_for`.
+      # first, or empty when the chain never reaches it.
       #
       # @return [Array<SuperclassChain::Link>]
       def chain(source, lookup: nil)

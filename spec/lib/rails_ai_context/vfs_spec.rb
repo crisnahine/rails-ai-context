@@ -286,6 +286,22 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["routes"].map { |r| r["action"] }).to contain_exactly("redeem", "list")
       end
 
+      # A route to a controller with no file resolves to no controller, so
+      # the route keys are matched on the name's own route form.
+      it "matches a CamelCase name against route keys when no controller resolves" do
+        by_controller = context[:routes][:by_controller].merge(
+          "stripe/webhooks" => [ { verb: "POST", path: "/stripe/webhooks", action: "create", name: "stripe_webhooks" } ]
+        )
+        allow(RailsAiContext).to receive(:introspect).and_return(
+          context.merge(routes: context[:routes].merge(by_controller: by_controller))
+        )
+
+        data = JSON.parse(described_class.resolve("rails-ai-context://routes/Webhooks").first[:text])
+
+        expect(data["total_routes"]).to eq(1)
+        expect(data["routes"].first["controller"]).to eq("stripe/webhooks")
+      end
+
       it "raises for bare routes URI without controller" do
         expect { described_class.resolve("rails-ai-context://routes") }
           .to raise_error(RailsAiContext::Error, /Unknown VFS URI/)
