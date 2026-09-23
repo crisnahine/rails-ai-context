@@ -147,7 +147,10 @@ module RailsAiContext
         # The keys are always lowercase snake_case, so a case-sensitive
         # include? against "GiftCards" selected nothing and answered zero.
         needle = Payload.route_needle(controller)
-        selected = names.include?(route_key) ? [ route_key ] : names.select { |n| n.include?(needle) }
+        selected = if names.include?(route_key) then [ route_key ]
+        elsif needle.empty? then []
+        else names.select { |n| n.include?(needle) }
+        end
 
         # A name that resolved to no controller and matched no route key is
         # not a controller with no routes, and a zero-route success document

@@ -199,6 +199,25 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(described_class.ivars_in(template, path: "app/views/posts/show.html.erb")).to eq(%w[order user])
     end
 
+    # A Jbuilder or Builder template is Ruby from the first line, so a
+    # handle in a quoted string is text there too.
+    it "does not read a word inside a quoted string in a Ruby template" do
+      %w[show.json.jbuilder feed.xml.builder index.html.ruby].each do |name|
+        template = %(json.note "ping @U12345ABC"\njson.title @post.title\n)
+
+        expect(described_class.ivars_in(template, path: "app/views/posts/#{name}")).to eq(%w[post]), name
+      end
+    end
+
+    # Whichever quote opens first owns the literal: an apostrophe inside a
+    # double-quoted string paired with the next single quote on the line and
+    # swallowed the ivar between them.
+    it "reads an ivar beside a double-quoted string holding an apostrophe" do
+      template = %(<%= link_to "Don't delete", post_path(@post), class: 'btn' %>)
+
+      expect(described_class.ivars_in(template, path: "app/views/posts/show.html.erb")).to eq(%w[post])
+    end
+
     it "still reads ivars that legally start with an underscore or a capital" do
       expect(described_class.ivars_in("<%= @_private %><%= @Thing %>")).to eq(%w[Thing _private])
     end

@@ -144,10 +144,10 @@ module RailsAiContext
       # entirely.
       #
       # @return [Array(MCP::Tool::Response, String, nil)] the view section and
-      #   a note when the answer came from the flat directory
+      #   a note naming the directory it came from
       private_class_method def self.controller_views(snake)
         namespaced = GetView.call(controller: snake, detail: "standard")
-        return [ namespaced, nil ] unless empty?(namespaced)
+        return [ namespaced, "_Views from `app/views/#{snake}`._" ] unless empty?(namespaced)
 
         basename = snake.to_s.split("/").last
         return [ namespaced, nil ] if basename.nil? || basename == snake

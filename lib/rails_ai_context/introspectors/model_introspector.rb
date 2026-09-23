@@ -1015,9 +1015,9 @@ module RailsAiContext
           bases_unread: (bases_unread if bases_unread.any?),
           macros: data[:macros],
           methods: own_methods,
-          # The same two keys the booted tier carries, so a consumer reading
-          # the model's method set gets the same answer in both tiers rather
-          # than an empty one here.
+          # The keys the booted tier carries, so a consumer finds them here
+          # too. `source_instance_methods` is the same set on both tiers; the
+          # counts here are the source's, where booted ones add reflection's.
           instance_methods: static_instance_methods.first(PAYLOAD_METHOD_CAP),
           instance_method_count: static_instance_methods.size,
           source_instance_methods: static_instance_methods,

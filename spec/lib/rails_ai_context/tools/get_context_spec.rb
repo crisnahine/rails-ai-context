@@ -61,6 +61,12 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       expect(text).not_to include("orders/reminder.text.erb")
     end
 
+    it "names the directory the views came from" do
+      text = described_class.call(controller: "Api::V1::Admin::OrdersController", action: "edit").content.first[:text]
+
+      expect(text).to include("_Views from `app/views/api/v1/admin/orders`._")
+    end
+
     it "reads the same directory for the whole-controller document" do
       text = described_class.call(controller: "Api::V1::Admin::OrdersController").content.first[:text]
 

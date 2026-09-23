@@ -65,7 +65,8 @@ could act on.
 - **get_context reads the views Rails would resolve.** It handed `GetView`
   the last segment of the controller path, so `Api::V1::Admin::OrdersController`
   picked up `app/views/orders`, a directory of templates a background service
-  renders. A flat-directory fallback is labelled as one.
+  renders. The answer names the directory its views came from, and a
+  flat-directory fallback is labelled as one.
 - **analyze_feature finds a test by its path.** A spec whose feature word is a
   directory (`spec/services/billing/invoices/create_spec.rb`) was dropped,
   while the gap checker beside it already matched on the path. The suite's
@@ -82,8 +83,11 @@ could act on.
   not exist.
 - **A word in a quoted string is not an instance variable.** `view` reported
   a chat handle inside a Ruby string literal as a template's ivar; the reader
-  strips string literals and keeps interpolation, and `get_view`'s hydrator
-  reads through the same method.
+  strips string literals and keeps interpolation, in ERB tags and in the
+  Ruby template handlers (Jbuilder, Builder, `.ruby`), and `get_view`'s
+  hydrator reads through the same method. Whichever quote opens first owns
+  the literal, so an apostrophe inside `"Don't"` does not swallow the ivar
+  beside it.
 - **env_config tells a re-assignment from a tuple.** Two unconditional
   assignments of one key rendered as `:file, :test`, which reads exactly like
   `:mem_cache_store, { pool_size: 5 }`. The winner is named, with what it

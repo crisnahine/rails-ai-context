@@ -71,6 +71,7 @@ module RailsAiContext
       end
 
       def self.call(controller: nil, detail: "standard", limit: nil, offset: 0, app_only: true, server_context: nil)
+        controller = nil if controller.to_s.strip.empty?
         fetch_section(:routes, subject: "Route introspection") do |routes|
           by_controller = routes[:by_controller] || {}
           offset = [ offset.to_i, 0 ].max
@@ -101,8 +102,11 @@ module RailsAiContext
             # and it swept `api/v1/admin/orders/ai_data` in with the fully
             # qualified `api/v1/admin/orders` - a separate class with its own
             # filter chain.
-            exact = by_controller.select { |k, _| k.downcase == normalized || k.downcase == normalized_alt }
-            filtered = exact.any? ? exact : by_controller.select { |k, _| k.downcase.include?(normalized) || k.downcase.include?(normalized_alt) }
+            # A name that normalizes to nothing matches nothing: the empty
+            # string is a substring of every key.
+            needles = [ normalized, normalized_alt ].map(&:to_s).reject(&:empty?)
+            exact = by_controller.select { |k, _| needles.include?(k.downcase) }
+            filtered = exact.any? ? exact : by_controller.select { |k, _| needles.any? { |n| k.downcase.include?(n) } }
             return empty_response("No routes for '#{controller}'. Controllers: #{by_controller.keys.sort.join(', ')}") if filtered.empty?
             by_controller = filtered
           end

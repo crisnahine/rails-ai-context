@@ -302,6 +302,15 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["routes"].first["controller"]).to eq("stripe/webhooks")
       end
 
+      # A name that is all suffix leaves nothing to match, and an empty
+      # needle is a substring of every route key.
+      it "answers not found for a name that is only the controller suffix" do
+        data = JSON.parse(described_class.resolve("rails-ai-context://routes/_controller").first[:text])
+
+        expect(data["error"]).to include("not found")
+        expect(data).not_to have_key("routes")
+      end
+
       it "raises for bare routes URI without controller" do
         expect { described_class.resolve("rails-ai-context://routes") }
           .to raise_error(RailsAiContext::Error, /Unknown VFS URI/)

@@ -199,6 +199,21 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       expect(text).to include("No routes for")
       expect(text).to include("posts")
     end
+
+    # All suffix, it normalizes to nothing, and nothing is a substring of
+    # every route key.
+    # MCP clients send an empty string for an optional argument they leave
+    # unset, which is no filter at all.
+    it "reads a blank name as no filter" do
+      expect(described_class.call(controller: " ").content.first[:text])
+        .to eq(described_class.call.content.first[:text])
+    end
+
+    it "answers no routes for a name that is only the controller suffix" do
+      text = described_class.call(controller: "_controller").content.first[:text]
+
+      expect(text).to include("No routes for '_controller'")
+    end
   end
 
   describe ".call with pagination" do

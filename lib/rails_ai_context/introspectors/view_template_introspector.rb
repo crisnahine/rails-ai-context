@@ -83,6 +83,9 @@ module RailsAiContext
         templates
       end
 
+      # Template handlers whose whole source is Ruby.
+      RUBY_TEMPLATE_EXTENSIONS = %w[.rb .jbuilder .builder .ruby].freeze
+
       # The one reader of a template's ivars, so `get_view` and this
       # introspector cannot disagree about what a template uses. Only the Ruby
       # inside ERB tags: over the whole file the regex read the CSS rule
@@ -94,7 +97,7 @@ module RailsAiContext
         # Only where what is left is Ruby. A HAML or Slim template is prose
         # with Ruby lines in it, and its apostrophes are apostrophes: reading
         # them as string quotes swallows every ivar between two of them.
-        ruby = strip_string_literals(ruby) if erb || path.to_s.end_with?(".rb")
+        ruby = strip_string_literals(ruby) if erb || path.to_s.end_with?(*RUBY_TEMPLATE_EXTENSIONS)
         ruby.scan(IVAR).flatten.uniq.reject { |v| RENDER_LOCALS.include?(v) }.sort
       end
 
@@ -107,10 +110,13 @@ module RailsAiContext
         # One line at a time. A Ruby literal may span lines and rarely does in
         # a template, while an apostrophe in a comment is ordinary: read as an
         # opening quote it swallowed every line up to the next apostrophe, and
-        # every ivar in between with it.
+        # every ivar in between with it. One pass, so whichever quote opens
+        # first owns the literal: `"Don't"` is not the start of a single-quoted
+        # string.
         ruby.lines.map { |line|
-          line.gsub(/'(?:\\.|[^'\\\n])*'/, "''")
-              .gsub(/"(?:\\.|[^"\\\n])*"/) { |literal| literal.scan(/#\{.*?\}/).join(" ") }
+          line.gsub(/"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/) do |literal|
+            literal.start_with?('"') ? literal.scan(/#\{.*?\}/).join(" ") : "''"
+          end
         }.join
       end
 
