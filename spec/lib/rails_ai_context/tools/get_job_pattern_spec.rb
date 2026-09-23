@@ -351,7 +351,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
 
         it "says the listing does not cover workers the introspector never saw" do
           text = described_class.call.content.first[:text]
-          expect(text).to include("Workers the introspector did not see are not covered by this tool.")
+          expect(text).to include(described_class::NOT_COVERED)
         end
       end
 
@@ -464,6 +464,7 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
         class Billing::Invoices::CreateWorker
           include Sidekiq::Job
           sidekiq_options queue: :default, retry: 3
+          sidekiq_throttle(concurrency: { limit: 1 }, threshold: { limit: 10, period: 1.minute })
 
           def perform(account_id)
             Billing::Invoices::Create.run(account: Account.find(account_id))
@@ -485,6 +486,60 @@ RSpec.describe RailsAiContext::Tools::GetJobPattern do
       expect(text).to include("queue: default")
       expect(text).to include("retry: 3")
       expect(text).to include("perform(account_id)")
+    end
+
+    # The bracket reads as the worker's run constraints, and a throttle is
+    # the constraint that decides how fast it actually runs.
+    it "names the throttle the worker declares" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("throttle: concurrency { limit: 1 }, threshold { limit: 10, period: 1.minute }")
+    end
+
+    # The app names its Sidekiq config config/sidekiq_production.yml, which
+    # is what a multi-environment app tends to do, so there is no
+    # config/sidekiq.yml to hang the caveat on.
+    it "says the listing does not cover workers it never saw, with no config/sidekiq.yml" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include(described_class::NOT_COVERED)
+    end
+
+    it "answers the worker name the listing just printed" do
+      text = described_class.call(job: "Billing::Invoices::CreateWorker").content.first[:text]
+
+      expect(text).to include("# Billing::Invoices::CreateWorker")
+      expect(text).to include("app/workers/billing/invoices/create_worker.rb")
+      expect(text).not_to include("No jobs found")
+    end
+
+    # The listing shows the queue and the throttle; asking about the same
+    # worker by name showed less than the list it was copied from.
+    it "carries the worker's queue and throttle into its own page" do
+      text = described_class.call(job: "Billing::Invoices::CreateWorker").content.first[:text]
+
+      expect(text).to include("**Queue:** `default`")
+      expect(text).to include("**Throttle:** concurrency { limit: 1 }, threshold { limit: 10, period: 1.minute }")
+    end
+
+    # A worker record with no file cannot be read from disk, and joining nil
+    # onto the root raises rather than answering.
+    it "answers with what it holds when the worker record carries no file" do
+      allow(described_class).to receive(:cached_context).and_return(
+        jobs: { jobs: [], workers: [ { name: "Billing::Invoices::CreateWorker", options: { "queue" => "default" } } ] }
+      )
+
+      text = described_class.call(job: "Billing::Invoices::CreateWorker").content.first[:text]
+
+      expect(text).to include("Billing::Invoices::CreateWorker")
+      expect(text).to include("queue: default")
+    end
+
+    it "lists the worker among the known names when the query matches nothing" do
+      text = described_class.call(job: "NoSuchThing").content.first[:text]
+
+      expect(text).to include("not found")
+      expect(text).to include("Billing::Invoices::CreateWorker")
     end
   end
 end

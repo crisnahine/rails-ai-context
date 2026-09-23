@@ -106,12 +106,12 @@ module RailsAiContext
         search_pattern = case match_type
         when "definition"
           cleaned = pattern.sub(/\A\s*def\s+/, "")
-          escaped = Regexp.escape(cleaned)
+          escaped = literal(cleaned)
           # `def\s+` already anchors the left edge, so only a trailing boundary.
           exact_match ? "^\\s*def\\s+(self\\.)?#{escaped}#{trailing_boundary(cleaned)}" : "^\\s*def\\s+(self\\.)?#{escaped}"
         when "class"
           cleaned = pattern.sub(/\A\s*(class|module)\s+/, "")
-          escaped = Regexp.escape(cleaned)
+          escaped = literal(cleaned)
           # `\w*` stays unbounded so a CamelCase prefix still resolves.
           exact_match ? "^\\s*(class|module)\\s+\\w*#{escaped}#{trailing_boundary(cleaned)}" : "^\\s*(class|module)\\s+\\w*#{escaped}"
         when "call"
@@ -228,7 +228,13 @@ module RailsAiContext
       # A literal, whole-word pattern: the user's text is regex source
       # otherwise, so `def reblog?` would match `def reblog` too.
       private_class_method def self.exact_pattern(pattern)
-        "#{leading_boundary(pattern)}#{Regexp.escape(pattern)}#{trailing_boundary(pattern)}"
+        "#{leading_boundary(pattern)}#{literal(pattern)}#{trailing_boundary(pattern)}"
+      end
+
+      # Regexp.escape writes a space as `\ `, which ripgrep 13 rejects as an
+      # unknown escape; a bare space means the same to both engines.
+      private_class_method def self.literal(text)
+        Regexp.escape(text).gsub("\\ ", " ")
       end
 
       # "> " for match lines, "  " for context lines; empty when the result
@@ -448,7 +454,7 @@ module RailsAiContext
         lines = [ "# Trace: `#{cleaned}`", "" ]
 
         # 1. Find the definition
-        def_pattern = "^\\s*def\\s+(self\\.)?#{Regexp.escape(cleaned)}#{trailing_boundary(cleaned)}"
+        def_pattern = "^\\s*def\\s+(self\\.)?#{literal(cleaned)}#{trailing_boundary(cleaned)}"
         def_results, = quick_search(def_pattern, search_path, root, 10, exclude_tests)
 
         if def_results.any?

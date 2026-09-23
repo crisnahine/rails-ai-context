@@ -326,6 +326,34 @@ RSpec.describe RailsAiContext::Tools::SearchCode do
 
   # ripgrep exits 1 when it matched nothing and 2 when the run itself failed,
   # which is what an rg too old for --field-match-separator does.
+  # ripgrep 13, which Ubuntu 22.04 and Debian 12 ship, rejects `\ ` as an
+  # unrecognized escape and exits 2 with no output, so every exact search
+  # with a space fell back to Ruby and lost its context lines.
+  describe "the pattern an exact search hands ripgrep" do
+    let(:patterns) { [] }
+
+    before do
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+      allow(described_class).to receive(:ripgrep_available?).and_return(true)
+      allow(Open3).to receive(:capture2) do |*cmd, **|
+        patterns << cmd.last(2).first
+        [ "", instance_double(Process::Status, success?: false, exitstatus: 1) ]
+      end
+    end
+
+    it "escapes no space, for every match type" do
+      with_search_app("app/models/status.rb" => "class Status\nend\n") do
+        %w[any call definition class].each do |match_type|
+          described_class.call(pattern: "def reblog?", match_type: match_type, exact_match: true)
+        end
+        described_class.call(pattern: "reblog? x", match_type: "trace")
+      end
+
+      expect(patterns).not_to be_empty
+      expect(patterns.grep(/\\ /)).to eq([])
+    end
+  end
+
   describe "when the ripgrep run fails" do
     before do
       allow(RailsAiContext).to receive(:tier).and_return(:static)

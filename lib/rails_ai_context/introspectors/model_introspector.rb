@@ -454,6 +454,14 @@ module RailsAiContext
         source_data, unread, bases_unread, hidden =
           merge_inherited_macros(source_data, unread, hidden, booted_declaring_bases(model))
 
+        class_methods = extract_class_methods_from_ast(model, source_data)
+        instance_methods = extract_instance_methods_from_ast(model, source_data)
+        # The model's own public instance methods, uncapped: a display cap
+        # decides what a page prints, never whether a method exists, and
+        # reflection's own list is inflated by an attribute method per column
+        # as soon as anything instantiates the model.
+        source_instance_methods = own_source_methods(model, source_data)
+
         details = {
           table_name:       model.table_name,
           file:             relative_to_root(model_source_path(model)),
@@ -472,8 +480,11 @@ module RailsAiContext
           # AST-based (replaces regex source parsing)
           custom_validates: extract_custom_validates_from_ast(source_data),
           scopes:           extract_scopes_from_ast(source_data),
-          class_methods:    extract_class_methods_from_ast(model, source_data),
-          instance_methods: extract_instance_methods_from_ast(model, source_data)
+          class_methods:    class_methods.first(PAYLOAD_METHOD_CAP),
+          class_method_count: class_methods.size,
+          instance_methods: instance_methods.first(PAYLOAD_METHOD_CAP),
+          instance_method_count: instance_methods.size,
+          source_instance_methods: source_instance_methods
         }
 
         sti_info = extract_sti_info(model)
@@ -658,6 +669,11 @@ module RailsAiContext
         end
       end
 
+      # What the payload lists. The count beside it is the whole set: a
+      # consumer that reads the list as complete (diagnose did) states a
+      # confident negative about a method the model defines.
+      PAYLOAD_METHOD_CAP = 30
+
       def extract_class_methods_from_ast(model, source_data)
         # Scope names to exclude from class methods (they appear in :scopes already)
         scope_names = source_data[:scopes].map { |s| s[:name].to_s }.to_set
@@ -683,17 +699,21 @@ module RailsAiContext
           .sort
 
         # Source-defined methods first, then reflection-discovered ones
-        ordered = source_methods + (all_methods - source_methods)
-        ordered.first(30)
+        source_methods + (all_methods - source_methods)
+      end
+
+      # The model's own public instance methods, from its source alone.
+      def own_source_methods(model, source_data)
+        ActionResolver.own_methods(source_data[:methods], model.name)
+          .select { |m| m[:scope] == :instance && m[:visibility] == :public }
+          .map { |m| m[:name].to_s }
       end
 
       def extract_instance_methods_from_ast(model, source_data)
         generated = generated_association_methods(model)
 
         # Source-defined instance methods (AST), the model's own.
-        source_methods = ActionResolver.own_methods(source_data[:methods], model.name)
-          .select { |m| m[:scope] == :instance && m[:visibility] == :public }
-          .map { |m| m[:name] }
+        source_methods = own_source_methods(model, source_data)
 
         # Reflection-discovered instance methods
         all_methods = (model.instance_methods - ActiveRecord::Base.instance_methods - Object.instance_methods)
@@ -708,8 +728,7 @@ module RailsAiContext
           .sort
 
         # Source-defined methods first
-        ordered = source_methods + (all_methods - source_methods)
-        ordered.first(30)
+        source_methods + (all_methods - source_methods)
       end
 
       # Maps macro names to their target key in the output hash.
@@ -964,6 +983,11 @@ module RailsAiContext
         own = SourceIntrospector.call(path)
         data, unread, hidden = merge_concern_macros(own, class_name)
         data, unread, bases_unread, hidden = merge_inherited_macros(data, unread, hidden, inherited_from)
+        own_methods = ActionResolver.own_methods(own[:methods], class_name)
+        scope_names = Array(data[:scopes]).filter_map { |scope| scope[:name]&.to_s }.to_set
+        static_instance_methods = own_methods.select { |m| m[:scope] == :instance && m[:visibility] == :public }.map { |m| m[:name].to_s }
+        static_class_methods = own_methods.select { |m| m[:scope] == :class && m[:visibility] == :public }
+                                          .map { |m| m[:name].to_s }.reject { |name| scope_names.include?(name) }
         details = {
           confidence: Confidence::STATIC,
           table_name: table_name || TableName.stem(path),
@@ -990,7 +1014,15 @@ module RailsAiContext
           concerns_unread: (unread if unread.any?),
           bases_unread: (bases_unread if bases_unread.any?),
           macros: data[:macros],
-          methods: ActionResolver.own_methods(own[:methods], class_name),
+          methods: own_methods,
+          # The keys the booted tier carries, so a consumer finds them here
+          # too. `source_instance_methods` is the same set on both tiers; the
+          # counts here are the source's, where booted ones add reflection's.
+          instance_methods: static_instance_methods.first(PAYLOAD_METHOD_CAP),
+          instance_method_count: static_instance_methods.size,
+          source_instance_methods: static_instance_methods,
+          class_methods: static_class_methods.first(PAYLOAD_METHOD_CAP),
+          class_method_count: static_class_methods.size,
           file: file,
           sti: sti
         }

@@ -38,6 +38,12 @@ module RailsAiContext
       # the filesystem. Tool output notes when the cap is hit so the AI agent knows
       # to narrow its feature keyword. v5.8.1 hardening; all glob sites in r2.
       MAX_SCAN_FILES = 500
+
+      # The directories rspec-rails and minitest file tests under by kind.
+      SUITE_TYPE_DIRS = %w[
+        channels components controllers features functional helpers integration jobs lib mailboxes
+        mailers models policies requests routing serializers services system unit views workers
+      ].freeze
       AUTH_GEM_NAMES = %w[devise omniauth rodauth sorcery clearance authlogic warden jwt].freeze
 
       def self.call(feature:, server_context: nil)
@@ -360,6 +366,24 @@ module RailsAiContext
         end
 
         # --- AF5: Tests ---
+        # The path a test is named by: without the root, without the suite
+        # directory it sits in, and without the extension. The suite directory
+        # is every test's own name for itself; left in, "spec" and "test"
+        # would match the whole suite.
+        def relative_test_name(path, real_root)
+          relative = path.to_s.sub("#{real_root}/", "").sub(%r{\A(?:spec|test)/}, "").sub(/\.rb\z/, "")
+          # The type directory a suite files a test under is the suite's word
+          # too: spec/models/account_spec.rb tests Account, not "models".
+          relative = relative.sub(%r{\A(?:#{SUITE_TYPE_DIRS.join("|")})/}, "")
+          without_suffix = relative.sub(/_(?:spec|test)\z/, "")
+          # One convention or the other, never both: stripping a `spec_`
+          # prefix from a file already named `..._spec` takes a word out of
+          # the feature's own name (spec_runner_spec.rb).
+          return without_suffix unless without_suffix == relative
+
+          relative.sub(%r{(\A|/)(?:spec|test)_}, "\\1")
+        end
+
         def discover_tests(root, pattern, lines)
           test_dirs = [ File.join(root, "spec"), File.join(root, "test") ]
           real_root = File.realpath(root).to_s
@@ -370,13 +394,17 @@ module RailsAiContext
             next unless Dir.exist?(dir)
             suffix_glob = safe_glob(dir, "**/*_{test,spec}.rb", real_root).first(MAX_SCAN_FILES)
             truncated = true if suffix_glob.size == MAX_SCAN_FILES
+            # The path, not the basename: the gap checker below matches this
+            # way for the same reason, and a spec whose feature word is a
+            # directory (billing/invoices/create_spec.rb) is the normal shape
+            # of a namespaced suite.
             suffix_glob.each do |path|
-              found << path if feature_word_match?(File.basename(path, ".rb"), pattern)
+              found << path if feature_word_match?(relative_test_name(path, real_root), pattern)
             end
             prefix_glob = safe_glob(dir, "**/{test,spec}_*.rb", real_root).first(MAX_SCAN_FILES)
             truncated = true if prefix_glob.size == MAX_SCAN_FILES
             prefix_glob.each do |path|
-              found << path if feature_word_match?(File.basename(path, ".rb"), pattern)
+              found << path if feature_word_match?(relative_test_name(path, real_root), pattern)
             end
           end
           found.uniq!

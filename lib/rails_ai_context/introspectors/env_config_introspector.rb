@@ -98,17 +98,39 @@ module RailsAiContext
       end
 
       # `:memory_store if Rails.root.join(...).exist?, else :null_store`.
+      #
+      # Two unconditional assignments of one key are not branches: Rails runs
+      # both lines and the last one wins. Comma-joining them read exactly like
+      # a single assignment whose value is a comma list
+      # (`:mem_cache_store, { pool_size: 5 }`), so the winner is named and the
+      # assignment it overrode is named after it.
       def branch_values(entries)
         return one_line(entries.first[:source].to_s) if entries.size == 1
 
-        entries.map do |entry|
+        unconditional, conditional = entries.partition { |entry| entry[:condition].nil? }
+        rendered = conditional.map { |entry|
           value = one_line(entry[:source].to_s)
-          case entry[:condition]
-          when nil then value
-          when "else" then "else #{value}"
-          else "#{value} if #{entry[:condition]}"
-          end
-        end.uniq.join(", ")
+          text = entry[:condition] == "else" ? "else #{value}" : "#{value} if #{entry[:condition]}"
+          [ entry[:location].to_i, text ]
+        }
+
+        if unconditional.any?
+          # The last line the file runs is the value in force, whatever ran
+          # before it, so the winner is taken before any de-duplication - a
+          # value that repeats is still the one that ran last.
+          winner = unconditional.last
+          overridden = unconditional[0..-2].map { |entry| one_line(entry[:source].to_s) }.uniq
+          overridden -= [ one_line(winner[:source].to_s) ]
+          text = one_line(winner[:source].to_s)
+          text += " (overrides #{overridden.join(', ')})" if overridden.any?
+          rendered << [ winner[:location].to_i, text ]
+        end
+
+        # Source order, because that is run order: a conditional assignment
+        # printed after the unconditional one that follows it reads as the
+        # value in force.
+        rendered.each_with_index.sort_by { |(line, _), index| [ line, index ] }
+                .map { |(_, text), _| text }.uniq.join(", ")
       end
 
       # The booted app has already resolved the branch, and two tools reading

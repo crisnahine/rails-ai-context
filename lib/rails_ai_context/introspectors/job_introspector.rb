@@ -168,12 +168,14 @@ module RailsAiContext
 
           ast = candidate[:ast]
           options = ast[:macros].find { |m| m[:macro] == :sidekiq_options }
+          throttle = ast[:macros].find { |m| m[:macro] == :sidekiq_throttle }
           perform = ast[:methods].find { |m| m[:name] == "perform" && m[:scope] == :instance }
 
           {
             name: name,
             file: candidate[:file],
             options: options ? (options[:option_values] || {}).transform_keys(&:to_s) : {},
+            throttle: throttle && throttle_summary(throttle),
             perform_signature: perform && perform[:params]&.any? ? ActionResolver.parameter_list(perform) : nil
           }.compact
         end.sort_by { |w| w[:name] }
@@ -197,11 +199,26 @@ module RailsAiContext
             file: record.file,
             superclass: declarations.find { |d| d.name == name }&.superclass,
             ast: SourceIntrospector.walk_source(record.source, {
-              macros:  -> { Listeners::GenericMacroListener.new(:sidekiq_options, :include) },
+              macros:  -> { Listeners::GenericMacroListener.new(:sidekiq_options, :sidekiq_throttle, :include) },
               methods: Listeners::MethodsListener
             })
           }
         end
+      end
+
+      # A throttle decides how fast a worker runs whatever the queue and the
+      # pool allow, so a bracket carrying queue and retry without it reads as
+      # the worker's constraints while leaving out the binding one. Rendered
+      # from the source text: the limits are often expressions (1.minute),
+      # which have no literal value to read.
+      def throttle_summary(macro)
+        nodes = macro[:option_nodes] || {}
+        return nil if nodes.empty?
+
+        nodes.filter_map { |key, node|
+          next unless node.respond_to?(:slice)
+          "#{key} #{node.slice.gsub(/\s+/, " ")}"
+        }.join(", ").presence
       end
 
       def worker?(name, candidates, seen = [])

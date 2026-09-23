@@ -48,6 +48,36 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::GenericMacroListener do
     expect(results.first[:confidence]).to be_a(String)
   end
 
+  # A macro call inside another target macro's block is nested in it:
+  # `string :title` inside `hash :order_params do ... end` is a key of that
+  # hash, not a filter of the class.
+  it "records the call whose block a nested call sits in" do
+    results = parse_and_dispatch(<<~RUBY, :hash, :string, :object)
+      hash :order_params do
+        string :title, default: nil
+      end
+
+      object :account
+    RUBY
+
+    nested = results.find { |r| r[:macro] == :string }
+    expect(nested[:parent_offset]).to be_an(Integer)
+    expect(nested[:parent_offset]).to eq(results.find { |r| r[:macro] == :hash }[:offset])
+    expect(results.find { |r| r[:macro] == :hash }[:parent_offset]).to be_nil
+    expect(results.find { |r| r[:macro] == :object }[:parent_offset]).to be_nil
+  end
+
+  it "leaves a call in a block that is not a target macro unnested" do
+    results = parse_and_dispatch(<<~RUBY, :string)
+      %w[a b].each do |name|
+        string name
+      end
+    RUBY
+
+    expect(results.first).to include(parent_offset: nil)
+    expect(results.first[:offset]).to be_a(Integer)
+  end
+
   it "works with Proc factory in walk_source" do
     source = <<~RUBY
       devise :confirmable, :registerable

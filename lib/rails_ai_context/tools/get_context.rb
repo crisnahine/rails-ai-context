@@ -92,13 +92,7 @@ module RailsAiContext
           lines << response_text(route_result)
         end
 
-        # Views for this controller
-        view_ctrl = snake.split("/").last
-        view_result = GetView.call(controller: view_ctrl, detail: "standard")
-        unless empty?(view_result)
-          lines << "" << "---" << ""
-          lines << response_text(view_result)
-        end
+        lines.concat(view_section_lines(snake))
 
         # Cross-reference: controller ivars vs view ivars. The action's own
         # source is the origin for both sides of the controller's half; a
@@ -134,6 +128,35 @@ module RailsAiContext
         lines.join("\n")
       rescue => e
         "Error assembling context: #{e.message}"
+      end
+
+      # The templates for a controller, read from the directory Rails would
+      # resolve: the full controller_path, never its last segment. An app that
+      # keeps a flat app/views still gets an answer, and it is labelled,
+      # because those templates are not the ones this controller renders by
+      # convention - on a namespaced app they belong to another component
+      # entirely.
+      #
+      private_class_method def self.view_section_lines(snake)
+        view_result, view_note = controller_views(snake)
+        return [] if empty?(view_result)
+
+        [ "", "---", "", view_note, response_text(view_result) ].compact
+      end
+
+      # @return [Array(MCP::Tool::Response, String, nil)] the view section and
+      #   a note naming the directory it came from
+      private_class_method def self.controller_views(snake)
+        namespaced = GetView.call(controller: snake, detail: "standard")
+        return [ namespaced, "_Views from `app/views/#{snake}`._" ] unless empty?(namespaced)
+
+        basename = snake.to_s.split("/").last
+        return [ namespaced, nil ] if basename.nil? || basename == snake
+
+        flat = GetView.call(controller: basename, detail: "standard")
+        return [ namespaced, nil ] if empty?(flat)
+
+        [ flat, "_No templates under `app/views/#{snake}`; these are `app/views/#{basename}`, which Rails resolves for this controller only if it sets its own view path._" ]
       end
 
       # The action's body out of the file the payload carried for the
@@ -204,12 +227,7 @@ module RailsAiContext
           lines << "" << "---" << "" << response_text(route_result)
         end
 
-        # Views for this controller
-        view_ctrl = snake.split("/").last
-        view_result = GetView.call(controller: view_ctrl, detail: "standard")
-        unless empty?(view_result)
-          lines << "" << "---" << "" << response_text(view_result)
-        end
+        lines.concat(view_section_lines(snake))
 
         lines.join("\n")
       rescue => e

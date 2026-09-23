@@ -62,6 +62,87 @@ RSpec.describe RailsAiContext::Introspectors::RouteIntrospector do
     end
   end
 
+  # `mount` is `match(path, to: app, via: :all, anchor: false)`, so both forms
+  # build the same endpoint. Keeping only Rails::Engine subclasses left every
+  # plain Rack app counted in the header and named nowhere.
+  describe "a booted route set with Rack apps attached" do
+    before do
+      stub_const("MetricsApp", Class.new { def self.call(_env) = [ 200, {}, [ "ok" ] ] })
+      stub_const("MetricsAdminApp", Class.new { def self.call(_env) = [ 200, {}, [ "ok" ] ] })
+    end
+
+    let(:route_set) do
+      ActionDispatch::Routing::RouteSet.new.tap do |set|
+        set.draw do
+          match "/metrics", to: MetricsApp, via: :all, as: :metrics_app
+          mount MetricsAdminApp => "/metrics-admin"
+          get "orders" => "orders#index"
+        end
+      end
+    end
+
+    let(:app_double) { double("app", routes: route_set, routes_reloader: nil, root: Rails.root) }
+
+    it "names both endpoints and the path each answers on" do
+      result = described_class.new(app_double).call
+
+      expect(result[:mounted_engines]).to contain_exactly(
+        { engine: "MetricsApp", path: "/metrics" },
+        { engine: "MetricsAdminApp", path: "/metrics-admin" }
+      )
+    end
+
+    # The header count and the list have to describe the same set: the count
+    # included a Rack app attached as an instance, and the list held classes
+    # only, so one line of output disagreed with the next.
+    it "names an endpoint attached as an instance too" do
+      server = Class.new { def call(_env) = [ 200, {}, [ "ok" ] ] }
+      stub_const("Propshaft::Server", server)
+      set = ActionDispatch::Routing::RouteSet.new
+      set.draw { mount Propshaft::Server.new => "/assets" }
+      result = described_class.new(double("app", routes: set, routes_reloader: nil, root: Rails.root)).call
+
+      expect(result[:mounted_engines].map { |m| m[:path] }).to include("/assets")
+      expect(result[:unrouted_mounts]).to eq(result[:mounted_engines].size)
+    end
+
+    it "counts them as the mounts they are, and leaves the controller route alone" do
+      result = described_class.new(app_double).call
+
+      expect(result[:unrouted_mounts]).to eq(2)
+      expect(result[:by_controller].keys).to eq([ "orders" ])
+    end
+  end
+
+  # The mount listener names `match "/x", to: SomeApp` as a mounted Rack app,
+  # so the routes listener must not also count it as a construct it could not
+  # expand: the header said "1 dynamic construct not expanded" about an
+  # endpoint named two lines further down.
+  describe "a Rack app attached with a verb and a constant to: on the static tier" do
+    it "counts it once, as a mount" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "routes.rb"), <<~RUBY)
+          Rails.application.routes.draw do
+            match "/metrics", to: MetricsApp, via: :all
+            get "/health", to: Health::App
+            mount MetricsAdminApp => "/metrics-admin"
+            mount ActionCable.server => "/cable"
+            get "/status" => StatusApp
+            get "orders" => "orders#index"
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result[:unrouted_mounts]).to eq(5)
+        expect(result[:mounted_engines]).to include({ engine: "ActionCable.server", path: "/cable" }, { engine: "StatusApp", path: "/status" })
+        expect(result[:dynamic_routes]).to be_nil
+        expect(result[:by_controller].keys).to eq([ "orders" ])
+      end
+    end
+  end
+
   # Both tiers answer the same question, so they answer it with the same rule.
   describe "api namespaces on both tiers" do
     let(:route_set) do

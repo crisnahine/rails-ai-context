@@ -75,6 +75,9 @@ module RailsAiContext
         # Limit nodes. The cut used to be silent, so a 133-model app read as a
         # 50-model app with no edges to the other 83.
         total_nodes = subgraph.size
+        # Both numbers in the stats line are taken here, before the cut, so
+        # they describe the same models.
+        total_edges = subgraph.values.sum { |edges| edges.size }
         subgraph = subgraph.first(MAX_NODES).to_h if subgraph.size > MAX_NODES
 
         # Optional analyses
@@ -85,10 +88,10 @@ module RailsAiContext
         case format
         when "mermaid"
           text_response(render_mermaid(subgraph, model, cycles: cycles, sti_groups: sti_groups,
-            total_nodes: total_nodes, skipped: skipped))
+            total_nodes: total_nodes, total_edges: total_edges, skipped: skipped))
         else
           text_response(render_text(subgraph, model, cycles: cycles, sti_groups: sti_groups,
-            total_nodes: total_nodes, skipped: skipped))
+            total_nodes: total_nodes, total_edges: total_edges, skipped: skipped))
         end
       end
 
@@ -306,7 +309,7 @@ module RailsAiContext
           groups
         end
 
-        def render_mermaid(graph, center, cycles: [], sti_groups: [], total_nodes: nil, skipped: [])
+        def render_mermaid(graph, center, cycles: [], sti_groups: [], total_nodes: nil, total_edges: nil, skipped: [])
           lines = [ "# Dependency Graph", "" ]
           lines << "```mermaid"
           lines << "graph LR"
@@ -371,11 +374,12 @@ module RailsAiContext
           lines << "```"
           lines << ""
 
-          stats = [ "**Models:** #{total_nodes || graph.keys.size}", "**Associations:** #{graph.values.sum(&:size)}" ]
+          stats = [ "**Models:** #{total_nodes || graph.keys.size}",
+                    "**Associations:** #{total_edges || graph.values.sum(&:size)}" ]
           stats << "**Cycles:** #{cycles.size}" if cycles.any?
           stats << "**STI hierarchies:** #{sti_groups.size}" if sti_groups.any?
           lines << stats.join(" | ")
-          lines.concat(truncation_notes(graph, total_nodes, skipped))
+          lines.concat(truncation_notes(graph, total_nodes, skipped, total_edges))
 
           # Cycles section
           if cycles.any?
@@ -387,7 +391,7 @@ module RailsAiContext
           lines.join("\n")
         end
 
-        def render_text(graph, center, cycles: [], sti_groups: [], total_nodes: nil, skipped: [])
+        def render_text(graph, center, cycles: [], sti_groups: [], total_nodes: nil, total_edges: nil, skipped: [])
           lines = [ "# Dependency Graph", "" ]
 
           if center
@@ -432,22 +436,25 @@ module RailsAiContext
             lines << ""
           end
 
-          stats = [ "**Models:** #{total_nodes || graph.keys.size}", "**Associations:** #{graph.values.sum(&:size)}" ]
+          stats = [ "**Models:** #{total_nodes || graph.keys.size}",
+                    "**Associations:** #{total_edges || graph.values.sum(&:size)}" ]
           stats << "**Cycles:** #{cycles.size}" if cycles.any?
           stats << "**STI hierarchies:** #{sti_groups.size}" if sti_groups.any?
           lines << stats.join(" | ")
-          lines.concat(truncation_notes(graph, total_nodes, skipped))
+          lines.concat(truncation_notes(graph, total_nodes, skipped, total_edges))
 
           lines.join("\n")
         end
 
         # Both a node cap and a model whose reflections could not be read
         # used to leave the graph looking complete.
-        def truncation_notes(graph, total_nodes, skipped)
+        def truncation_notes(graph, total_nodes, skipped, total_edges = nil)
           notes = []
           if total_nodes && total_nodes > graph.keys.size
+            drawn = graph.values.sum(&:size)
+            edges = total_edges && total_edges > drawn ? " and #{drawn} of #{count_phrase(total_edges, "association")}" : ""
             notes << ""
-            notes << "_Showing #{graph.keys.size} of #{total_nodes} models; pass `model:` to focus the graph._"
+            notes << "_Showing #{graph.keys.size} of #{total_nodes} models#{edges}; pass `model:` to focus the graph._"
           end
           if skipped.any?
             notes << ""

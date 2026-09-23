@@ -22,6 +22,13 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # One wording for the same fact on both detail levels.
+      DEFAULTS_DIFFER = "defaults differ by call site"
+
+      # `ENV.fetch("PORT", defaults[:port])`: a fallback with no printable
+      # value, which is still a site that never raises KeyError.
+      COMPUTED_DEFAULT = :computed
+
       def self.call(detail: "standard", server_context: nil)
         root = rails_app.root.to_s
 
@@ -85,14 +92,26 @@ module RailsAiContext
         env_vars.each { |_file, vars| vars.each { |v| all_names << v[:name] } }
 
         if all_names.any?
+          # One pass over the scan, not one per variable: the standard listing
+          # asked every file about every name.
+          sites_by_variable = sites_by_name(env_vars)
           grouped = group_env_vars(all_names.to_a)
           grouped.each do |group, vars|
             lines << "## #{group}"
             vars.sort.each do |name|
-              # Find default value if any
-              default = find_default_value(env_vars, name)
+              sites = sites_by_variable[name] || []
+              defaults = sites.map { |v| v[:default] }.uniq
               entry = "- `#{name}`"
-              entry += " (default: `#{default}`)" if default
+              entry += if disagree?(sites)
+                # A site with no default argument raises KeyError when the
+                # variable is unset, and one site's fallback labelled as the
+                # variable's said the opposite.
+                " (#{DEFAULTS_DIFFER}; `detail:\"full\"` names each)"
+              elsif defaults.size == 1 && defaults.first.is_a?(String)
+                " (default: `#{defaults.first}`)"
+              else
+                ""
+              end
               lines << entry
             end
             lines << ""
@@ -169,9 +188,9 @@ module RailsAiContext
           env_vars.sort_by { |file, _| file }.each do |file, vars|
             relative = file.sub("#{root}/", "")
             vars.each do |v|
-              var_details[v[:name]] ||= { files: [], default: nil }
-              var_details[v[:name]][:files] << { file: relative, line: v[:line] }
-              var_details[v[:name]][:default] ||= v[:default]
+              var_details[v[:name]] ||= { files: [], defaults: [] }
+              var_details[v[:name]][:files] << { file: relative, line: v[:line], default: v[:default], bracket: v[:bracket] }
+              var_details[v[:name]][:defaults] << v[:default]
             end
           end
 
@@ -188,9 +207,22 @@ module RailsAiContext
             vars = categorized[category]
             lines << "" << "### #{category}"
             vars.sort_by { |v| v[:name] }.each do |v|
-              file_locations = v[:files].map { |f| f[:line] ? "#{f[:file]}:#{f[:line]}" : f[:file] }.uniq
+              defaults = v[:defaults].uniq
+              # Where the sites disagree the default belongs next to the site
+              # that passes it: the one that passes none is the one a reader
+              # most needs, since it raises KeyError when the variable is unset.
+              file_locations = v[:files].map { |f|
+                at = f[:line] ? "#{f[:file]}:#{f[:line]}" : f[:file]
+                next at unless disagree?(v[:files])
+                case f[:default]
+                when String then "#{at} default: `#{f[:default]}`"
+                when COMPUTED_DEFAULT then "#{at} default computed at runtime"
+                else f[:bracket] ? "#{at} nil when unset" : "#{at} no default"
+                end
+              }.uniq
               entry = "- `#{v[:name]}`"
-              entry += " (default: `#{v[:default]}`)" if v[:default]
+              entry += " (default: `#{defaults.first}`)" if defaults.size == 1 && defaults.first.is_a?(String)
+              entry += " (#{DEFAULTS_DIFFER})" if disagree?(v[:files])
               entry += " (#{file_locations.join(', ')})"
               lines << entry
             end
@@ -303,9 +335,15 @@ module RailsAiContext
           next unless name.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
 
           var = { name: name, line: entry[:location] }
+          # `ENV["X"]` answers nil when unset; only a fetch without a default raises.
+          var[:bracket] = true if entry[:method] == "[]"
           # The listener writes a `nil` default as the string "nil", which
           # redaction then treated as a value worth hiding.
-          var[:default] = entry[:default] == "nil" ? "nil" : RailsAiContext::Redaction.value(name, entry[:default]) if entry[:default]
+          if entry[:default]
+            var[:default] = entry[:default] == "nil" ? "nil" : RailsAiContext::Redaction.value(name, entry[:default])
+          elsif entry[:has_default]
+            var[:default] = COMPUTED_DEFAULT
+          end
           var
         end
       rescue => e
@@ -657,13 +695,18 @@ module RailsAiContext
         groups.sort_by { |k, _| CATEGORY_ORDER.index(k) || 99 }
       end
 
-      private_class_method def self.find_default_value(env_vars, name)
-        env_vars.each_value do |vars|
-          vars.each do |v|
-            return v[:default] if v[:name] == name && v[:default]
-          end
+      # Every site each variable is read at.
+      private_class_method def self.sites_by_name(env_vars)
+        env_vars.each_value.with_object(Hash.new { |h, k| h[k] = [] }) do |vars, found|
+          vars.each { |v| found[v[:name]] << v }
         end
-        nil
+      end
+
+      # Whether the sites answer an unset variable differently. `ENV["X"]` and
+      # `ENV.fetch("X", nil)` both answer nil, so they agree; a fetch with no
+      # default raises, which is the difference a reader needs to see.
+      private_class_method def self.disagree?(sites)
+        sites.map { |v| v[:bracket] || v[:default] == "nil" ? :nil_when_unset : v[:default] }.uniq.size > 1
       end
     end
   end

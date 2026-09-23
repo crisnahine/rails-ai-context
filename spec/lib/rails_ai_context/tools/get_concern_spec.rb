@@ -647,4 +647,158 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       end
     end
   end
+  # A class under app/models/concerns that subclasses ActiveModel::Validator
+  # is not a concern: nothing includes it, and `validates_with` is how it is
+  # wired. The type came from the directory alone, so 37 validators on one app
+  # were reported as model concerns used by nothing.
+  describe "a validator class in the concerns directory" do
+    let(:validator_dir) { File.join(tmpdir, "app", "models", "concerns") }
+
+    before do
+      described_class.reset_cache!
+      FileUtils.mkdir_p(validator_dir)
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models"))
+      File.write(File.join(validator_dir, "address_validator.rb"), <<~RUBY)
+        class AddressValidator < ActiveModel::Validator
+          def validate(record); end
+        end
+      RUBY
+      File.write(File.join(validator_dir, "email_validator.rb"), <<~RUBY)
+        class EmailValidator < ActiveModel::EachValidator
+          def validate_each(record, attribute, value); end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "models", "order.rb"), <<~RUBY)
+        class Order < ApplicationRecord
+          validates :email, email: true
+
+          validates_with AddressValidator
+        end
+      RUBY
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+    end
+
+    it "calls it a validator rather than a model concern" do
+      text = described_class.call(name: "AddressValidator").content.first[:text]
+
+      expect(text).to include("**Type:** validator")
+      expect(text).not_to include("**Type:** model concern")
+    end
+
+    it "names the model that wires it with validates_with" do
+      text = described_class.call(name: "AddressValidator").content.first[:text]
+
+      expect(text).to include("Order")
+      expect(text).not_to include("Nothing in app/models includes this concern")
+    end
+
+    # The pre-parse filter skips a file naming neither the class nor its key;
+    # these shapes name them only partly and still wire the validator.
+    it "finds the namespaced and hash-rocket wirings" do
+      File.write(File.join(tmpdir, "app", "models", "order.rb"), <<~RUBY)
+        class Order < ApplicationRecord
+          validates_with Checks::AddressValidator
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "models", "account.rb"), <<~RUBY)
+        class Account < ApplicationRecord
+          validates :email, :email => true
+        end
+      RUBY
+
+      expect(described_class.call(name: "AddressValidator").content.first[:text]).to include("- Order")
+      expect(described_class.call(name: "EmailValidator").content.first[:text]).to include("- Account")
+    end
+
+    it "names the model that wires an EachValidator by its option key" do
+      text = described_class.call(name: "EmailValidator").content.first[:text]
+
+      expect(text).to include("Order")
+    end
+
+    # A concern that wires the validator in its `included` block is how a
+    # validator shared by several models is usually attached.
+    it "names a concern that wires it, as a concern" do
+      File.write(File.join(tmpdir, "app", "models", "order.rb"), "class Order < ApplicationRecord\nend\n")
+      File.write(File.join(validator_dir, "addressable.rb"), <<~RUBY)
+        module Addressable
+          extend ActiveSupport::Concern
+
+          included do
+            validates_with AddressValidator
+          end
+        end
+      RUBY
+
+      text = described_class.call(name: "AddressValidator").content.first[:text]
+
+      expect(text).to include("- Addressable (concern)")
+      expect(text).not_to include("No model or concern in app/models wires this validator")
+    end
+
+    # An app with its own validator base class is the ordinary shape, and one
+    # level of compare called every such validator a concern used by nothing.
+    it "follows the app's own validator base class" do
+      File.write(File.join(validator_dir, "application_validator.rb"), <<~RUBY)
+        class ApplicationValidator < ActiveModel::EachValidator
+        end
+      RUBY
+      File.write(File.join(validator_dir, "postcode_validator.rb"), <<~RUBY)
+        class PostcodeValidator < ApplicationValidator
+          def validate_each(record, attribute, value); end
+        end
+      RUBY
+
+      text = described_class.call(name: "PostcodeValidator").content.first[:text]
+
+      expect(text).to include("**Type:** validator")
+      expect(text).not_to include("**Type:** model concern")
+    end
+
+    # `presence:` names ActiveModel's own validator, which the model's
+    # ancestry reaches before any app class, so an app PresenceValidator is
+    # not what `validates :x, presence: true` runs.
+    it "does not claim a framework option key for an app validator of the same name" do
+      File.write(File.join(validator_dir, "presence_validator.rb"), <<~RUBY)
+        class PresenceValidator < ActiveModel::EachValidator
+          def validate_each(record, attribute, value); end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "models", "post.rb"), <<~RUBY)
+        class Post < ApplicationRecord
+          validates :title, presence: true
+        end
+      RUBY
+
+      text = described_class.call(name: "PresenceValidator").content.first[:text]
+
+      expect(text).not_to include("- Post")
+    end
+
+    # `on:`, `if:` and the other keys `validates` reads for itself never look
+    # up a validator class.
+    it "does not claim one of validates' own option keys" do
+      File.write(File.join(validator_dir, "on_validator.rb"), <<~RUBY)
+        class OnValidator < ActiveModel::EachValidator
+          def validate_each(record, attribute, value); end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "models", "post.rb"), <<~RUBY)
+        class Post < ApplicationRecord
+          validates :title, presence: true, on: :create
+        end
+      RUBY
+
+      text = described_class.call(name: "OnValidator").content.first[:text]
+
+      expect(text).not_to include("- Post")
+    end
+
+    it "lists validators apart from concerns" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Validators (2)")
+      expect(text).not_to include("## Model Concerns (2)")
+    end
+  end
 end

@@ -24,6 +24,11 @@ module RailsAiContext
           tables: extract_tables,
           total_tables: table_names.size,
           schema_version: current_schema_version,
+          # The version stamp is read off db/schema.rb and the tables off the
+          # connection, so the two can be one migration apart. The tables the
+          # dump declares are what lets a consumer say so rather than call a
+          # declared table a typo.
+          declared_tables: declared_table_names,
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: generated_columns(schema_reader)
@@ -157,6 +162,20 @@ module RailsAiContext
         schema_reader.enums
       end
 
+      # The tables db/schema.rb declares, or nil when there is no dump to
+      # read - nil is "unknown", which is not the claim that the dump
+      # declares nothing. A structure.sql app answers nil: reading it costs a
+      # full parse on every booted call, and a missing note is better than a
+      # slow one.
+      def declared_table_names
+        return nil unless File.exist?(schema_file_path)
+
+        names = schema_reader.tables.keys.map(&:to_s)
+        names.any? ? names : nil
+      rescue => e
+        RailsAiContext.debug_fail(e, nil, label: "declared_table_names")
+      end
+
       def current_schema_version
         RailsAiContext::SchemaVersion.current(app.root.to_s)
       rescue => e
@@ -193,7 +212,18 @@ module RailsAiContext
       # Fallback: parse schema file as text when DB isn't connected.
       # Tries db/schema.rb first, then db/structure.sql, then migrations.
       # This enables introspection in CI, Claude Code, etc.
+      # Every key the booted answer carries, answered from the files, and
+      # meaning the same thing: `declared_tables` is what db/schema.rb
+      # declares, nil for an app whose tables come from structure.sql or the
+      # migrations.
       def static_schema_parse
+        result = static_schema_sources
+        return result unless result.is_a?(Hash) && result[:tables].is_a?(Hash)
+
+        result.merge(declared_tables: declared_table_names)
+      end
+
+      def static_schema_sources
         schema_rb_exists = File.exist?(schema_file_path)
 
         if schema_rb_exists

@@ -416,6 +416,46 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
       end
     end
 
+    # The model count was app-wide and the association count was the edge
+    # count of the fifty nodes that survived the cut, printed side by side on
+    # one line, so the second number read as app-wide too.
+    context "when models past the node cap carry associations" do
+      let(:models_data) do
+        data = {}
+        60.times do |i|
+          data["Widget#{format('%02d', i)}"] = {
+            table_name: "widgets",
+            associations: [ { macro: :belongs_to, name: :account, class_name: "Account", foreign_key: "account_id" } ]
+          }
+        end
+        data["Account"] = { table_name: "accounts", associations: [] }
+        data
+      end
+
+      it "counts the associations over the same models the count names" do
+        text = described_class.call(format: "text").content.first[:text]
+
+        expect(text).to include("**Models:** 61 | **Associations:** 60")
+        expect(text).to include("Showing 50 of 61 models")
+      end
+
+      # The header counts every association; a reader counting the edges the
+      # cut graph draws needs the note to say it drew fewer.
+      it "says how many of the associations the cut graph draws" do
+        text = described_class.call(format: "text").content.first[:text]
+        drawn = text.lines.count { |line| line.match?(/^  belongs_to /) }
+
+        expect(drawn).to be < 60
+        expect(text).to include("Showing 50 of 61 models and #{drawn} of 60 associations")
+      end
+
+      it "counts them the same way in the mermaid rendering" do
+        text = described_class.call(format: "mermaid").content.first[:text]
+
+        expect(text).to include("**Models:** 61 | **Associations:** 60")
+      end
+    end
+
     context "with an association that cannot resolve" do
       let(:models_data) do
         {

@@ -144,7 +144,25 @@ module RailsAiContext
         key = Payload.find_controller(context, controller)
         route_key = key && Payload.controller_route_key(context, key)
         names = by_controller.keys.map(&:to_s)
-        selected = names.include?(route_key) ? [ route_key ] : names.select { |n| n.include?(controller) }
+        # The keys are always lowercase snake_case, so a case-sensitive
+        # include? against "GiftCards" selected nothing and answered zero.
+        needle = Payload.route_needle(controller)
+        selected = if names.include?(route_key) then [ route_key ]
+        elsif needle.empty? then []
+        else names.select { |n| n.include?(needle) }
+        end
+
+        # A name that resolved to no controller and matched no route key is
+        # not a controller with no routes, and a zero-route success document
+        # cannot say which of the two it is.
+        if selected.empty? && key.nil?
+          text = JSON.pretty_generate(
+            error: "Controller '#{controller}' not found",
+            available: names.sort
+          )
+          return [ { uri: uri, mimeType: "application/json", text: text } ]
+        end
+
         routes = by_controller.flat_map { |name, entries|
           next [] unless selected.include?(name.to_s)
 
@@ -152,6 +170,12 @@ module RailsAiContext
         }
 
         data = { filtered_by: controller, total_routes: routes.size, routes: routes }
+        # An empty list from a name that did resolve is a different answer
+        # from one that did not, and only the document can say so.
+        if routes.empty? && key
+          data[:resolved_controller] = key
+          data[:note] = "#{key} resolved, and the route set has no routes for it."
+        end
 
         [ { uri: uri, mimeType: "application/json", text: JsonBudget.for_resource(data) } ]
       end

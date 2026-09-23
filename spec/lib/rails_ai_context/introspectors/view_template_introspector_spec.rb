@@ -166,6 +166,58 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
       expect(described_class.ivars_in("= image_tag file&.url(:'@1x'), alt: @post.title")).to eq(%w[post])
     end
 
+    # A chat handle inside a quoted Ruby string is text the template prints,
+    # not a variable the controller assigns.
+    it "does not read a word inside a quoted string as an ivar" do
+      template = "<%= status.include?('sent') ? '' : '<@U12345ABC> ' %>\nOwner: <@<%= owner.id %>>\n"
+
+      expect(described_class.ivars_in(template, path: "notify.text.erb")).to eq([])
+    end
+
+    it "does not read one inside a double-quoted string either" do
+      expect(described_class.ivars_in(%(<%= "ping @U12345ABC" %>))).to eq([])
+    end
+
+    # Interpolation is code, and an ivar read inside it is a real read.
+    it "still reads an ivar interpolated into a string" do
+      expect(described_class.ivars_in(%(<%= "hello #{'#'}{@user.name}" %>))).to eq(%w[user])
+    end
+
+    # A HAML or Slim template is not Ruby: its prose carries apostrophes, and
+    # treating those as string quotes swallows everything between them.
+    it "keeps reading ivars in a template whose prose has apostrophes" do
+      template = "%p Don't stop\n= @user.name\n%p We can't win\n= @order.total\n"
+
+      expect(described_class.ivars_in(template, path: "app/views/posts/show.html.haml")).to eq(%w[order user])
+    end
+
+    # Two ERB comments with apostrophes in them are not one string literal,
+    # and reading them as one deleted every ivar in between.
+    it "keeps reading ivars around apostrophes in ERB comments" do
+      template = "<% # don't do this %>\n<h1><%= @user.name %></h1>\n<% # it won't work %>\n<p><%= @order.total %></p>\n"
+
+      expect(described_class.ivars_in(template, path: "app/views/posts/show.html.erb")).to eq(%w[order user])
+    end
+
+    # A Jbuilder or Builder template is Ruby from the first line, so a
+    # handle in a quoted string is text there too.
+    it "does not read a word inside a quoted string in a Ruby template" do
+      %w[show.json.jbuilder feed.xml.builder index.html.ruby].each do |name|
+        template = %(json.note "ping @U12345ABC"\njson.title @post.title\n)
+
+        expect(described_class.ivars_in(template, path: "app/views/posts/#{name}")).to eq(%w[post]), name
+      end
+    end
+
+    # Whichever quote opens first owns the literal: an apostrophe inside a
+    # double-quoted string paired with the next single quote on the line and
+    # swallowed the ivar between them.
+    it "reads an ivar beside a double-quoted string holding an apostrophe" do
+      template = %(<%= link_to "Don't delete", post_path(@post), class: 'btn' %>)
+
+      expect(described_class.ivars_in(template, path: "app/views/posts/show.html.erb")).to eq(%w[post])
+    end
+
     it "still reads ivars that legally start with an underscore or a capital" do
       expect(described_class.ivars_in("<%= @_private %><%= @Thing %>")).to eq(%w[Thing _private])
     end

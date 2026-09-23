@@ -108,6 +108,33 @@ module RailsAiContext
         end
       end
 
+      # How many methods this page prints. The payload caps its own list
+      # before this one does, which is why the heading counts what was
+      # printed against the list it printed from, and says the model's own
+      # total separately.
+      PAGE_METHOD_CAP = 25
+
+      # One method list: the heading counts what this page prints against the
+      # list it printed from, and the model's own total - a wider set, taken
+      # by reflection before the payload's cap and this page's filter - is
+      # said on its own line rather than used as the denominator of a
+      # different number.
+      #
+      # @param reflected [Array(Integer, String, String), nil] the payload's
+      #   count, the noun it counts, and what this list leaves out of it
+      private_class_method def self.method_section(methods, kind:, reflected: nil, model: nil)
+        listed = methods.first(PAGE_METHOD_CAP)
+        heading = methods.size > listed.size ? "## #{kind} (#{listed.size} of #{methods.size})" : "## #{kind}"
+        lines = [ "", heading ] + listed.map { |m| "- `#{m}`" }
+
+        total, noun, omitted = reflected
+        if total.is_a?(Integer) && total > methods.size
+          source = RailsAiContext.static_tier? ? "The source defines" : "Reflection reports"
+          lines << "" << "_#{source} #{count_phrase(total, noun)} on #{model}; this list is what the payload carries, #{omitted}._"
+        end
+        lines
+      end
+
       private_class_method def self.unavailable_row(name, data)
         Serializers::SectionFacts.unread_row("- **#{name}**", data)
       end
@@ -374,22 +401,22 @@ module RailsAiContext
         # Class methods - only show methods defined in the actual model file
         source_class_methods = extract_source_class_methods(name)
         if source_class_methods&.any?
-          lines << "" << "## Class methods"
-          source_class_methods.first(25).each { |m| lines << "- `#{m}`" }
+          lines.concat(method_section(source_class_methods, kind: "Class methods"))
         elsif data[:class_methods]&.any?
           # Fallback: filter obvious framework methods
           app_class_methods = data[:class_methods].reject { |m| m.match?(/\A(find_for_|find_or_|devise_|new_with_session|http_auth|params_auth|case_insensitive|expire_all|extend_remember|strip_whitespace|email_regexp|omniauth_providers)/) }
           if app_class_methods.any?
-            lines << "" << "## Class methods"
-            lines << app_class_methods.first(25).map { |m| "- `#{m}`" }.join("\n")
+            lines.concat(method_section(app_class_methods, kind: "Class methods",
+              reflected: [ data[:class_method_count], "class method", "minus framework ones" ], model: name))
           end
         end
 
-        # Key instance methods - only from source file, not framework-inherited
+        # Key instance methods - only from source file, not framework-inherited.
+        # Its own total, not the payload's: the file's methods, where the
+        # payload count includes the ones reflection found on top of them.
         source_instance_methods = extract_method_signatures(name)
         if source_instance_methods&.any?
-          lines << "" << "## Key instance methods"
-          source_instance_methods.first(25).each { |s| lines << "- `#{s}`" }
+          lines.concat(method_section(source_instance_methods, kind: "Key instance methods"))
         elsif data[:instance_methods]&.any?
           # Fallback: filter association-generated and framework methods
           assoc_names = (data[:associations] || []).flat_map do |a|
@@ -399,8 +426,8 @@ module RailsAiContext
           end
           filtered = data[:instance_methods].reject { |m| assoc_names.include?(m) || m.end_with?("=") }
           if filtered.any?
-            lines << "" << "## Key instance methods"
-            lines << filtered.first(25).map { |m| "- `#{m}`" }.join("\n")
+            lines.concat(method_section(filtered, kind: "Key instance methods",
+              reflected: [ data[:instance_method_count], "instance method", "minus association and writer methods" ], model: name))
           end
         end
 

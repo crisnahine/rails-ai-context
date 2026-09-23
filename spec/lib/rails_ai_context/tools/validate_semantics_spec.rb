@@ -138,6 +138,69 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
       end
     end
 
+    # The payload lists thirty instance methods, so a callback naming one the
+    # model inherits past that cap is not missing. Booted, the loaded class
+    # answers; statically, a truncated list cannot say it is absent.
+    context "a callback method the capped method list leaves out" do
+      let(:source) { "class CallbackWidget < ApplicationRecord\n  before_save :normalize_email\nend\n" }
+
+      def context_with(count)
+        {
+          routes: { by_controller: {} },
+          schema: { tables: {} },
+          models: { "CallbackWidget" => { file: "app/models/callback_widget.rb", concerns: [],
+                                          instance_methods: (1..30).map { |i| "step_#{i}" },
+                                          instance_method_count: count } }
+        }
+      end
+
+      def warnings_for(context)
+        allow(described_class).to receive(:cached_context).and_return(context)
+        with_app_file("app/models/callback_widget.rb", source) do |file, path|
+          described_class.check_rails_semantics(file, path).join("\n")
+        end
+      end
+
+      it "asks the loaded class on the booted tier" do
+        stub_const("CallbackWidget", Class.new(ActiveRecord::Base) { def normalize_email; end })
+
+        expect(warnings_for(context_with(40))).not_to include("normalize_email")
+      end
+
+      # Callbacks run private methods, and a base class usually keeps them
+      # private.
+      it "counts a private method the class inherits" do
+        parent = Class.new(ActiveRecord::Base) do
+          self.abstract_class = true
+
+          private
+
+          def normalize_email; end
+        end
+        stub_const("CallbackWidget", Class.new(parent))
+
+        expect(warnings_for(context_with(40))).not_to include("normalize_email")
+      end
+
+      it "still flags a method the loaded class lacks" do
+        stub_const("CallbackWidget", Class.new(ActiveRecord::Base))
+
+        expect(warnings_for(context_with(40))).to include("before_save :normalize_email - method not found")
+      end
+
+      it "makes no claim from a truncated list on the static tier" do
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+        expect(warnings_for(context_with(40))).not_to include("normalize_email")
+      end
+
+      it "still flags a method a complete list lacks on the static tier" do
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+        expect(warnings_for(context_with(30))).to include("before_save :normalize_email - method not found")
+      end
+    end
+
     it "flags a scope chain that loads every record into memory" do
       source = <<~RUBY
         class WidgetsController < ApplicationController

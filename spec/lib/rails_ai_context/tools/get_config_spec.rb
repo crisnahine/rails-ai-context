@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetConfig do
   before { described_class.reset_cache! }
@@ -334,6 +336,37 @@ RSpec.describe RailsAiContext::Tools::GetConfig do
       result = described_class.call
       text = result.content.first[:text]
       expect(text).not_to include("CurrentAttributes")
+    end
+  end
+  # An empty file has no comments to be commented out, and the note sent a
+  # reader to open it expecting commented-out config.
+  describe "the note on an initializer file" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      described_class.reset_cache!
+      FileUtils.mkdir_p(File.join(tmpdir, "config", "initializers"))
+      File.write(File.join(tmpdir, "config", "initializers", "assets.rb"), "")
+      File.write(File.join(tmpdir, "config", "initializers", "view_annotations.rb"),
+                 "# Be sure to restart your server when you modify this file.\n#\n# config.x = true\n")
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      allow(described_class).to receive(:cached_context).and_return(
+        config: { initializers: %w[assets.rb view_annotations.rb] }
+      )
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "calls an empty file empty" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- `assets.rb` - empty")
+    end
+
+    it "still calls an all-comment file commented out" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- `view_annotations.rb` - all commented out")
     end
   end
 end

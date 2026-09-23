@@ -116,7 +116,7 @@ Full-stack feature analysis: models + controllers + routes + services + jobs + v
 
 ### `rails_get_context`
 
-Composite context: schema + model + controller + routes + views for a resource.
+Composite context: schema + model + controller + routes + views for a resource. Views come from the directory Rails resolves for the controller; a flat-directory fallback is labelled.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -140,7 +140,10 @@ Narrative app walkthrough for getting up to speed.
 
 ### `rails_get_schema`
 
-Database schema with column types, indexes, defaults, encrypted hints.
+Database schema with column types, indexes, defaults, encrypted hints. Booted,
+a table `db/schema.rb` declares and the connected database does not have is
+named as a migration that has not run, and the listing header says when the
+two table counts disagree.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -149,7 +152,7 @@ Database schema with column types, indexes, defaults, encrypted hints.
 
 ### `rails_get_model_details`
 
-AST-parsed model internals. Every result carries `[VERIFIED]` or `[INFERRED]` confidence tag.
+AST-parsed model internals. Every result carries `[VERIFIED]` or `[INFERRED]` confidence tag. The method list says how many of the model's methods it is showing.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -176,7 +179,10 @@ its concerns), not the order Rails registered them in.
 
 ### `rails_get_concern`
 
-Concern methods, source code, and which models include it.
+Concern methods, source code, and which models include it. A class under
+`app/models/concerns` that subclasses `ActiveModel::Validator` is listed as a
+validator rather than a concern, and its users are the models that name it in
+`validates_with`.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -201,7 +207,11 @@ Controller actions with inherited filters, render map, strong params. Includes s
 
 ### `rails_get_routes`
 
-Routes with code-ready helpers (`post_path(@record)`) and required params.
+Routes with code-ready helpers (`post_path(@record)`) and required params. A
+fully qualified controller key answers with its own routes only; a short name
+still matches every controller that carries it. Rack apps attached with `mount`
+or `match ... to:` are named with the path they answer on, when the source
+spells one out.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -216,7 +226,7 @@ Routes with code-ready helpers (`post_path(@record)`) and required params.
 
 ### `rails_get_view`
 
-View templates with instance variables, Turbo frames, Stimulus controllers, partial locals. Includes schema hints for detected ivars.
+View templates with instance variables, Turbo frames, Stimulus controllers, partial locals. Includes schema hints for detected ivars. A template directly under `app/views` is grouped as `(app/views root)`, which `path:` reaches and `controller:` does not.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -299,7 +309,9 @@ Brakeman static analysis: SQL injection, XSS, mass assignment, command injection
 |:----------|:-----|:--------|:------------|
 | `detail` | enum | `standard` | `summary`, `standard`, `full` |
 
-> Requires the `brakeman` gem. Gracefully reports "not installed" if missing.
+> Requires the `brakeman` gem. When it cannot be loaded, the answer says which
+> case it is: brakeman is nowhere on the machine, or it is installed and the
+> app's bundle does not carry it, which `--no-boot` scans around.
 
 ### `rails_performance_check`
 
@@ -349,7 +361,7 @@ Notable gems with versions, categories, and config file locations.
 
 ### `rails_get_env`
 
-Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so.
+Environment variables + credentials keys (values are never exposed). Scans `.rb`, `.rake`, ERB views and config YAML under `app`, `config` and `lib`; files matching `sensitive_patterns` (`config/database.yml`, credentials, keys) are never read, and the answer says so. A variable whose call sites pass different defaults is labelled as such rather than with one site's default; `detail:"full"` names each site's.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -365,7 +377,12 @@ Application and framework helpers with view cross-references.
 
 ### `rails_get_service_pattern`
 
-Service object interface, dependencies, side effects, callers.
+Service object interface, dependencies, side effects, callers. An
+ActiveInteraction's inputs include the ones it inherits, with the filters
+nested inside a `hash` filter shown under it. Callers are read from every
+`app/` and `lib/` tree, and on a booted app from any other directory it
+autoloads, and the page says when the twenty-caller display cap or the scan's
+own file ceiling left the list partial.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -376,7 +393,9 @@ Service object interface, dependencies, side effects, callers.
 
 Background job queue, retries, guard clauses, broadcasts, schedules. Sidekiq
 workers under `app/workers` are listed alongside the ActiveJob jobs, with
-their `sidekiq_options` and `perform` signature.
+their `sidekiq_options`, any `sidekiq_throttle`, and the `perform` signature. A
+worker that inherits its Sidekiq mixin from a base worker is one of them, and
+`job:` answers a worker name as well as a job name.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -414,7 +433,7 @@ ActionMailer mailers: every mailer class with its delivery actions and delivery 
 
 ### `rails_get_engines`
 
-Rails engines: engines mounted in `config/routes.rb` (with known-engine descriptions) and loaded engine classes with route/model counts.
+What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on when the source spells one out - and loaded engine classes with route/model counts.
 
 *No parameters.*
 
@@ -506,7 +525,7 @@ Reverse file tail with level filtering and sensitive data redaction.
 
 ### `rails_diagnose`
 
-One-call error diagnosis with classification, context, git blame, and log correlation.
+One-call error diagnosis with classification, context, git blame, and log correlation. It does not call a method undefined when the model's method list could be missing one - a concern's, a parent's, or anything past the payload's own cap.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|

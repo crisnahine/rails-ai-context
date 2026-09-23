@@ -32,9 +32,8 @@ module RailsAiContext
           by_controller: group_by_controller(routes),
           api_namespaces: api_namespaces(routes),
           mounted_engines: detect_mounted_engines,
-          # Everything routable that has no controller#action: Engine mounts
-          # AND bare rack apps (propshaft's /assets mounts a Server instance,
-          # which detect_mounted_engines' Class check can't see).
+          # Everything routable that has no controller#action and is not a
+          # redirect or a lambda: the same set the list above names.
           unrouted_mounts: count_unrouted_mounts,
           root_route: root ? "#{root[:controller]}##{root[:action]}" : nil
         }.tap do |result|
@@ -85,6 +84,19 @@ module RailsAiContext
         result
       rescue => e
         { error: e.message }
+      end
+
+      # What config/routes.rb and every file it draws mount, from source. The
+      # engines section reads this rather than walking config/routes.rb on its
+      # own, so the two sections name one set of mounted apps.
+      #
+      # @return [Array<Hash>] { engine:, path:, location: } per mounted app
+      def static_mounts
+        routes_path = File.join(app.root.to_s, "config", "routes.rb")
+        return [] unless File.exist?(routes_path)
+
+        _records, mounts, _files = walk_routes_file(routes_path)
+        mounts
       end
 
       private
@@ -229,7 +241,7 @@ module RailsAiContext
       end
 
       def count_unrouted_mounts
-        controllerless_routes.count { |r| !dynamic_target?(r) }
+        mounted_routes.size
       rescue => e
         RailsAiContext.debug_fail(e, 0, label: "count_unrouted_mounts")
       end
@@ -255,19 +267,40 @@ module RailsAiContext
         rack_app.is_a?(Proc)
       end
 
+      # Every Rack app the route set carries, engine or not, read off the same
+      # set the count reads: `mount App => path` is `match(path, to: app,
+      # via: :all, anchor: false)` with a name derived, so the two forms build
+      # the same endpoint, and keeping only Rails::Engine subclasses left a
+      # plain Rack app counted in the header and named nowhere. An app mounted
+      # as an instance (propshaft's Server) is named by its class, because the
+      # count includes it either way and a header that disagrees with the list
+      # below it is the thing this pairing exists to prevent.
       def detect_mounted_engines
-        app.routes.routes
-          .select { |r| r.app.respond_to?(:app) && r.app.app.is_a?(Class) }
-          .filter_map do |r|
-            engine_class = r.app.app
-            next unless engine_class < Rails::Engine
-            {
-              engine: engine_class.name,
-              path: r.path.spec.to_s
-            }
-          rescue => e
-            RailsAiContext.debug_fail(e, nil, label: "detect_mounted_engines")
-          end
+        mounted_routes.map do |r|
+          mounted = r.app.respond_to?(:app) ? r.app.app : r.app
+          name = mounted.is_a?(Class) ? mounted.name : mounted.class.name
+          # An app mounted as an instance of an anonymous class has no name to
+          # print and is still one of the endpoints the count counts, so it is
+          # named for what it is rather than dropped into a disagreement
+          # between the two numbers.
+          { engine: name || "(anonymous Rack app)", path: mount_path(r) }
+        rescue => e
+          RailsAiContext.debug_fail(e, { engine: "(unreadable Rack app)", path: nil }, label: "detect_mounted_engines")
+        end
+      end
+
+      # Routable, controller-less, and not a redirect or a lambda: what is
+      # left is a Rack app attached at a path. Walked once: the count and the
+      # list are the same set, and reading it twice is reading the whole route
+      # table twice.
+      def mounted_routes
+        @mounted_routes ||= controllerless_routes.reject { |r| dynamic_target?(r) }
+      end
+
+      # `match` records the format segment the path spec carries; `mount` does
+      # not. The path a reader asks about is the one without it.
+      def mount_path(route)
+        route.path.spec.to_s.sub(/\(\.:format\)\z/, "")
       end
 
       # One rule for both tiers, like total_routes above: a namespace is a

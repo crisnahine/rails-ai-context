@@ -289,6 +289,16 @@ module RailsAiContext
           model_data = models[receiver]
           return nil unless model_data.is_a?(Hash) && !model_data[:error]
 
+          # Booted, the loaded class is the whole answer: it carries a
+          # concern's methods and a gem's, which no payload list does.
+          live = live_method_defined?(receiver, method_name)
+          return nil if live == true
+
+          # Otherwise a negative claim cannot be read off a partial list: a
+          # method past the display cap was reported as not existing in the
+          # same answer that printed its definition.
+          return nil if live.nil? && source_methods_missing?(model_data)
+
           known = known_model_methods(model_data)
           # "published?" / "save!" resolve through the bare attribute name, so
           # compare without the trailing punctuation too.
@@ -319,11 +329,32 @@ module RailsAiContext
           nil
         end
 
+        # True when the names the model carries cannot answer whether a method
+        # exists: a method a concern or a parent defines is reflection's to
+        # report, and reflection's list is the capped one.
+        def source_methods_missing?(model_data)
+          return false unless reflection_list_truncated?(model_data)
+          return true unless model_data[:source_instance_methods].is_a?(Array)
+
+          Array(model_data[:concerns]).any? || !model_data[:sti].nil? || Array(model_data[:inherited_from]).any?
+        end
+
+        # Never the count alone: it is reflection's, and ActiveRecord defines
+        # an attribute method per column the first time a model is
+        # instantiated, so it passes the cap on an ordinary model as soon as
+        # the app is warm.
+        def reflection_list_truncated?(model_data)
+          count = model_data[:instance_method_count]
+          count.is_a?(Integer) && count > Array(model_data[:instance_methods]).size
+        end
+
         # Everything legitimately callable on the model that introspection
         # knows about: associations, table columns, and declared methods.
         def known_model_methods(model_data)
           names = Array(model_data[:associations]).filter_map { |a| (a[:name] || a["name"])&.to_s }
           names += Array(model_data[:instance_methods]).map(&:to_s)
+          # Uncapped, and the half of the set a display cap must never decide.
+          names += Array(model_data[:source_instance_methods]).map(&:to_s)
           names += Array(model_data[:class_methods]).map(&:to_s)
           names += Array(model_data[:scopes]).filter_map { |s| s.is_a?(Hash) ? (s[:name] || s["name"])&.to_s : s.to_s }
 

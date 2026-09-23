@@ -43,11 +43,16 @@ module RailsAiContext
           return text_response("A services directory exists but contains no Ruby files.")
         end
 
+        # One lookup for the whole call: it walks the service tree on first
+        # use and only a class whose superclass is not ActiveInteraction::Base
+        # ever asks it anything.
+        lookup = Introspectors::SuperclassChain.lookup_for(root)
+
         if service
-          return format_single_service(service, service_files, real_service_dirs, real_root)
+          return format_single_service(service, service_files, real_service_dirs, real_root, lookup)
         end
 
-        format_service_listing(service_files, real_service_dirs, real_root, detail)
+        format_service_listing(service_files, real_service_dirs, real_root, detail, lookup)
       end
 
       # A service lives under app/services, a pack, an in-repo engine or a
@@ -58,7 +63,7 @@ module RailsAiContext
         dir ? file.delete_prefix("#{dir}#{File::SEPARATOR}") : File.basename(file)
       end
 
-      private_class_method def self.format_single_service(service, service_files, service_dirs, root)
+      private_class_method def self.format_single_service(service, service_files, service_dirs, root, lookup)
         matches = match_service_files(service, service_files, service_dirs)
 
         if matches.size > 1
@@ -106,10 +111,10 @@ module RailsAiContext
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
 
-        inputs = interaction_inputs(source)
+        inputs = interaction_input_lines(source, lookup, class_name)
         if inputs.any?
           lines << "" << "## Inputs (ActiveInteraction)"
-          inputs.each { |i| lines << "- #{i}" }
+          lines.concat(inputs)
         end
 
         owned = owned_methods(source, constant_for(file, service_dirs))
@@ -147,10 +152,17 @@ module RailsAiContext
         end
 
         # Cross-reference: who calls this service
-        callers = find_callers(class_name, root, file)
+        callers, scan_truncated = find_callers(class_name, root, file)
         if callers.any?
           lines << "" << "## Called By"
-          callers.each { |c| lines << "- `#{c}`" }
+          callers.first(CALLER_LIMIT).each { |c| lines << "- `#{c}`" }
+          if callers.size > CALLER_LIMIT
+            lines << "_#{callers.size} callers in all; the #{CALLER_LIMIT} listed are the first by path._"
+          end
+        end
+        if scan_truncated
+          lines << "" << "_The caller scan stopped after #{count_phrase(MAX_CALLER_SCAN_FILES, "file")}; " \
+                        "run `rails_search_code(pattern:\"#{class_name}\")` for the rest._"
         end
 
         # Cross-reference hints
@@ -159,7 +171,7 @@ module RailsAiContext
         text_response(lines.join("\n"))
       end
 
-      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail)
+      private_class_method def self.format_service_listing(service_files, service_dirs, root, detail, lookup)
         # Detect common pattern across all services
         pattern_stats = { initialize_call: 0, initialize_single_method: 0, class_method_call: 0, result_object: 0, active_interaction: 0, total: 0 }
         service_data = []
@@ -181,7 +193,7 @@ module RailsAiContext
           pattern_stats[:initialize_single_method] += 1 if has_initialize && public_methods.size == 1
           pattern_stats[:class_method_call] += 1 if owned.any? { |m| m[:scope] == :class && m[:name] == "call" }
           pattern_stats[:result_object] += 1 if source.match?(/Result\.new|OpenStruct\.new|Struct\.new|\.success|\.failure/)
-          pattern_stats[:active_interaction] += 1 if active_interaction?(source)
+          pattern_stats[:active_interaction] += 1 if Introspectors::Interaction.interaction?(source, lookup: lookup)
 
           service_data << {
             file: relative,
@@ -275,28 +287,23 @@ module RailsAiContext
 
       # ActiveInteraction declares its interface as filter macros rather than
       # an `initialize`, so a service that looks argument-less from its
-      # methods alone is documented entirely by these lines.
-      INTERACTION_FILTERS = %w[
-        array boolean date date_time decimal file float hash integer
-        interface object record string symbol time
-      ].freeze
-
-      private_class_method def self.active_interaction?(source)
-        Introspectors::DeclaredConstant.declarations(source)
-          .any? { |d| d.superclass == "ActiveInteraction::Base" }
+      # methods alone is documented entirely by these lines. One line per
+      # filter, nested ones indented under the filter whose block declares
+      # them, and an inherited one named with the class that declares it: it
+      # is not in this file, and a reader looking for it needs somewhere to
+      # look.
+      private_class_method def self.interaction_input_lines(source, lookup, own_class)
+        Introspectors::Interaction.filters(source, lookup: lookup).flat_map do |filter|
+          [ "- #{input_line(filter, own_class)}" ] +
+            filter.nested.map { |nested| "  - #{input_line(nested, filter.declared_by)}" }
+        end
       end
 
-      private_class_method def self.interaction_inputs(source)
-        return [] unless active_interaction?(source)
-
-        walked = Introspectors::SourceIntrospector.walk_source(
-          source, { filters: -> { Introspectors::Listeners::GenericMacroListener.new(INTERACTION_FILTERS) } }
-        )
-        (walked[:filters] || []).flat_map do |record|
-          options = record[:option_values] || {}
-          suffix = options.any? ? " (#{options.map { |k, v| "#{k}: #{v.nil? ? 'nil' : v}" }.join(', ')})" : ""
-          Array(record[:args]).map { |name| "`#{record[:macro]} :#{name}`#{suffix}" }
-        end
+      private_class_method def self.input_line(filter, own_class)
+        options = filter.options
+        suffix = options.any? ? " (#{options.map { |k, v| "#{k}: #{v.nil? ? 'nil' : v}" }.join(', ')})" : ""
+        origin = own_class && filter.declared_by != own_class ? " - from `#{filter.declared_by}`" : ""
+        "`#{filter.macro} :#{filter.name}`#{suffix}#{origin}"
       end
 
       # The methods the service class defines itself. Nesting a query builder
@@ -407,10 +414,43 @@ module RailsAiContext
         effects.to_a.sort
       end
 
+      # Every caller is capped at CALLER_LIMIT, and the renderer says so: a
+      # list that stops at twenty with no word looks complete. The scan reads
+      # every file under app/ and lib/ rather than six named directories,
+      # which is the only way to see a caller in app/tools or lib/ - the cost
+      # is one pass over the tree per named service.
+      CALLER_LIMIT = 20
+
+      # The directories a booted app autoloads from that are not under app/ or
+      # lib/: an app is free to add one, and a caller in it is as real as any
+      # other. Empty on the static tier, where there is no config to ask.
+      private_class_method def self.configured_load_paths(real_root)
+        return [] unless defined?(Rails) && Rails.respond_to?(:application) && Rails.application&.config.respond_to?(:eager_load_paths)
+
+        paths = Array(Rails.application.config.eager_load_paths) + Array(Rails.application.config.autoload_paths)
+        paths.map(&:to_s).select { |dir| dir.start_with?("#{real_root}/") && Dir.exist?(dir) }
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, [], label: "configured_load_paths")
+      end
+
+      # The scan is raw file reading with no cache behind it, so on a monorepo
+      # it is the most expensive thing this tool does. It stops here and says
+      # so, the way analyze_feature states its own scan cap.
+      MAX_CALLER_SCAN_FILES = 5_000
+
+      # app/ and lib/, plus the load paths outside them: most load paths sit
+      # inside app/, and walking each one again read the tree once per path.
+      private_class_method def self.caller_search_dirs(real_root)
+        base_dirs = %w[app lib].flat_map { |d| PathResolver.dirs_for(real_root, d) }
+        extra_dirs = configured_load_paths(real_root).reject do |dir|
+          base_dirs.any? { |base| dir == base || dir.start_with?("#{base}/") }
+        end
+        (base_dirs + extra_dirs).uniq
+      end
+
       private_class_method def self.find_callers(class_name, real_root, own_file = nil)
         callers = Set.new
-        search_dirs = %w[app/controllers app/jobs app/models app/services app/workers app/mailers]
-                        .flat_map { |d| PathResolver.dirs_for(real_root, d) }
+        search_dirs = caller_search_dirs(real_root)
         # A bare `include?` matched `Billing::Invoices::Create` inside
         # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
         # underscored-path skip dropped the one real caller, whose path
@@ -420,19 +460,23 @@ module RailsAiContext
         # is not a caller of this one, so the declaration is not a reference.
         definition = /\b(?:class|module)\s+(?:::)?#{Regexp.escape(class_name)}(?![\w:])/
 
-        search_dirs.each do |dir|
-          safe_glob(dir, "**/*.rb", real_root).each do |real|
-            next if own_file && real == own_file
-            source = safe_read(real)
-            next unless source
-            next unless source.match?(reference)
-            next unless source.gsub(definition, "").match?(reference)
+        # The paths first, so the ceiling is measured against the files there
+        # are rather than the files read: a tree of exactly the cap skips
+        # nothing and must not say it stopped.
+        paths = search_dirs.flat_map { |dir| safe_glob(dir, "**/*.rb", real_root) }.uniq
+        paths.reject! { |real| real == own_file } if own_file
+        truncated = paths.size > MAX_CALLER_SCAN_FILES
 
-            callers << real.sub("#{real_root}/", "")
-          end
+        paths.first(MAX_CALLER_SCAN_FILES).each do |real|
+          source = safe_read(real)
+          next unless source
+          next unless source.match?(reference)
+          next unless source.gsub(definition, "").match?(reference)
+
+          callers << real.sub("#{real_root}/", "")
         end
 
-        callers.to_a.sort.first(20)
+        [ callers.to_a.sort, truncated ]
       end
 
       private_class_method def self.detect_common_pattern(stats)

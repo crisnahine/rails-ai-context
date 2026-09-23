@@ -669,5 +669,200 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
         expect(text).not_to include("Concerns::Payloadable")
       end
     end
+
+    # `.filters.keys` is [:order_params, :account]: the two inside the block
+    # are keys of the hash filter, and an interaction that is handed them as
+    # keyword arguments drops them.
+    context "an interaction with a nested hash filter" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "orders"))
+        File.write(File.join(tmpdir, "app", "services", "orders", "create_with_params.rb"), <<~RUBY)
+          class Orders::CreateWithParams < ActiveInteraction::Base
+            hash :order_params do
+              string :title, default: nil
+              integer :quantity, default: nil
+            end
+
+            object :account
+
+            def execute; end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "shows the nested filters under the hash they belong to" do
+        text = described_class.call(service: "Orders::CreateWithParams").content.first[:text]
+
+        expect(text).to include("- `hash :order_params`")
+        expect(text).to include("  - `string :title`")
+        expect(text).to include("  - `integer :quantity`")
+        expect(text).to include("- `object :account`")
+      end
+    end
+
+    # A subclass of a subclass of ActiveInteraction::Base is still one, and
+    # the filters it takes are its own plus the ones it inherits.
+    context "an interaction one level down" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "billing", "invoices"))
+        File.write(File.join(tmpdir, "app", "services", "billing", "invoices", "base_request.rb"), <<~RUBY)
+          class Billing::Invoices::BaseRequest < ActiveInteraction::Base
+            string :token
+
+            def execute; end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app", "services", "billing", "invoices", "charge.rb"), <<~RUBY)
+          class Billing::Invoices::Charge < Billing::Invoices::BaseRequest
+            hash :body do
+              integer :amount, default: nil
+            end
+
+            def execute; end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "lists the inherited filter alongside the class's own" do
+        text = described_class.call(service: "Billing::Invoices::Charge").content.first[:text]
+
+        expect(text).to include("## Inputs (ActiveInteraction)")
+        expect(text).to include("`hash :body`")
+        expect(text).to include("`string :token`")
+      end
+
+      it "says which class an inherited filter came from" do
+        text = described_class.call(service: "Billing::Invoices::Charge").content.first[:text]
+
+        expect(text).to include("Billing::Invoices::BaseRequest")
+      end
+    end
+
+    # The six directories the caller scan used to name are not the app's
+    # autoload paths: anything else under app/ is invisible to it.
+    context "a caller outside the conventional service directories" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "billing", "invoices"))
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "tools"))
+        FileUtils.mkdir_p(File.join(tmpdir, "lib", "reporting"))
+        File.write(File.join(tmpdir, "app", "services", "billing", "invoices", "create.rb"), <<~RUBY)
+          class Billing::Invoices::Create < ActiveInteraction::Base
+            object :account
+
+            def execute; end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app", "tools", "invoice_tool.rb"), <<~RUBY)
+          class InvoiceTool
+            def call(account)
+              Billing::Invoices::Create.run(account: account)
+            end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "lib", "reporting", "nightly.rb"), <<~RUBY)
+          module Reporting
+            class Nightly
+              def call(account)
+                Billing::Invoices::Create.run(account: account)
+              end
+            end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names a caller in any app/ directory" do
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("app/tools/invoice_tool.rb")
+      end
+
+      # Booted, the app's own load paths are the direct answer, and an app
+      # that autoloads a directory outside app/ and lib/ still has callers in
+      # it.
+      it "reads a caller in a directory only the app's load paths name" do
+        FileUtils.mkdir_p(File.join(tmpdir, "extras"))
+        File.write(File.join(tmpdir, "extras", "nightly_run.rb"), <<~RUBY)
+          class NightlyRun
+            def call(account)
+              Billing::Invoices::Create.run(account: account)
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:configured_load_paths).and_return([ File.join(tmpdir, "extras") ])
+
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("extras/nightly_run.rb")
+      end
+
+      # Booted, the load paths repeat app/'s own subdirectories, and a file
+      # read once per directory naming it hit the ceiling at half the tree.
+      it "counts a file the load paths name twice as one file" do
+        files = Dir.glob(File.join(tmpdir, "{app,lib}", "**", "*.rb")).size - 1
+        stub_const("#{described_class}::MAX_CALLER_SCAN_FILES", files)
+        allow(described_class).to receive(:configured_load_paths)
+          .and_return(Dir.glob(File.join(tmpdir, "app", "*")).select { |dir| File.directory?(dir) })
+
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("lib/reporting/nightly.rb")
+        expect(text).not_to include("stopped after")
+      end
+
+      # Most load paths sit inside app/, which the scan already walks: each
+      # one walked again was the tree read once per load path.
+      it "walks a load path only when it lies outside app/ and lib/" do
+        real_root = File.realpath(tmpdir)
+        FileUtils.mkdir_p(File.join(real_root, "extras"))
+        allow(described_class).to receive(:configured_load_paths)
+          .and_return([ File.join(real_root, "app", "services"), File.join(real_root, "extras") ])
+
+        dirs = described_class.send(:caller_search_dirs, real_root)
+
+        expect(dirs).to include(File.join(real_root, "extras"))
+        expect(dirs).not_to include(File.join(real_root, "app", "services"))
+      end
+
+      # The scan reads every file under app/ and lib/, so on a large app it
+      # has to stop somewhere and say that it did.
+      it "says so when the scan stopped at its file ceiling" do
+        stub_const("#{described_class}::MAX_CALLER_SCAN_FILES", 1)
+
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("stopped after 1 file")
+      end
+
+      # A list that stops at the limit with no word reads as complete.
+      it "says how many callers there are when it lists fewer" do
+        stub_const("#{described_class}::CALLER_LIMIT", 1)
+
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to match(/_\d+ callers in all; the 1 listed are the first by path\._/)
+        expect(text.scan(/^- `(?:app|lib)\//).size).to eq(1)
+      end
+
+      it "names a caller under lib/" do
+        text = described_class.call(service: "Billing::Invoices::Create").content.first[:text]
+
+        expect(text).to include("lib/reporting/nightly.rb")
+      end
+    end
   end
 end

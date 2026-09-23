@@ -26,9 +26,19 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
     it "lists mounted engines with paths, categories, and descriptions" do
       text = described_class.call.content.first[:text]
       expect(text).to include("# Engines")
-      expect(text).to include("## Mounted (config/routes.rb)")
+      expect(text).to include("## Mounted Apps (config/routes.rb)")
       expect(text).to include("**Sidekiq::Web** at `/sidekiq` (admin) - Sidekiq background job dashboard")
       expect(text).to include("**Blazer::Engine** at `/blazer`")
+    end
+
+    it "names a mount with no known path without inventing one" do
+      allow(described_class).to receive(:cached_context)
+        .and_return({ engines: engines_data.merge(mounted_engines: [ { engine: "Sidekiq::Web", path: nil } ]) })
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- **Sidekiq::Web**\n")
+      expect(text).not_to include("at `")
     end
 
     it "lists loaded engine classes with route and model counts" do
@@ -46,7 +56,7 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
 
       it "says so plainly in both sections" do
         text = described_class.call.content.first[:text]
-        expect(text).to include("_No engines mounted in config/routes.rb._")
+        expect(text).to include("_Nothing mounted in config/routes.rb._")
         expect(text).to include("_No loaded Rails::Engine subclasses detected._")
       end
     end
@@ -99,7 +109,7 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
 
       it "still reports the mounted engines it read from routes" do
         text = described_class.call.content.first[:text]
-        expect(text).to include("## Mounted (config/routes.rb)")
+        expect(text).to include("## Mounted Apps (config/routes.rb)")
       end
     end
   end

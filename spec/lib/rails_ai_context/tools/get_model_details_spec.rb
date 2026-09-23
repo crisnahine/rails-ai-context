@@ -584,4 +584,68 @@ RSpec.describe RailsAiContext::Tools::GetModelDetails do
       expect(text).to match(/\*\*Structure:\*\* .+/)
     end
   end
+  # Two caps sit between the model's methods and the page: the payload lists
+  # thirty, and the renderer prints twenty-five. A reader who takes the list
+  # as the model's whole interface gets it wrong, and diagnose did.
+  describe "a model with more methods than the page lists" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Widget" => {
+            table_name: "widgets",
+            associations: [],
+            instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+            instance_method_count: 72
+          }
+        },
+        schema: { tables: { "widgets" => { columns: [ { name: "title", type: "string" } ] } } }
+      )
+    end
+
+    it "says how many of the listed methods it is showing" do
+      text = described_class.call(model: "Widget").content.first[:text]
+
+      expect(text).to include("## Key instance methods (25 of 30)")
+    end
+
+    # The heading's two numbers describe the filtered list; the model's own
+    # total is a different set and says so on its own line.
+    it "says the same about the class-method list" do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Widget" => {
+            table_name: "widgets", associations: [],
+            class_methods: %w[search_by import_from_csv],
+            class_method_count: 41
+          }
+        },
+        schema: { tables: { "widgets" => { columns: [ { name: "title", type: "string" } ] } } }
+      )
+
+      text = described_class.call(model: "Widget").content.first[:text]
+
+      expect(text).to include("## Class methods")
+      expect(text).to include("41 class methods")
+    end
+
+    it "names the model's whole method count apart from the list" do
+      text = described_class.call(model: "Widget").content.first[:text]
+
+      expect(text).to include("72 instance methods")
+      # Markdown folds a line straight after a bullet into that bullet.
+      expect(text).to include("`\n\n_Reflection reports 72 instance methods")
+    end
+
+    # The static count comes from the source parse, so crediting it to
+    # reflection claims a boot that never happened.
+    it "credits the count to the source on the static tier" do
+      allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+
+      text = described_class.call(model: "Widget").content.first[:text]
+
+      expect(text).to include("The source defines 72 instance methods on Widget")
+      expect(text).not_to include("Reflection reports")
+    end
+  end
 end

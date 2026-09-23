@@ -157,6 +157,162 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).not_to include("undefined_method_on_model")
     end
 
+    # The method list a model carries is capped for display. Reading it as
+    # the model's complete set turned a method defined on line 36 into a
+    # confident "the method does not exist", in the same answer whose Method
+    # Trace printed the definition.
+    context "a model with more methods than the listing carries" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: {
+            "Post" => {
+              table_name: "posts",
+              associations: [],
+              scopes: [],
+              class_methods: [],
+              instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+              # The model's own methods, uncapped: the display list stops at
+              # thirty and `title_present?` is the thirty-second in the file.
+              source_instance_methods: (1..31).map { |i| "step_#{format('%02d', i)}" } + %w[title_present?],
+              instance_method_count: 132
+            }
+          },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+      end
+
+      it "does not claim a method the model's own source defines does not exist" do
+        text = described_class.call(error: "NoMethodError: undefined method `title_present?' for an instance of Post").content.first[:text]
+
+        expect(text).not_to include("undefined_method_on_model")
+        expect(text).not_to include("the method does not exist")
+      end
+
+      # The reflection list is capped and attribute methods inflate its count
+      # the moment anything instantiates a model, so a guard keyed on that
+      # count alone switches the classification off app-wide.
+      it "still names a method that is in neither the source nor the schema" do
+        text = described_class.call(error: "NoMethodError: undefined method `bogus_assoc' for an instance of Post").content.first[:text]
+
+        expect(text).to include("undefined_method_on_model")
+      end
+    end
+
+    # A concern's methods are reflection's to report, and that list is the
+    # capped one, so a model that includes concerns cannot support a negative
+    # claim about a name its own file does not define.
+    context "a model whose methods can come from a concern, on the static tier" do
+      before do
+        # No loaded class to ask: the payload is all there is.
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+        allow(described_class).to receive(:cached_context).and_return(
+          models: {
+            "Post" => {
+              table_name: "posts", associations: [], scopes: [], class_methods: [],
+              concerns: [ "Publishable" ],
+              instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+              source_instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+              instance_method_count: 132
+            }
+          },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+      end
+
+      it "declines to say the method does not exist" do
+        text = described_class.call(error: "NoMethodError: undefined method `publish_later' for an instance of Post").content.first[:text]
+
+        expect(text).not_to include("undefined_method_on_model")
+      end
+    end
+
+    # Booted, the loaded class is the whole answer: it carries what the
+    # payload's capped list and the model's own file cannot, a concern's
+    # methods and a gem's included.
+    context "a booted app whose model class is loaded" do
+      let(:truncated_post) do
+        {
+          table_name: "posts", associations: [], scopes: [], class_methods: [],
+          concerns: [ "Publishable" ],
+          instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+          source_instance_methods: %w[display_url],
+          instance_method_count: 132
+        }
+      end
+
+      it "still names a real typo on a model whose list was cut" do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: { "Post" => truncated_post },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+
+        text = described_class.call(error: "NoMethodError: undefined method `nope_xyz' for an instance of Post").content.first[:text]
+
+        expect(text).to include("undefined_method_on_model")
+      end
+
+      # `to_param` comes from ActiveRecord, is in no payload list, and exists
+      # on every model: the negative claim read "the method does not exist".
+      it "does not claim a method the loaded class defines is missing" do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: { "Post" => truncated_post.merge(concerns: [], instance_method_count: 30) },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+
+        text = described_class.call(error: "NoMethodError: undefined method `to_param' for an instance of Post").content.first[:text]
+
+        expect(text).not_to include("undefined_method_on_model")
+      end
+    end
+
+    # A context written before the source list existed carries no key for it,
+    # and a negative claim cannot be read off what is left.
+    context "a payload from before the source method list existed, on the static tier" do
+      before do
+        allow(RailsAiContext).to receive(:static_tier?).and_return(true)
+        allow(described_class).to receive(:cached_context).and_return(
+          models: {
+            "Post" => {
+              table_name: "posts", associations: [], scopes: [], class_methods: [],
+              instance_methods: (1..30).map { |i| "step_#{format('%02d', i)}" },
+              instance_method_count: 32
+            }
+          },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+      end
+
+      it "declines to classify rather than guess" do
+        text = described_class.call(error: "NoMethodError: undefined method `title_present?' for an instance of Post").content.first[:text]
+
+        expect(text).not_to include("undefined_method_on_model")
+      end
+    end
+
+    context "a model whose method list is complete" do
+      before do
+        allow(described_class).to receive(:cached_context).and_return(
+          models: {
+            "Post" => {
+              table_name: "posts",
+              associations: [],
+              scopes: [],
+              class_methods: [],
+              instance_methods: %w[title_present?],
+              instance_method_count: 1
+            }
+          },
+          schema: { tables: { "posts" => { columns: [ { name: "title", type: "string" } ] } } }
+        )
+      end
+
+      it "still names a method the model really does not define" do
+        text = described_class.call(error: "NoMethodError: undefined method `bogus_assoc' for an instance of Post").content.first[:text]
+
+        expect(text).to include("undefined_method_on_model")
+      end
+    end
+
     it "truncates oversized output to within MAX_TOTAL_OUTPUT" do
       # Stub gather_context to return a very large section
       allow(described_class).to receive(:gather_context).and_return(

@@ -56,6 +56,105 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     allow(described_class).to receive(:detect_encrypted_columns).and_return(encrypted_columns)
   end
 
+  # Three files read one variable three ways: a nil-defaulting fetch, a real
+  # fallback, and a fetch with no default that raises KeyError when the
+  # variable is unset. One label for all three said the variable is optional.
+  describe "a variable whose call sites disagree about the default" do
+    let(:env_vars) do
+      {
+        "#{root}/app/services/billing/audit_log.rb" => [ { name: "SITE_URL", line: 4, default: "nil" } ],
+        "#{root}/app/services/billing/mailer_link.rb" => [ { name: "SITE_URL", line: 4, default: "https://example.com" } ],
+        "#{root}/app/services/billing/oauth_link.rb" => [ { name: "SITE_URL", line: 4 } ]
+      }
+    end
+
+    it "does not label the variable with one site's default" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("`SITE_URL`")
+      expect(text).not_to include("SITE_URL` (default: `nil`)")
+      expect(text).to include("defaults differ")
+    end
+
+    it "names each site's default in full detail" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("app/services/billing/audit_log.rb:4 default: `nil`")
+      expect(text).to include("app/services/billing/mailer_link.rb:4 default: `https://example.com`")
+      expect(text).to include("app/services/billing/oauth_link.rb:4 no default")
+    end
+
+    it "keeps the single label when every site agrees" do
+      allow(described_class).to receive(:scan_env_vars).and_return(
+        "#{root}/a.rb" => [ { name: "PORT", line: 1, default: "3000" } ],
+        "#{root}/b.rb" => [ { name: "PORT", line: 2, default: "3000" } ]
+      )
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("`PORT` (default: `3000`)")
+      expect(text).not_to include("defaults differ")
+    end
+  end
+
+  # A fetch whose fallback is an expression has a default all the same: it
+  # never raises, so labelling it "no default" named the wrong site as the
+  # one that raises KeyError.
+  describe "a fetch whose fallback is an expression" do
+    let(:env_vars) do
+      {
+        "#{root}/config/puma.rb" => described_class.send(:env_references, %(port ENV.fetch("PORT", defaults[:port])\n)),
+        "#{root}/config/web.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", "3000")\n)),
+        "#{root}/config/strict.rb" => described_class.send(:env_references, %(ENV.fetch("PORT")\n))
+      }
+    end
+
+    it "says the site has a default it cannot print" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("config/puma.rb:1 default computed at runtime")
+      expect(text).to include("config/web.rb:1 default: `3000`")
+      expect(text).to include("config/strict.rb:1 no default")
+    end
+
+    # A bracket read returns nil when the variable is unset and never raises,
+    # which is the one thing "no default" is there to warn about.
+    it "tells a bracket read from a fetch that raises" do
+      allow(described_class).to receive(:scan_env_vars).and_return(
+        "#{root}/config/web.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", "3000")\n)),
+        "#{root}/config/strict.rb" => described_class.send(:env_references, %(ENV.fetch("PORT")\n)),
+        "#{root}/config/loose.rb" => described_class.send(:env_references, %(ENV["PORT"]\n))
+      )
+
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("config/strict.rb:1 no default")
+      expect(text).to include("config/loose.rb:1 nil when unset")
+    end
+
+    # Neither raises and both answer nil, so they agree.
+    it "does not call a bracket read and a nil fetch a disagreement" do
+      allow(described_class).to receive(:scan_env_vars).and_return(
+        "#{root}/config/a.rb" => described_class.send(:env_references, %(ENV["SITE"]\n)),
+        "#{root}/config/b.rb" => described_class.send(:env_references, %(ENV.fetch("SITE", nil)\n))
+      )
+
+      expect(described_class.call.content.first[:text]).not_to include("defaults differ")
+      expect(described_class.call(detail: "full").content.first[:text]).not_to include("defaults differ")
+    end
+
+    it "prints no default when that is every site's" do
+      allow(described_class).to receive(:scan_env_vars).and_return(
+        "#{root}/config/puma.rb" => described_class.send(:env_references, %(ENV.fetch("PORT", defaults[:port])\n))
+      )
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("- `PORT`\n")
+      expect(text).not_to include("computed")
+    end
+  end
+
   describe "categorize_env_var" do
     it "categorizes API key variables" do
       result = described_class.send(:categorize_env_var, "GEMINI_API_KEY")
@@ -464,12 +563,12 @@ RSpec.describe RailsAiContext::Tools::GetEnv do
     it "does not print a Ruby expression where a default value belongs" do
       vars = scan(%{PORT = ENV.fetch("PORT", defaults[:port])\n})
       expect(vars.first[:name]).to eq("PORT")
-      expect(vars.first[:default]).to be_nil
+      expect(vars.first[:default]).to eq(described_class::COMPUTED_DEFAULT)
     end
 
     it "does not print a method call as a default" do
       vars = scan(%{PW = ENV.fetch("REDIS_PASSWORD", default_password)\n})
-      expect(vars.first[:default]).to be_nil
+      expect(vars.first[:default]).to eq(described_class::COMPUTED_DEFAULT)
     end
 
     it "ignores an ENV reference that only appears in a comment" do

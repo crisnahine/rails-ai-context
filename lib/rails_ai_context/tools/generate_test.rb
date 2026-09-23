@@ -1057,17 +1057,33 @@ module RailsAiContext
         def generate_file_test(file, framework, tests_data, type)
           case file
           when %r{app/models/(.+)\.rb}
-            model_name = $1.split("/").last.camelize
-            generate_model_test(model_name, framework, tests_data)
+            # The whole path, not its last segment: the declaration that names
+            # this file is the one equal to the path name ignoring case, and a
+            # basename carries no namespace to match a namespaced class
+            # against.
+            generate_model_test(declared_name(file, $1.split("/").map(&:camelize).join("::")), framework, tests_data)
           when %r{app/controllers/(.+)_controller\.rb}
-            ctrl_name = "#{$1.split('/').map(&:camelize).join('::')}Controller"
-            generate_controller_test(ctrl_name, framework, tests_data)
+            path_name = "#{$1.split('/').map(&:camelize).join('::')}Controller"
+            generate_controller_test(declared_name(file, path_name), framework, tests_data)
           when %r{app/services/(.+)\.rb}, %r{app/jobs/(.+)\.rb}
-            class_name = $1.split("/").map(&:camelize).join("::")
-            generate_service_test(class_name, file, framework)
+            path_name = $1.split("/").map(&:camelize).join("::")
+            generate_service_test(declared_name(file, path_name), file, framework)
           else
             text_response("Cannot auto-detect test type for `#{file}`. Use `model:` or `controller:` parameter instead.")
           end
+        end
+
+        # A path camelizes through Ruby's inflector, which has never read the
+        # app's config/initializers/inflections.rb on the static tier, so
+        # `ai_reports/build.rb` gives AiReports::Build where the app declares
+        # AIReports::Build - a constant that does not exist, in a spec that
+        # dies on load. The declaration is the one spelling that is right in
+        # both tiers.
+        def declared_name(file, path_name)
+          source = read_app_file(file)
+          return path_name unless source
+
+          Introspectors::DeclaredConstant.resolve(source, path_name)
         end
 
         def generate_service_test(class_name, file, framework)
@@ -1102,28 +1118,19 @@ module RailsAiContext
         # ── Helpers ──────────────────────────────────────────────────────
 
         # `ActiveInteraction::Base` defines `.run` and `.run!`, never `.call`,
-        # and its inputs are the filters the class declares.
-        INTERACTION_FILTERS = %w[
-          array boolean date date_time decimal file float hash integer
-          interface object record string symbol time
-        ].freeze
-
+        # and its inputs are the filters the class declares. A subclass of the
+        # app's own base interaction is one just the same, so the superclass
+        # chain decides this rather than the one `class` line.
         def service_entry_point(file)
           source = read_app_file(file)
-          declarations = source ? Introspectors::DeclaredConstant.declarations(source) : []
-          return { method: "call", call: "call", expectation: "be_truthy" } unless
-            declarations.any? { |d| d.superclass == "ActiveInteraction::Base" }
+          lookup = Introspectors::SuperclassChain.lookup_for(rails_app.root.to_s)
+          filters = source && Introspectors::Interaction.interface(source, lookup: lookup)
+          return { method: "call", call: "call", expectation: "be_truthy" } unless filters
 
-          inputs = interaction_inputs(source)
-          args = inputs.map { |name| "#{name}: nil" }.join(", ")
+          # Nested filters are keys of the filter that declares them, not
+          # keyword arguments: active_interaction drops them without a word.
+          args = filters.map { |filter| "#{filter.name}: nil" }.join(", ")
           { method: "run", call: args.empty? ? "run" : "run(#{args})", expectation: "be_valid" }
-        end
-
-        def interaction_inputs(source)
-          walked = Introspectors::SourceIntrospector.walk_source(
-            source, { filters: -> { Introspectors::Listeners::GenericMacroListener.new(INTERACTION_FILTERS) } }
-          )
-          (walked[:filters] || []).flat_map { |record| Array(record[:args]).map(&:to_s) }
         end
 
         def read_app_file(file)

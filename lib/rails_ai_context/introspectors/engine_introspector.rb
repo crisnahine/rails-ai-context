@@ -66,21 +66,16 @@ module RailsAiContext
 
       private
 
-      def root
-        app.root.to_s
-      end
-
+      # What config/routes.rb and the files it draws mount, on both tiers,
+      # through the route introspector's own walk: on the static tier the
+      # routes section reads the same walk, and booted it reads the live
+      # route table, which also holds what a gem mounts for itself.
       def discover_mounted_engines
-        routes_path = File.join(root, "config/routes.rb")
-        return [] unless File.exist?(routes_path)
-
-        ast_data = SourceIntrospector.walk(routes_path, { mounts: -> { Listeners::MountListener.new } })
         engines = []
 
-        ast_data[:mounts].each do |mount|
+        RouteIntrospector.new(app).static_mounts.each do |mount|
           engine_name = mount[:engine]
-          path = mount[:path] || "unknown"
-          info = { engine: engine_name, path: path }
+          info = { engine: engine_name, path: mount[:path] }
           known = KNOWN_ENGINES[engine_name]
           if known
             info[:category] = known[:category].to_s

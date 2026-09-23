@@ -45,7 +45,7 @@ module RailsAiContext
         sidekiq_line = sidekiq_queues_line(jobs_data)
         workers = (jobs_data.is_a?(Hash) ? jobs_data[:workers] : nil) || []
 
-        return format_single_job(job, jobs, real_root, sidekiq_line) if job
+        return format_single_job(job, jobs, real_root, sidekiq_line, workers) if job
 
         # No jobs and no channels - bail out. Channel absence is only a real
         # negative when the :jobs section actually ran - if it's unavailable
@@ -65,13 +65,13 @@ module RailsAiContext
           lines << "" if lines.any?
           lines.concat(format_channels_section(channels))
         end
-        # A count of the jobs the introspector saw is still a claim about the
-        # app's async work, and on an app that runs most of it through Sidekiq
-        # workers that count is the small half. The queues are already in hand
-        # either way.
-        if sidekiq_line
+        # A worker count is a claim about the app's async work, so the caveat
+        # belongs to the workers section, not to config/sidekiq.yml existing:
+        # an app that names its config anything else still gets it. An app
+        # with no Sidekiq in it gets no sentence about Sidekiq.
+        if workers.any? || sidekiq_line
           lines << "" if lines.any?
-          lines << "_#{sidekiq_line} Workers the introspector did not see are not covered by this tool._"
+          lines << "_#{[ sidekiq_line, NOT_COVERED ].compact.join(" ")}_"
         end
         text_response(lines.join("\n"))
       end
@@ -87,10 +87,23 @@ module RailsAiContext
           lines << "- **#{worker[:name]}**#{label}"
           next unless RailsAiContext::DetailLevel.full?(detail) || detail == "standard"
 
+          lines << "  - throttle: #{worker[:throttle]}" if worker[:throttle]
           lines << "  - `perform(#{worker[:perform_signature]})`" if worker[:perform_signature]
           lines << "  - `#{worker[:file]}`" if worker[:file]
         end
         lines
+      end
+
+      # The record the listing renders, as its own page: everything the
+      # introspector holds about a worker whose file it cannot re-read.
+      private_class_method def self.worker_summary(worker)
+        lines = [ "# #{worker[:name]}", "" ]
+        options = worker[:options] || {}
+        lines << "**Options:** #{options.map { |key, value| "#{key}: #{value}" }.join(', ')}" if options.any?
+        lines << "**Throttle:** #{worker[:throttle]}" if worker[:throttle]
+        lines << "**Perform:** `perform(#{worker[:perform_signature]})`" if worker[:perform_signature]
+        lines << "" << "_No file was recorded for this worker, so only what the listing holds is shown._"
+        lines.join("\n")
       end
 
       private_class_method def self.no_job_files_message(sidekiq_line = nil)
@@ -125,18 +138,33 @@ module RailsAiContext
 
       # The name never rebuilds the path: the file is the one the introspector
       # recorded, which is the only place a pack job's path is written down.
-      private_class_method def self.format_single_job(job, jobs, root, sidekiq_line)
+      private_class_method def self.format_single_job(job, jobs, root, sidekiq_line, workers)
         names = jobs.map { |j| j[:name] }
-        return text_response(no_job_files_message(sidekiq_line)) if names.empty?
+        worker_names = workers.map { |w| w[:name] }.compact
+        return text_response(no_job_files_message(sidekiq_line)) if names.empty? && worker_names.empty?
 
         # "SendWelcomeEmailJob", "send_welcome_email_job" and "send_welcome_email" all name one job.
         query = job.to_s.delete_suffix(".rb")
         class_name = fuzzy_find_key(names, query) ||
                      fuzzy_find_key(names, "#{query.underscore.delete_suffix("_job")}_job")
         relative = class_name && RailsAiContext::Payload.job_file(cached_context, class_name)
+        worker = nil
         unless relative
-          return not_found_response("Job", job, names.sort,
-            recovery_tool: "Call rails_get_job_pattern(detail:\"summary\") to see all jobs")
+          # A Sidekiq worker is not in the ActiveJob list, and the listing
+          # above it prints both, so the name a reader copied is in either.
+          worker_name = fuzzy_find_key(worker_names, query)
+          worker = worker_name && workers.find { |w| w[:name] == worker_name }
+          if worker
+            class_name = worker_name
+            relative = worker[:file]
+            # A worker the walk recorded without a file has no source to read,
+            # and joining nil onto the root raises. What the listing holds is
+            # still an answer.
+            return text_response(worker_summary(worker)) if relative.nil?
+          else
+            return not_found_response("Job", job, (names + worker_names).sort,
+              recovery_tool: "Call rails_get_job_pattern(detail:\"summary\") to see all jobs")
+          end
         end
 
         file = File.join(root, relative)
@@ -150,9 +178,12 @@ module RailsAiContext
         lines = [ "# #{class_name}", "" ]
         lines << "**File:** `#{relative}` (#{count_phrase(line_count, "line")})"
 
-        # Queue
-        queue = extract_queue(source)
+        # Queue. A worker declares its own in `sidekiq_options`, which the
+        # introspector already read, and the throttle that governs it is on
+        # the same record - the listing shows both, so this page shows both.
+        queue = extract_queue(source) || (worker && (worker[:options] || {})["queue"])
         lines << "**Queue:** `#{queue}`" if queue
+        lines << "**Throttle:** #{worker[:throttle]}" if worker && worker[:throttle]
 
         # Retry/discard configuration
         retry_config = extract_retry_config(source)

@@ -126,11 +126,13 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(text).to include("API: API-only, 2 versions, GraphQL, Alba")
     end
 
-    it "renders engines line when mounted engines exist" do
-      ctx = { engines: { mounted_engines: [ { engine: "Sidekiq::Web" }, { engine: "Devise::Engine" } ] } }
+    # Engines and plain Rack apps land in the same list, so the line names
+    # what mounting means rather than what half of it is.
+    it "renders the mounted line when the routes file mounts anything" do
+      ctx = { engines: { mounted_engines: [ { engine: "Sidekiq::Web" }, { engine: "MetricsApp" } ] } }
       helper = test_class.new(ctx)
       text = helper.full_preset_stack_lines.join("\n")
-      expect(text).to include("Engines: Sidekiq::Web, Devise::Engine")
+      expect(text).to include("Mounted: Sidekiq::Web, MetricsApp")
     end
 
     it "renders multi-database line when more than one database" do

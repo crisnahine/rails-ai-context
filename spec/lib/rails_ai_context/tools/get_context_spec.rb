@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::GetContext do
   describe ".call" do
@@ -22,6 +24,85 @@ RSpec.describe RailsAiContext::Tools::GetContext do
       result = described_class.call(model: "")
       text = result.content.first[:text]
       expect(text).not_to include("Did you mean")
+    end
+  end
+
+  # Rails resolves a namespaced controller's templates under its full
+  # controller_path. Handing GetView the basename read app/views/orders,
+  # which on this app is a directory of templates a service renders.
+  describe "views for a namespaced controller" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      described_class.reset_cache!
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "controllers", "api", "v1", "admin"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "views", "api", "v1", "admin", "orders"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "views", "orders"))
+      File.write(File.join(tmpdir, "app", "controllers", "api", "v1", "admin", "orders_controller.rb"), <<~RUBY)
+        class Api::V1::Admin::OrdersController < ApplicationController
+          def edit
+            @order = Order.find(params[:id])
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "views", "api", "v1", "admin", "orders", "edit.html.erb"),
+                 "<h1>Edit order <%= @order.number %></h1>\n")
+      File.write(File.join(tmpdir, "app", "views", "orders", "reminder.text.erb"),
+                 "Hello <%= @order.number %>,\n")
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "reads the directory Rails would resolve for the controller" do
+      text = described_class.call(controller: "Api::V1::Admin::OrdersController", action: "edit").content.first[:text]
+
+      expect(text).to include("api/v1/admin/orders/edit.html.erb")
+      expect(text).not_to include("orders/reminder.text.erb")
+    end
+
+    it "names the directory the views came from" do
+      text = described_class.call(controller: "Api::V1::Admin::OrdersController", action: "edit").content.first[:text]
+
+      expect(text).to include("_Views from `app/views/api/v1/admin/orders`._")
+    end
+
+    it "reads the same directory for the whole-controller document" do
+      text = described_class.call(controller: "Api::V1::Admin::OrdersController").content.first[:text]
+
+      expect(text).to include("api/v1/admin/orders/edit.html.erb")
+      expect(text).not_to include("orders/reminder.text.erb")
+    end
+  end
+
+  # An app that keeps a flat app/views still has its templates found, and the
+  # answer says they are not under the controller's own directory.
+  describe "views for a namespaced controller with a flat views directory" do
+    let(:tmpdir) { Dir.mktmpdir }
+
+    before do
+      described_class.reset_cache!
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "controllers", "admin"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "views", "orders"))
+      File.write(File.join(tmpdir, "app", "controllers", "admin", "orders_controller.rb"), <<~RUBY)
+        class Admin::OrdersController < ApplicationController
+          def index
+            @orders = Order.all
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "views", "orders", "index.html.erb"),
+                 "<%= @orders.size %>\n")
+      allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+    end
+
+    after { FileUtils.remove_entry(tmpdir) }
+
+    it "falls back to the flat directory and says the templates are not under the controller's own" do
+      text = described_class.call(controller: "Admin::OrdersController").content.first[:text]
+
+      expect(text).to include("orders/index.html.erb")
+      expect(text).to include("app/views/admin/orders")
     end
   end
 

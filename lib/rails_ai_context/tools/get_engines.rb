@@ -4,15 +4,15 @@ module RailsAiContext
   module Tools
     class GetEngines < BaseTool
       tool_name "rails_get_engines"
-      description "Get Rails engines: engines mounted in config/routes.rb (with known-engine descriptions) and every loaded Rails::Engine subclass (routes and model counts). " \
-        "Use when: checking which engines are mounted, finding an admin dashboard's path, or understanding engine-provided routes."
+      description "Get what config/routes.rb mounts - engines and plain Rack apps alike, with known-engine descriptions - and every loaded Rails::Engine subclass (routes and model counts). " \
+        "Use when: checking what is mounted where, finding an admin dashboard's path, or understanding engine-provided routes."
 
       input_schema(properties: {})
 
       guide_row(
         order: 42,
         mcp: "rails_get_engines",
-        summary: "Mounted engines + loaded engine classes with route/model counts"
+        summary: "Mounted apps (engines and Rack apps) + loaded engine classes with route/model counts"
       )
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
@@ -24,16 +24,19 @@ module RailsAiContext
 
           lines = [ "# Engines" ]
 
-          lines << "" << "## Mounted (config/routes.rb)"
+          # Engines and plain Rack apps both: `mount App => path` and
+          # `match path, to: App` build the same endpoint, and neither the
+          # heading nor the empty line calls one of them the other.
+          lines << "" << "## Mounted Apps (config/routes.rb)"
           if mounted.any?
             mounted.each do |e|
-              line = "- **#{e[:engine]}** at `#{e[:path]}`"
+              line = e[:path] ? "- **#{e[:engine]}** at `#{e[:path]}`" : "- **#{e[:engine]}**"
               line += " (#{e[:category]})" if e[:category]
               line += " - #{e[:description]}" if e[:description]
               lines << line
             end
           else
-            lines << "_No engines mounted in config/routes.rb._"
+            lines << "_Nothing mounted in config/routes.rb._"
           end
 
           lines << "" << "## Loaded Engine Classes"

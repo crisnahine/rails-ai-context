@@ -56,7 +56,7 @@ module RailsAiContext
         key: :migrations
       },
       "rails://engines" => {
-        name: "Mounted Engines",
+        name: "Mounted Apps",
         description: "Mounted Rails engines and Rack apps with paths and descriptions",
         mime_type: "application/json",
         key: :engines

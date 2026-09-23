@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Tools::SecurityScan do
   before do
@@ -12,7 +14,8 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
   describe ".call" do
     context "when Brakeman is not installed" do
       before do
-        described_class.instance_variable_set(:@brakeman_available, false)
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return(nil)
       end
 
       it "returns installation instructions" do
@@ -21,6 +24,276 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
         expect(text).to include("Brakeman is not installed")
         expect(text).to include("gem 'brakeman'")
       end
+    end
+
+    # Booted, the app's bundle is set up and narrows the load path, so a
+    # require that succeeds on the static tier raises LoadError here. Both
+    # answers used to be "Brakeman is not installed", and editing the Gemfile
+    # is not what a reader whose machine already has it needs to do.
+    context "when brakeman is on the machine but cannot be run at all" do
+      before do
+        described_class.instance_variable_set(:@brakeman_available, nil)
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
+        allow(described_class).to receive(:run_brakeman_unbundled).and_return([ nil, nil ])
+      end
+
+      it "names the version it found and says the outside run failed too" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("8.0.6")
+        expect(text).to include("not in this app's bundle")
+        expect(text).to include("outside the bundle produced no report")
+        expect(text).to include("gem 'brakeman'")
+      end
+    end
+
+    # One machine, one scanner: the gem is installed, the app's bundle does
+    # not carry it, and the scan runs it from outside the bundle rather than
+    # refusing and pointing at another command.
+    context "when brakeman can only be reached outside the app's bundle" do
+      let(:report) do
+        {
+          "scan_info" => { "checks_performed" => %w[BasicAuth CrossSiteScripting SQL] },
+          "warnings" => [
+            {
+              "warning_type" => "Mass Assignment", "message" => "Potentially dangerous key allowed for mass assignment",
+              "file" => "app/controllers/admin/users_controller.rb", "line" => 9, "confidence" => "Medium",
+              "link" => "https://brakemanscanner.org/docs/warning_types/mass_assignment/",
+              "code" => "params.require(:user).permit(:role)", "cwe_id" => [ 915 ]
+            },
+            {
+              "warning_type" => "Unmaintained Dependency", "message" => "Support for Rails 8.0.5.1 ends on 2026-11-07",
+              "file" => "config/routes.rb", "line" => 323, "confidence" => "Weak", "code" => nil, "cwe_id" => [ 1104 ]
+            }
+          ]
+        }
+      end
+
+      before do
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
+        allow(described_class).to receive(:run_brakeman_unbundled).and_return([ report, nil ])
+      end
+
+      it "reports the warnings the outside scan found" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("**2 warnings** (3 checks run)")
+        expect(text).to include("## Mass Assignment")
+        expect(text).to include("[Medium] app/controllers/admin/users_controller.rb:9")
+      end
+
+      it "sorts them the way the in-process scan does" do
+        text = described_class.call.content.first[:text]
+
+        expect(text.index("Mass Assignment")).to be < text.index("Unmaintained Dependency")
+      end
+
+      it "says which brakeman answered and where it ran from" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("brakeman 8.0.6")
+        expect(text).to include("outside the app's bundle")
+      end
+
+      # With several installed, the newest on disk is not always the one the
+      # binstub ran, and the report says which one did.
+      it "names the version the report says ran" do
+        allow(described_class).to receive(:run_brakeman_unbundled)
+          .and_return([ report.merge("scan_info" => report["scan_info"].merge("brakeman_version" => "7.1.0")), nil ])
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("brakeman 7.1.0")
+        expect(text).not_to include("8.0.6")
+      end
+
+      it "still filters by file" do
+        text = described_class.call(files: [ "config/routes.rb" ]).content.first[:text]
+
+        expect(text).to include("Unmaintained Dependency")
+        expect(text).not_to include("Mass Assignment")
+      end
+
+      it "skips an entry the report holds that is not a warning object" do
+        allow(described_class).to receive(:run_brakeman_unbundled)
+          .and_return([ report.merge("warnings" => report["warnings"] + [ nil, "oops" ]), nil ])
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("**2 warnings**")
+      end
+
+      it "falls back to the two-ways-out message when the outside run fails" do
+        allow(described_class).to receive(:run_brakeman_unbundled).and_return([ nil, nil ])
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("not in this app's bundle")
+      end
+    end
+
+    # The two scanners render through one formatter, so a Tracker and the
+    # JSON report have to produce the same page.
+    context "when the app's bundle carries brakeman" do
+      before do
+        warning = Struct.new(:warning_type, :confidence, :confidence_name, :file, :line,
+                             :message, :cwe_id, :code, :link, keyword_init: true)
+        file = Struct.new(:relative, keyword_init: true)
+        found = warning.new(warning_type: "Mass Assignment", confidence: 1, confidence_name: "Medium",
+                            file: file.new(relative: "app/controllers/admin/users_controller.rb"), line: 9,
+                            message: "Potentially dangerous key allowed for mass assignment",
+                            cwe_id: [ 915 ], code: nil, link: nil)
+        # The short names brakeman's own tracker reports (6.x through 8.x).
+        checks = Class.new { def checks_run = %w[SQL MassAssignment] }.new
+        tracker = Struct.new(:filtered_warnings, :checks, keyword_init: true)
+                        .new(filtered_warnings: [ found ], checks: checks)
+
+        allow(described_class).to receive(:load_brakeman).and_return(true)
+        stub_const("Brakeman", Class.new { def self.run(_options); end })
+        allow(Brakeman).to receive(:run).and_return(tracker)
+      end
+
+      it "renders the in-process result the same way as the outside one" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("**1 warning** (2 checks run)")
+        expect(text).to include("## Mass Assignment")
+        expect(text).to include("[Medium] app/controllers/admin/users_controller.rb:9")
+      end
+
+      it "says nothing about running outside the bundle" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).not_to include("outside the app's bundle")
+      end
+    end
+
+    # The binstub a gem manager installs can print to stdout before brakeman
+    # does (RVM's executable-hooks writes "Resolving dependencies..."), so a
+    # report parsed off stdout died on its first byte and the scan answered
+    # "not installed" on a machine that has it. This runs a real child.
+    describe "the report the outside run writes" do
+      let(:bin_dir) { Dir.mktmpdir }
+
+      after { FileUtils.remove_entry(bin_dir) }
+
+      it "reads the report even when the executable prints before it" do
+        script = File.join(bin_dir, "brakeman")
+        File.write(script, <<~SH)
+          #!/bin/sh
+          echo "Resolving dependencies..."
+          out=""
+          while [ $# -gt 0 ]; do
+            if [ "$1" = "--output" ]; then out="$2"; fi
+            shift
+          done
+          printf '%s' '{"scan_info":{"checks_performed":["SQL"]},"warnings":[]}' > "$out"
+        SH
+        File.chmod(0o755, script)
+        allow(described_class).to receive(:brakeman_executable).and_return(script)
+
+        report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
+
+        expect(failure).to be_nil
+
+        expect(report).to include("warnings" => [])
+        expect(report.dig("scan_info", "checks_performed")).to eq([ "SQL" ])
+      end
+    end
+
+    # The API counts confidence up from high and the CLI's -w counts down
+    # from weak, and the CLI rejects a level it does not know: an uninverted
+    # level answered "installed but produced no report" for confidence:"high".
+    describe "the command the outside run is given" do
+      let(:bin_dir) { Dir.mktmpdir }
+
+      after { FileUtils.remove_entry(bin_dir) }
+
+      def fake_brakeman(body)
+        script = File.join(bin_dir, "brakeman")
+        File.write(script, "#!/bin/sh\n#{body}\n")
+        File.chmod(0o755, script)
+        described_class.instance_variable_set(:@brakeman_available, nil)
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return("8.0.6")
+        allow(described_class).to receive(:brakeman_executable).and_return(script)
+      end
+
+      it "passes the CLI's confidence level and the resolved checks" do
+        args_file = File.join(bin_dir, "args")
+        fake_brakeman(<<~SH)
+          printf '%s\n' "$@" > "#{args_file}"
+          out=""
+          while [ $# -gt 0 ]; do
+            if [ "$1" = "--output" ]; then out="$2"; fi
+            shift
+          done
+          printf '%s' '{"scan_info":{"checks_performed":["SQL"]},"warnings":[]}' > "$out"
+        SH
+
+        described_class.call(confidence: "high", checks: [ "sql" ])
+        args = File.read(args_file).split("\n")
+
+        expect(args.each_cons(2).to_a).to include([ "--confidence-level", "3" ], [ "--test", "CheckSQL" ])
+        expect(args).to include("--no-exit-on-warn", "--no-exit-on-error")
+      end
+
+      # Every way the outside run can fail used to read the same, so the one
+      # line brakeman printed about why is the line the answer carries.
+      it "carries what brakeman said when it wrote no report" do
+        fake_brakeman(%(echo "noise" >&2\necho "invalid argument: --confidence-level 0" >&2\nexit 1))
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("installed on this machine but not in this app's bundle")
+        expect(text).to include("invalid argument: --confidence-level 0")
+        expect(text).not_to include("noise")
+      end
+    end
+
+    # A scan that hangs must not hold the tool open: the wait is bounded, and
+    # a child that ignores the polite signal gets the other one.
+    describe "a scan that does not end" do
+      it "returns rather than waiting on a child that ignores SIGTERM" do
+        stub_const("#{described_class}::SCAN_TIMEOUT", 1)
+        stub_const("#{described_class}::KILL_GRACE", 1)
+
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        output = described_class.send(:capture_with_timeout, [ "sh", "-c", "trap '' TERM; sleep 30" ])
+        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+        expect(output).to be_nil
+        expect(elapsed).to be < 10
+      end
+    end
+
+    context "when brakeman is nowhere on the machine" do
+      before do
+        described_class.instance_variable_set(:@brakeman_available, nil)
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return(nil)
+      end
+
+      it "gives the Gemfile instructions" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("Brakeman is not installed")
+        expect(text).to include("gem 'brakeman'")
+      end
+    end
+
+    # The memo was one process-wide boolean, so whichever tier answered first
+    # decided for every later call in the process.
+    it "does not reuse one tier's availability answer for the other" do
+      described_class.instance_variable_set(:@brakeman_available, nil)
+      allow(described_class).to receive(:load_brakeman).and_return(false, true)
+      allow(described_class).to receive(:brakeman_on_machine).and_return(nil)
+      allow(RailsAiContext).to receive(:static_tier?).and_return(false, true)
+
+      expect(described_class.send(:brakeman_available?)).to be(false)
+      expect(described_class.send(:brakeman_available?)).to be(true)
     end
 
     context "when Brakeman is available" do
@@ -87,7 +360,7 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
       end
 
       before do
-        described_class.instance_variable_set(:@brakeman_available, true)
+        allow(described_class).to receive(:load_brakeman).and_return(true)
         stub_const("Brakeman", brakeman_stub)
         allow(Brakeman).to receive(:run).and_return(mock_tracker)
       end

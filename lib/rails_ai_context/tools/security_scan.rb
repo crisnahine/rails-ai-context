@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+require "open3"
+require "json"
+require "tmpdir"
+
 module RailsAiContext
   module Tools
     class SecurityScan < BaseTool
@@ -68,36 +72,23 @@ module RailsAiContext
         refused = refuse_unsafe_paths(files)
         return refused if refused
 
-        unless brakeman_available?
-          return text_response(
-            "Brakeman is not installed. Add it to your Gemfile:\n\n" \
-            "```ruby\ngem 'brakeman', group: :development\n```\n\n" \
-            "Then run `bundle install` and try again."
-          )
-        end
-
         min_confidence = CONFIDENCE_MAP[confidence] || 2
+        resolved_checks = checks&.any? ? checks.map { |c| CHECK_ALIASES[c] || c } : nil
 
-        options = {
-          app_path: rails_app.root.to_s,
-          quiet: true,
-          report_progress: false,
-          min_confidence: min_confidence,
-          print_report: false
-        }
-
-        if checks&.any?
-          resolved = checks.map { |c| CHECK_ALIASES[c] || c }
-          options[:run_checks] = Set.new(resolved)
+        scan = if brakeman_available?
+          in_process_scan(min_confidence, resolved_checks)
+        else
+          # One machine, one scanner: the app's bundle not carrying brakeman
+          # is not the same as the machine not having it, and the second one
+          # can still answer - from outside the bundle, which is where it is.
+          unbundled_scan(min_confidence, resolved_checks)
         end
+        return text_response(unavailable_message(scan&.dig(:unavailable))) if scan.nil? || scan.key?(:unavailable)
+        return text_response("Brakeman scan failed: #{scan[:error]}") if scan[:error]
 
-        tracker = begin
-          Brakeman.run(options)
-        rescue => e
-          return text_response("Brakeman scan failed: #{e.message}")
-        end
-
-        warnings = tracker.filtered_warnings
+        warnings = scan[:warnings]
+        checks_run = scan[:checks_run]
+        source_note = scan[:note]
 
         if files&.any?
           # Check if specified files exist
@@ -114,42 +105,244 @@ module RailsAiContext
 
         warnings = warnings.sort_by { |w| [ w.confidence, w.file.relative, w.line || 0 ] }
 
-        format_response(warnings, tracker, detail, files)
+        format_response(warnings, checks_run, detail, files, source_note)
       end
 
-      private_class_method def self.brakeman_available?
-        return @brakeman_available unless @brakeman_available.nil?
+      # The scan brakeman runs in this process, when the app's bundle carries
+      # it. Returns the same shape the unbundled run returns, so the renderer
+      # never learns which of the two answered.
+      private_class_method def self.in_process_scan(min_confidence, resolved_checks)
+        options = {
+          app_path: rails_app.root.to_s,
+          quiet: true,
+          report_progress: false,
+          min_confidence: min_confidence,
+          print_report: false
+        }
+        options[:run_checks] = Set.new(resolved_checks) if resolved_checks
 
-        @brakeman_available = begin
-          require "brakeman"
-          true
-        rescue LoadError
-          false
+        tracker = Brakeman.run(options)
+        {
+          warnings: tracker.filtered_warnings,
+          checks_run: tracker.checks.checks_run.map(&:to_s)
+        }
+      rescue => e
+        { error: e.message }
+      end
+
+      # The scan the installed brakeman runs as its own process, outside the
+      # app's bundle. Its JSON carries what the renderer reads, so the two
+      # tiers answer the same question with the same scanner rather than one
+      # of them refusing.
+      private_class_method def self.unbundled_scan(min_confidence, resolved_checks)
+        version = brakeman_on_machine
+        return nil unless version
+
+        report, failure = run_brakeman_unbundled(min_confidence, resolved_checks)
+        return { unavailable: failure } unless report.is_a?(Hash) && report["warnings"].is_a?(Array)
+
+        # The newest on disk is not always the one the binstub ran.
+        version = report.dig("scan_info", "brakeman_version") || version
+        {
+          # A report whose warnings array holds anything but objects is not a
+          # report this can read, and one bad entry is not a reason to drop
+          # the rest.
+          warnings: report["warnings"].filter_map { |w| ExternalWarning.from_json(w) if w.is_a?(Hash) },
+          checks_run: Array(report.dig("scan_info", "checks_performed")),
+          note: "_Scanned with brakeman #{version} from outside the app's bundle, which does not carry it. " \
+                "Add it to the Gemfile to scan in-process._"
+        }
+      end
+
+      # The file a warning is about, in the shape brakeman's own warning
+      # answers: the renderer asks for `w.file.relative`.
+      WarningFile = Data.define(:relative)
+
+      # What the renderer reads off a warning, built from brakeman's JSON so
+      # the unbundled scan and the in-process one render identically. Brakeman
+      # sorts by a numeric confidence, which the JSON spells as a name.
+      ExternalWarning = Data.define(:warning_type, :confidence, :confidence_name, :file, :line,
+                                    :message, :cwe_id, :code, :link) do
+        def format_code = code
+
+        def self.from_json(warning)
+          name = warning["confidence"].to_s
+          ExternalWarning.new(
+            warning_type: warning["warning_type"].to_s,
+            confidence: CONFIDENCE_NAMES.key(name) || 2,
+            confidence_name: name,
+            file: WarningFile.new(relative: warning["file"].to_s),
+            line: warning["line"],
+            message: warning["message"].to_s,
+            cwe_id: Array(warning["cwe_id"]),
+            code: warning["code"],
+            link: warning["link"]
+          )
         end
       end
 
-      private_class_method def self.format_response(warnings, tracker, detail, files)
-        checks_run = tracker.checks.checks_run.size
+      # A scan of a large app is minutes of work, and a hung one must not hold
+      # the tool open forever.
+      SCAN_TIMEOUT = 300
+
+      # How long a child gets to end on the polite signal before it gets the
+      # one it cannot trap: popen3 waits on the process itself when the block
+      # returns, so a child that ignores TERM holds the tool open through the
+      # wait this timeout exists to bound.
+      KILL_GRACE = 5
+
+      # Brakeman as its own process, with the app's bundle out of the way.
+      # `-w` counts the other direction from the API's min_confidence: level 3
+      # is high-only, level 1 is everything.
+      #
+      # @return [Array(Hash, nil), Array(nil, String)] the parsed report, or
+      #   nil and the last line brakeman printed about why there is none
+      #
+      # The report goes to a file of its own rather than stdout: the binstub a
+      # gem manager installs can print there first (RVM's executable-hooks
+      # writes "Resolving dependencies..."), and a report parsed off stdout
+      # died on that first byte.
+      private_class_method def self.run_brakeman_unbundled(min_confidence, resolved_checks)
+        executable = brakeman_executable or return [ nil, nil ]
+
+        Dir.mktmpdir("rails-ai-context-brakeman") do |dir|
+          report_path = File.join(dir, "report.json")
+          command = [ executable, "--format", "json", "--output", report_path, "--quiet",
+                      "--no-exit-on-warn", "--no-exit-on-error",
+                      "--confidence-level", (3 - min_confidence).to_s, "--path", rails_app.root.to_s ]
+          command += [ "--test", resolved_checks.join(",") ] if resolved_checks&.any?
+
+          _out, err = with_unbundled_env { capture_with_timeout(command) }
+          next [ nil, "no report after #{SCAN_TIMEOUT} seconds" ] if err.nil?
+          next [ nil, err.lines.map(&:strip).reject(&:empty?).last ] unless File.file?(report_path) && File.size?(report_path)
+
+          [ JSON.parse(File.read(report_path)), nil ]
+        end
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, [ nil, e.message ], label: "run_brakeman_unbundled")
+      end
+
+      # The gem's own executable, not whatever `brakeman` resolves to on PATH.
+      private_class_method def self.brakeman_executable
+        Gem.path.map { |dir| File.join(dir, "bin", "brakeman") }.find { |path| File.executable?(path) }
+      end
+
+      # Bundler narrows the environment for child processes as well as for
+      # this one, so the child has to be told to forget it.
+      private_class_method def self.with_unbundled_env(&block)
+        return yield unless defined?(Bundler) && Bundler.respond_to?(:with_unbundled_env)
+
+        Bundler.with_unbundled_env(&block)
+      end
+
+      # Readers drain both pipes, so a report larger than the pipe buffer
+      # cannot deadlock the wait, and a scan that never ends is killed rather
+      # than waited on.
+      #
+      # @return [Array(String, String), nil] stdout and stderr, or nil on timeout
+      private_class_method def self.capture_with_timeout(command)
+        Open3.popen3(*command) do |stdin, stdout, stderr, wait|
+          stdin.close
+          out = Thread.new { stdout.read }
+          err = Thread.new { stderr.read }
+
+          unless wait.join(SCAN_TIMEOUT)
+            stop(wait)
+            out.kill
+            err.kill
+            next nil
+          end
+
+          [ out.value, err.value ]
+        end
+      end
+
+      # A child that is already gone raises ESRCH, which is the outcome asked
+      # for either way.
+      private_class_method def self.stop(wait)
+        Process.kill("TERM", wait.pid)
+        return if wait.join(KILL_GRACE)
+
+        Process.kill("KILL", wait.pid)
+      rescue Errno::ESRCH
+        nil
+      end
+
+      # Keyed by tier, because the two tiers ask a different question of the
+      # same machine: booted, the app's bundle is set up and the load path
+      # holds the app's gems only, so an app that does not bundle brakeman
+      # cannot require it even though `gem list` shows it.
+      private_class_method def self.brakeman_available?
+        @brakeman_available = {} unless @brakeman_available.is_a?(Hash)
+        key = RailsAiContext.static_tier? ? :static : :runtime
+        return @brakeman_available[key] unless @brakeman_available[key].nil?
+
+        @brakeman_available[key] = load_brakeman
+      end
+
+      private_class_method def self.load_brakeman
+        require "brakeman"
+        true
+      rescue LoadError
+        false
+      end
+
+      # The remedy has to match what is actually wrong. "Add it to your
+      # Gemfile" is the wrong instruction for a machine that already has the
+      # gem and an app whose bundle simply does not carry it.
+      private_class_method def self.unavailable_message(failure = nil)
+        version = brakeman_on_machine
+        said = failure ? " It said: `#{failure}`." : ""
+        return (
+          "Brakeman #{version} is installed on this machine but not in this app's bundle, and running it from " \
+          "outside the bundle produced no report either.#{said}\n\n" \
+          "Add it to the Gemfile so the scan runs in this process:\n\n" \
+          "```ruby\ngem 'brakeman', group: :development\n```\n\n" \
+          "Then run `bundle install`. Running `brakeman` in the app directory shows what the outside run hit."
+        ) if version
+
+        "Brakeman is not installed. Add it to your Gemfile:\n\n" \
+        "```ruby\ngem 'brakeman', group: :development\n```\n\n" \
+        "Then run `bundle install` and try again."
+      end
+
+      # The newest brakeman installed on this machine, read off the gem
+      # directories rather than asked of Gem::Specification: under Bundler the
+      # spec set is the app's bundle, which is exactly the set that does not
+      # have it.
+      private_class_method def self.brakeman_on_machine
+        # `brakeman-*` also matches brakeman-lib, a different gem: a version
+        # starts with a digit.
+        versions = Gem.path.flat_map { |dir|
+          Dir.glob(File.join(dir, "specifications", "brakeman-*.gemspec"))
+        }.filter_map { |path| File.basename(path)[/\Abrakeman-(\d[^-]*)\.gemspec\z/, 1] }
+
+        versions.max_by { |v| Gem::Version.new(v) rescue Gem::Version.new("0") }
+      rescue StandardError => e
+        RailsAiContext.debug_fail(e, nil, label: "brakeman_on_machine")
+      end
+
+      # `checks` is the list of check names that ran, whichever scanner ran
+      # them: the renderer knows a scan, not a Tracker.
+      private_class_method def self.format_response(warnings, checks, detail, files, note = nil)
+        checks_run = checks.size
 
         if warnings.empty?
           scope = files&.any? ? " in #{files.join(', ')}" : ""
           # Summarize what categories were checked for transparency
-          check_names = tracker.checks.checks_run.map do |c|
-            c.to_s.sub(/\ABrakeman::Checks::Check/, "").gsub(/([a-z])([A-Z])/, '\1 \2')
-          end
+          check_names = checks.map { |c| c.to_s.gsub(/([a-z])([A-Z])/, '\1 \2') }
           categories = check_names.first(6).join(", ")
           categories += ", ..." if check_names.size > 6
-          return text_response("No security warnings found#{scope}. (#{count_phrase(checks_run, "check")} run: #{categories})")
+          body = "No security warnings found#{scope}. (#{count_phrase(checks_run, "check")} run: #{categories})"
+        else
+          body = case detail
+          when "summary" then format_summary(warnings, checks_run)
+          when "full" then format_full(warnings, checks_run)
+          else format_standard(warnings, checks_run)
+          end
         end
 
-        case detail
-        when "summary"
-          format_summary(warnings, checks_run)
-        when "full"
-          format_full(warnings, checks_run)
-        else
-          format_standard(warnings, checks_run)
-        end
+        text_response([ body, note ].compact.join("\n\n"))
       end
 
       # Three detail levels open with the same headline.
@@ -175,8 +368,7 @@ module RailsAiContext
           lines << "- #{type}: #{ws.size}"
         end
         lines << "" << "_Use `detail:\"standard\"` for file locations, or `detail:\"full\"` for code and remediation._"
-
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
       private_class_method def self.format_standard(warnings, checks_run)
@@ -192,8 +384,7 @@ module RailsAiContext
           loc = w.line ? "#{w.file.relative}:#{w.line}" : w.file.relative
           lines << "- [#{w.confidence_name}] #{loc} - #{w.message}"
         end
-
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
 
       private_class_method def self.format_full(warnings, checks_run)
@@ -217,8 +408,7 @@ module RailsAiContext
 
           lines << "- **More info:** #{w.link}" if w.link
         end
-
-        text_response(lines.join("\n"))
+        lines.join("\n")
       end
     end
   end

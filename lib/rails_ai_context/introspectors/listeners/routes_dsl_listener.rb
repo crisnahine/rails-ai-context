@@ -43,8 +43,8 @@ module RailsAiContext
           when :concerns then apply_concerns(node)
           when :with_options then enter_with_options(node)
           when :root then emit_root(node)
-          when *VERB_METHODS then emit_verb_route(node)
-          when *DYNAMIC_MACROS then emit_dynamic(node)
+          when *VERB_METHODS then emit_verb_route(node) unless rack_app_target?(node)
+          when *DYNAMIC_MACROS then emit_dynamic(node) unless rack_app_target?(node)
           end
         end
 
@@ -53,6 +53,15 @@ module RailsAiContext
         end
 
         private
+
+        # `match "/metrics", to: MetricsApp` attaches a Rack app, which
+        # MountListener names with its path. Counting it here as well, as a
+        # construct this walk could not expand, described one endpoint twice.
+        def rack_app_target?(node)
+          return false unless MountListener::VERB_MACROS.include?(node.name)
+
+          !rack_app_constant(node.arguments&.arguments || []).nil?
+        end
 
         def push_frame(node, **attrs)
           @stack << { node: node }.merge(attrs)

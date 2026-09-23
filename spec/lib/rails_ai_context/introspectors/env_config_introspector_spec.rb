@@ -282,6 +282,64 @@ RSpec.describe RailsAiContext::Introspectors::EnvConfigIntrospector do
     end
   end
 
+  # Two unconditional assignments of one key are not a tuple value: Rails
+  # runs both lines and the second wins, and the comma-joined rendering was
+  # indistinguishable from `:mem_cache_store, { pool_size: 5 }`.
+  describe "a key assigned twice unconditionally" do
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:app) { double("app", root: tmpdir) }
+
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "config", "environments"))
+      File.write(File.join(tmpdir, "config", "environments", "production.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.action_mailer.delivery_method = :file
+          config.cache_store = :mem_cache_store, { pool_size: 5 }
+          config.action_mailer.delivery_method = :smtp
+        end
+      RUBY
+    end
+
+    after { FileUtils.rm_rf(tmpdir) }
+
+    let(:notable) { introspector.call[:environments].find { |e| e[:name] == "production" }[:notable] }
+
+    it "names the assignment that wins, and says what it overrode" do
+      expect(notable["action_mailer.delivery_method"]).to eq(":smtp (overrides :file)")
+    end
+
+    # Rails runs every line, so the last one wins however many times the key
+    # was set before it.
+    it "names the last assignment even when an earlier value repeats" do
+      File.write(File.join(tmpdir, "config", "environments", "production.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.action_mailer.delivery_method = :file
+          config.action_mailer.delivery_method = :smtp
+          config.action_mailer.delivery_method = :file
+        end
+      RUBY
+
+      expect(notable["action_mailer.delivery_method"]).to eq(":file (overrides :smtp)")
+    end
+
+    # The unconditional assignment runs after the conditional one, so reading
+    # it first says the conditional value is the one in force.
+    it "keeps the assignments in the order the file runs them" do
+      File.write(File.join(tmpdir, "config", "environments", "production.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.cache_store = :null_store if ENV["NO_CACHE"]
+          config.cache_store = :mem_cache_store
+        end
+      RUBY
+
+      expect(notable["cache_store"]).to eq(":null_store if ENV[\"NO_CACHE\"], :mem_cache_store")
+    end
+
+    it "leaves a single assignment whose value holds a comma unchanged" do
+      expect(notable["cache_store"]).to eq(":mem_cache_store, { pool_size: 5 }")
+    end
+  end
+
   describe "static tier" do
     it "is declared files-only, so call serves the same data unbooted" do
       expect(described_class.static_tier).to eq(:files_only)

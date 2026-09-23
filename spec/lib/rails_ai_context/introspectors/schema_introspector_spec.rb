@@ -182,6 +182,27 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:tables]).not_to have_key("schema_migrations")
       end
 
+      # `declared_tables` names what db/schema.rb declares on both tiers, and
+      # a structure.sql app has no such list: the booted tier answers nil.
+      it "names what db/schema.rb declares on the static tier" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"),
+                     %(ActiveRecord::Schema[8.0].define(version: 1) do\n  create_table "users" do |t|\n    t.string "email"\n  end\nend\n))
+
+          result = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:static_schema_parse)
+
+          expect(result[:declared_tables]).to eq([ "users" ])
+        end
+      end
+
+      it "claims no db/schema.rb declaration for a structure.sql app" do
+        result = introspector.call
+
+        expect(result).to have_key(:declared_tables)
+        expect(result[:declared_tables]).to be_nil
+      end
+
       it "extracts columns with normalized types" do
         result = introspector.call
         user_cols = result[:tables]["users"][:columns]
@@ -637,6 +658,41 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         result = introspector.call
         expect(result[:schema_version]).to eq("20240115123456")
+      ensure
+        FileUtils.rm_rf(db_dir)
+      end
+    end
+
+    # The booted answer read its table list off the connection and its version
+    # stamp off db/schema.rb, and joined neither, so a branch pulled without
+    # running db:migrate looked like a misspelled table.
+    context "when db/schema.rb declares a table the connection does not have" do
+      before do
+        allow(introspector).to receive(:active_record_connected?).and_return(true)
+        allow(introspector).to receive(:adapter_name).and_return("postgresql")
+        allow(introspector).to receive(:table_names).and_return([ "users" ])
+        allow(introspector).to receive(:extract_tables).and_return({ "users" => { columns: [], indexes: [], foreign_keys: [] } })
+      end
+
+      it "carries the tables the dump declares alongside the live ones" do
+        db_dir = File.join(fixture_path, "db")
+        FileUtils.mkdir_p(db_dir)
+        File.write(File.join(db_dir, "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[8.0].define(version: 2026_09_20_000000) do
+            create_table "users", force: :cascade do |t|
+              t.string "email"
+            end
+
+            create_table "order_comments", force: :cascade do |t|
+              t.text "body"
+            end
+          end
+        RUBY
+
+        result = introspector.call
+
+        expect(result[:declared_tables]).to contain_exactly("users", "order_comments")
+        expect(result[:tables].keys).to eq([ "users" ])
       ensure
         FileUtils.rm_rf(db_dir)
       end

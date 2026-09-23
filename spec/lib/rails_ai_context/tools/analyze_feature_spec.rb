@@ -219,6 +219,100 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    # The gap checker matches on the path and the test lister matched on the
+    # basename, so one of them saw a spec the other did not and the feature
+    # read as untested.
+    it "finds a spec whose feature word is in its directory" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        spec_dir = File.join(tmp, "spec", "services", "billing", "invoices")
+        FileUtils.mkdir_p(spec_dir)
+        File.write(File.join(spec_dir, "create_spec.rb"), <<~RUBY)
+          require "rails_helper"
+
+          RSpec.describe Billing::Invoices::Create do
+            it "runs" do
+              expect(described_class).to be_a(Class)
+            end
+          end
+        RUBY
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "invoice").content.first[:text]
+
+        expect(text).to include("## Tests (1)")
+        expect(text).to include("spec/services/billing/invoices/create_spec.rb")
+      end
+    end
+
+    # The path match put the suite's own directory names in scope, so
+    # "spec" or "test" matched every file in it.
+    it "does not treat the suite's own directory as a feature word" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        spec_dir = File.join(tmp, "spec", "services", "billing")
+        FileUtils.mkdir_p(spec_dir)
+        File.write(File.join(spec_dir, "create_spec.rb"), "require \"rails_helper\"\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "spec").content.first[:text]
+
+        expect(text).not_to include("## Tests")
+      end
+    end
+
+    # A minitest suite names its files test_orders.rb, and stripping that
+    # prefix must not take the path separator with it.
+    it "finds a prefix-named test by the directory it sits in" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        test_dir = File.join(tmp, "test", "billing", "invoices")
+        FileUtils.mkdir_p(test_dir)
+        File.write(File.join(test_dir, "test_create.rb"), "require \"test_helper\"\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "invoice").content.first[:text]
+
+        expect(text).to include("test/billing/invoices/test_create.rb")
+      end
+    end
+
+    # spec/models/account_spec.rb is a test of Account, not of a "models"
+    # feature: the suite's type directory is how it files every spec.
+    it "does not treat a suite type directory as a feature word" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "spec", "models"))
+        File.write(File.join(tmp, "spec", "models", "account_spec.rb"), "require \"rails_helper\"\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "models").content.first[:text]
+
+        expect(text).not_to include("## Tests")
+      end
+    end
+
+    # A file named by both conventions keeps its own words: stripping the
+    # `spec_` prefix from spec_runner_spec.rb left "runner".
+    it "keeps a feature word that only looks like the suite's prefix" do
+      Dir.mktmpdir("rac_tests") do |tmp|
+        spec_dir = File.join(tmp, "spec", "system")
+        FileUtils.mkdir_p(spec_dir)
+        File.write(File.join(spec_dir, "spec_runner_spec.rb"), "require \"rails_helper\"\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "spec_runner").content.first[:text]
+
+        expect(text).to include("spec/system/spec_runner_spec.rb")
+      end
+    end
+
     context "DoS cap (v5.8.1 round 2)" do
       it "caps discover_services at MAX_SCAN_FILES and emits truncation note" do
         Dir.mktmpdir("rac_dos_services") do |tmp|

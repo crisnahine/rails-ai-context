@@ -53,7 +53,8 @@ RSpec.describe RailsAiContext::Introspector do
     #
     # The home directory is listed independently of what PortablePath knows:
     # built from its own prefixes alone, this passes whenever the module
-    # returns none.
+    # returns none. A prefix counts only where a path can start: a checkout
+    # at /app is not a leak inside `rails-ai-context-5.28.0/app/controllers`.
     it "carries no path from the generating machine" do
       prefixes = RailsAiContext::PortablePath.gem_roots +
         RailsAiContext::PortablePath.gem_checkouts.map(&:first) +
@@ -64,7 +65,7 @@ RSpec.describe RailsAiContext::Introspector do
         case node
         when Hash  then node.each { |k, v| walk.call(v, "#{key}.#{k}") }
         when Array then node.each_with_index { |v, i| walk.call(v, "#{key}[#{i}]") }
-        when String then machine_paths << "#{key}: #{node}" if prefixes.any? { |p| node.include?(p) }
+        when String then machine_paths << "#{key}: #{node}" if prefixes.any? { |p| node.match?(/(?<![\w.-])#{Regexp.escape(p)}/) }
         end
       end
       walk.call(introspector.call, "context")

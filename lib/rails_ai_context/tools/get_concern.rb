@@ -129,7 +129,8 @@ module RailsAiContext
         return text_response("Could not read concern file: #{file_path}") unless source
         lines = [ "# #{name}", "" ]
         lines << "**File:** `#{relative_path}` (#{count_phrase(source.lines.size, "line")})"
-        lines << "**Type:** #{concern_type} concern"
+        validator = validator_superclass(source, Introspectors::SuperclassChain.lookup_for(root.to_s))
+        lines << (validator ? "**Type:** validator (`#{validator}`)" : "**Type:** #{concern_type} concern")
 
         # A second file at the same relative path answers the same name, and
         # everything below is read from the first one only. The other files are
@@ -210,6 +211,22 @@ module RailsAiContext
           callbacks.each { |c| lines << "- `#{c}`" }
         end
 
+        # A validator is wired with `validates_with` (or, for an
+        # EachValidator, the option key its name gives), never with `include`,
+        # so looking for an include reported every validator as dead code.
+        if validator
+          users = find_validator_users(name, root)
+          if users.any?
+            lines << "" << "## Validated By (#{users.size})"
+            users.each { |u| lines << "- #{u}" }
+          else
+            lines << "" << "_No model or concern in app/models wires this validator._"
+          end
+
+          lines << "" << "_Next: `rails_search_code(pattern:\"#{name.demodulize.camelize}\")` for every use_"
+          return text_response(lines.join("\n"))
+        end
+
         # Find which models/controllers include this concern
         includers = find_includers(name, root, concern_type)
         if includers.any?
@@ -237,6 +254,10 @@ module RailsAiContext
         all_concerns = []
         excluded_count = 0
         real_root = File.realpath(root).to_s
+        # One lookup for the whole listing: it resolves the app's autoload
+        # roots once and keeps every source it reads, so a tree of validators
+        # sharing one base class reads that base once.
+        lookup = Introspectors::SuperclassChain.lookup_for(root.to_s)
 
         concern_dirs.each do |dir|
           concern_type = ConcernPaths.type_for(dir)
@@ -260,6 +281,7 @@ module RailsAiContext
             all_concerns << {
               name: concern_name,
               type: concern_type,
+              validator: source && validator_superclass(source, lookup),
               path: relative,
               method_count: method_count
             }
@@ -275,6 +297,8 @@ module RailsAiContext
 
           return text_response("No concerns found in #{dirs}.")
         end
+
+        validators, all_concerns = all_concerns.partition { |c| c[:validator] }
 
         lines = [ "# Concerns (#{all_concerns.size})", "" ]
         if excluded_count > 0
@@ -298,8 +322,86 @@ module RailsAiContext
           lines << ""
         end
 
+        if validators.any?
+          lines << "## Validators (#{validators.size})"
+          lines << "_Not concerns: each subclasses `ActiveModel::Validator` or `ActiveModel::EachValidator`, " \
+                   "and is wired with `validates_with` or a validation option rather than with `include`._"
+          validators.each do |v|
+            lines << "- **#{v[:name]}** - #{count_phrase(v[:method_count], "method")} (`#{v[:path]}`)"
+          end
+          lines << ""
+        end
+
         lines << "_Use `name:\"ConcernName\"` for full detail including method signatures and includers._"
         text_response(lines.join("\n"))
+      end
+
+      VALIDATOR_BASES = %w[ActiveModel::Validator ActiveModel::EachValidator].freeze
+
+      # The option keys ActiveModel and ActiveRecord answer with their own
+      # validators, which the model's ancestry reaches before any app class of
+      # the same name: `presence: true` never runs an app PresenceValidator.
+      FRAMEWORK_VALIDATION_KEYS = %w[
+        absence acceptance associated comparison confirmation exclusion format
+        inclusion length numericality presence uniqueness
+      ].freeze
+
+      # The keys `validates` reads for itself, which never name a validator.
+      VALIDATES_OWN_KEYS = %w[if unless on allow_blank allow_nil strict].freeze
+
+      # The validator base a file's class reaches, or nil for anything else -
+      # a module, a PORO, a class that subclasses something else entirely.
+      # Followed through the app's own sources, because an app with its own
+      # `ApplicationValidator < ActiveModel::EachValidator` is the ordinary
+      # shape and one level of compare calls every validator under it a
+      # concern that nothing includes.
+      private_class_method def self.validator_superclass(source, lookup)
+        Introspectors::SuperclassChain.to(source, bases: VALIDATOR_BASES, lookup: lookup).last&.superclass
+      end
+
+      # The models that wire a validator: `validates_with TheValidator`, and
+      # for an EachValidator the option key its name gives
+      # (EmailValidator -> `validates :x, email: true`). Both are macro calls,
+      # so both are read off the AST - a text match also finds the one in a
+      # comment or a heredoc.
+      private_class_method def self.find_validator_users(validator_name, root)
+        simple = validator_name.to_s.demodulize.camelize
+        option_key = simple.sub(/Validator\z/, "").underscore
+
+        real_root = File.realpath(root).to_s
+        PathResolver.dirs_for(root, "app/models").flat_map { |dir|
+          safe_glob(dir, "**/*.rb", real_root).filter_map do |file_path|
+            source = RailsAiContext::SafeFile.read(file_path) or next
+            # A file naming neither the class nor the key cannot wire it, and
+            # this skips the parse for nearly every model.
+            next unless source.include?(simple) || (!option_key.empty? && source.include?(option_key))
+            next unless wires_validator?(source, simple, option_key)
+
+            name = Introspectors::DeclaredConstant.declared_names(source).first ||
+              Introspectors::DeclaredConstant.declared_module_names(source).first ||
+              File.basename(file_path, ".rb").camelize
+            file_path.include?("/concerns/") ? "#{name} (concern)" : name
+          end
+        }.uniq.sort
+      rescue => e
+        RailsAiContext.debug_fail(e, [], label: "find_validator_users")
+      end
+
+      private_class_method def self.wires_validator?(source, simple, option_key)
+        macros = Introspectors::SourceIntrospector.walk_source(source, {
+          validations: -> { Introspectors::Listeners::GenericMacroListener.new(:validates_with, :validates) }
+        })[:validations] || []
+
+        macros.any? do |macro|
+          case macro[:macro]
+          when :validates_with
+            Array(macro[:values]).flatten.map(&:to_s).any? { |value| value.split("::").last == simple }
+          when :validates
+            !option_key.empty? && !FRAMEWORK_VALIDATION_KEYS.include?(option_key) &&
+              !VALIDATES_OWN_KEYS.include?(option_key) &&
+              macro[:options].key?(option_key.to_sym)
+          end
+        end
       end
 
       private_class_method def self.collect_concern_names(concern_dirs, real_root)

@@ -70,6 +70,20 @@ module RailsAiContext
             } || table
             table_data = tables[table_key]
             unless table_data
+              # A table db/schema.rb declares and the connection does not have
+              # is not a misspelling: the migration that adds it has not run
+              # here, and "Did you mean 'comments'?" sends the reader to fix
+              # the wrong thing.
+              # The key is the caller's own string when nothing matched, and
+              # the declared names are table names: `OrderComments` and
+              # `order_comments` are the same request.
+              if declared_not_connected(schema).include?(table_key.to_s.underscore)
+                return text_response(
+                  "Table '#{table_key.to_s.underscore}' is declared in db/schema.rb and missing from the connected database. " \
+                  "Run `rails db:migrate`, or pass `--no-boot` to read the declaration instead."
+                )
+              end
+
               return not_found_response("Table", table, tables.keys.sort,
                 recovery_tool: "Call rails_get_schema(detail:\"summary\") to see all tables")
             end
@@ -257,10 +271,16 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "models_for_table")
       end
 
-      # Rails 8 multi-database apps dump each secondary database (queue,
-      # cache, cable) to its own schema/structure file. This tool targets
-      # the primary database's tables in detail, so secondaries get a
-      # compact one-line-per-database summary rather than full column detail.
+      # The tables db/schema.rb declares that the connected database does not
+      # have. Empty unless both sides are known, which is the booted tier
+      # with a schema file to read.
+      private_class_method def self.declared_not_connected(schema)
+        declared = schema[:declared_tables]
+        return [] unless declared.is_a?(Array)
+
+        declared.map(&:to_s) - (schema[:tables] || {}).keys.map(&:to_s)
+      end
+
       # Static-parse extras: the SQL dialect the dump was written in, the
       # schema version recorded by the dump, and migration files it doesn't
       # cover - the static-tier stand-ins for a live connection's answers.
@@ -268,6 +288,16 @@ module RailsAiContext
         lines = []
         lines << "**Dialect:** #{schema[:dialect]} (db/structure.sql)" if schema[:dialect] && schema[:dialect] != "unknown"
         lines << "**Schema version:** #{schema[:schema_version]}" if schema[:schema_version]
+        # The header pairs a live table count with the version stamp read off
+        # db/schema.rb, and nothing joined the two: at that migration the app
+        # has the table the database is missing.
+        missing = declared_not_connected(schema)
+        if missing.any?
+          declared_total = Array(schema[:declared_tables]).size
+          lines << "_db/schema.rb declares #{count_phrase(declared_total, "table")}; the connected database has " \
+                   "#{(schema[:tables] || {}).size}. Missing: #{missing.sort.first(5).join(', ')}" \
+                   "#{missing.size > 5 ? " (+#{missing.size - 5} more)" : ""}. Run `rails db:migrate`._"
+        end
         if schema[:pending_migrations].is_a?(Array)
           pending = schema[:pending_migrations]
           if pending.any?
@@ -281,6 +311,10 @@ module RailsAiContext
         lines
       end
 
+      # Rails 8 multi-database apps dump each secondary database (queue,
+      # cache, cable) to its own schema/structure file. This tool targets the
+      # primary database's tables in detail, so secondaries get a compact
+      # one-line-per-database summary rather than full column detail.
       private_class_method def self.secondary_databases_lines(schema)
         secondary = schema[:secondary_databases]
         return [] unless secondary

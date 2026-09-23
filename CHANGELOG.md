@@ -5,6 +5,185 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.29.0] - 2026-09-23
+
+Twenty-three QA reports against v5.27.0, each one a wrong answer a reader
+could act on, plus what eight review rounds found in the fixes themselves.
+
+### Added
+
+- **Model payloads carry method counts and the model's own methods
+  uncapped.** `instance_method_count`, `class_method_count` and
+  `source_instance_methods` sit beside the capped `instance_methods` and
+  `class_methods` lists, on both tiers, so a reader can tell a cut list from
+  a whole one.
+- **The schema payload carries `declared_tables`**, what `db/schema.rb`
+  declares, on both tiers: nil for an app whose tables come from
+  `structure.sql` or the migrations.
+
+### Changed
+
+- **"Mounted Engines" is "Mounted Apps" everywhere it is printed**: the
+  `engines`, `routes` and `onboard` tools, the generated context files, and
+  the MCP `rails://engines` resource name. The stack overview line reads
+  `Mounted:` rather than `Engines:`. Half of what the list holds are plain
+  Rack apps. The payload key stays `mounted_engines`.
+- **A mount whose path the source does not spell out carries `path: nil`**
+  rather than the string `"unknown"`, and is printed without a path.
+- **`routes` reads a blank `controller` as no filter**, and a name that
+  normalizes to nothing (`_controller`) as matching nothing, where the empty
+  string used to match every route key.
+
+### Fixed
+
+- **A Sidekiq worker answers to its own name, and the bracket carries the
+  limit that governs it.** `job:"Billing::Invoices::CreateWorker"` answered
+  "No jobs found" for a worker the same tool had just listed, because the
+  single-job lookup read the ActiveJob list only. It reads both lists now, and
+  a name in neither is a not-found that names what exists. The listing prints
+  its "workers the introspector did not see" caveat whenever it prints
+  workers, rather than only when `config/sidekiq.yml` happens to exist, and a
+  `sidekiq_throttle` prints under the worker it throttles - 438 of 522 workers
+  on one app declared one and none of them showed it.
+- **onboard's async section reads the workers out of the hash it already
+  had.** The section counted jobs, mailers and channels, so an app whose
+  background work is 522 Sidekiq workers read as "4 mailers." and the section
+  disappeared entirely when workers were the only async code. The "not
+  covered" line no longer prints next to a worker list it contradicts.
+- **What an ActiveInteraction declares is read in one place.** A filter
+  declared inside another filter's block (`string :title` inside `hash
+  :order_params do`) is a key of that hash, not an input of the class:
+  `service_pattern` showed four inputs where `.filters` has two, and
+  `generate_test` passed the other two to `.run`, which drops them silently. A
+  subclass of the app's own base interaction is an interaction too, with its
+  parent's filters first, so `generate_test` stops emitting `.call`, which
+  `ActiveInteraction::Base` does not define. `GenericMacroListener` records
+  each call's own offset and its enclosing call's, which is what both tools
+  pair filters by.
+- **generate_test names the constant the file declares.** A path camelizes
+  through Ruby's inflector, which has not read the app's
+  `config/initializers/inflections.rb` on the static tier, so
+  `ai_reports/build.rb` gave `AiReports::Build` where the app defines
+  `AIReports::Build` - a constant nothing defines, in a spec that dies on
+  load.
+- **service_pattern looks for callers where the app keeps code.** The scan
+  named six `app/` directories, so a caller in `app/tools` or under `lib/` was
+  invisible. It reads every `app/` and `lib/` tree, plus whatever else a
+  booted app autoloads from, and says when the twenty-entry cap or its own
+  file ceiling left the list partial.
+- **schema tells a missing migration from a typo.** Booted, a table declared
+  in `db/schema.rb` and absent from the connected database answered "Did you
+  mean 'comments'?". The payload carries the declared tables beside the live
+  ones, so the answer names the migration that has not run, and the listing
+  header says the two counts disagree instead of pairing a live table count
+  with the file's version stamp.
+- **A validator under app/models/concerns is not a concern.** The type came
+  from the directory alone, so 37 `ActiveModel::Validator` subclasses on one
+  app were listed as model concerns used by nothing. They are listed as
+  validators - following the app's own validator base class, not one level of
+  compare - and looked up by the `validates_with`, or the validation option,
+  that wires them, in a model or in a concern's `included` block. The keys
+  `validates` reads for itself (`on:`, `if:` and the like) name no
+  validator.
+- **dependency_graph counts both header numbers over the same models.** The
+  model count was app-wide and the association count covered the fifty nodes
+  that survived the cap. Both are app-wide now, and the truncation note says
+  how many of the associations the cut graph draws.
+- **get_context reads the views Rails would resolve.** It handed `GetView`
+  the last segment of the controller path, so `Api::V1::Admin::OrdersController`
+  picked up `app/views/orders`, a directory of templates a background service
+  renders. The answer names the directory its views came from, and a
+  flat-directory fallback is labelled as one.
+- **analyze_feature finds a test by its path.** A spec whose feature word is a
+  directory (`spec/services/billing/invoices/create_spec.rb`) was dropped,
+  while the gap checker beside it already matched on the path. The suite's
+  own words stay out of the match - the `spec/` root, the type directory it
+  files a test under (`models/`, `requests/`), and the `_spec` suffix - so
+  `--feature models` is not every model spec.
+- **routes answers an exact controller key with its own routes.** A substring
+  filter returned a nested sibling's routes too (`api/v1/admin/orders` swept
+  in `api/v1/admin/orders/ai_data`), and `get_context` inherited it. A short
+  name still matches every controller that carries it.
+- **A template at the root of app/views is listed.** Its filename became a
+  directory group that matched nothing, so the header counted a file the body
+  never printed, and the controller-miss hint suggested a directory that does
+  not exist.
+- **A word in a quoted string is not an instance variable.** `view` reported
+  a chat handle inside a Ruby string literal as a template's ivar; the reader
+  strips string literals and keeps interpolation, in ERB tags and in the
+  Ruby template handlers (Jbuilder, Builder, `.ruby`), and `get_view`'s
+  hydrator reads through the same method. Whichever quote opens first owns
+  the literal, so an apostrophe inside `"Don't"` does not swallow the ivar
+  beside it.
+- **env_config tells a re-assignment from a tuple.** Two unconditional
+  assignments of one key rendered as `:file, :test`, which reads exactly like
+  `:mem_cache_store, { pool_size: 5 }`. The winner is named, with what it
+  overrode.
+- **env keeps one default per call site.** One label for every site said a
+  variable was optional while one of its reads was `ENV.fetch` with no
+  default, which raises `KeyError`. A fetch whose fallback is an expression
+  says its default is computed at runtime rather than claiming it has none,
+  and an `ENV["X"]` read says it is nil when unset, apart from the fetch
+  that raises.
+- **A Rack app attached with `match ... to:` is found.** `mount` is that call
+  with a name derived, and the exact-path form is what an app writes when an
+  unanchored mount would swallow a sibling path. It reaches `engines` and
+  `routes`, which names the mounted apps it counts instead of calling them
+  engine mounts, and the booted tier lists every Rack endpoint rather than
+  `Rails::Engine` subclasses alone. A mount inside a `namespace` or `scope`
+  carries that prefix; one whose enclosing scope, or its `path:`, is an expression is listed
+  with no path rather than an unprefixed one, and every list prints it
+  without one. `engines` follows every file `config/routes.rb` draws,
+  through the walk the static `routes` answer uses, so on the static tier
+  the two name one set of mounted apps; booted, `routes` reads the live
+  route table. `engines`, `onboard`, the MCP resource and the
+  generated context files head the same list "Mounted Apps", because half of
+  what it holds are not engines. On the static tier a `match ... to: SomeApp`
+  is counted once, as the mount it is, rather than also as a construct the
+  walk could not expand, and so are `get "/status" => StatusApp` and
+  `mount ActionCable.server => "/cable"`, which the walk did not see at all.
+- **config calls a zero-byte initializer empty** rather than "all commented
+  out".
+- **Smaller corrections in the same pass.** `validate_semantics` asks the
+  loaded model class before calling a callback method missing, and on the
+  static tier makes no claim once the payload's method list was cut at its
+  cap, so an inherited method past the cap is no longer reported as missing.
+  `get_controllers` points
+  `rails_get_view` at the controller's full path rather than its last segment,
+  which is the directory Rails resolves. The stack overview's `Engines:` line
+  is `Mounted:`, because half of what it lists are plain Rack apps.
+- **diagnose stops reading a display cap as a model's whole interface.** A
+  method past the thirtieth was reported as not existing, in the same answer
+  whose Method Trace printed its definition. Booted, diagnose asks the loaded
+  model class, which knows a concern's methods and a gem's as well as the
+  model's own. Statically, the model's own methods travel uncapped beside the
+  capped display list, and where a concern or a parent could define the
+  method the answer declines rather than guesses. `model_details` says how
+  many of the model's methods it is showing.
+- **A CamelCase controller name resolves everywhere.** The needle was
+  downcased without being underscored, so "GiftCards" never equalled the
+  route key's own "gift_cards": `Payload.find_controller` missed it, and every
+  tool that resolves a controller through it missed it too. One normalization
+  now serves the payload, the routes tool and the MCP resource, and the
+  resource answers a name that resolves to nothing with an error naming what
+  exists rather than a zero-route success document.
+- **security_scan runs the brakeman the machine has.** The app's bundle
+  narrows the load path, so a machine with brakeman installed was told to add
+  it to the Gemfile while the other tier scanned the same app. When the
+  in-process require fails and the gem is installed, the scan runs it as its
+  own process outside the bundle - reading the report from a file of its own,
+  since a gem manager's binstub can print to stdout first - and renders the
+  result the same way, with a line saying which brakeman answered and from
+  where. When the outside run writes no report, the answer carries the last
+  line brakeman printed about why. With no brakeman anywhere, the message
+  says that instead of guessing, and the availability answer is keyed by
+  tier rather than decided once per process.
+- **An exact search with a space keeps its context lines on ripgrep 13.**
+  The literal was escaped with Ruby's `\ `, which ripgrep 13 (Ubuntu 22.04,
+  Debian 12) rejects, so the search fell back to the Ruby scan and dropped
+  context lines and files with no listed extension. The space goes through
+  unescaped now, which both engines read the same way.
+
 ## [5.28.0] - 2026-09-22
 
 Thirty-six changes an architecture survey of v5.27.0 asked for, nine of them

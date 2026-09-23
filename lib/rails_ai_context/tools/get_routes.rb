@@ -57,7 +57,21 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # A mounted app answers on a path and has no controller#action, so
+      # no controller group can hold it. Counting it and then dropping it left
+      # the one endpoint a reader was looking for named nowhere.
+      private_class_method def self.mounted_apps_lines(mounted_apps)
+        return [] if mounted_apps.empty?
+
+        lines = [ "", "## Mounted Apps (#{mounted_apps.size})" ]
+        mounted_apps.each do |app|
+          lines << (app[:path] ? "- **#{app[:engine]}** at `#{app[:path]}`" : "- **#{app[:engine]}**")
+        end
+        lines
+      end
+
       def self.call(controller: nil, detail: "standard", limit: nil, offset: 0, app_only: true, server_context: nil)
+        controller = nil if controller.to_s.strip.empty?
         fetch_section(:routes, subject: "Route introspection") do |routes|
           by_controller = routes[:by_controller] || {}
           offset = [ offset.to_i, 0 ].max
@@ -66,8 +80,8 @@ module RailsAiContext
           # the listing reads it once and hands the copy down.
           ctx = cached_context
 
-          # Routes with no controller#action (engine mounts like propshaft's
-          # /assets) never enter by_controller; surface their count so the
+          # Routes with no controller#action (a mounted engine or Rack app)
+          # never enter by_controller; surface their count so the
           # header's arithmetic adds up instead of silently dropping them.
           unattributed_count = routes[:unrouted_mounts] || Array(routes[:mounted_engines]).size
 
@@ -83,8 +97,16 @@ module RailsAiContext
           # Filter by controller - accepts "posts", "PostsController", "posts_controller", "Api::V1::Posts"
           if controller
             normalized = RailsAiContext::Payload.controller_route_key(ctx, controller)
-            normalized_alt = controller.downcase.delete_suffix("_controller").delete_suffix("controller")
-            filtered = by_controller.select { |k, _| k.downcase.include?(normalized) || k.downcase.include?(normalized_alt) }
+            normalized_alt = RailsAiContext::Payload.route_needle(controller)
+            # Exact first. The loose match is what makes a short name work,
+            # and it swept `api/v1/admin/orders/ai_data` in with the fully
+            # qualified `api/v1/admin/orders` - a separate class with its own
+            # filter chain.
+            # A name that normalizes to nothing matches nothing: the empty
+            # string is a substring of every key.
+            needles = [ normalized, normalized_alt ].map(&:to_s).reject(&:empty?)
+            exact = by_controller.select { |k, _| needles.include?(k.downcase) }
+            filtered = exact.any? ? exact : by_controller.select { |k, _| needles.any? { |n| k.downcase.include?(n) } }
             return empty_response("No routes for '#{controller}'. Controllers: #{by_controller.keys.sort.join(', ')}") if filtered.empty?
             by_controller = filtered
           end
@@ -96,8 +118,14 @@ module RailsAiContext
           if excluded_framework_count > 0 && controller.nil?
             count_label += ", excluding #{count_phrase(excluded_framework_count, "framework route")}"
           end
+          # "engine mount" named the wrong thing: a plain Rack app attached
+          # with `mount` or with `match ... to:` is not an engine, and both
+          # land in this count.
+          # A filtered answer is about one controller, and no mounted app
+          # belongs to one.
+          mounted_apps = controller ? [] : Array(routes[:mounted_engines]).select { |m| m.is_a?(Hash) && m[:engine] }
           if unattributed_count > 0 && controller.nil?
-            count_label += " and #{count_phrase(unattributed_count, "engine mount")}"
+            count_label += " and #{count_phrase(unattributed_count, "mounted app")}"
           end
           # Dropping the count of what the static tier could not expand let a
           # partial list read as the whole routing table, which is the one
@@ -145,6 +173,8 @@ module RailsAiContext
               fw_names = framework_routes.keys.map { |k| k.split("/").first }.uniq.join(", ")
               lines << "- _#{fw_names} framework routes: #{total_fw} total_"
             end
+
+            lines.concat(mounted_apps_lines(mounted_apps))
 
             if routes[:api_namespaces]&.any?
               lines << "" << "API namespaces: #{routes[:api_namespaces].join(', ')}"
@@ -202,6 +232,8 @@ module RailsAiContext
               lines << "- `#{r[:verb]}` `#{r[:path]}` → #{r[:action]}#{helper_part}#{params_part}"
             end
 
+            lines.concat(mounted_apps_lines(mounted_apps))
+
             if excluded_framework_count > 0 && controller.nil?
               lines << "" << "_#{count_phrase(excluded_framework_count, "framework route")} hidden. " \
                              "Use `app_only:false` to include them._"
@@ -220,6 +252,8 @@ module RailsAiContext
             page[:items].each do |r|
               lines << "| #{r[:verb]} | `#{r[:path]}` | #{r[:_ctrl]}##{r[:action]} | #{r[:name] || '-'} |"
             end
+            lines.concat(mounted_apps_lines(mounted_apps))
+
             if routes[:api_namespaces]&.any?
               lines << "" << "## API namespaces: #{routes[:api_namespaces].join(', ')}"
             end

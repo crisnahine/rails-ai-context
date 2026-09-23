@@ -31,6 +31,94 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
     })
   end
 
+  # A controller nested under another controller's name has its own class and
+  # its own filter chain, and a substring filter swept it in with the parent.
+  describe "a fully qualified controller whose name prefixes another" do
+    let(:nested_controllers) do
+      {
+        "api/v1/admin/orders" => [
+          { verb: "POST", path: "/api/v1/admin/orders/edit", action: "edit", name: "api_v1_admin_orders_edit" }
+        ],
+        "api/v1/admin/orders/ai_data" => [
+          { verb: "GET", path: "/api/v1/admin/orders/ai_data/availability", action: "availability", name: nil },
+          { verb: "GET", path: "/api/v1/admin/orders/ai_data/download", action: "download", name: nil }
+        ],
+        "api/v1/gift_cards" => [
+          { verb: "POST", path: "/api/v1/gift-cards/redeem", action: "redeem", name: nil }
+        ]
+      }
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { total_routes: 4, by_controller: nested_controllers, api_namespaces: [] }
+      })
+    end
+
+    it "answers the exact key with its own routes only" do
+      text = described_class.call(controller: "api/v1/admin/orders").content.first[:text]
+
+      expect(text).to include("# Routes (1 route)")
+      expect(text).not_to include("ai_data")
+    end
+
+    it "still answers a short name with every controller that carries it" do
+      text = described_class.call(controller: "orders").content.first[:text]
+
+      expect(text).to include("# Routes (3 routes)")
+      expect(text).to include("api/v1/admin/orders/ai_data")
+    end
+  end
+
+  # A Rack app attached in the routes file is counted and then dropped from
+  # the body, so the one place it could be found by path named it nowhere.
+  describe "an app with mounted Rack endpoints" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: {
+          total_routes: 1,
+          by_controller: { "posts" => [ { verb: "GET", path: "/posts", action: "index", name: "posts" } ] },
+          api_namespaces: [],
+          unrouted_mounts: 2,
+          mounted_engines: [
+            { engine: "MetricsApp", path: "/metrics" },
+            { engine: "MetricsAdminApp", path: "/metrics-admin" }
+          ]
+        }
+      })
+    end
+
+    it "names each mounted app and the path it answers on" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Mounted Apps (2)")
+      expect(text).to include("- **MetricsApp** at `/metrics`")
+      expect(text).to include("- **MetricsAdminApp** at `/metrics-admin`")
+    end
+
+    it "names them at every detail level" do
+      %w[summary standard full].each do |detail|
+        text = described_class.call(detail: detail).content.first[:text]
+
+        expect(text).to include("## Mounted Apps (2)"), detail
+        expect(text).to include("- **MetricsApp** at `/metrics`"), detail
+      end
+    end
+
+    it "counts them in the header without calling them engines" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("2 mounted apps")
+      expect(text).not_to include("engine mount")
+    end
+
+    it "leaves them out of a filtered answer" do
+      text = described_class.call(controller: "posts").content.first[:text]
+
+      expect(text).not_to include("Mounted Apps")
+    end
+  end
+
   describe ".call with no params" do
     it "defaults to standard detail and filters framework routes" do
       result = described_class.call
@@ -119,6 +207,21 @@ RSpec.describe RailsAiContext::Tools::GetRoutes do
       text = result.content.first[:text]
       expect(text).to include("No routes for")
       expect(text).to include("posts")
+    end
+
+    # All suffix, it normalizes to nothing, and nothing is a substring of
+    # every route key.
+    # MCP clients send an empty string for an optional argument they leave
+    # unset, which is no filter at all.
+    it "reads a blank name as no filter" do
+      expect(described_class.call(controller: " ").content.first[:text])
+        .to eq(described_class.call.content.first[:text])
+    end
+
+    it "answers no routes for a name that is only the controller suffix" do
+      text = described_class.call(controller: "_controller").content.first[:text]
+
+      expect(text).to include("No routes for '_controller'")
     end
   end
 

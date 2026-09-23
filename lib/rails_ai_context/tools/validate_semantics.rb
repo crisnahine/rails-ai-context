@@ -562,11 +562,18 @@ module RailsAiContext
 
         # Skip check if model has concerns (method may be in concern)
         has_concerns = (model_data[:concerns] || []).any?
+        # The payload's list is capped, so past the cap an inherited method
+        # is not in it and its absence says nothing.
+        truncated = model_data[:instance_method_count].to_i > Array(model_data[:instance_methods]).size
 
         visitor.callback_registrations.each do |reg|
           reg[:methods].each do |method_name|
             next if known.include?(method_name)
             next if has_concerns # uncertain - method may come from concern
+
+            live = live_method_defined?(model_name, method_name)
+            next if live || (live.nil? && truncated)
+
             warnings << "#{reg[:type]} :#{method_name} - method not found in #{model_name}"
           end
         end

@@ -238,12 +238,77 @@ RSpec.describe RailsAiContext::VFS do
         expect(data["total_routes"]).to eq(1)
       end
 
-      it "returns an empty list for a controller with no routes" do
-        result = described_class.resolve("rails-ai-context://routes/widgets")
+      it "returns an empty list for a controller that exists and has no routes" do
+        result = described_class.resolve("rails-ai-context://routes/Admin::PostsController")
         data = JSON.parse(result.first[:text])
         expect(data["routes"]).to eq([])
         expect(data["total_routes"]).to eq(0)
-        expect(data["filtered_by"]).to eq("widgets")
+      end
+
+      # Zero because the controller has none, not zero because the name went
+      # nowhere: the document has to say which.
+      it "names the controller it resolved when that controller has no routes" do
+        data = JSON.parse(described_class.resolve("rails-ai-context://routes/Admin::PostsController").first[:text])
+
+        expect(data["resolved_controller"]).to eq("Admin::PostsController")
+        expect(data["note"]).to include("no routes")
+      end
+
+      # A zero-route success document for a name that resolved to nothing
+      # cannot be told apart from one for a name that does not exist, and the
+      # sibling controllers resource already answers that case with an error.
+      it "says so when the name resolves to no controller at all" do
+        result = described_class.resolve("rails-ai-context://routes/TotallyMadeUpThing")
+        data = JSON.parse(result.first[:text])
+
+        expect(data["error"]).to include("TotallyMadeUpThing")
+        expect(data["available"]).to include("posts", "users")
+        expect(data).not_to have_key("total_routes")
+      end
+
+      # The tool answers this exact string with the routes; the resource
+      # downcased the input without underscoring it, so "giftcards" never
+      # equalled the key's own "gift_cards".
+      it "resolves a short CamelCase controller name" do
+        by_controller = context[:routes][:by_controller].merge(
+          "api/v1/gift_cards" => [
+            { verb: "POST", path: "/api/v1/gift-cards/redeem", action: "redeem", name: "api_v1_gift_cards_redeem" },
+            { verb: "GET", path: "/api/v1/gift-cards/list", action: "list", name: "api_v1_gift_cards_list" }
+          ]
+        )
+        allow(RailsAiContext).to receive(:introspect).and_return(
+          context.merge(routes: context[:routes].merge(by_controller: by_controller))
+        )
+
+        data = JSON.parse(described_class.resolve("rails-ai-context://routes/GiftCards").first[:text])
+
+        expect(data["total_routes"]).to eq(2)
+        expect(data["routes"].map { |r| r["action"] }).to contain_exactly("redeem", "list")
+      end
+
+      # A route to a controller with no file resolves to no controller, so
+      # the route keys are matched on the name's own route form.
+      it "matches a CamelCase name against route keys when no controller resolves" do
+        by_controller = context[:routes][:by_controller].merge(
+          "stripe/webhooks" => [ { verb: "POST", path: "/stripe/webhooks", action: "create", name: "stripe_webhooks" } ]
+        )
+        allow(RailsAiContext).to receive(:introspect).and_return(
+          context.merge(routes: context[:routes].merge(by_controller: by_controller))
+        )
+
+        data = JSON.parse(described_class.resolve("rails-ai-context://routes/Webhooks").first[:text])
+
+        expect(data["total_routes"]).to eq(1)
+        expect(data["routes"].first["controller"]).to eq("stripe/webhooks")
+      end
+
+      # A name that is all suffix leaves nothing to match, and an empty
+      # needle is a substring of every route key.
+      it "answers not found for a name that is only the controller suffix" do
+        data = JSON.parse(described_class.resolve("rails-ai-context://routes/_controller").first[:text])
+
+        expect(data["error"]).to include("not found")
+        expect(data).not_to have_key("routes")
       end
 
       it "raises for bare routes URI without controller" do
