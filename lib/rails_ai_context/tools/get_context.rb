@@ -92,13 +92,7 @@ module RailsAiContext
           lines << response_text(route_result)
         end
 
-        # Views for this controller
-        view_result, view_note = controller_views(snake)
-        unless empty?(view_result)
-          lines << "" << "---" << ""
-          lines << view_note if view_note
-          lines << response_text(view_result)
-        end
+        lines.concat(view_section_lines(snake))
 
         # Cross-reference: controller ivars vs view ivars. The action's own
         # source is the origin for both sides of the controller's half; a
@@ -143,6 +137,13 @@ module RailsAiContext
       # convention - on a namespaced app they belong to another component
       # entirely.
       #
+      private_class_method def self.view_section_lines(snake)
+        view_result, view_note = controller_views(snake)
+        return [] if empty?(view_result)
+
+        [ "", "---", "", view_note, response_text(view_result) ].compact
+      end
+
       # @return [Array(MCP::Tool::Response, String, nil)] the view section and
       #   a note naming the directory it came from
       private_class_method def self.controller_views(snake)
@@ -226,13 +227,7 @@ module RailsAiContext
           lines << "" << "---" << "" << response_text(route_result)
         end
 
-        # Views for this controller
-        view_result, view_note = controller_views(snake)
-        unless empty?(view_result)
-          lines << "" << "---" << ""
-          lines << view_note if view_note
-          lines << response_text(view_result)
-        end
+        lines.concat(view_section_lines(snake))
 
         lines.join("\n")
       rescue => e

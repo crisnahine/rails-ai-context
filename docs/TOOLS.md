@@ -210,7 +210,8 @@ Controller actions with inherited filters, render map, strong params. Includes s
 Routes with code-ready helpers (`post_path(@record)`) and required params. A
 fully qualified controller key answers with its own routes only; a short name
 still matches every controller that carries it. Rack apps attached with `mount`
-or `match ... to:` are named with the path they answer on.
+or `match ... to:` are named with the path they answer on, when the source
+spells one out.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -379,8 +380,9 @@ Application and framework helpers with view cross-references.
 Service object interface, dependencies, side effects, callers. An
 ActiveInteraction's inputs include the ones it inherits, with the filters
 nested inside a `hash` filter shown under it. Callers are read from every
-`app/` and `lib/` tree, and the page says when the twenty-caller display cap or
-the scan's own file ceiling left the list partial.
+`app/` and `lib/` tree, and on a booted app from any other directory it
+autoloads, and the page says when the twenty-caller display cap or the scan's
+own file ceiling left the list partial.
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
@@ -431,7 +433,7 @@ ActionMailer mailers: every mailer class with its delivery actions and delivery 
 
 ### `rails_get_engines`
 
-What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on - and loaded engine classes with route/model counts.
+What `config/routes.rb` mounts - engines and plain Rack apps alike, with known-engine descriptions, each with the path it answers on when the source spells one out - and loaded engine classes with route/model counts.
 
 *No parameters.*
 

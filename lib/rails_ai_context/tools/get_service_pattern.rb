@@ -438,13 +438,19 @@ module RailsAiContext
       # so, the way analyze_feature states its own scan cap.
       MAX_CALLER_SCAN_FILES = 5_000
 
-      private_class_method def self.find_callers(class_name, real_root, own_file = nil)
-        callers = Set.new
+      # app/ and lib/, plus the load paths outside them: most load paths sit
+      # inside app/, and walking each one again read the tree once per path.
+      private_class_method def self.caller_search_dirs(real_root)
         base_dirs = %w[app lib].flat_map { |d| PathResolver.dirs_for(real_root, d) }
         extra_dirs = configured_load_paths(real_root).reject do |dir|
           base_dirs.any? { |base| dir == base || dir.start_with?("#{base}/") }
         end
-        search_dirs = (base_dirs + extra_dirs).uniq
+        (base_dirs + extra_dirs).uniq
+      end
+
+      private_class_method def self.find_callers(class_name, real_root, own_file = nil)
+        callers = Set.new
+        search_dirs = caller_search_dirs(real_root)
         # A bare `include?` matched `Billing::Invoices::Create` inside
         # `Workers::Billing::Invoices::CreateOrUpdateSheetWorker`, and the
         # underscored-path skip dropped the one real caller, whose path

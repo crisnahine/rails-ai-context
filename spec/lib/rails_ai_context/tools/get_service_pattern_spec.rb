@@ -826,15 +826,16 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
       # Most load paths sit inside app/, which the scan already walks: each
       # one walked again was the tree read once per load path.
-      it "does not walk a load path inside a directory it already walks" do
-        real_app = File.realpath(File.join(tmpdir, "app"))
+      it "walks a load path only when it lies outside app/ and lib/" do
+        real_root = File.realpath(tmpdir)
+        FileUtils.mkdir_p(File.join(real_root, "extras"))
         allow(described_class).to receive(:configured_load_paths)
-          .and_return(Dir.glob(File.join(real_app, "*")).select { |dir| File.directory?(dir) })
-        allow(described_class).to receive(:safe_glob).and_call_original
+          .and_return([ File.join(real_root, "app", "services"), File.join(real_root, "extras") ])
 
-        described_class.call(service: "Billing::Invoices::Create")
+        dirs = described_class.send(:caller_search_dirs, real_root)
 
-        expect(described_class).not_to have_received(:safe_glob).with(File.join(real_app, "services"), anything, anything)
+        expect(dirs).to include(File.join(real_root, "extras"))
+        expect(dirs).not_to include(File.join(real_root, "app", "services"))
       end
 
       # The scan reads every file under app/ and lib/, so on a large app it
