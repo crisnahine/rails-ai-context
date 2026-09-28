@@ -301,7 +301,7 @@ module RailsAiContext
       # Returns `:bundle` (with its version), `:machine`, or nil. Doctor answers from this, so
       # it says what the scan would do.
       def self.brakeman_location
-        return [ :bundle, Brakeman::Version ] if brakeman_available?
+        return [ :bundle, ::Brakeman::Version ] if brakeman_available? && defined?(::Brakeman::Version)
 
         version = brakeman_on_machine
         version ? [ :machine, version ] : [ nil, nil ]

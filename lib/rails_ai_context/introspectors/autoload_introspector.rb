@@ -122,11 +122,19 @@ module RailsAiContext
       # engine's paths sit under the machine's gem prefix rather than the app.
       # This gem's own directories are not the app's, and a path with no
       # portable form is left out rather than carried absolute.
+      # This gem's own code is its app/ and lib/: a bundle installed under its
+      # checkout (vendor/bundle on CI) holds other gems, which stay.
       def relativize(paths)
-        own = defined?(RailsAiContext::Engine) ? "#{RailsAiContext::Engine.root}#{File::SEPARATOR}" : nil
+        own = own_code_dirs
         app_root = "#{root}#{File::SEPARATOR}"
-        Array(paths).reject { |path| own && path.to_s.start_with?(own) && !path.to_s.start_with?(app_root) }
+        Array(paths).reject { |path| own.any? { |dir| path.to_s.start_with?(dir) } && !path.to_s.start_with?(app_root) }
                     .filter_map { |path| PortablePath.portable(path, root) }.uniq
+      end
+
+      def own_code_dirs
+        return [] unless defined?(RailsAiContext::Engine)
+
+        %w[app lib].map { |dir| "#{File.join(RailsAiContext::Engine.root.to_s, dir)}#{File::SEPARATOR}" }
       end
     end
   end
