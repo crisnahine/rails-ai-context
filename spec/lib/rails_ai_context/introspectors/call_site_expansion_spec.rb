@@ -1,0 +1,256 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+
+RSpec.describe RailsAiContext::Introspectors::CallSiteExpansion do
+  # The entries `call_source` declares by calling the one method `method_source` defines.
+  def expand(method_source, call_source)
+    definition = Prism.parse(method_source).value.statements.body.first
+    call = Prism.parse(call_source).value.statements.body.first
+    described_class.entries(definition, call, RailsAiContext::Introspectors::SourceIntrospector::LISTENER_MAP)
+  end
+
+  def associations(data)
+    Array(data[:associations]).map { |a| [ a[:type], a[:name].to_s ] }
+  end
+
+  describe "binding a parameter to the call's literal" do
+    it "leaves a parameter the method reassigns unbound" do
+      data = expand(<<~RUBY, "attachable :picture")
+        def attachable(name)
+          name = "\#{name}_file"
+          has_one name
+        end
+      RUBY
+
+      expect(data[:associations].map { |a| a[:name].to_s }).not_to include("picture")
+    end
+
+    it "leaves a parameter a block reassigns unbound" do
+      data = expand(<<~RUBY, "attachable :picture")
+        def attachable(name)
+          [1].each { name = :"\#{name}_file" }
+          has_one name
+        end
+      RUBY
+
+      expect(associations(data)).not_to include([ "has_one", "picture" ])
+    end
+
+    it "leaves a read that a block parameter shadows unbound" do
+      data = expand(<<~RUBY, "many :things, [:alpha, :beta]")
+        def many(name, kinds)
+          kinds.each { |name| has_many name }
+          has_one name
+        end
+      RUBY
+
+      expect(associations(data)).to include([ "has_one", "things" ])
+      expect(associations(data)).not_to include([ "has_many", "things" ])
+    end
+
+    it "binds a read inside a block that does not shadow it" do
+      data = expand(<<~RUBY, "tagged :labels")
+        def tagged(name)
+          [1].each { has_many name }
+        end
+      RUBY
+
+      expect(associations(data)).to eq([ [ "has_many", "labels" ] ])
+    end
+  end
+
+  # Canvas's plugin_settings runs `module_eval <<~RUBY` with interpolation;
+  # a heredoc's body sits past its node's slice, and reading it crashed.
+  it "reads a method whose heredoc interpolates, keeping what follows it" do
+    data = expand(<<~'RUBY', "recent_by :created_at")
+      def recent_by(column)
+        scope :recent, -> { where(<<~SQL) }
+          #{column} > now()
+        SQL
+        has_many :entries
+      end
+    RUBY
+
+    expect(data[:scopes].map { |scope| scope[:name] }).to eq([ "recent" ])
+    expect(associations(data)).to eq([ [ "has_many", "entries" ] ])
+  end
+
+  # OpenProject's acts_as_customizable declares custom_comments only
+  # `if can_have_custom_comments?`, which the call's literals cannot decide;
+  # WorkPackage, which does not pass comments:, was listed as having it.
+  describe "a declaration under a condition the literals cannot decide" do
+    it "is conditional, with its condition, and not listed as present" do
+      data = expand(<<~RUBY, "customizable validate_on: :saving")
+        def customizable(options = {})
+          has_many :custom_values
+          if can_have_custom_comments?
+            has_many :custom_comments,
+                     dependent: :delete_all
+          end
+          if options[:comments]
+            has_many :comment_links
+          end
+        end
+      RUBY
+
+      expect(associations(data)).to eq([ [ "has_many", "custom_values" ] ])
+      expect(data[:conditional].map { |c| [ c[:declaration], c[:condition] ] })
+        .to eq([ [ "has_many :custom_comments, dependent: :delete_all", "can_have_custom_comments?" ] ])
+    end
+
+    it "names the declaration by its call, less the block it takes" do
+      data = expand(<<~RUBY, "noted")
+        def noted
+          if enabled?
+            has_many :notes, dependent: :destroy do
+              def recent; end
+            end
+          end
+        end
+      RUBY
+
+      expect(data[:conditional].first[:declaration]).to eq("has_many :notes, dependent: :destroy")
+    end
+
+    it "lists what every branch declares alike, and holds the rest as conditional" do
+      data = expand(<<~RUBY, "taggable Kind.current")
+        def taggable(kind)
+          if kind.admin?
+            has_many :tags
+            has_one :summary
+          else
+            has_many :tags
+            has_many :summary
+          end
+        end
+      RUBY
+
+      expect(associations(data)).to eq([ [ "has_many", "tags" ] ])
+      expect(data[:conditional].map { |c| [ c[:declaration], c[:condition] ] })
+        .to eq([ [ "has_one :summary", "kind.admin?" ], [ "has_many :summary", "not kind.admin?" ] ])
+    end
+  end
+
+  describe "a case the call's literals decide or cannot" do
+    let(:method_source) do
+      <<~RUBY
+        def setup(type: :many)
+          case type
+          when :one then has_one :thing
+          when :many, :some
+            has_many :things
+          end
+        end
+      RUBY
+    end
+
+    it "takes the one branch the literal picks" do
+      expect(associations(expand(method_source, "setup type: :one"))).to eq([ [ "has_one", "thing" ] ])
+      expect(associations(expand(method_source, "setup type: :some"))).to eq([ [ "has_many", "things" ] ])
+      expect(associations(expand(method_source, "setup type: :neither"))).to eq([])
+    end
+
+    it "holds every branch back as conditional when the literals cannot pick" do
+      data = expand(method_source, "setup type: Kind.current")
+
+      expect(associations(data)).to eq([])
+      expect(data[:conditional].map { |c| [ c[:declaration], c[:condition] ] }).to eq(
+        [ [ "has_one :thing", "type is :one" ], [ "has_many :things", "type is :many, :some" ] ]
+      )
+    end
+  end
+
+  # Consul's validates_translation validates on translation_class inside
+  # `translation_class.instance_eval { }`: that block declares on the
+  # translation class, not on the model the method is called in.
+  describe "a block evaluated on another receiver" do
+    let(:method_source) do
+      <<~RUBY
+        def validates_translation(method, options = {})
+          validates(method, options)
+          translation_class.instance_eval do
+            validates method, length: options[:length]
+          end
+          Proposal::Translation.class_eval { has_many :notes }
+          self.class_eval { has_many :drafts }
+        end
+      RUBY
+    end
+
+    it "is not the model's, and is named with the receiver it declares on" do
+      data = expand(method_source, "validates_translation :title, presence: true, length: { maximum: 80 }")
+
+      expect(data[:validations].map { |v| [ v[:kind], v[:attributes] ] }).to eq([ [ "presence", [ "title" ] ], [ "length", [ "title" ] ] ])
+      expect(associations(data)).to eq([ [ "has_many", "drafts" ] ])
+      expect(data[:foreign].map { |f| [ f[:declaration], f[:receiver] ] }).to eq(
+        [ [ "validates :title, length: { maximum: 80 }", "translation_class" ],
+          [ "has_many :notes", "Proposal::Translation" ] ]
+      )
+    end
+  end
+
+  # An options hash the call leaves at its empty default wrote `has_one :picture, `
+  # with a dangling comma, and the next line became that call's argument.
+  it "drops an empty options argument whole, keeping the next declaration" do
+    data = expand(<<~RUBY, "attachable :picture")
+      def attachable(name, options = {})
+        has_one name, options
+        after_save :touch_attachment
+        validates(name, options)
+        has_many :versions
+      end
+    RUBY
+
+    expect(associations(data)).to eq([ [ "has_one", "picture" ], [ "has_many", "versions" ] ])
+    expect(data[:callbacks].map { |c| c[:method] }).to eq([ "touch_attachment" ])
+  end
+
+  # Consul's validates_translation passes `options.merge(if: ...)`: the rules
+  # the call names, each under that condition, and never a computed attribute.
+  it "reads merge, reject, slice and except on the call's options hash" do
+    data = expand(<<~RUBY, "validates_translation :title, presence: true, length: { in: 4..Proposal.title_max_length }")
+      def validates_translation(method, options = {})
+        validates(method, options.merge(if: -> { translations.blank? }))
+        validates :summary, options.reject { |key| key == :length }
+        validates :body, options.slice(:length)
+        validates :intro, options.except(:presence, :length)
+      end
+    RUBY
+
+    rules = data[:validations].map { |v| [ v[:kind], v[:attributes], v[:options].keys.sort ] }
+    expect(rules).to eq([
+      [ "presence", [ "title" ], %i[if] ], [ "length", [ "title" ], %i[if in] ],
+      [ "presence", [ "summary" ], [] ],
+      [ "length", [ "body" ], %i[in] ]
+    ])
+    expect(data[:validations].flat_map { |v| Array(v[:computed_attributes]) }).to be_empty
+  end
+
+  # Consul validates the translation class a second time only `if options.many?`.
+  describe "a block on another receiver under a condition" do
+    let(:method_source) do
+      <<~RUBY
+        def validates_translation(method, options = {})
+          if options.many?
+            translation_class.instance_eval { validates method, options.reject { |key| key == :length } }
+          end
+          translation_class.instance_eval { has_many :notes } if enabled?
+        end
+      RUBY
+    end
+
+    it "is left out when the call's options decide the condition false, and carries a condition it cannot decide" do
+      data = expand(method_source, "validates_translation :description, presence: true")
+
+      expect(data[:foreign].map { |f| [ f[:declaration], f[:receiver], f[:condition] ] })
+        .to eq([ [ "has_many :notes", "translation_class", "enabled?" ] ])
+    end
+
+    it "is listed with no condition when the call's options decide it true" do
+      data = expand(method_source, "validates_translation :title, presence: true, length: { maximum: 80 }")
+
+      expect(data[:foreign].first.slice(:declaration, :condition)).to eq({ declaration: "validates :title, presence: true" })
+    end
+  end
+end

@@ -5,7 +5,7 @@ module RailsAiContext
     # Generates AGENTS.md optimized for OpenCode.
     # In :compact mode (default), produces ≤150 lines with MCP tool references.
     # In :full mode, delegates to MarkdownSerializer with OpenCode header.
-    class OpencodeSerializer
+    class OpencodeSerializer < Base
       include TestCommandDetection
       include StackOverviewHelper
       include ToolGuideHelper
@@ -18,23 +18,8 @@ module RailsAiContext
         FullOpencodeSerializer
       end
 
-      # The shared architecture and footer renderers serve here too; the
-      # overrides this class used to carry dropped the Services/Jobs lines
-      # and the detected test command, and its composition skipped the
-      # warnings, so a half-failed run looked clean in AGENTS.md.
       def render_compact
-        lines = []
-        lines.concat(render_header)
-        lines.concat(render_stack_overview)
-        lines.concat(render_key_models)
-        lines.concat(render_notable_gems)
-        lines.concat(render_architecture)
-        lines.concat(render_commands)
-        lines.concat(render_tools_guide_compact)
-        lines.concat(render_warnings)
-        lines.concat(render_footer)
-
-        enforce_max_lines(lines)
+        render_compact_rules
       end
     end
 

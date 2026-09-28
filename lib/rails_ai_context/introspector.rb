@@ -17,6 +17,10 @@ module RailsAiContext
     #
     # @return [Hash] complete application context
     def call
+      RunCache.around { introspect_all }
+    end
+
+    private def introspect_all
       context = {
         app_name: app_name,
         ruby_version: ruby_version,
@@ -29,6 +33,9 @@ module RailsAiContext
 
       config.introspectors.each do |name|
         introspector = resolve_introspector(name)
+        # The sections already answered, for one that reads another's answer
+        # rather than working it out a second way.
+        introspector.context = context if introspector.respond_to?(:context=)
         context[name] = run_introspector(introspector)
       rescue StandardError, ScriptError => e
         # ScriptError included: a syntax-broken app file surfacing through
@@ -37,6 +44,8 @@ module RailsAiContext
         context[name] = { error: e.message }
         RailsAiContext.log_warn "[rails-ai-context] #{name} introspection failed: #{e.message}"
       end
+
+      Introspectors::ControllerIntrospector.apply_routes(context[:controllers], context[:routes], app.root)
 
       # Collect warnings for introspectors that failed, so serializers can
       # render them and AI clients know which sections are missing.
@@ -153,15 +162,8 @@ module RailsAiContext
     # "mastodon" for an app named Mastodon, and whatever the checkout was
     # renamed to for any other.
     def declared_app_name
-      source = RailsAiContext::SafeFile.read(File.join(app.root.to_s, "config", "application.rb"))
-      return nil unless source
-
-      declaration = Introspectors::DeclaredConstant.declarations(source)
-                      .find { |entry| entry.superclass == "Rails::Application" }
-      name = declaration&.name.to_s.deconstantize
+      name = AppKind.application_class(app.root).to_s.deconstantize
       name.empty? ? nil : name
-    rescue StandardError, ScriptError
-      nil
     end
 
     # Static tier: what an introspector answers is what it declared, so a
@@ -194,16 +196,14 @@ module RailsAiContext
       return Rails.version if defined?(Rails) && Rails.respond_to?(:version) && !RailsAiContext.static_tier?
 
       # The lockfile names what is installed, and this string is written
-      # mid-sentence into files the user commits.
-      GemLock.for(app.root).version("rails") || Confidence.unavailable("app not booted")
+      # mid-sentence into files the user commits. An app can bundle railties
+      # without the `rails` meta-gem and still be a Rails app at that version.
+      lock = GemLock.for(app.root)
+      lock.version("rails") || lock.version("railties") || Confidence.unavailable("app not booted")
     end
 
     def environment_name
-      if defined?(Rails) && Rails.respond_to?(:env) && !RailsAiContext.static_tier?
-        Rails.env
-      else
-        ENV["RAILS_ENV"] || "development"
-      end
+      RailsAiContext.environment_name
     end
 
     def resolve_introspector(name)

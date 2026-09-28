@@ -13,6 +13,10 @@ module RailsAiContext
     # Values that mean "no adapter was observed", not "the adapter is X".
     PLACEHOLDERS = %w[static_parse unknown].freeze
 
+    # Also the marker that a label names several: the label is written back into the
+    # payload, so a surface reading it back checks for this rather than a flag.
+    CANDIDATE_JOIN = " or "
+
     # Gemfile display names, only as the last resort.
     GEM_ADAPTERS = {
       "pg" => "PostgreSQL",
@@ -21,12 +25,21 @@ module RailsAiContext
       "sqlite3" => "SQLite"
     }.freeze
 
-    # structure.sql dialects, as SchemaIntrospector records them.
+    # Column types only one database has, as schema.rb and migrations write
+    # them. A table with jsonb columns is not on MySQL or SQLite.
+    POSTGRES_ONLY_TYPES = %w[jsonb hstore inet cidr citext tsvector ltree macaddr interval].freeze
+    MYSQL_ONLY_TYPES = %w[tinytext mediumtext longtext tinyblob mediumblob longblob].freeze
+
+    # structure.sql dialects as SchemaIntrospector records them, plus adapter names that
+    # mean one of them (activerecord-postgis-adapter registers `postgis`).
     DIALECTS = {
       "postgresql" => "PostgreSQL",
+      "postgis" => "PostgreSQL",
       "mysql" => "MySQL",
       "sqlite" => "SQLite"
     }.freeze
+
+    DISPLAY_ORDER = %w[PostgreSQL MySQL SQLite].freeze
 
     module_function
 
@@ -39,9 +52,30 @@ module RailsAiContext
       return observed unless placeholder?(observed)
 
       # Best first: the app's own database config, which needs no connection.
-      # Then the dialect parsed out of structure.sql. Only then the Gemfile,
-      # which is a guess - an app can carry two adapter gems.
-      from_configurations(context) || from_dialect(schema) || from_gems(context) || "unknown"
+      # Then what the schema proves, then the example database files (often SQLite for
+      # convenience), and last the Gemfile, which is a guess.
+      from_configurations(context) || from_dialect(schema) || from_column_types(schema) ||
+        from_examples(context) || from_gems(context) || "unknown"
+    end
+
+    def label_with_reason(context)
+      shown = label(context)
+      undecided?(shown) ? "#{shown}, #{undecided_reason(context, shown)}" : shown
+    end
+
+    # Names only files the app has: an app may commit no database.yml, just one example
+    # per database it supports.
+    def undecided_reason(context, shown)
+      context = {} unless context.is_a?(Hash)
+      return "its database.yml examples name each" if shown == from_examples(context)
+
+      multi = context[:multi_database]
+      configured = Tools::SectionFetch.usable?(multi) && Array(multi[:databases]).any?
+      configured ? "database.yml does not say which" : "the app does not say which"
+    end
+
+    def undecided?(adapter)
+      adapter.to_s.include?(CANDIDATE_JOIN)
     end
 
     def placeholder?(adapter)
@@ -54,14 +88,44 @@ module RailsAiContext
 
       primary = Array(multi[:databases]).find { |db| db[:name].to_s == "primary" } ||
                 Array(multi[:databases]).first
-      adapter = primary&.dig(:adapter)
+      database_label(primary)
+    end
+
+    # These are ActiveRecord adapter names (`postgresql`), not gem names; the two
+    # overlap only at sqlite3/mysql2/trilogy.
+    #
+    # @return [String, nil] nil when the record says nothing about the adapter
+    def database_label(database)
+      return nil unless database.is_a?(Hash)
+
+      adapter = database[:adapter]
       return nil if placeholder?(adapter)
 
-      # These are ActiveRecord adapter names (`postgresql`, `sqlite3`), not gem
-      # names. The two overlap by accident at sqlite3/mysql2/trilogy, so
-      # reading only GEM_ADAPTERS let `postgresql` fall through raw - a Postgres
-      # app rendered "Database: postgresql" beside a SQLite app's "SQLite".
-      DIALECTS[adapter.to_s] || GEM_ADAPTERS[adapter.to_s] || adapter
+      name = DIALECTS[adapter.to_s] || GEM_ADAPTERS[adapter.to_s] || adapter
+      database[:adapter_default] ? "#{name} by database.yml default" : name
+    end
+
+    def from_examples(context)
+      multi = context[:multi_database]
+      return nil unless Tools::SectionFetch.usable?(multi)
+
+      candidates(Array(multi[:example_adapters]).map { |name| DIALECTS[name.to_s] || GEM_ADAPTERS[name.to_s] || name.to_s })
+    end
+
+    def from_column_types(schema)
+      return nil unless schema.is_a?(Hash) && schema[:tables].is_a?(Hash)
+
+      columns = schema[:tables].values.flat_map { |table| table.is_a?(Hash) ? Array(table[:columns]) : [] }
+      postgres = columns.any? { |c| c[:array] || POSTGRES_ONLY_TYPES.include?(c[:type].to_s) }
+      mysql = columns.any? { |c| MYSQL_ONLY_TYPES.include?(c[:type].to_s) }
+      return nil if postgres == mysql
+
+      postgres ? "PostgreSQL" : "MySQL"
+    end
+
+    def candidates(shown)
+      shown = shown.uniq.sort_by { |name| [ DISPLAY_ORDER.index(name) || DISPLAY_ORDER.size, name ] }
+      shown.empty? ? nil : shown.join(CANDIDATE_JOIN)
     end
 
     def from_dialect(schema)
@@ -70,16 +134,17 @@ module RailsAiContext
       DIALECTS[schema[:dialect].to_s]
     end
 
-    # Last, and order-independent: an app with both `pg` and `sqlite3` gets the
-    # same answer here as anywhere else, rather than depending on which match
-    # a loop happened to see last.
+    # Never a guess: naming one of `pg` and `mysql2` can put a database the app does not
+    # use into every generated file. Two gems for the same database still answer.
     def from_gems(context)
       gems = context[:gems]
       return nil unless Tools::SectionFetch.usable?(gems)
 
       names = Array(gems[:notable_gems]).map { |g| g[:name].to_s }
-      GEM_ADAPTERS.each_key { |gem_name| return GEM_ADAPTERS[gem_name] if names.include?(gem_name) }
-      nil
+      bundled = GEM_ADAPTERS.keys.select { |gem_name| names.include?(gem_name) }
+      return nil if bundled.empty?
+
+      candidates(bundled.map { |gem_name| GEM_ADAPTERS[gem_name] })
     end
   end
 end

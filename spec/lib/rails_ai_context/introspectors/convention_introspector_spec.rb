@@ -234,6 +234,27 @@ RSpec.describe RailsAiContext::Introspectors::ConventionIntrospector do
         expect(patterns).to include("sti")
       end
 
+      it "detects sti from a model that sets its own inheritance column" do
+        patterns = patterns_for(
+          models: { "vehicle.rb" => "class Vehicle < ApplicationRecord\n  self.inheritance_column = \"kind\"\nend\n" }
+        )
+
+        expect(patterns).to include("sti")
+      end
+
+      # `self.inheritance_column = nil` is how an app turns STI off; a private
+      # API app does it on a model with a `type` column of its own.
+      # Mastodon's PreviewCard and BulkImport write `false`.
+      it "reads an inheritance column set to nil, false or :_type_disabled as STI off" do
+        %w[nil false :_type_disabled "_type_disabled"].each do |value|
+          patterns = patterns_for(
+            models: { "charge.rb" => "class Charge < ApplicationRecord\n  self.inheritance_column = #{value}\nend\n" }
+          )
+
+          expect(patterns).not_to include("sti"), "inheritance_column = #{value} read as STI"
+        end
+      end
+
       it "stays quiet when the parent table has no type column" do
         patterns = patterns_for(
           models: models,
@@ -360,6 +381,40 @@ end
         patterns = described_class.new(app).call[:patterns]
         expect(patterns).to include("sti")
       end
+    end
+  end
+
+  describe "stimulus in a non-default javascript root" do
+    def architecture_for(path, source)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+        File.write(File.join(dir, path), source)
+        app = double("app", root: Pathname.new(dir), config: double(api_only: false))
+        described_class.new(app).call[:architecture]
+      end
+    end
+
+    # One app keeps 37 validators and no concern in app/models/concerns.
+    it "claims no model concerns from a concerns directory that holds only classes" do
+      arch = architecture_for("app/models/concerns/email_validator.rb",
+                              "class EmailValidator < ActiveModel::EachValidator\n  def validate_each(*); end\nend\n")
+
+      expect(arch).not_to include("concerns_models")
+      expect(architecture_for("app/models/concerns/trackable.rb", "module Trackable\nend\n")).to include("concerns_models")
+    end
+
+    it "reads a webpacker controllers directory as stimulus and hotwire" do
+      arch = architecture_for("app/webpacker/controllers/bulk_form_controller.js",
+                              %(import { Controller } from "@hotwired/stimulus";\nexport default class extends Controller {}\n))
+
+      expect(arch).to include("stimulus", "hotwire")
+    end
+
+    it "does not read a react component named *_controller as stimulus" do
+      arch = architecture_for("app/javascript/mastodon/components/alerts_controller.tsx",
+                              %(import { useState } from "react";\n))
+
+      expect(arch).not_to include("stimulus")
     end
   end
 end

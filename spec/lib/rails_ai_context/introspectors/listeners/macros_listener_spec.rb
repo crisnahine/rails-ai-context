@@ -3,13 +3,6 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MacrosListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects has_secure_password" do
     results = parse_and_dispatch("has_secure_password")
     expect(results.size).to eq(1)

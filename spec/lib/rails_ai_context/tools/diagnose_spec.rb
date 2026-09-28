@@ -342,5 +342,68 @@ RSpec.describe RailsAiContext::Tools::Diagnose do
       expect(text).to include("section truncated")
       expect(text).not_to include(large_content)
     end
+    # A sub-tool that raises is an answer the reader needs: the section still
+    # renders, carrying the reason it is empty.
+    it "renders the failure reason when the controller sub-tool raises" do
+      allow(RailsAiContext::Tools::GetControllers).to receive(:call).and_raise("boom")
+
+      text = described_class.call(error: "NoMethodError: undefined method `foo` for nil:NilClass",
+        action: "posts#show").content.first[:text]
+
+      expect(text).to include("## Controller Context")
+      expect(text).to include("_Could not load: boom_")
+    end
+
+    it "renders the failure reason when the edit-context sub-tool raises" do
+      allow(RailsAiContext::Tools::GetEditContext).to receive(:call).and_raise("kaboom")
+
+      text = described_class.call(error: "NoMethodError: undefined method `title` for nil",
+        file: "app/models/post.rb", line: 1).content.first[:text]
+
+      expect(text).to include("## Code Context")
+      expect(text).to include("_Could not load: kaboom_")
+    end
+
+    # The schema, model and trace steps are best-effort: a raise leaves the
+    # section out entirely and says so only under DEBUG.
+    context "a schema_mismatch error whose table the schema payload holds" do
+      let(:schema_error) do
+        "ActiveRecord::StatementInvalid: PG::UndefinedColumn: ERROR: relation \"widgets\" does not exist"
+      end
+
+      before do
+        RailsAiContext::Tools::GetSchema.reset_cache!
+        allow(RailsAiContext::Tools::GetSchema).to receive(:cached_context).and_return(
+          schema: {
+            adapter: "postgresql",
+            total_tables: 1,
+            tables: {
+              "widgets" => {
+                columns: [ { name: "id", type: "integer", null: false }, { name: "sku", type: "string", null: true } ],
+                indexes: [],
+                foreign_keys: []
+              }
+            }
+          },
+          models: {}
+        )
+      end
+
+      it "renders the schema section" do
+        text = described_class.call(error: schema_error).content.first[:text]
+
+        expect(text).to include("## Schema Context")
+        expect(text).to include("sku")
+      end
+
+      it "drops the schema section when its sub-tool raises" do
+        allow(RailsAiContext::Tools::GetSchema).to receive(:call).and_raise("nope")
+
+        text = described_class.call(error: schema_error).content.first[:text]
+
+        expect(text).not_to include("## Schema Context")
+        expect(text).not_to include("Could not load: nope")
+      end
+    end
   end
 end

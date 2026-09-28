@@ -66,6 +66,16 @@ RSpec.describe RailsAiContext::GemLock do
     expect(lock.present?("rails")).to be true
   end
 
+  it "names each PATH section's remote, as the one lockfile reader" do
+    expect(lock.path_remotes).to eq([ "engines/billing" ])
+  end
+
+  it "names a PATH remote in a lockfile with CRLF line ends" do
+    File.write(File.join(@root, "Gemfile.lock"), lock_text.gsub("\n", "\r\n"))
+
+    expect(described_class.for(@root).path_remotes).to eq([ "engines/billing" ])
+  end
+
   it "matches a name exactly, so a longer gem name is not its prefix" do
     expect(lock.present?("bugsnag")).to be false
     expect(lock.present?("database_cleaner")).to be false
@@ -159,6 +169,57 @@ RSpec.describe RailsAiContext::GemLock do
       File.write(File.join(dir, "Gemfile"), "ruby '>= 3.3.0', '< 4.1.0'\n")
 
       expect(described_class.for(dir).ruby_version).to be_nil
+    end
+  end
+
+  it "reads .ruby-version when neither the lockfile nor the Gemfile names one" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.0.0)\n")
+      File.write(File.join(dir, ".ruby-version"), "3.3.6\n")
+
+      spec = described_class.for(dir)
+
+      expect(spec.ruby_version).to eq("3.3.6")
+      expect(spec.ruby_version_source).to eq(".ruby-version")
+    end
+  end
+
+  it "reads the ruby line of .tool-versions last" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (8.0.0)\n")
+      File.write(File.join(dir, ".tool-versions"), "nodejs 20.11.0\nruby 3.2.2\n")
+
+      expect(described_class.for(dir).ruby_version).to eq("3.2.2")
+      expect(described_class.for(dir).ruby_version_source).to eq(".tool-versions")
+    end
+  end
+
+  it "prefers the lockfile over the version-manager files and says so when they disagree" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            rails (8.0.0)
+
+        RUBY VERSION
+          ruby 3.4.1
+      LOCK
+      File.write(File.join(dir, ".ruby-version"), "ruby-3.3.6\n")
+
+      spec = described_class.for(dir)
+
+      expect(spec.ruby_version).to eq("3.4.1")
+      expect(spec.ruby_version_source).to eq("Gemfile.lock")
+      expect(spec.ruby_versions).to eq("Gemfile.lock" => "3.4.1", ".ruby-version" => "3.3.6")
+    end
+  end
+
+  it "reads .ruby-version with no lockfile at all" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, ".ruby-version"), "3.1.4\n")
+
+      expect(described_class.for(dir).ruby_version).to eq("3.1.4")
     end
   end
 

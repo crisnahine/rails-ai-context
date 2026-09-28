@@ -122,7 +122,7 @@ module RailsAiContext
           lines << ""
 
           ordered.each do |type, methods|
-            lines << "- **#{callback_type_label(type)}** → #{format_targets(methods)}"
+            lines << "- **#{callback_type_label(type)}** → #{format_targets(methods, data, type)}"
           end
         end
 
@@ -173,7 +173,7 @@ module RailsAiContext
             ordered = order_callbacks(data[:callbacks])
             lines << "## #{name}"
             ordered.each do |type, methods|
-              lines << "- **#{callback_type_label(type)}** → #{format_targets(methods)}"
+              lines << "- **#{callback_type_label(type)}** → #{format_targets(methods, data, type)}"
             end
             lines << ""
           end
@@ -256,8 +256,13 @@ module RailsAiContext
         "#{prefix}lines #{source[:start_line]}-#{source[:end_line]}"
       end
 
-      private_class_method def self.format_targets(methods)
-        methods.map { |m| "`#{callback_target(m.to_s)}`" }.join(", ")
+      # The conditions arrive in step with the names, one entry per
+      # occurrence, so the same method declared twice keeps its own condition.
+      private_class_method def self.format_targets(methods, data = nil, type = nil)
+        per_type = Array(((data && data[:callback_conditions]) || {})[type.to_s])
+        methods.each_with_index.map do |m, i|
+          "`#{callback_target(m.to_s)}`#{callback_condition_tail(per_type[i])}"
+        end.join(", ")
       end
 
       # The introspector already walks the concern files and tags what it

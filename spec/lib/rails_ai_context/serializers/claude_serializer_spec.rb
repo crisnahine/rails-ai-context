@@ -68,6 +68,28 @@ RSpec.describe RailsAiContext::Serializers::ClaudeSerializer do
       expect(output).to include("...15 more")
     end
 
+    # The file said "Key models" and listed the alphabetical first 15, while
+    # rails_onboard named the most connected ones: two answers to one question.
+    it "ranks key models by association count, most connected first" do
+      models = {
+        "Zebra" => { associations: 4.times.map { |j| { type: "has_many", name: "z#{j}" } } },
+        "Alpha" => { associations: [] },
+        "Beta"  => { associations: [ { type: "belongs_to", name: "zebra" } ] }
+      }
+
+      context = {
+        app_name: "App", rails_version: "8.0", ruby_version: "3.4",
+        generated_at: Time.now.iso8601, schema: {}, models: models,
+        routes: {}, gems: {}, conventions: {}
+      }
+
+      output = described_class.new(context).call
+      listed = output.lines.grep(/\A- \*\*(Zebra|Beta|Alpha)\*\*/).map { |l| l[/\*\*(\w+)\*\*/, 1] }
+
+      expect(listed).to eq(%w[Zebra Beta Alpha])
+      expect(output).to include("Key models (3 total, most connected first)")
+    end
+
     it "includes app name and version" do
       context = {
         app_name: "MyApp", rails_version: "8.0", ruby_version: "3.4",

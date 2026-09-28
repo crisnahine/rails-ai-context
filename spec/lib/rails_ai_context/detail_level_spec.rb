@@ -30,14 +30,6 @@ RSpec.describe RailsAiContext::DetailLevel do
     end
   end
 
-  describe ".at_least?" do
-    it "orders summary below standard below full" do
-      expect(described_class.at_least?("full", "standard")).to be true
-      expect(described_class.at_least?("standard", "standard")).to be true
-      expect(described_class.at_least?("summary", "standard")).to be false
-    end
-  end
-
   describe ".full? and .summary?" do
     it "answers for each level" do
       expect(described_class.full?("full")).to be true

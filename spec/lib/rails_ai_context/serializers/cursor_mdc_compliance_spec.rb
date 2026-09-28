@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "spec_helper"
-require "yaml"
 
 # Validates that CursorRulesSerializer output conforms to Cursor's MDC format.
 #
@@ -18,29 +17,7 @@ require "yaml"
 # - No curly brace glob patterns (unreliable in Cursor)
 # - Standard ** recursive glob works
 RSpec.describe "Cursor MDC compliance" do
-  let(:context) do
-    {
-      app_name: "TestApp", rails_version: "8.0", ruby_version: "3.4",
-      schema: { adapter: "postgresql", total_tables: 12 },
-      models: {
-        "User" => { associations: [ { type: :has_many, name: :posts } ], validations: [], table_name: "users", scopes: [ "active" ], constants: [] },
-        "Post" => { associations: [ { type: :belongs_to, name: :user } ], validations: [], table_name: "posts", scopes: [], constants: [] }
-      },
-      routes: { total_routes: 45 },
-      gems: {},
-      conventions: {},
-      controllers: {
-        controllers: {
-          "UsersController" => { actions: %w[index show new create edit update destroy] },
-          "PostsController" => { actions: %w[index show] }
-        }
-      },
-      view_templates: { templates: {}, partials: {} },
-      stimulus: {},
-      turbo: {}, auth: {}, api: {}, i18n: {}, active_storage: {},
-      action_text: {}, assets: {}, engines: {}, multi_database: {}
-    }
-  end
+  let(:context) { serializer_context }
 
   # Scope the MDC-compliance assertions to files under .cursor/rules/ only.
   # The serializer ALSO writes .cursorrules at the project root as a legacy
@@ -63,13 +40,6 @@ RSpec.describe "Cursor MDC compliance" do
       end
       files
     end
-  end
-
-  def parse_frontmatter(content)
-    return nil unless content.start_with?("---")
-    parts = content.split("---", 3)
-    return nil if parts.size < 3
-    YAML.safe_load(parts[1], permitted_classes: [ Symbol ])
   end
 
   describe "file structure" do

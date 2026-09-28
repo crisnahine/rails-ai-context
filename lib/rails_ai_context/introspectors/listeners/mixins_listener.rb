@@ -17,6 +17,25 @@ module RailsAiContext
         def initialize
           super
           @singleton_depth = 0
+          @owner_stack = []
+        end
+
+        # The class or module the mixin is written in, the way MethodsListener
+        # records a method's: a nested class's include is not its module's.
+        def on_class_node_enter(node)
+          @owner_stack.push(constant_path_string(node.constant_path))
+        end
+
+        def on_class_node_leave(_node)
+          @owner_stack.pop
+        end
+
+        def on_module_node_enter(node)
+          @owner_stack.push(constant_path_string(node.constant_path))
+        end
+
+        def on_module_node_leave(_node)
+          @owner_stack.pop
         end
 
         # `include` inside `class << self` lands on the singleton class, so it
@@ -29,25 +48,44 @@ module RailsAiContext
           @singleton_depth -= 1
         end
 
+        # `Type.include(StatusPatch)` mixes into Type, not the class the line sits in, so the
+        # record names Type as `receiver` and it is never an ancestor of the enclosing class.
         def on_call_node_enter(node)
-          return unless node.receiver.nil?
-          return unless MIXIN_MACROS.include?(node.name)
+          receiver = node.receiver && constant_name(node.receiver)
+          return unless node.receiver.nil? || receiver
 
-          (node.arguments&.arguments || []).each do |arg|
+          macro, arguments = mixin_call(node)
+          return unless macro
+
+          arguments.each do |arg|
             name = constant_name(arg)
             next unless name
 
-            @results << {
-              macro:      node.name,
+            record = {
+              macro:      macro,
               name:       name,
-              ancestor:   @singleton_depth.zero? && ANCESTOR_MACROS.include?(node.name),
+              ancestor:   receiver.nil? && @singleton_depth.zero? && ANCESTOR_MACROS.include?(macro),
+              owner:      @owner_stack.dup,
               location:   node.location.start_line,
               confidence: confidence_for(node)
             }
+            record[:receiver] = receiver if receiver
+            @results << record
           end
         end
 
         private
+
+        # `include X`, and `send :include, X`, the same include written to reach a private method.
+        def mixin_call(node)
+          arguments = node.arguments&.arguments || []
+          return [ node.name, arguments ] if MIXIN_MACROS.include?(node.name)
+          return unless %i[send public_send __send__].include?(node.name)
+
+          first = arguments.first
+          macro = first.unescaped.to_sym if first.is_a?(Prism::SymbolNode)
+          [ macro, arguments.drop(1) ] if MIXIN_MACROS.include?(macro)
+        end
 
         def constant_name(node)
           return unless node.is_a?(Prism::ConstantReadNode) || node.is_a?(Prism::ConstantPathNode)

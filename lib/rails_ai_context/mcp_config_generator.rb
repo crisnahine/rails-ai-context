@@ -173,12 +173,7 @@ module RailsAiContext
     RUBY_ENV_KEYS = %w[PATH GEM_HOME GEM_PATH GEM_ROOT RUBY_VERSION BUNDLE_PATH].freeze
 
     def ruby_env_snapshot
-      snapshot = {}
-      RUBY_ENV_KEYS.each do |key|
-        val = ENV[key]
-        snapshot[key] = val if val && !val.empty?
-      end
-      snapshot
+      ENV.slice(*RUBY_ENV_KEYS).reject { |_, value| value.empty? }
     end
 
     # --- Shared helpers ---

@@ -4,12 +4,6 @@ module RailsAiContext
   # The view tool and the view resource each decided which template an
   # extension-less name meant, and disagreed; this is the one answer.
   module ViewFile
-    Result = Data.define(:realpath, :relative, :refusal) do
-      def ok?
-        refusal.nil?
-      end
-    end
-
     LOGICAL_PATH = %r{\A[\w\-]+(?:/[\w\-]+)*\z}
 
     # What Rails registers when nothing else is bundled, for the static tier
@@ -28,7 +22,23 @@ module RailsAiContext
       rabl liquid arb md markdown prawn csv atom rss
     ].freeze
 
+    MARKUP_GLOB = "**/*.{erb,haml,slim}"
+
     module_function
+
+    # Every view file across every views root (the app's first, then packs, engines,
+    # plugins) with the name it renders by; a name a later root repeats is the first's.
+    def each(root, glob = "**/*")
+      seen = {}
+      PathResolver.view_dirs(root).each do |dir|
+        Dir.glob(File.join(dir, glob)).sort.each do |path|
+          next if File.directory?(path)
+
+          seen[path.sub("#{dir}/", "")] ||= path
+        end
+      end
+      seen.map { |relative, path| [ path, relative ] }
+    end
 
     # @return [Array<String>] the template handler extensions this app has
     def handler_extensions
@@ -52,22 +62,42 @@ module RailsAiContext
       handler_extensions.include?(ext)
     end
 
+    # app/views/layouts also holds the partials those layouts render, and the
+    # partial listing counts those; a layout is a non-partial template there.
+    def layout?(path)
+      template?(path) && !File.basename(path.to_s).start_with?("_")
+    end
+
     # path: relative to app/views, or spelled from the app root.
+    # Tried under every views root, so an engine's or plugin's view resolves too. A
+    # refusal other than "not here" is the answer wherever it comes from.
     def locate(root, path)
       path = path.to_s.delete_prefix("app/views/")
-      views = File.join(root.to_s, "app", "views")
+      refusal = nil
 
+      PathResolver.view_dirs(root).each do |views|
+        result = locate_under(views, root, path)
+        return result if result.ok?
+
+        refusal ||= result.refusal unless result.refusal == :missing
+      end
+
+      SafePath::Resolution.new(realpath: nil, relative: nil, refusal: refusal || :missing)
+    end
+
+    def locate_under(views, root, path)
       guard = SafePath.locate(path, under: views, root: root)
-      return Result.new(realpath: nil, relative: nil, refusal: guard.refusal) if guard.refusal && guard.refusal != :missing
+      return SafePath::Resolution.new(realpath: nil, relative: nil, refusal: guard.refusal) if guard.refusal && guard.refusal != :missing
 
       resolved = guard.ok? && File.file?(guard.realpath) ? path : logical_template(views, path)
-      return Result.new(realpath: nil, relative: nil, refusal: :missing) unless resolved
+      return SafePath::Resolution.new(realpath: nil, relative: nil, refusal: :missing) unless resolved
 
       located = SafePath.locate(resolved, under: views, root: root)
-      return Result.new(realpath: nil, relative: nil, refusal: located.refusal) unless located.ok?
+      return SafePath::Resolution.new(realpath: nil, relative: nil, refusal: located.refusal) unless located.ok?
 
-      Result.new(realpath: located.realpath, relative: resolved, refusal: nil)
+      SafePath::Resolution.new(realpath: located.realpath, relative: resolved, refusal: nil)
     end
+    private_class_method :locate_under
 
     def read(root, path)
       result = locate(root, path)

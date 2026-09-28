@@ -14,7 +14,7 @@ module RailsAiContext
     # introspectors' real output.
     LISTS = {
       mounted_engines: %i[engines mounted_engines],
-      rails_engines: %i[engines rails_engines],
+      in_repo_engines: %i[engines in_repo_engines],
       turbo_frames: %i[turbo turbo_frames],
       turbo_streams: %i[turbo turbo_streams],
       model_broadcasts: %i[turbo model_broadcasts],
@@ -26,7 +26,6 @@ module RailsAiContext
       available_locales: %i[i18n available_locales],
       storage_attachments: %i[active_storage attachments],
       rich_text_fields: %i[action_text rich_text_fields],
-      databases: %i[multi_database databases],
       notable_gems: %i[gems notable_gems],
       stimulus_controllers: %i[stimulus controllers],
       architecture: %i[conventions architecture],
@@ -64,9 +63,41 @@ module RailsAiContext
       controllers(ctx).reject { |name, _| excluded.include?(name) }
     end
 
+    # Counted from the model scan's files, since an engine's .rb files overcount. Nil,
+    # not 0, when the models section failed or never ran.
+    def in_repo_engines_with_models(ctx)
+      section = ctx.is_a?(Hash) ? ctx[:models] : nil
+      known = section.is_a?(Hash) && !section[:error] && !section[:unavailable]
+      files = known ? section.values.filter_map { |data| data[:file] if data.is_a?(Hash) } : []
+      in_repo_engines(ctx).map do |engine|
+        prefix = "#{engine[:path]}/"
+        engine.merge(model_count: known ? files.count { |file| file.to_s.start_with?(prefix) } : nil)
+      end
+    end
+
+    def engine_model_phrase(engine)
+      count = engine[:model_count]
+      count.nil? ? " - model count unavailable" : " - #{CountPhrase.call(count, 'model')}"
+    end
+
     def models(ctx)
       value = ctx.is_a?(Hash) ? ctx[:models] : nil
       value.is_a?(Hash) && !value[:error] ? value : {}
+    end
+
+    # Every "key models" list orders here, or two disagree when counts tie. A
+    # model ranks by the associations it adds to its listed parent.
+    # ponytail: a child redeclaring a parent's association counts as adding none.
+    def models_by_connection(models)
+      models.keys.sort_by do |name|
+        data = models[name]
+        next [ 0, 0, name.to_s ] unless data.is_a?(Hash)
+
+        parent = models[data[:parent_model]]
+        inherited = parent.is_a?(Hash) ? Array(parent[:associations]).size : 0
+        own = [ Array(data[:associations]).size - inherited, 0 ].max
+        [ -own, parent.is_a?(Hash) ? 1 : 0, name.to_s ]
+      end
     end
 
     # Answers only for gems in GemIntrospector::NOTABLE_GEMS - a gem missing
@@ -99,10 +130,6 @@ module RailsAiContext
     # none: a job in a pack has no conventional path to fall back to.
     def job_file(ctx, name)
       jobs(ctx).find { |job| job.is_a?(Hash) && job[:name] == name.to_s }&.dig(:file)
-    end
-
-    def mailer_file(ctx, name)
-      mailers(ctx).find { |mailer| mailer.is_a?(Hash) && mailer[:name] == name.to_s }&.dig(:file)
     end
 
     # The model a file declares, as [name, data].

@@ -4,48 +4,62 @@ module RailsAiContext
   module Introspectors
     # Discovers Active Storage usage: attachments, storage service config,
     # direct upload detection.
-    class ActiveStorageIntrospector
+    class ActiveStorageIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
           installed: defined?(ActiveStorage) ? true : false,
-          attachments: extract_attachments,
+          attachments: model_facts[:attachments],
           storage_services: extract_storage_services,
           direct_upload: detect_direct_upload,
-          validations: extract_attachment_validations,
-          variants: extract_variants
+          validations: model_facts[:validations],
+          variants: model_facts[:variants]
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
 
-      def root
-        app.root.to_s
-      end
+      # One walk per model answers all three model questions.
+      def model_facts
+        @model_facts ||= begin
+          attachments = []
+          validations = []
+          variants = []
 
-      def extract_attachments
-        attachments = []
-        SourceScan.classes(root, kind: "app/models").each do |model_name, record|
-          ast_data = SourceIntrospector.walk_source(record.source, { macros: Listeners::MacrosListener })
-          ast_data[:macros].each do |m|
-            next unless %i[has_one_attached has_many_attached].include?(m[:macro])
-            attachments << { model: model_name, name: m[:attribute], type: m[:macro].to_s }
+          SourceScan.classes(root, kind: "app/models").each do |model_name, record|
+            ast = SourceIntrospector.walk_source(record.source, {
+              macros: Listeners::MacrosListener,
+              validations: Listeners::ValidationsListener,
+              variants: Listeners::VariantCallListener
+            })
+
+            ast[:macros].each do |m|
+              next unless %i[has_one_attached has_many_attached].include?(m[:macro])
+              attachments << { model: model_name, name: m[:attribute], type: m[:macro].to_s }
+            end
+
+            ast[:validations].each do |v|
+              (v[:attributes] || []).each do |attr|
+                validations << { model: model_name, attachment: attr, type: "content_type" } if attachment_rule?(v, :content_type)
+                validations << { model: model_name, attachment: attr, type: "size" } if attachment_rule?(v, :size)
+              end
+            end
+
+            ast[:variants].each do |v|
+              v[:args].each { |name| variants << { model: model_name, name: name.to_s } }
+            end
           end
-        end
 
-        attachments.sort_by { |a| [ a[:model], a[:name] ] }
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_attachments")
+          {
+            attachments: attachments.sort_by { |a| [ a[:model], a[:name] ] },
+            validations: validations,
+            variants: variants
+          }
+        rescue => e
+          RailsAiContext.debug_fail(e, { attachments: [], validations: [], variants: [] }, label: "model_facts")
+        end
       end
 
       def extract_storage_services
@@ -59,44 +73,12 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "extract_storage_services")
       end
 
-      def extract_attachment_validations
-        validations = []
-        SourceScan.classes(root, kind: "app/models").each do |model, record|
-          ast_data = SourceIntrospector.walk_source(record.source, { validations: Listeners::ValidationsListener })
-          ast_data[:validations].each do |v|
-            attrs = v[:attributes] || []
-            attrs.each do |attr|
-              validations << { model: model, attachment: attr, type: "content_type" } if attachment_rule?(v, :content_type)
-              validations << { model: model, attachment: attr, type: "size" } if attachment_rule?(v, :size)
-            end
-          end
-        end
-        validations
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_attachment_validations")
-      end
-
       # `validates :avatar, content_type: [...]` names its validator in the
       # option key, so the listener reports it as the rule's kind; a rule
       # written with the same key beside another kind still carries it as an
       # option.
       def attachment_rule?(rule, key)
         rule[:kind].to_s == key.to_s || rule[:options].key?(key)
-      end
-
-      def extract_variants
-        variants = []
-        SourceScan.classes(root, kind: "app/models").each do |model, record|
-          ast_data = SourceIntrospector.walk_source(record.source, { variants: Listeners::VariantCallListener })
-          ast_data[:variants].each do |v|
-            v[:args].each do |name|
-              variants << { model: model, name: name.to_s }
-            end
-          end
-        end
-        variants
-      rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_variants")
       end
 
       def detect_direct_upload

@@ -7,15 +7,9 @@ module RailsAiContext
     # the Rails 8.1 structured event reporter, and the well-known Rails
     # event-name catalog. Covers RAILS_NERVOUS_SYSTEM.md §34 (Observability)
     # and §38 (AS::Notifications event catalog).
-    class ObservabilityIntrospector
+    class ObservabilityIntrospector < Base
       extend StaticTier
       static_tier :runtime_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
@@ -28,15 +22,9 @@ module RailsAiContext
           colorize_logging: !!app.config.colorize_logging,
           known_events: KNOWN_EVENTS
         }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "ObservabilityIntrospector#call")
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       # Every LogSubscriber registered with ActiveSupport::LogSubscriber is
       # reachable via `.log_subscribers` (available since Rails 3). Returns

@@ -76,7 +76,7 @@ module RailsAiContext
           lines << "| Waiting | #{stat[:waiting]} |"
           lines << "| Checkout timeout | #{stat[:checkout_timeout]}s |"
 
-          utilization = stat[:size] > 0 ? ((stat[:busy].to_f / stat[:size]) * 100).round : 0
+          utilization = RailsAiContext::Percent.floor(stat[:busy], stat[:size], decimals: 0)
           lines << "" << "Pool utilization: #{utilization}%"
           lines << "**Warning:** Pool is full (#{stat[:busy]}/#{stat[:size]} busy, #{stat[:waiting]} waiting)" if stat[:waiting] > 0
           lines << ""
@@ -102,10 +102,10 @@ module RailsAiContext
             lines << "| Table | Size |"
             lines << "|-------|------|"
             sizes.first(RailsAiContext::DetailLevel.summary?(detail) ? 5 : 30).each do |row|
-              lines << "| #{row[:name]} | #{format_bytes(row[:bytes])} |"
+              lines << "| #{row[:name]} | #{human_size(row[:bytes])} |"
             end
             total = sizes.sum { |r| r[:bytes] }
-            lines << "| **Total** | **#{format_bytes(total)}** |"
+            lines << "| **Total** | **#{human_size(total)}** |"
             lines << "_#{count_phrase(sizes.size - 30, "more table")}..._" if detail != "summary" && sizes.size > 30
           end
 
@@ -187,7 +187,7 @@ module RailsAiContext
             end
             return rows if rows.any?
           rescue => e
-            $stderr.puts "[rails-ai-context] gather_sqlite_table_sizes (dbstat) failed: #{e.message}" if ENV["DEBUG"]
+            RailsAiContext.debug_fail(e, label: "gather_sqlite_table_sizes (dbstat)")
           end
 
           # Fallback: whole-DB size split across user tables (dbstat unavailable).
@@ -243,7 +243,7 @@ module RailsAiContext
               hits = info["keyspace_hits"].to_i
               misses = info["keyspace_misses"].to_i
               total = hits + misses
-              hit_rate = total > 0 ? ((hits.to_f / total) * 100).round(1) : 0
+              hit_rate = RailsAiContext::Percent.floor(hits, total)
               lines << "**Hit rate:** #{hit_rate}% (#{count_phrase(hits, "hit")}, #{count_phrase(misses, "miss")})"
               lines << "**Memory:** #{cache.redis.info("memory")["used_memory_human"]}"
             rescue => e
@@ -320,21 +320,6 @@ module RailsAiContext
           lines
         rescue => e
           [ "## Background Jobs", "", "_Not available: #{e.message}_", "" ]
-        end
-
-        # ── Helpers ──────────────────────────────────────────────────────
-
-        def format_bytes(bytes)
-          return "0 B" if bytes.nil? || bytes == 0
-          if bytes >= 1_073_741_824
-            "#{(bytes / 1_073_741_824.0).round(1)} GB"
-          elsif bytes >= 1_048_576
-            "#{(bytes / 1_048_576.0).round(1)} MB"
-          elsif bytes >= 1024
-            "#{(bytes / 1024.0).round(1)} KB"
-          else
-            "#{bytes} B"
-          end
         end
       end
     end

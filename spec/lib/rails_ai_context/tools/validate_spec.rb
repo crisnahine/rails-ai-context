@@ -29,6 +29,48 @@ RSpec.describe RailsAiContext::Tools::Validate do
       end
     end
 
+    # Five SQL-injection warnings for listing.rb printed under public.rb's
+    # heading, at the indent that says "this file", because they were appended
+    # after the loop.
+    context "with Brakeman findings for one of several files" do
+      before do
+        allow(RailsAiContext::Tools::ValidateSemantics).to receive(:check_brakeman_security)
+          .and_return("app/models/post.rb" => [ "[Medium] SQL Injection - app/models/post.rb:12: Post.where(params)" ])
+      end
+
+      it "prints the finding under the file it belongs to" do
+        text = described_class.call(files: [ "app/models/post.rb", "app/models/comment.rb" ], level: "rails")
+                              .content.first[:text]
+        lines = text.split("\n")
+        post_at = lines.index { |l| l.include?("app/models/post.rb - syntax OK") }
+        comment_at = lines.index { |l| l.include?("app/models/comment.rb - syntax OK") }
+
+        expect(lines[(post_at + 1)...comment_at].grep(/SQL Injection/).size).to eq(1)
+      end
+
+      it "leaves nothing under a file with no finding of its own" do
+        text = described_class.call(files: [ "app/models/comment.rb", "app/models/post.rb" ], level: "rails")
+                              .content.first[:text]
+        lines = text.split("\n")
+        comment_at = lines.index { |l| l.include?("app/models/comment.rb - syntax OK") }
+        post_at = lines.index { |l| l.include?("app/models/post.rb - syntax OK") }
+
+        expect(lines[(comment_at + 1)...post_at].grep(/SQL Injection/)).to eq([])
+      end
+
+      # A file the loop never reaches still has a finding to report, and the
+      # message names the file, so it goes out unindented rather than silently.
+      it "reports a finding for a file the loop skipped, naming the file" do
+        allow(RailsAiContext::Tools::ValidateSemantics).to receive(:check_brakeman_security)
+          .and_return("config/database.yml" => [ "[High] SQL Injection - config/database.yml:3: something" ])
+
+        text = described_class.call(files: [ "config/database.yml" ], level: "rails").content.first[:text]
+
+        expect(text).to include("\u26A0 [High] SQL Injection - config/database.yml:3")
+        expect(text).not_to include("  \u26A0 [High]")
+      end
+    end
+
     it "returns error for non-existent files" do
       result = described_class.call(files: [ "nonexistent/file.rb" ])
       text = result.content.first[:text]
@@ -336,6 +378,99 @@ RSpec.describe RailsAiContext::Tools::Validate do
     it "passes a file with only comments" do
       ok, = validate_js("// just a comment\n/* block */\n")
       expect(ok).to be true
+    end
+  end
+  # A model file that maps to no model must not collect the whole app's missing indexes.
+  describe "missing foreign-key indexes" do
+    before do
+      findings = [ { table: "orders", column: "customer_id", suggestion: "add_index :orders, :customer_id" } ]
+      allow(RailsAiContext::Payload).to receive(:section).and_wrap_original do |original, context, name|
+        name == :performance ? { missing_fk_indexes: findings } : original.call(context, name)
+      end
+    end
+
+    it "does not report another table's missing index against an unmapped model file" do
+      result = described_class.call(files: [ "app/models/application_record.rb" ], level: "rails")
+      text = result.content.first[:text]
+
+      expect(text).not_to include("customer_id")
+    end
+  end
+
+  # CHECK 8, which reports the validated model's own table. It is what carries
+  # missing-FK reporting now, and it passed before the CHECK 14 deletion too.
+  describe "a mapped model's own missing foreign-key index" do
+    it "reports the belongs_to column its table has no index on" do
+      result = described_class.call(files: [ "app/models/post.rb" ], level: "rails")
+      text = result.content.first[:text]
+
+      expect(text).to include("user_id in posts - foreign key without index (slow queries)")
+    end
+  end
+  # Mastodon declares 40-odd associations inside one `with_options
+  # dependent: :destroy` block, and every one of them was reported.
+  describe "has_many inside a with_options block" do
+    it "warns only about the association the block does not cover" do
+      previous_root = RailsAiContext.configuration.app_root
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "account.rb"), <<~RUBY)
+          class Account < ApplicationRecord
+            with_options dependent: :destroy do
+              has_many :statuses
+              has_many :favourites
+            end
+
+            has_many :mentions
+          end
+        RUBY
+        RailsAiContext.configuration.app_root = dir
+
+        text = described_class.call(files: [ "app/models/account.rb" ], level: "rails").content.first[:text]
+
+        expect(text).to include("has_many :mentions - missing :dependent option")
+        expect(text).not_to include("has_many :statuses - missing :dependent option")
+        expect(text).not_to include("has_many :favourites - missing :dependent option")
+      end
+    ensure
+      RailsAiContext.configuration.app_root = previous_root
+    end
+  end
+
+  # paper_trail adds `has_many :versions` through `has_paper_trail`; reflection
+  # lists it, and the fix the warning asked for belongs in no line the app wrote.
+  describe "a has_many a gem adds to the model" do
+    it "judges only the associations the model's source declares" do
+      previous_root = RailsAiContext.configuration.app_root
+      allow(RailsAiContext).to receive(:tier).and_return(:static)
+
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "document.rb"), <<~RUBY)
+          class Document < ApplicationRecord
+            has_paper_trail
+            has_many :pages
+          end
+        RUBY
+        RailsAiContext.configuration.app_root = dir
+        allow(RailsAiContext::Tools::ValidateSemantics).to receive(:cached_context).and_return(
+          models: {
+            "Document" => {
+              table_name: "documents", file: "app/models/document.rb",
+              associations: [ { type: "has_many", name: "versions" }, { type: "has_many", name: "pages" } ]
+            }
+          }
+        )
+
+        text = described_class.call(files: [ "app/models/document.rb" ], level: "rails").content.first[:text]
+
+        expect(text).to include("has_many :pages - missing :dependent option")
+        expect(text).not_to include("has_many :versions")
+      end
+    ensure
+      RailsAiContext.configuration.app_root = previous_root
     end
   end
 end

@@ -11,15 +11,13 @@ module RailsAiContext
     # action, a query chain and an association touched in an ERB view, and ERB
     # has no Ruby AST to walk. Matching both sides as text keeps them
     # comparable, and every finding here is a heuristic, not a fact.
-    class PerformanceIntrospector
+    class PerformanceIntrospector < Base
       extend StaticTier
       static_tier :files_only
 
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
+      # The run's sections so far; the models section answers which table a
+      # model reads, so this section and the model tier never disagree.
+      attr_writer :context
 
       def call
         schema_data = load_schema_data
@@ -29,19 +27,13 @@ module RailsAiContext
           n_plus_one_risks: detect_n_plus_one(model_data),
           missing_counter_cache: detect_missing_counter_cache(model_data, schema_data),
           missing_fk_indexes: detect_missing_fk_indexes(schema_data, model_data, load_foreign_keys),
-          model_all_in_controllers: detect_model_all_in_controllers,
-          eager_load_candidates: detect_eager_load_candidates,
+          model_all_in_controllers: detect_model_all_in_controllers(model_data),
+          eager_load_candidates: detect_eager_load_candidates(model_data),
           summary: nil # populated below
         }.tap { |result| result[:summary] = build_summary(result) }
-      rescue => e
-        { error: e.message }
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def load_schema_data
         SchemaReader.for(root).tables
@@ -49,6 +41,29 @@ module RailsAiContext
 
       def load_foreign_keys
         SchemaReader.for(root).foreign_keys
+      end
+
+      # The models section when the run has one; otherwise the model tier is
+      # asked directly, which is what a standalone call costs.
+      def resolved_models
+        @resolved_models ||= begin
+          models = @context && @context[:models]
+          if models.is_a?(Hash) && !models.key?(:error) && !models.key?(:unavailable)
+            models
+          else
+            introspector = ModelIntrospector.new(app)
+            static = RailsAiContext.static_tier? || app.is_a?(RailsAiContext::StaticApp)
+            static ? introspector.static_call : introspector.call
+          end
+        rescue StandardError => e
+          RailsAiContext.debug_fail(e, {}, label: "resolved_models")
+        end
+      end
+
+      # A hash lookup first: TableName.for_model_name scans every model, and
+      # this runs once per model.
+      def model_table(class_name)
+        table_of(class_name, resolved_models)
       end
 
       def active_record_class_name(classes)
@@ -64,7 +79,9 @@ module RailsAiContext
           ast = SourceIntrospector.walk_source(record.source, {
             classes: Listeners::ClassDefinitionListener,
             associations: Listeners::AssociationsListener,
-            includes: -> { Listeners::ChainedCallListener.new(:includes) }
+            includes: -> { Listeners::ChainedCallListener.new(:includes) },
+            tree: TREE_LISTENER,
+            mixins: Listeners::MixinsListener
           })
 
           # The listener names the class node alone, so the qualified name is
@@ -86,19 +103,36 @@ module RailsAiContext
 
           {
             name: class_name,
+            # The name of the class node whose superclass is ApplicationRecord,
+            # which is not always the qualified name above.
+            ar_class_name: active_record_class_name(ast[:classes]),
             file: record.file,
-            # This walk keeps no view of the other model files, so a
-            # table_name_prefix declared by an enclosing module is out of
-            # reach here and the stem stands alone. The declaration is looked
-            # up by the qualified name the file writes, which is what a model
-            # nested inside a module body is called.
-            table_name: TableName.explicit(record.source, class_name) || TableName.stem(record.path),
+            table_name: model_table(class_name),
             has_many: has_many,
             belongs_to: belongs_to,
+            tree_parent_keys: tree_parent_keys(ast, class_name),
             includes_calls: includes_calls
           }
         rescue => e
           RailsAiContext.debug_fail(e, nil, label: "load_model_data")
+        end
+      end
+
+      # Gem macros that declare a parent key, with the option that renames it.
+      # ponytail: a fixed list; a gem outside it declares keys the static walk cannot see.
+      TREE_MACROS = { acts_as_tree: :foreign_key, acts_as_nested_set: :parent_column,
+                      has_closure_tree: :parent_column_name }.freeze
+      TREE_LISTENER = -> { Listeners::GenericMacroListener.new(*TREE_MACROS.keys) }
+      TREE_CONCERN_LISTENERS = { tree: TREE_LISTENER, mixins: Listeners::MixinsListener }.freeze
+
+      # The parent key a tree macro declares, in the model or its concerns.
+      # The models section cannot carry it statically: the macro is a gem's.
+      def tree_parent_keys(ast, class_name)
+        collected, = ConcernMacros.collect(root, ast[:mixins], keys: %i[tree], prefer: "model",
+                                           within: class_name, cache: (@concern_cache ||= {}),
+                                           listeners: TREE_CONCERN_LISTENERS)
+        (ast[:tree] + Array(collected[:tree])).map do |macro|
+          ((macro[:options] || {})[TREE_MACROS[macro[:macro]]] || "parent_id").to_s
         end
       end
 
@@ -127,7 +161,7 @@ module RailsAiContext
         views_dir = File.join(root, "app/views")
         return [] unless Dir.exist?(views_dir)
 
-        Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim}")).filter_map do |path|
+        Dir.glob(File.join(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB)).filter_map do |path|
           RailsAiContext::SafeFile.read(path)
         end
       end
@@ -306,7 +340,7 @@ module RailsAiContext
             next if options.key?(:counter_cache)
             next if written.include?(count_col)
 
-            belongs_to_model = association_model(model_data, assoc)
+            belongs_to_model = association_model(model_data, assoc, model[:name])
             next unless belongs_to_model
             next if belongs_to_model[:belongs_to].any? { |b| b[:options].key?(:counter_cache) }
 
@@ -330,30 +364,18 @@ module RailsAiContext
       # never by the Remark the name implies. When no model in the app answers
       # either, the row would name a file the reader cannot open, so it is not
       # written at all.
-      def association_model(model_data, assoc)
-        wanted = (assoc[:options][:class_name] || assoc[:name].classify).to_s
-        model_data.find { |m| m[:name] == wanted } ||
-          model_data.find { |m| m[:name].demodulize == wanted.demodulize }
-      end
+      def association_model(model_data, assoc, owner)
+        return nil if assoc[:computed_name] && !assoc[:options][:class_name]
 
-      # A `*_id` column is only a foreign key when something says so. An app
-      # on uuid primary keys keeps `stripe_customer_id` and
-      # `calendar_app_id` as external ids that cannot reference any row here,
-      # and every one of them was reported as a missing index.
-      # integer and bigint are one type for this purpose: an app that keeps a
-      # bigint primary key may still declare an integer foreign key.
-      def normalized_type(type)
-        type.to_s == "bigint" ? "integer" : type.to_s
-      end
-
-      def primary_key_types(schema_data)
-        schema_data.each_with_object(Set.new) do |(_name, table), types|
-          Array(table[:columns]).each do |col|
-            types << normalized_type(col[:type]) if col[:primary_key]
-          end
+        by_name = model_data.to_h { |m| [ m[:name], m ] }
+        wanted = TableName.resolve_class(assoc[:options][:class_name] || assoc[:name].classify, owner) do |candidate|
+          candidate if by_name.key?(candidate)
         end
+        by_name[wanted]
       end
 
+      # A `*_id` column is a foreign key only when something says so (add_foreign_key,
+      # belongs_to, has_many or has_one); `stripe_customer_id` is an external id.
       def foreign_key_columns(foreign_keys)
         Array(foreign_keys).each_with_object(Set.new) do |fk, found|
           column = fk[:column] || "#{fk[:to].to_s.singularize}_id"
@@ -361,22 +383,52 @@ module RailsAiContext
         end
       end
 
-      def belongs_to_columns(model_data)
-        Array(model_data).each_with_object(Set.new) do |model, found|
-          table = model[:table_name].to_s
-          next if table.empty?
+      # The column each association reads, concerns and bases included: a belongs_to's on
+      # its own table, a has_many's on the other, both of a habtm join, none for :through.
+      def association_columns(models)
+        models.each_with_object(Set.new) do |(name, details), found|
+          next unless details.is_a?(Hash) && details[:table_name]
 
-          Array(model[:belongs_to]).each do |assoc|
-            options = assoc[:options] || {}
-            found << [ table, (options[:foreign_key] || "#{assoc[:name]}_id").to_s ]
+          table = details[:table_name].to_s
+          Array(details[:associations]).each do |assoc|
+            options = assoc[:options].is_a?(Hash) ? assoc[:options] : {}
+            next if assoc[:through] || options.key?(:through)
+
+            key = (assoc[:foreign_key] || options[:foreign_key])&.to_s
+            own_key = "#{name.to_s.demodulize.underscore}_id"
+            written = assoc[:class_name] || options[:class_name] || assoc[:name].to_s.camelize.singularize
+            other = TableName.resolve_class(written, name) { |candidate| candidate if models.key?(candidate) }
+            case assoc[:type].to_s
+            when "belongs_to"
+              found << [ table, key || "#{assoc[:name]}_id" ]
+            when "has_many", "has_one"
+              found << [ table_of(other, models), key || (options[:as] ? "#{options[:as]}_id" : own_key) ]
+            when "has_and_belongs_to_many"
+              join = (assoc[:join_table] || options[:join_table] ||
+                      HabtmJoinTables.join_table_name(table, table_of(other, models))).to_s
+              other_key = assoc[:association_foreign_key] || options[:association_foreign_key]
+              found << [ join, key || own_key ]
+              found << [ join, (other_key || "#{assoc[:name].to_s.singularize}_id").to_s ]
+            end
           end
         end
       end
 
+      def tree_parent_columns(model_data)
+        Array(model_data).each_with_object(Set.new) do |model, found|
+          Array(model[:tree_parent_keys]).each { |key| found << [ model[:table_name].to_s, key ] }
+        end
+      end
+
+      def table_of(class_name, models)
+        details = models[class_name]
+        ((details.is_a?(Hash) && details[:table_name]) || TableName.for_model_name(class_name, {})).to_s
+      end
+
       def detect_missing_fk_indexes(schema_data, model_data = [], foreign_keys = [])
         missing = []
-        pk_types = primary_key_types(schema_data)
-        declared = foreign_key_columns(foreign_keys) | belongs_to_columns(model_data)
+        declared = foreign_key_columns(foreign_keys) | association_columns(resolved_models) |
+                   tree_parent_columns(model_data)
 
         schema_data.each do |table_name, table|
           columns = table[:columns]
@@ -384,10 +436,11 @@ module RailsAiContext
           columns.each do |col|
             next unless col[:name].end_with?("_id")
 
-            indexed = table[:indexes].any? { |idx| idx[:columns].include?(col[:name]) }
+            indexed = SchemaConventions.lookup_indexed_columns(table).include?(col[:name])
             # Rails indexes a reference column when it creates it.
             next if %w[references belongs_to].include?(col[:type])
             next if indexed
+            next unless declared.include?([ table_name.to_s, col[:name] ])
 
             # Check for polymorphic association (_type column alongside _id)
             base_name = col[:name].sub(/_id\z/, "")
@@ -395,9 +448,7 @@ module RailsAiContext
 
             if type_col
               # Polymorphic: need compound index on [type, id]
-              compound_indexed = table[:indexes].any? { |idx|
-                idx[:columns].include?("#{base_name}_type") && idx[:columns].include?("#{base_name}_id")
-              }
+              compound_indexed = SchemaConventions.leading_index?(table[:indexes], [ "#{base_name}_type", "#{base_name}_id" ])
               unless compound_indexed
                 missing << {
                   table: table_name,
@@ -407,9 +458,6 @@ module RailsAiContext
                 }
               end
             else
-              next unless declared.include?([ table_name.to_s, col[:name] ]) ||
-                          pk_types.include?(normalized_type(col[:type]))
-
               missing << {
                 table: table_name,
                 column: col[:name],
@@ -422,18 +470,15 @@ module RailsAiContext
         missing
       end
 
-      def detect_model_all_in_controllers
+      def detect_model_all_in_controllers(model_data)
         findings = []
-        model_names = SourceScan.each(root, kind: "app/models").filter_map do |record|
-          ast = SourceIntrospector.walk_source(record.source, { classes: Listeners::ClassDefinitionListener })
-          active_record_class_name(ast[:classes])
-        end
+        model_names = model_data.map { |model| model[:ar_class_name] }
 
         return findings if model_names.empty?
 
         # One regex over every controller beats one AST walk per controller per
         # model, and a `Model.all` mention is all this heuristic needs. Regex
-        # stays; the model names it looks for come from the AST above.
+        # stays; the model names it looks for come from the model walk.
         escaped_names = model_names.map { |n| Regexp.escape(n) }
         combined_pattern = /(#{escaped_names.join("|")})\.all\b/
 
@@ -453,21 +498,12 @@ module RailsAiContext
         findings
       end
 
-      def detect_eager_load_candidates
+      def detect_eager_load_candidates(model_data)
         # Find models with multiple has_many that are likely rendered together
         candidates = []
-        SourceScan.each(root, kind: "app/models").each do |record|
-          ast = SourceIntrospector.walk_source(record.source, {
-            classes: Listeners::ClassDefinitionListener,
-            associations: Listeners::AssociationsListener
-          })
-
-          next unless active_record_class_name(ast[:classes])
-
-          class_name = declared_name(record)
-          has_many_assocs = ast[:associations]
-            .select { |a| a[:type] == "has_many" }
-            .map { |a| a[:name].to_s }
+        model_data.each do |model|
+          class_name = model[:name]
+          has_many_assocs = model[:has_many].map { |a| a[:name] }
 
           next unless has_many_assocs.size >= 2
 
@@ -476,29 +512,19 @@ module RailsAiContext
             associations: has_many_assocs,
             suggestion: "Consider eager loading when rendering #{class_name} with associations: #{has_many_assocs.join(", ")}"
           }
-        rescue => e
-          $stderr.puts "[rails-ai-context] detect_eager_load_candidates failed: #{e.message}" if ENV["DEBUG"]
-          next
         end
 
         candidates
       end
 
-      def build_summary(result)
-        total_issues = result[:n_plus_one_risks].size +
-                       result[:missing_counter_cache].size +
-                       result[:missing_fk_indexes].size +
-                       result[:model_all_in_controllers].size +
-                       result[:eager_load_candidates].size
+      SUMMARY_KEYS = %i[
+        n_plus_one_risks missing_counter_cache missing_fk_indexes
+        model_all_in_controllers eager_load_candidates
+      ].freeze
 
-        {
-          total_issues: total_issues,
-          n_plus_one_risks: result[:n_plus_one_risks].size,
-          missing_counter_cache: result[:missing_counter_cache].size,
-          missing_fk_indexes: result[:missing_fk_indexes].size,
-          model_all_in_controllers: result[:model_all_in_controllers].size,
-          eager_load_candidates: result[:eager_load_candidates].size
-        }
+      def build_summary(result)
+        counts = SUMMARY_KEYS.to_h { |key| [ key, result[key].size ] }
+        { total_issues: counts.values.sum }.merge(counts)
       end
     end
   end

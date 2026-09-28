@@ -5,21 +5,25 @@ module RailsAiContext
     module Listeners
       # Detects `scope :name, -> { ... }` declarations via Prism AST.
       class ScopesListener < BaseListener
+        include WithOptionsScope
+
+        # `scope :x, lambda { ... }` and `scope :x do ... end` hold their body
+        # in a block, not in a LambdaNode.
+        LAMBDA_METHODS = %i[lambda proc].to_set.freeze
+
         def on_call_node_enter(node)
-          return unless node.name == :scope && node.receiver.nil?
+          return unless node.name == :scope && in_scope?(node)
 
           name = extract_first_symbol(node)
           return if name == "[INFERRED]"
 
-          # Extract the lambda body source if available
-          args = node.arguments&.arguments || []
-          lambda_node = args.find { |a| a.is_a?(Prism::LambdaNode) }
-          body = lambda_node ? lambda_body_source(lambda_node) : nil
+          callable = scope_body_node(node)
+          body = callable ? lambda_body_source(callable) : nil
 
           @results << {
             name:            name.to_s,
             body:            body,
-            required_params: lambda_node ? lambda_required_params(lambda_node) : [],
+            required_params: callable ? lambda_required_params(callable) : [],
             location:        node.location.start_line,
             # A lambda body sliced verbatim from source IS the scope's ground
             # truth; only scopes whose body can't be extracted (block form,
@@ -30,11 +34,21 @@ module RailsAiContext
 
         private
 
+        # A stabby lambda, a `lambda`/`proc` call's block, or the scope's own block only when
+        # the call passes no body (otherwise that block is an extension block).
+        def scope_body_node(node)
+          args = (node.arguments&.arguments || []).reject { |a| a.is_a?(Prism::KeywordHashNode) }
+          positional = args.reject { |a| a.is_a?(Prism::SymbolNode) || a.is_a?(Prism::StringNode) }
+          args.find { |a| a.is_a?(Prism::LambdaNode) } ||
+            args.find { |a| a.is_a?(Prism::CallNode) && LAMBDA_METHODS.include?(a.name) }&.block ||
+            (node.block if positional.empty?)
+        end
+
         def lambda_body_source(node)
           body = node.body
           return nil unless body
-          # Get the source slice for the body
-          body.slice&.strip
+
+          one_line_source(body)
         rescue StandardError
           nil
         end

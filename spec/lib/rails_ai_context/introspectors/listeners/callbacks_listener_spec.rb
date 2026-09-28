@@ -3,13 +3,6 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects before_save callback" do
     results = parse_and_dispatch("before_save :normalize_email")
     expect(results.size).to eq(1)
@@ -38,12 +31,12 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
     expect(results.first[:confidence]).to eq("[VERIFIED]")
   end
 
-  it "emits separate entries for multi-event on: option" do
-    results = parse_and_dispatch("after_commit :sync, on: [:create, :update]")
-    expect(results.size).to eq(2)
-    types = results.map { |r| r[:type] }
-    expect(types).to contain_exactly("after_commit_on_create", "after_commit_on_update")
-    expect(results.map { |r| r[:method] }).to all(eq("sync"))
+  # `after_commit on: %i[create update] do` is one declaration, one callback.
+  it "keeps a multi-event on: as one after_commit with its events" do
+    results = parse_and_dispatch("after_commit :sync, on: %i[create update]")
+    expect(results.size).to eq(1)
+    expect(results.first).to include(type: "after_commit", method: "sync")
+    expect(results.first[:options][:on]).to eq(%i[create update])
   end
 
   it "includes line location" do
@@ -84,5 +77,25 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::CallbacksListener do
   it "reports nothing for a macro that carries only keyword options" do
     expect(parse_and_dispatch("after_commit on: :create")).to be_empty
     expect(parse_and_dispatch("after_save unless: :skip?")).to be_empty
+  end
+
+  it "reads an option off an enclosing with_options block" do
+    results = parse_and_dispatch(<<~RUBY)
+      with_options if: :published? do
+        after_save :notify
+      end
+
+      after_save :touch_tracker
+    RUBY
+
+    scoped, plain = results.partition { |r| r[:method] == "notify" }.map(&:first)
+    expect(scoped[:options]).to include(if: :published?)
+    expect(plain[:options]).not_to include(:if)
+  end
+
+  it "keeps a lambda condition as the line wrote it" do
+    results = parse_and_dispatch(%(after_create :notify, if: -> { category == "vomit" }))
+
+    expect(results.first[:options]).to eq(if: %(-> { category == "vomit" }))
   end
 end

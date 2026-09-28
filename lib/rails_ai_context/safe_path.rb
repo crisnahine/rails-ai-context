@@ -8,8 +8,6 @@ module RailsAiContext
   # prefix does not pass, and the sensitive check runs again on the realpath
   # so a symlink from a benign name cannot reach one.
   module SafePath
-    REFUSALS = %i[traversal sensitive missing outside too_large].freeze
-
     Resolution = Data.define(:realpath, :relative, :refusal) do
       def ok?
         refusal.nil?

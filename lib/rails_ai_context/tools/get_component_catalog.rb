@@ -37,6 +37,9 @@ module RailsAiContext
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
       def self.call(component: nil, detail: "standard", offset: 0, limit: nil, server_context: nil)
+        blank = blank_name_response("component", component)
+        return blank if blank
+
         fetch_section(:components, unusable_message: "No component data available. Ensure :components introspector is enabled and app/components/ exists.") do |data|
           components = data[:components] || []
 
@@ -50,17 +53,14 @@ module RailsAiContext
               return text_response("Component '#{component}' not found - no components exist in app/components/. Create ViewComponent or Phlex components first.")
             end
 
-            found = components.find { |c|
-              c[:name]&.downcase == component.downcase ||
-              c[:name]&.underscore&.downcase == component.downcase ||
-              c[:name]&.sub(/Component\z/, "")&.downcase == component.downcase
-            }
+            found = matching_components(components + Array(data[:bases]), component)
 
             return not_found_response("component", component,
               components.map { |c| c[:name] },
-              recovery_tool: "rails_get_component_catalog") unless found
+              recovery_tool: "rails_get_component_catalog") if found.empty?
+            return ambiguous_response(component, found) if found.size > 1
 
-            text_response(render_single(found, detail))
+            text_response(render_single(found.first, detail))
           else
             if components.empty?
               note = api_only_note("app/components")
@@ -73,7 +73,7 @@ module RailsAiContext
                 "- `rails_get_view(controller:\"name\")` - view templates with partial/Stimulus references"
               )
             end
-            text_response(render_catalog(components, data[:summary], detail, offset: offset, limit: limit))
+            text_response(render_catalog(components, data[:summary], detail, offset: offset, limit: limit, bases: data[:bases]))
           end
         end
       end
@@ -81,16 +81,39 @@ module RailsAiContext
       class << self
         private
 
-        def render_catalog(components, summary, detail, offset: 0, limit: nil)
+        # Matched on whole constant segments, with or without the shared suffix; a substring hit
+        # would be another component's answer.
+        def matching_components(components, query)
+          names = components.map { |c| c[:name] }.compact
+          matched = exact_matches(query, names)
+          matched = exact_matches("#{query}Component", names) if matched.empty?
+          components.select { |c| matched.include?(c[:name]) }
+        end
+
+        # Several components of one name is a question, not a resolution.
+        def ambiguous_response(query, found)
+          lines = [ "Component '#{query}' names #{count_phrase(found.size, "component")}:", "" ]
+          found.each { |c| lines << "- **#{c[:name]}** (`#{c[:file]}`)" }
+          lines << "" << "_Pass one by its full name, e.g. `#{found.first[:name]}`._"
+          empty_response(lines.join("\n"))
+        end
+
+        def render_catalog(components, summary, detail, offset: 0, limit: nil, bases: nil)
           page = paginate(components, offset: offset, limit: limit, default_limit: 50)
 
           lines = [ "# Component Catalog", "" ]
 
           if summary
-            lines << "**Total:** #{count_phrase(summary[:total], "component")} " \
-              "(#{summary[:view_component]} ViewComponent, #{summary[:phlex]} Phlex)"
+            # The same partition the generated files print, so the buckets add up to the total.
+            buckets = Serializers::SectionFacts.component_buckets(summary)
+            lines << "**Total:** #{count_phrase(summary[:total], "component")} (#{buckets.join(', ')})"
             lines << "**With slots:** #{summary[:with_slots]} | **With previews:** #{summary[:with_previews]}"
             lines << ""
+          end
+
+          note = bases_note("components", Array(bases).map { |base| base[:name] })
+          if note
+            lines << note << ""
           end
 
           page[:items].each do |comp|

@@ -57,7 +57,275 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
     })
   end
 
+  describe "the summary Adapter line" do
+    it "names the candidates and why it cannot choose" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "static_parse", tables: tables, total_tables: 3 },
+        gems: { notable_gems: [ { name: "mysql2" }, { name: "sqlite3" } ] },
+        models: {}
+      })
+
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("**Adapter:** MySQL or SQLite, the app does not say which")
+    end
+  end
+
+  # A composite unique index constrains the pair, not each column: a blog's
+  # articles read series_id and position as unique on their own, and lost the
+  # plain index on series_id.
+  describe "column hints for a composite unique index" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "articles" => {
+            columns: [
+              { name: "id", type: "integer", null: false },
+              { name: "series_id", type: "integer", null: true },
+              { name: "position", type: "integer", null: true },
+              { name: "slug", type: "string", null: true }
+            ],
+            indexes: [
+              { name: "index_articles_on_series_id_and_position", columns: %w[series_id position], unique: true },
+              { name: "index_articles_on_series_id", columns: %w[series_id], unique: false },
+              { name: "index_articles_on_slug", columns: %w[slug], unique: true }
+            ],
+            foreign_keys: []
+          }
+        } },
+        models: {}
+      })
+    end
+
+    let(:text) { described_class.call(detail: "standard").content.first[:text] }
+
+    it "names the partner column rather than calling each one unique" do
+      expect(text).to include("series_id:integer [indexed; unique with position]")
+      expect(text).to include("position:integer [unique with series_id]")
+    end
+
+    it "still calls a column unique when a unique index covers it alone" do
+      expect(text).to include("slug:string [unique]")
+    end
+
+    # Forem's articles.canonical_url is unique only among published rows.
+    it "says a unique index is partial, in the hints and in the table view" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "articles" => {
+            columns: [ { name: "canonical_url", type: "string" }, { name: "slug", type: "string" },
+                       { name: "user_id", type: "bigint" } ],
+            indexes: [
+              { name: "index_articles_on_canonical_url", columns: %w[canonical_url], unique: true,
+                where: "(published IS TRUE)" },
+              { name: "index_articles_on_slug_and_user_id", columns: %w[slug user_id], unique: true,
+                where: "(deleted_at IS NULL)" }
+            ],
+            foreign_keys: []
+          }
+        } },
+        models: {}
+      })
+
+      expect(text).to include("canonical_url:string [unique where (published IS TRUE)]")
+      expect(text).to include("user_id:bigint [unique with slug where (deleted_at IS NULL)]")
+      table = described_class.call(table: "articles").content.first[:text]
+      expect(table).to include("- `index_articles_on_canonical_url` on (canonical_url) (unique) where (published IS TRUE)")
+    end
+
+    it "keeps each condition when two partial unique indexes cover one column" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "articles" => {
+            columns: [ { name: "slug", type: "string" }, { name: "code", type: "string" } ],
+            indexes: [
+              { name: "a", columns: %w[slug], unique: true, where: "(kind = 1)" },
+              { name: "b", columns: %w[slug], unique: true, where: "(kind = 2)" },
+              { name: "c", columns: %w[code], unique: true, where: "(kind = 1)" },
+              { name: "d", columns: %w[code], unique: true }
+            ],
+            foreign_keys: []
+          }
+        } },
+        models: {}
+      })
+
+      expect(text).to include("slug:string [unique where (kind = 1); unique where (kind = 2)]")
+      expect(text).to include("code:string [unique]")
+    end
+
+    # Discourse's categories has a unique index on
+    # (COALESCE(parent_category_id, '-1'::integer), name). The expression is
+    # a key of its own, not the column inside it, and it is name's partner.
+    it "names an expression partner as the expression" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "categories" => {
+            columns: [ { name: "parent_category_id", type: "integer" }, { name: "name", type: "string" } ],
+            indexes: [ { name: "u", columns: [ "COALESCE(parent_category_id, '-1'::integer)", "name" ], unique: true } ],
+            foreign_keys: []
+          }
+        } },
+        models: {}
+      })
+
+      expect(text).to include("parent_category_id:integer, name:string [unique with `COALESCE(parent_category_id, '-1'::integer)`]")
+    end
+
+    it "gives no column a hint from an index over one expression" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "users" => {
+            columns: [ { name: "email", type: "string" } ],
+            indexes: [ { name: "u", columns: [ "lower((email)::text)" ], unique: true } ],
+            foreign_keys: []
+          }
+        } },
+        models: {}
+      })
+
+      expect(text).to include("email:string\n")
+    end
+
+    # Unique alone already makes every combination containing it unique.
+    it "adds no partner to a column that is unique by itself" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "members" => {
+            columns: [ { name: "project_id", type: "bigint" }, { name: "user_id", type: "bigint" } ],
+            indexes: [
+              { name: "a", columns: %w[project_id user_id], unique: true },
+              { name: "b", columns: %w[user_id], unique: true }
+            ],
+            foreign_keys: []
+          }
+        } },
+        models: {}
+      })
+
+      expect(text).to include("user_id:bigint [unique]")
+      # project_id leads the composite, so a lookup on it alone is indexed.
+      expect(text).to include("project_id:bigint [indexed; unique with user_id]")
+    end
+  end
+
+  # Only an index's leading column can be looked up through it. [indexed] on
+  # every member of (project_id, user_id) told a reader that a query on
+  # user_id alone was covered.
+  describe "column hints for a plain composite index" do
+    let(:hints_context) do
+      { schema: { adapter: "postgresql", total_tables: 1, tables: {
+        "memberships" => {
+          columns: [
+            { name: "project_id", type: "bigint" }, { name: "user_id", type: "bigint" },
+            { name: "role", type: "string" }, { name: "status", type: "string" }
+          ],
+          indexes: [
+            { name: "a", columns: %w[project_id user_id role], unique: false },
+            { name: "b", columns: %w[status], unique: false }
+          ],
+          foreign_keys: []
+        }
+      } }, models: {} }
+    end
+
+    before { allow(described_class).to receive(:cached_context).and_return(hints_context) }
+
+    let(:text) { described_class.call(detail: "standard").content.first[:text] }
+
+    it "gives [indexed] to the leading column" do
+      expect(text).to include("project_id:bigint [indexed]")
+    end
+
+    it "names what a non-leading column sits behind" do
+      expect(text).to include("user_id:bigint [in index after project_id]")
+      expect(text).to include("role:string [in index after project_id, user_id]")
+    end
+
+    # One clause per distinct index position, and a separator that no clause
+    # uses inside itself.
+    it "prints each trailing clause once and tells two apart" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "items" => {
+            columns: [ { name: "a_id", type: "bigint" }, { name: "sku", type: "string" }, { name: "code", type: "string" } ],
+            indexes: [
+              { name: "p", columns: %w[a_id code], unique: false },
+              { name: "q", columns: %w[a_id code sku], unique: false },
+              { name: "r", columns: %w[a_id sku code], unique: false }
+            ],
+            foreign_keys: []
+          }
+        } },
+        models: {}
+      })
+
+      expect(text).to include("code:string [in index after a_id; in index after a_id, sku]")
+    end
+
+    it "keeps [indexed] for a column that leads an index of its own" do
+      expect(text).to include("status:string [indexed]")
+    end
+
+    # Discourse's allowed_pm_users has the same unique pair in both orders,
+    # and assignments a column both in a unique set and behind another key.
+    it "names a partner set once and adds no trailing hint beside a unique one" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "postgresql", total_tables: 1, tables: {
+          "pairs" => {
+            columns: [ { name: "a_id", type: "bigint" }, { name: "b_id", type: "bigint" }, { name: "kind", type: "string" } ],
+            indexes: [
+              { name: "x", columns: %w[a_id b_id], unique: true },
+              { name: "y", columns: %w[b_id a_id], unique: true },
+              { name: "z", columns: %w[a_id b_id kind], unique: true },
+              { name: "w", columns: %w[b_id kind], unique: false }
+            ],
+            foreign_keys: []
+          }
+        } },
+        models: {}
+      })
+
+      expect(text).to include("a_id:bigint [indexed; unique with b_id; unique with b_id, kind]")
+      expect(text).to include("kind:string [unique with a_id, b_id]")
+    end
+  end
+
+  # The replay note said how many table names were read off the file, and it
+  # reached only .ai-context.json.
+  describe "the section note" do
+    let(:note) { "Reconstructed from 240 migration files (no DB connection, no schema.rb), 91 table names read from the file rather than the create_table call" }
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "static_parse", tables: tables, total_tables: 3, note: note },
+        models: {}
+      })
+    end
+
+    %w[summary standard full].each do |detail|
+      it "is printed at detail #{detail}" do
+        expect(described_class.call(detail: detail).content.first[:text]).to include("_#{note}_")
+      end
+    end
+
+    it "prints nothing when the section carries none" do
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: tables, total_tables: 3 }, models: {}
+      })
+
+      expect(described_class.call(detail: "summary").content.first[:text]).not_to include("Reconstructed")
+    end
+  end
+
   describe ".call with no params" do
+    it "reads a junk detail as standard" do
+      text = described_class.call(detail: "verbose").content.first[:text]
+
+      expect(text).to include("Schema (3 tables")
+      expect(text).not_to include("# Database Schema")
+    end
+
     it "defaults to standard detail" do
       result = described_class.call
       text = result.content.first[:text]
@@ -151,8 +419,114 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       expect(warning_line).not_to include("posts_tags")
     end
 
+    # The lists answer for the whole schema, whichever page and level is shown.
+    %w[summary standard full].each do |level|
+      it "names every unclaimed table at detail #{level}, past the page" do
+        text = described_class.call(detail: level, limit: 1).content.first[:text]
+        warning = text.lines.find { |l| l.start_with?("⚠") }.to_s
+
+        expect(warning).to include("legacy_audits", "users", "comments")
+      end
+    end
+
+    it "prints the gem lines at every level" do
+      join_tables["good_jobs"] = { columns: [], indexes: [], foreign_keys: [] }
+      allow(RailsAiContext::GemLock).to receive(:for)
+        .and_return(RailsAiContext::GemLock::Spec.new({ "good_job" => "4.19.2" }))
+
+      %w[summary standard full].each do |level|
+        expect(described_class.call(detail: level, limit: 1).content.first[:text]).to include("Tables the good_job gem owns: good_jobs")
+      end
+    end
+
+    it "caps a long list and says where the rest is" do
+      30.times { |i| join_tables[format("orphan_%02d", i)] = { columns: [], indexes: [], foreign_keys: [] } }
+
+      expect(warning_line).to include("orphan_00", "and 18 more")
+      expect(warning_line).not_to include("orphan_29")
+      expect(described_class.call.content.first[:text]).to include("`format:\"json\"` lists all 33")
+      json = JSON.parse(described_class.call(format: "json").content.first[:text])
+      expect(json["tables_without_model_file"].size).to eq(33)
+    end
+
     it "still names a table nothing declares" do
       expect(warning_line).to include("legacy_audits")
+    end
+
+    it "names the gem that owns a table the lockfile has, instead of listing it" do
+      join_tables.merge!(
+        "good_jobs" => { columns: [], indexes: [], foreign_keys: [] },
+        "oauth_applications" => { columns: [], indexes: [], foreign_keys: [] },
+        "work_package_hierarchies" => { columns: [], indexes: [], foreign_keys: [] },
+        "versions" => { columns: [], indexes: [], foreign_keys: [] }
+      )
+      allow(RailsAiContext::GemLock).to receive(:for)
+        .and_return(RailsAiContext::GemLock::Spec.new({ "good_job" => "4.19.2", "closure_tree" => "9.7.0", "paper_trail" => "17.0.0" }))
+      text = described_class.call.content.first[:text]
+
+      expect(warning_line).not_to include("good_jobs")
+      expect(warning_line).to include("oauth_applications")
+      expect(text).to include("Tables the good_job gem owns: good_jobs")
+      expect(text).to include("Tables the closure_tree gem owns: work_package_hierarchies")
+      expect(text).to include("Tables the paper_trail gem owns: versions")
+    end
+
+    # The other side's table is the one its model records, not the name
+    # tableized: Tag keeps legacy_tags, so the join table is legacy_tags_posts.
+    it "names a join table from the other model's own table" do
+      join_tables["legacy_tags_posts"] = { columns: [], indexes: [], foreign_keys: [] }
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: join_tables, total_tables: 6 },
+        models: {
+          "Post" => { table_name: "posts",
+                      associations: [ { name: "tags", type: "has_and_belongs_to_many", options: {} } ] },
+          "Tag" => { table_name: "legacy_tags", associations: [] }
+        }
+      })
+
+      expect(warning_line).not_to include("legacy_tags_posts")
+    end
+
+    it "finds the other side in the owner's namespace first" do
+      join_tables["spree_products_taxons"] = { columns: [], indexes: [], foreign_keys: [] }
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: join_tables, total_tables: 6 },
+        models: {
+          "Spree::Product" => { table_name: "spree_products",
+                                associations: [ { name: "taxons", type: "has_and_belongs_to_many", options: {} } ] },
+          "Spree::Taxon" => { table_name: "spree_taxons", associations: [] },
+          "Taxon" => { table_name: "legacy_taxons", associations: [] }
+        }
+      })
+
+      expect(warning_line).not_to include("spree_products_taxons")
+    end
+
+    it "leaves out a custom join table the booted record carries" do
+      join_tables["post_labels"] = { columns: [], indexes: [], foreign_keys: [] }
+      allow(described_class).to receive(:cached_context).and_return({
+        schema: { adapter: "sqlite3", tables: join_tables, total_tables: 6 },
+        models: {
+          "Post" => { table_name: "posts",
+                      associations: [ { name: "labels", type: "has_and_belongs_to_many", class_name: "Tag",
+                                        join_table: "post_labels" } ] }
+        }
+      })
+
+      expect(warning_line).not_to include("post_labels")
+    end
+
+    it "leaves out a join table a lib patch's habtm names" do
+      join_tables["done_statuses_for_project"] = { columns: [], indexes: [], foreign_keys: [] }
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "lib/patches"))
+        File.write(File.join(dir, "lib/patches/project_patch.rb"),
+                   "module ProjectPatch\n  included do\n    has_and_belongs_to_many :done_statuses, join_table: \"done_statuses_for_project\"\n  end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(dir))
+
+        expect(warning_line).to include("legacy_audits")
+        expect(warning_line).not_to include("done_statuses_for_project")
+      end
     end
 
     it "does not claim the table has no model anywhere" do

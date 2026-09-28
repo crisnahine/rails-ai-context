@@ -3,13 +3,6 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MigrationDslListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects create_table" do
     results = parse_and_dispatch('create_table "users" do |t|; end')
     expect(results.size).to eq(1)
@@ -20,6 +13,11 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MigrationDslListener do
     results = parse_and_dispatch('add_column "users", "email", :string')
     expect(results.size).to eq(1)
     expect(results.first).to include(action: :add_column, table: "users", column: "email", column_type: "string")
+  end
+
+  it "reads an escaped symbol as the characters it names" do
+    results = parse_and_dispatch('add_column "users", :"first\tname", :string')
+    expect(results.first[:column]).to eq("first\tname")
   end
 
   it "detects remove_column" do

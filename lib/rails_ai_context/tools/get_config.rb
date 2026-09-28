@@ -24,9 +24,7 @@ module RailsAiContext
 
           # Several values below (cache store, queue adapter, Action Cable)
           # differ per environment; name the one that produced them.
-          if defined?(Rails) && Rails.respond_to?(:env)
-            lines << "- **Environment:** #{Rails.env} (values below reflect this environment)"
-          end
+          lines << "- **Environment:** #{rails_env_name} (values below reflect this environment)"
 
           # Database - critical for query syntax decisions
           db_config = detect_database
@@ -60,19 +58,7 @@ module RailsAiContext
             lines << "- **Mailer config:** #{data[:mailer].map { |k, v| "#{k}: #{v}" }.join(', ')}"
           end
 
-          if data[:middleware_stack]&.any?
-            # Filter default Rails middleware AND dev-only middleware
-            dev_middleware = %w[
-              Propshaft::Server WebConsole::Middleware ActionDispatch::Reloader
-              Bullet::Rack ActiveSupport::Cache::Strategy::LocalCache
-            ]
-            excluded_mw = RailsAiContext.configuration.excluded_middleware
-            custom = data[:middleware_stack].reject { |m| excluded_mw.include?(m) || dev_middleware.include?(m) }
-            if custom.any?
-              lines << "" << "## Custom Middleware"
-              custom.each { |m| lines << "- #{m}" }
-            end
-          end
+          lines.concat(middleware_lines(data[:middleware_stack]))
 
           if data[:initializers]&.any?
             # List every initializer - stock ones often carry active code
@@ -91,6 +77,44 @@ module RailsAiContext
 
           text_response(lines.join("\n"))
         end
+      end
+
+      # Middleware Rails or a development gem puts in every stack.
+      DEV_MIDDLEWARE = %w[
+        Propshaft::Server WebConsole::Middleware ActionDispatch::Reloader
+        Bullet::Rack ActiveSupport::Cache::Strategy::LocalCache
+      ].freeze
+
+      # The live stack split the way the middleware section splits it: the
+      # app's own classes with their files, everything else as an addition.
+      private_class_method def self.middleware_lines(stack)
+        return [] unless stack&.any?
+
+        excluded = RailsAiContext.configuration.excluded_middleware
+        stacked = stack.reject { |m| excluded.include?(m) || DEV_MIDDLEWARE.include?(m) }
+        owned = owned_middleware
+        return [] if stacked.empty? && owned.empty?
+
+        lines = [ "", "## Custom Middleware" ]
+        if owned.any?
+          owned.each { |name, file| lines << "- `#{name}` (#{file})" }
+        else
+          lines << "- No custom middleware in app/middleware/ or lib/middleware/"
+        end
+
+        added = stacked.reject { |m| owned.key?(m) }
+        if added.any?
+          lines << "### Added to the stack"
+          added.each { |m| lines << "- `#{m}`" }
+        end
+        lines
+      end
+
+      # What the middleware introspector found the app owns, by class name.
+      private_class_method def self.owned_middleware
+        Array(Payload.section(cached_context, :middleware)&.dig(:custom_middleware))
+          .to_h { |entry| [ entry[:class_name], entry[:file] ] }
+          .compact
       end
 
       # One-line descriptions for initializers Rails generates in every app.

@@ -12,77 +12,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        ruby: ["3.1", "3.2", "3.3", "3.4", "4.0"]
-        rails: ["7.0", "7.1", "7.2", "8.0", "8.1"]
-        exclude:
-          # Rails 7.0 is only supported on Ruby 3.1 (7.0 predates Ruby 3.2+ support)
-          - ruby: "3.2"
-            rails: "7.0"
-          - ruby: "3.3"
-            rails: "7.0"
-          - ruby: "3.4"
-            rails: "7.0"
-          - ruby: "4.0"
-            rails: "7.0"
-          # Rails 8.x requires Ruby 3.3+
-          - ruby: "3.1"
-            rails: "8.0"
-          - ruby: "3.1"
-            rails: "8.1"
-          - ruby: "3.2"
-            rails: "8.0"
-          - ruby: "3.2"
-            rails: "8.1"
-          # Rails 7.x is not Ruby 4.0 compatible (no upstream support)
-          - ruby: "4.0"
-            rails: "7.1"
-          - ruby: "4.0"
-            rails: "7.2"
-
-    name: Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }}
-
-    env:
-      RAILS_VERSION: ${{ matrix.rails }}
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: ${{ matrix.ruby }}
-          bundler-cache: true
-
-      # The search_code count examples skip without it, so the runner image
-      # shipping it is stated here rather than assumed.
-      - name: Ensure ripgrep
-        run: command -v rg || sudo apt-get install -y ripgrep
-
-      # A publish must not depend on which order RSpec happened to pick. CI
-      # runs a random seed to keep discovering order bugs; the release gate
-      # runs fixed ones so the same commit always gets the same verdict.
-      # 27377 is kept because it caught a real cross-example cache leak that a
-      # random seed had waved through on the same commit.
-      - name: Run specs (fixed seeds)
-        run: |
-          for seed in 1 27377 90210; do
-            echo "::group::rspec --seed $seed"
-            bundle exec rspec --seed "$seed" || exit 1
-            echo "::endgroup::"
-          done
-
-      # Defined order is a fourth ordering no random seed reproduces: every
-      # example runs in file order, so state leaking forward shows up here.
-      - name: Run specs (defined order)
-        run: bundle exec rspec --order defined
-
-      - name: Run RuboCop
-        run: bundle exec rubocop --parallel
-        if: matrix.ruby == '3.3' && matrix.rails == '8.0'
+    uses: ./.github/workflows/unit-matrix.yml
+    with:
+      release_gate: true
 
   # The e2e suite owns the pins this release could break - static-tier
   # answers, redaction markers, the three install paths - and it does not run
@@ -179,7 +111,7 @@ jobs:
             gh release create "$TAG" \
               --title "$TAG" \
               --notes "$NOTES" \
-              *.gem
+              ./*.gem
           fi
 
       - name: Upload mcpb to release

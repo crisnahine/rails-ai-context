@@ -141,20 +141,4 @@ RSpec.describe RailsAiContext::Introspectors::ListenerRegistration do
         .to raise_error(described_class::UnknownEventError)
     end
   end
-
-  describe ".register" do
-    it "registers onto a dispatcher the caller already has" do
-      dispatcher = Prism::Dispatcher.new
-      listener   = SingleEventListener.new
-      described_class.register(dispatcher, listener)
-      dispatcher.dispatch(Prism.parse("foo(1)").value)
-
-      expect(listener.seen).to eq([ :foo ])
-    end
-
-    it "returns the events it registered" do
-      expect(described_class.register(Prism::Dispatcher.new, LeaveOnlyListener.new))
-        .to eq([ :on_class_node_leave ])
-    end
-  end
 end

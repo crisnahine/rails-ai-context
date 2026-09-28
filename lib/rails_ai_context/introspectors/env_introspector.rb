@@ -7,15 +7,9 @@ module RailsAiContext
     # (SECRET_KEY_BASE, DATABASE_URL, REDIS_URL, etc.) - only presence
     # (boolean). Safe, non-sensitive vars report their value.
     # Covers RAILS_NERVOUS_SYSTEM.md §36 (ENV vars Rails reads).
-    class EnvIntrospector
+    class EnvIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
@@ -23,15 +17,9 @@ module RailsAiContext
           unset: envs_that_are_unset,
           referenced_in_code: scan_env_references
         }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "EnvIntrospector#call")
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       # Rails / Bundler / web-server environment variables the framework
       # documents or checks. `safe: true` = value is returned verbatim when
@@ -115,24 +103,20 @@ module RailsAiContext
         end
       end
 
-      # Scan config/ and app/ for `ENV["FOO"]` / `ENV.fetch("FOO")` references
-      # to surface custom env vars the app reads beyond the known catalog.
+      # The names the app reads beyond the known catalogue, from the scan
+      # rails_get_env reads too, so the tool and the context file agree.
       def scan_env_references
+        real_root = File.realpath(root)
         refs = {}
-        %w[config app lib].each do |rel|
-          dir = File.join(root, rel)
-          next unless Dir.exist?(dir)
+        EnvReferences.scan(root).each do |path, entries|
+          entries.each do |entry|
+            name = entry[:name]
+            next unless name.match?(/\A[A-Z][A-Z0-9_]{1,}\z/)
+            next if KNOWN_ENV_VARS.any? { |spec| spec[:name] == name }
 
-          # Sort before slicing - see rationale in active_support_introspector.
-          Dir.glob(File.join(dir, "**/*.rb")).sort.first(2000).each do |path|
-            ast_data = SourceIntrospector.walk(path, { env: -> { Listeners::EnvAccessListener.new } })
-            ast_data[:env].each do |entry|
-              name = entry[:key]
-              next unless name.match?(/\A[A-Z][A-Z0-9_]{1,}\z/)
-              next if KNOWN_ENV_VARS.any? { |spec| spec[:name] == name }
-              refs[name] ||= []
-              refs[name] << path.sub("#{root}/", "") unless refs[name].size >= 3
-            end
+            refs[name] ||= []
+            file = path.delete_prefix("#{real_root}/")
+            refs[name] << file unless refs[name].size >= 3 || refs[name].include?(file)
           end
         end
         refs.map { |name, files| { name: name, files: files, set: ENV.key?(name) && !ENV[name].to_s.empty? } }.sort_by { |h| h[:name] }

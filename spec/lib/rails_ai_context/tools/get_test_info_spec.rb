@@ -10,7 +10,7 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       framework: "RSpec",
       factories: { location: "spec/factories", count: 5 },
       factory_names: { "users.rb" => %w[user admin_user], "posts.rb" => %w[post published_post] },
-      factory_traits: %w[user:admin user:with_posts post:published],
+      factory_traits: { "users.rb" => %w[admin with_posts], "posts.rb" => %w[published] },
       fixtures: nil,
       fixture_names: nil,
       system_tests: { location: "spec/system" },
@@ -29,6 +29,25 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
 
   before do
     allow(described_class).to receive(:cached_context).and_return({ tests: test_data })
+  end
+
+  describe "factory traits" do
+    it "renders the file and its trait names, not a Ruby array" do
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("- **users.rb:** admin, with_posts")
+      expect(text).not_to include('["users.rb"')
+    end
+  end
+
+  describe "a fixtures directory with other files in it" do
+    it "says what it counted" do
+      test_data[:fixtures] = { location: "spec/fixtures", count: 1, other_files: 485 }
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text).to include("- **Fixtures:** spec/fixtures (1 YAML fixture set, 485 other files)")
+    end
   end
 
   describe ".call with no params" do
@@ -208,6 +227,207 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       expect(text).to include("Searched:")
     end
 
+    # Whitehall files controller tests under test/functional and model tests
+    # under test/unit/app/models, and the no-arg answer already lists both
+    # directories. Searching only the conventional two answered "no test file"
+    # for a file the same tool had just counted.
+    it "finds a controller test the app files outside test/controllers" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "test", "functional", "admin"))
+        File.write(File.join(root, "test", "functional", "admin", "editions_controller_test.rb"),
+                   "class Admin::EditionsControllerTest < ActionController::TestCase\n  test \"index\" do\n  end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: test_data, controllers: { controllers: { "Admin::EditionsController" => {} } }
+        })
+
+        text = described_class.call(controller: "admin/editions", detail: "full").content.first[:text]
+
+        expect(text).to include("test/functional/admin/editions_controller_test.rb")
+        expect(text).not_to include("No test file found")
+      end
+    end
+
+    it "finds a model test the app files outside test/models" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "test", "unit", "app", "models"))
+        File.write(File.join(root, "test", "unit", "app", "models", "organisation_test.rb"),
+                   "class OrganisationTest < ActiveSupport::TestCase\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({ tests: test_data, models: { "Organisation" => {} } })
+
+        text = described_class.call(model: "Organisation", detail: "full").content.first[:text]
+
+        expect(text).to include("test/unit/app/models/organisation_test.rb")
+        expect(text).not_to include("No test file found")
+      end
+    end
+
+    # An app that keeps model specs in spec/models, half of them named
+    # user_model_spec.rb, and has a serializer spec at
+    # spec/services/serializers/.../user_spec.rb. A basename match anywhere
+    # answered the serializer spec for the User model.
+    it "looks for a model's test only where the app keeps model tests, in its own naming" do
+      Dir.mktmpdir do |root|
+        { "spec/models/user_model_spec.rb" => "describe User do\n  it \"is a model\" do\n  end\nend\n",
+          "spec/models/invoice_spec.rb" => "describe Invoice do\nend\n",
+          "spec/models/order_model_spec.rb" => "describe Order do\nend\n",
+          "spec/services/serializers/api/v1/admin/user_spec.rb" => "describe UserSerializer do\n  it \"serializes\" do\n  end\nend\n" }.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(root, rel)))
+          File.write(File.join(root, rel), body)
+        end
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: test_data, models: { "User" => {}, "Invoice" => {}, "Order" => {} }
+        })
+
+        text = described_class.call(model: "User", detail: "full").content.first[:text]
+
+        expect(text).to include("spec/models/user_model_spec.rb")
+        expect(text).not_to include("serializers")
+      end
+    end
+
+    # Mastodon tests AboutController only through spec/system/about_spec.rb,
+    # which visits about_path. "No test file found" there is a confident
+    # negative about a controller the app does test.
+    describe "specs that exercise a controller from outside its controller spec" do
+      def app_with(root, files)
+        files.each do |rel, body|
+          FileUtils.mkdir_p(File.dirname(File.join(root, rel)))
+          File.write(File.join(root, rel), body)
+        end
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          tests: test_data,
+          controllers: { controllers: { "AboutController" => {}, "Admin::Settings::AboutController" => {} } },
+          routes: { by_controller: {
+            "about" => [ { verb: "GET", path: "/about", action: "show", name: "about" } ],
+            "admin/settings/about" => [ { verb: "PUT", path: "/admin/settings/about", action: "update", name: "admin_settings_about" } ]
+          } }
+        })
+      end
+
+      it "lists the system spec named for the controller, labelled by its type" do
+        Dir.mktmpdir do |root|
+          app_with(root, "spec/system/about_spec.rb" => "RSpec.describe 'About page' do\n  it 'visits' do\n    visit about_path\n  end\nend\n",
+                         "spec/requests/admin/settings/about_spec.rb" =>
+                           "RSpec.describe 'Admin about' do\n  it 'saves' do\n    put admin_settings_about_path\n  end\nend\n")
+
+          text = described_class.call(controller: "AboutController", detail: "summary").content.first[:text]
+
+          expect(text).to include("spec/system/about_spec.rb")
+          expect(text).to include("(system")
+          expect(text).not_to include("No test file found")
+          expect(text).not_to include("admin/settings/about_spec.rb")
+        end
+      end
+
+      it "finds a spec by the route it visits, whatever it is named" do
+        Dir.mktmpdir do |root|
+          app_with(root, "spec/features/landing_spec.rb" => "RSpec.feature 'Landing' do\n  scenario 'x' do\n    visit '/about'\n  end\nend\n",
+                         "spec/requests/pages_spec.rb" => "RSpec.describe 'Pages' do\n  it 'x' do\n    get about_url\n  end\nend\n")
+
+          text = described_class.call(controller: "AboutController", detail: "summary").content.first[:text]
+
+          expect(text).to include("`spec/features/landing_spec.rb` (feature")
+          expect(text).to include("`spec/requests/pages_spec.rb` (request")
+        end
+      end
+
+      it "lists them beside the controller spec when there is one" do
+        Dir.mktmpdir do |root|
+          app_with(root, "spec/controllers/about_controller_spec.rb" => "RSpec.describe AboutController do\n  it 'shows' do\n  end\nend\n",
+                         "spec/system/about_spec.rb" => "RSpec.describe 'About page' do\n  it 'visits' do\n    visit about_path\n  end\nend\n")
+
+          text = described_class.call(controller: "AboutController", detail: "summary").content.first[:text]
+
+          expect(text).to include("# spec/controllers/about_controller_spec.rb")
+          expect(text).to include("`spec/system/about_spec.rb` (system")
+        end
+      end
+    end
+
+    # A model spec's examples sit inside describe and context blocks, and
+    # counting every line that opens a block counted the groups as tests.
+    it "counts the examples a spec runs, not the groups around them" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "spec", "models"))
+        File.write(File.join(root, "spec", "models", "user_spec.rb"), <<~RUBY)
+          RSpec.describe User do
+            describe "#name" do
+              context "when set" do
+                it "returns it" do
+                end
+                it { is_expected.to be_valid }
+              end
+              specify { expect(1).to eq(1) }
+              xit "is pending" do
+              end
+            end
+            its(:email) { is_expected.to be_nil }
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({ tests: test_data, models: { "User" => {} } })
+
+        text = described_class.call(model: "User", detail: "summary").content.first[:text]
+
+        expect(text).to include("# spec/models/user_spec.rb (5 tests)")
+      end
+    end
+
+    # The lines listed under the count are the examples it counted, so the
+    # two cannot disagree: no group lines, every example form.
+    it "lists the examples it counted, and nothing else" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "spec", "models"))
+        File.write(File.join(root, "spec", "models", "user_spec.rb"), <<~RUBY)
+          RSpec.describe User do
+            context "when set" do
+              it "returns it" do
+              end
+              example "an example" do
+              end
+              fit "focused" do
+              end
+            end
+            its(:email) { is_expected.to be_nil }
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({ tests: test_data, models: { "User" => {} } })
+
+        text = described_class.call(model: "User", detail: "summary").content.first[:text]
+
+        expect(text.lines.map(&:strip).grep(/\A- /)).to eq([
+          '- it "returns it" do', '- example "an example" do', '- fit "focused" do', "- its(:email) { is_expected.to be_nil }"
+        ])
+      end
+    end
+
+    it "counts minitest's test blocks and test_ methods" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "test", "models"))
+        File.write(File.join(root, "test", "models", "user_test.rb"), <<~RUBY)
+          class UserTest < ActiveSupport::TestCase
+            test "valid" do
+            end
+            def test_name
+            end
+            def helper_not_a_test
+            end
+          end
+        RUBY
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({ tests: test_data, models: { "User" => {} } })
+
+        text = described_class.call(model: "User", detail: "summary").content.first[:text]
+
+        expect(text).to include("# test/models/user_test.rb (2 tests)")
+      end
+    end
+
     it "does not name a directory outside the app root when it finds nothing" do
       Dir.mktmpdir do |parent|
         root = File.join(parent, "app")
@@ -297,6 +517,23 @@ RSpec.describe RailsAiContext::Tools::GetTestInfo do
       result = described_class.call(controller: "Posts")
       text = result.content.first[:text]
       expect(text).to match(/posts_controller_spec\.rb|posts_spec\.rb|posts_controller_test\.rb|No test file found/)
+    end
+
+    # `spec/requests/posts_spec.rb` is the top-level PostsController's spec.
+    # Offering it for Api::V1::PostsController answered a namespaced
+    # controller with another controller's tests.
+    it "does not answer a namespaced controller with the flat spec of another" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "spec", "requests"))
+        File.write(File.join(root, "spec", "requests", "posts_spec.rb"),
+                   "RSpec.describe PostsController do\n  it \"indexes\" do\n  end\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(root))
+
+        text = described_class.call(controller: "Api::V1::PostsController").content.first[:text]
+
+        expect(text).to include("No test file found")
+        expect(text).not_to include("indexes")
+      end
     end
 
     it "returns not found with nearby files hint for missing controller test" do

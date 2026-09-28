@@ -3,13 +3,6 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects belongs_to" do
     results = parse_and_dispatch("belongs_to :user")
     expect(results.size).to eq(1)
@@ -20,6 +13,93 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
     results = parse_and_dispatch("has_many :posts, dependent: :destroy")
     expect(results.first).to include(type: "has_many", name: :posts)
     expect(results.first[:options]).to include(dependent: :destroy)
+  end
+
+  it "reads an option off an enclosing with_options block" do
+    results = parse_and_dispatch(<<~RUBY)
+      with_options dependent: :destroy do
+        has_many :statuses
+      end
+
+      has_many :mentions
+    RUBY
+
+    inside, outside = results.partition { |r| r[:name] == :statuses }.map(&:first)
+    expect(inside[:options]).to include(dependent: :destroy)
+    expect(outside[:options]).not_to include(:dependent)
+  end
+
+  it "lets the association's own option win over the enclosing one" do
+    results = parse_and_dispatch(<<~RUBY)
+      with_options dependent: :destroy do
+        has_many :statuses, dependent: :nullify
+      end
+    RUBY
+
+    expect(results.first[:options]).to include(dependent: :nullify)
+  end
+
+  # with_options instance_evals a zero-arity block but CALLS one that takes a
+  # parameter, so only calls on that parameter are re-sent with the options.
+  it "reads the options off the block parameter the merger is passed to" do
+    results = parse_and_dispatch(<<~RUBY)
+      with_options dependent: :destroy do |assoc|
+        assoc.has_many :tags
+      end
+    RUBY
+
+    expect(results.first).to include(type: "has_many", name: :tags)
+    expect(results.first[:options]).to include(dependent: :destroy)
+  end
+
+  it "gives a receiverless association inside a block-parameter with_options nothing" do
+    results = parse_and_dispatch(<<~RUBY)
+      with_options dependent: :destroy do |assoc|
+        has_many :mentions
+      end
+    RUBY
+
+    expect(results.first).to include(name: :mentions)
+    expect(results.first[:options]).not_to include(:dependent)
+  end
+
+  it "ignores a call on a receiver no with_options block named" do
+    results = parse_and_dispatch(<<~RUBY)
+      other.has_many :tags
+    RUBY
+
+    expect(results).to be_empty
+  end
+
+  it "restores the enclosing options after the block ends" do
+    results = parse_and_dispatch(<<~RUBY)
+      with_options dependent: :destroy do
+        has_many :statuses
+      end
+
+      with_options autosave: true do
+        has_many :favourites
+      end
+
+      has_many :mentions
+    RUBY
+
+    by_name = results.to_h { |r| [ r[:name], r[:options] ] }
+    expect(by_name[:statuses]).to eq(dependent: :destroy)
+    expect(by_name[:favourites]).to eq(autosave: true)
+    expect(by_name[:mentions]).to eq({})
+  end
+
+  it "merges nested with_options blocks, the inner one winning" do
+    results = parse_and_dispatch(<<~RUBY)
+      with_options dependent: :destroy, autosave: true do
+        with_options dependent: :nullify do
+          has_many :statuses
+        end
+      end
+    RUBY
+
+    expect(results.first[:options]).to eq(dependent: :nullify, autosave: true)
   end
 
   it "detects has_one" do
@@ -55,5 +135,38 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::AssociationsListener do
   it "includes line location" do
     results = parse_and_dispatch("has_many :posts")
     expect(results.first[:location]).to eq(1)
+  end
+
+  # Discourse's Searchable concern names one association per model with an
+  # interpolated symbol; `[INFERRED]` is not a name anything can look up.
+  it "names an interpolated association with the line the file wrote" do
+    results = parse_and_dispatch('has_one :"#{name.underscore}_search_data", dependent: :destroy')
+
+    expect(results.first[:name]).to eq('="#{name.underscore}_search_data"'.sub("=", ":"))
+    expect(results.first[:options]).to include(dependent: :destroy)
+  end
+
+  # Discourse writes `class_name: "#{name}CustomField"`; the marker names no
+  # class, and the line does.
+  it "keeps a computed class_name as the line the file wrote" do
+    results = parse_and_dispatch('has_many :_custom_fields, class_name: "#{name}CustomField"')
+
+    expect(results.first[:options][:class_name]).to eq('"#{name}CustomField"')
+  end
+
+  # OpenProject's has_details_table concern writes `belongs_to owner_name`
+  # with a local. As text it reads exactly like `belongs_to :owner_name`, so
+  # the record has to say which it was.
+  it "marks a name held in a local as computed" do
+    results = parse_and_dispatch("belongs_to owner_name, class_name: owner_class")
+
+    expect(results.first[:name]).to eq("owner_name")
+    expect(results.first[:computed_name]).to be(true)
+  end
+
+  it "leaves a literal name unmarked" do
+    results = parse_and_dispatch("belongs_to :owner")
+
+    expect(results.first).not_to have_key(:computed_name)
   end
 end

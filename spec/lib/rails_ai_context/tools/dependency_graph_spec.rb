@@ -440,13 +440,29 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
       end
 
       # The header counts every association; a reader counting the edges the
-      # cut graph draws needs the note to say it drew fewer.
-      it "says how many of the associations the cut graph draws" do
+      # page draws needs the note to say how many of them it drew.
+      it "counts the edges it drew, so the note and the rows agree" do
         text = described_class.call(format: "text").content.first[:text]
         drawn = text.lines.count { |line| line.match?(/^  belongs_to /) }
 
         expect(drawn).to be < 60
-        expect(text).to include("Showing 50 of 61 models and #{drawn} of 60 associations")
+        expect(text).to include("Showing 50 of 61 models, drawing #{drawn} edges for")
+        expect(text).to include("of 60 associations")
+      end
+
+      # OpenProject `--model WorkPackage` ended with "pass `model:` to focus
+      # the graph" though model: had been passed.
+      it "drops the focus hint when a model was passed" do
+        text = described_class.call(model: "Account", depth: 1, format: "mermaid").content.first[:text]
+
+        expect(text).not_to include("pass `model:`")
+      end
+
+      it "counts the arrows the mermaid block draws, not the records behind them" do
+        text = described_class.call(format: "mermaid").content.first[:text]
+        arrows = text.lines.count { |line| line.include?("-->") || line.include?("-.->") || line.include?("==>") }
+
+        expect(text).to include("drawing #{arrows} edges for")
       end
 
       it "counts them the same way in the mermaid rendering" do
@@ -478,6 +494,324 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
         # `Reader` node and on to a `ReaderEmail` neither of which is a class.
         expect(text).not_to match(/reader/i)
       end
+    end
+  end
+
+  describe "an association whose class_name is a runtime expression" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "RelatedContent" => {
+            table_name: "related_contents",
+            associations: [
+              { macro: :belongs_to, name: :user, class_name: "User" },
+              { macro: :has_one, name: :opposite_related_content, class_name: "[INFERRED]" }
+            ]
+          },
+          "User" => { table_name: "users", associations: [] }
+        }
+      )
+    end
+
+    it "draws no node for it and says which association it left out" do
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).not_to include("_INFERRED_")
+      expect(text).to include("RelatedContent#opposite_related_content")
+      expect(text).to include("The association count leaves out 1 association")
+    end
+  end
+
+  # The note counted only the models the cut kept while the total counted
+  # every model, so the two described different sets and the numbers did not
+  # add up.
+  describe "an unresolved association on a model the node cap cut" do
+    before do
+      models = { "Anchor" => { table_name: "anchors", associations: [] } }
+      120.times do |i|
+        models["Filler#{i.to_s.rjust(3, '0')}"] = {
+          table_name: "filler#{i}",
+          associations: [ { macro: :has_one, name: :mirror, class_name: "[INFERRED]" } ]
+        }
+      end
+      allow(described_class).to receive(:cached_context).and_return(models: models)
+    end
+
+    it "counts every unresolved association the totals cover" do
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).to include("The association count leaves out 120 associations")
+      expect(text).to include("and 110 more")
+    end
+  end
+
+  describe "a Mongoid document" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "App" => {
+            mongoid: true,
+            associations: [ { macro: :has_many, name: :problems, class_name: "Problem" },
+                            { type: "embeds_many", name: "watchers" },
+                            { type: "embeds_one", name: "issue_tracker" } ],
+            embeds: [ { type: :embeds_many, name: :watchers },
+                      { type: :embeds_one, name: :issue_tracker },
+                      { type: :embedded_in, name: :site_config } ]
+          },
+          "Problem" => { associations: [] }
+        }
+      )
+    end
+
+    it "draws an edge for each embedded relation" do
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).to include("App -->|embeds_many| Watcher")
+      expect(text).to include("App -->|embeds_one| IssueTracker")
+      expect(text).not_to include("embedded_in")
+    end
+  end
+
+  # Camelizing a name the walk read off source drew a node no app defines,
+  # the way an unreadable class_name once did.
+  describe "an association whose name is computed" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Topic" => {
+            table_name: "topics",
+            associations: [
+              { macro: :belongs_to, name: :user, class_name: "User" },
+              { macro: :has_one, name: '"#{name.underscore}_search_data"'.sub('"', ":"), computed_name: true },
+              { macro: :belongs_to, name: "owner_name", computed_name: true }
+            ]
+          },
+          "User" => { table_name: "users", associations: [] }
+        }
+      )
+    end
+
+    it "draws no node for it and says it left the association out" do
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).not_to include("_INFERRED_")
+      expect(text).not_to include("SearchData")
+      expect(text).not_to include("OwnerName")
+      expect(text).to include("Topic -->|belongs_to| User")
+      expect(text).to include("The association count leaves out 2 associations")
+    end
+  end
+
+  # OpenProject writes `class_name: "::Token::API"`: a literal, rooted at the
+  # top-level namespace. Read as a runtime expression, its edge vanished.
+  describe "a class_name written with a leading ::" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "AnonymousUser" => {
+            table_name: "users",
+            associations: [ { macro: :has_one, name: :api_token, class_name: "::Token::API" } ]
+          },
+          "Token::API" => { table_name: "tokens", associations: [] }
+        }
+      )
+    end
+
+    it "draws the edge to the class it names" do
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).to include("AnonymousUser -->|has_one| Token__API")
+      expect(text).not_to include("runtime expression")
+    end
+  end
+
+  # Whitehall's PolicyGroup: `has_many :depended_upon_contacts, through:
+  # :policy_group_dependencies, source: :dependable, source_type: "Contact"`.
+  # The source is a polymorphic belongs_to, so only source_type names the class.
+  describe "a through association with a source_type" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "PolicyGroup" => {
+            table_name: "policy_groups",
+            associations: [
+              { type: "has_many", name: "policy_group_dependencies" },
+              { type: "has_many", name: "depended_upon_contacts", through: "policy_group_dependencies",
+                options: { source: :dependable, source_type: "Contact" } }
+            ]
+          },
+          "PolicyGroupDependency" => {
+            table_name: "policy_group_dependencies",
+            associations: [ { type: "belongs_to", name: "dependable", polymorphic: true } ]
+          },
+          "Contact" => { table_name: "contacts", associations: [] }
+        }
+      )
+    end
+
+    it "points the through edge at the class source_type names" do
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).to include("PolicyGroupDependency ==>|through| Contact")
+      expect(text).not_to include("==>|through| Dependable")
+    end
+  end
+
+  # Rails resolves `has_many :investments` on Budget to Budget::Investment
+  # when it exists, and Spree::Order's `:payments` to Spree::Payment.
+  describe "an association named from inside a namespace" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Budget" => {
+            table_name: "budgets",
+            associations: [ { type: "has_many", name: "investments" }, { type: "has_many", name: "banners" } ]
+          },
+          "Budget::Investment" => { table_name: "budget_investments", associations: [] },
+          "Banner" => { table_name: "banners", associations: [] },
+          "Spree::Order" => {
+            table_name: "spree_orders",
+            associations: [ { type: "has_many", name: "payments" } ]
+          },
+          "Spree::Payment" => { table_name: "spree_payments", associations: [] }
+        }
+      )
+    end
+
+    it "resolves from the owner's namespace outward" do
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).to include("Budget -->|has_many| Budget__Investment")
+      expect(text).to include("Budget -->|has_many| Banner")
+      expect(text).to include("Spree__Order -->|has_many| Spree__Payment")
+      expect(text).not_to match(/-->\|has_many\| (Investment|Payment)\b/)
+    end
+  end
+
+  # Mastodon's Account follows, blocks and mutes other accounts through three
+  # join models; only the first of them was drawn.
+  describe "through associations to one target via different join models" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Account" => {
+            associations: [
+              { type: "has_many", name: "active_relationships", class_name: "Follow" },
+              { type: "has_many", name: "following", through: "active_relationships", class_name: "Account" },
+              { type: "has_many", name: "block_relationships", class_name: "Block" },
+              { type: "has_many", name: "blocking", through: "block_relationships", class_name: "Account" }
+            ]
+          },
+          "Follow" => { associations: [ { type: "belongs_to", name: "target_account", class_name: "Account" } ] },
+          "Block" => { associations: [ { type: "belongs_to", name: "target_account", class_name: "Account" } ] }
+        }
+      )
+    end
+
+    it "draws each join model" do
+      text = described_class.call(model: "Account", depth: 1, format: "mermaid").content.first[:text]
+
+      expect(text).to include("Account ==>|through| Follow", "Follow ==>|through| Account")
+      expect(text).to include("Account ==>|through| Block", "Block ==>|through| Account")
+    end
+  end
+
+  # A leading :: is top level, whatever the owner's namespace holds.
+  describe "a rooted class_name inside a namespace" do
+    before do
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Spree::Order" => { table_name: "spree_orders", associations: [
+            { type: "has_many", name: "payments" },
+            { type: "has_many", name: "legacy_payments", class_name: "::Payment" }
+          ] },
+          "Spree::Payment" => { table_name: "spree_payments", associations: [] },
+          "Payment" => { table_name: "payments", associations: [] }
+        }
+      )
+    end
+
+    it "draws the top-level class for the rooted name only" do
+      text = described_class.call(model: "Spree::Order", format: "mermaid").content.first[:text]
+
+      expect(text).to include("Spree__Order -->|has_many| Spree__Payment", "Spree__Order -->|has_many| Payment\n")
+    end
+  end
+
+  # The introspector used to drop the `::` before the graph saw it.
+  describe "a rooted class_name read from the model's source" do
+    it "draws the top-level class" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "shop"))
+        File.write(File.join(dir, "app", "models", "payment.rb"), "class Payment < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "shop", "payment.rb"), "class Shop::Payment < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "shop", "order.rb"),
+                   "class Shop::Order < ApplicationRecord\n  has_many :payments\n  has_many :legacy_payments, class_name: \"::Payment\"\nend\n")
+        models = RailsAiContext::Introspectors::ModelIntrospector.new(RailsAiContext::StaticApp.new(dir)).static_call
+        allow(described_class).to receive(:cached_context).and_return(models: models)
+
+        text = described_class.call(model: "Shop::Order", format: "mermaid").content.first[:text]
+
+        expect(text).to include("Shop__Order -->|has_many| Shop__Payment", "Shop__Order -->|has_many| Payment\n")
+      end
+    end
+  end
+
+  describe "two associations to one class" do
+    it "draws an arrow for each, labelled by its association" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Article" => { associations: [ { type: "belongs_to", name: "author" },
+                                       { type: "belongs_to", name: "owner", class_name: "Author" },
+                                       { type: "has_many", name: "tags" } ] },
+        "Author" => { associations: [] }, "Tag" => { associations: [] }
+      })
+
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).to include("Article -->|belongs_to author| Author", "Article -->|belongs_to owner| Author",
+                              "Article -->|has_many| Tag")
+      expect(described_class.call(format: "text").content.first[:text]).to include("belongs_to → Author (author)", "belongs_to → Author (owner)")
+    end
+  end
+
+  # `has_many :buyer_emails, through: :buyer` on a model with no `buyer`
+  # association drew a Buyer node and a BuyerEmail node.
+  describe "a through association naming no association of its model" do
+    it "draws nothing for it and says why" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Listing" => { associations: [ { type: "has_many", name: "buyer_emails", through: "buyer" },
+                                       { type: "belongs_to", name: "seller" } ] },
+        "Seller" => { associations: [] }
+      })
+
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).not_to include("Buyer")
+      expect(text).to include("Listing -->|belongs_to| Seller",
+                              "Listing#buyer_emails (through :buyer, which Listing does not declare)")
+    end
+
+    it "says a computed through name is computed, not undeclared" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Organisation" => { associations: [ { type: "has_many", name: "pages", through: '"edition_#{table_name}".to_sym' } ] }
+      })
+
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).to include('Organisation#pages (through `"edition_#{table_name}".to_sym`)', "computed at run time")
+      expect(text).not_to include("does not declare")
+    end
+
+    it "names the modules it could not read when the model includes some" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Listing" => { concerns_unread: [ "Searchable::Model" ],
+                       associations: [ { type: "has_many", name: "buyer_emails", through: "buyer" } ] }
+      })
+
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).not_to include("Buyer")
+      expect(text).to include("which no file read for Listing declares; Searchable::Model unread")
     end
   end
 end

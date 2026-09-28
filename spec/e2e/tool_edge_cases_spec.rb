@@ -34,6 +34,19 @@ RSpec.describe "E2E: tool input edge cases", type: :e2e do
     end
   end
 
+  # Booted, `--environment prod` became RAILS_ENV as well as env_config's
+  # filter, and the app failed to boot in an environment it has no database
+  # for. The flag is the tool's; the app boots in its own environment.
+  describe "--environment after a tool that declares the parameter" do
+    it "filters env_config without booting the app in that environment" do
+      result = @cli.cli_tool("env_config", [ "--environment", "prod" ])
+
+      expect(result.output).not_to match(/failed to boot|not configured/i), result.to_s
+      expect(result.output).to include("prod")
+      expect(result.output).to include("development")
+    end
+  end
+
   describe "unknown parameter" do
     it "exits non-zero with a clear error and the valid param list" do
       result = @cli.cli_tool("schema", [ "--bogus-flag", "value" ])

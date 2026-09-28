@@ -3,13 +3,6 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::RakeTaskDslListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects namespace" do
     results = parse_and_dispatch("namespace :db do; end")
     ns = results.find { |r| r[:type] == :namespace }

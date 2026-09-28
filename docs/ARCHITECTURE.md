@@ -103,7 +103,8 @@ flowchart LR
 
 40 modules that extract structured data from your Rails app. Each introspector:
 
-- Returns a Hash (never raises - wraps errors in `{ error: msg }`)
+- Subclasses `Introspectors::Base`, which holds the `app` handle and its `root`
+- Returns a Hash, and raises on failure: `Introspector#call` turns a raised section into `{ error: msg }` and logs a warning, so one broken section costs only itself
 - Is registered in `INTROSPECTOR_MAP` with a symbol key
 - Belongs to one or both presets (`:standard`, `:full`)
 - Results are cached with TTL + fingerprint invalidation
@@ -112,6 +113,7 @@ The `Introspector` orchestrator runs configured introspectors and merges results
 
 Four modules answer questions every introspector used to answer for itself:
 
+- **PathResolver** - where a kind of app code lives: `app/<kind>`, packs, and the in-repo code roots read from the tree (a directory holding its own `app/` plus a gemspec, `plugin.rb` or `lib/**/engine.rb`), memoized per root
 - **SourceScan** - one walk over a kind of app source, across every directory `PathResolver` resolves: `paths` stats, `each` reads, `classes` names by the declared constant
 - **EagerLoad** - loads a directory's constants for a booted-tier walk, one file at a time, so an unloadable file costs only itself
 - **GemLock** - which gems the app resolved and at what version, read once per lockfile and matched by exact name across GEM, GIT and PATH
@@ -126,7 +128,7 @@ Two more answer a question a tool asks:
 
 **Prism AST parsing** replaced all regex-based Ruby source parsing in v5.2.0.
 
-- **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by path + SHA256 + mtime
+- **AstCache** - Thread-safe parse cache (`Concurrent::Map`), keyed by path + SHA256 + mtime; a stat match answers without a read for a file already two seconds older than the read that recorded it
 - **SourceIntrospector** - Single-pass Prism Dispatcher walks the AST once, feeding every registered listener simultaneously
 - **26 Listeners** - Associations, Validations, Scopes, Enums, Callbacks, Macros and Methods are the default map for model analysis; the rest are used through targeted walks over schema dumps, migrations, Gemfiles, rake tasks and initializers, and `MethodCallListener` reports a named call with its arguments and options wherever one is asked for
 - **Confidence** - Every result carries `[VERIFIED]` (static literals) or `[INFERRED]` (dynamic expressions), and a record in a static-tier entry is capped at `[STATIC]`, since no record can claim more than the tier that carries it
@@ -140,7 +142,7 @@ Auto-registration via Ruby's `inherited` hook:
 3. `BaseTool.registered_tools` eager-loads all tool files and returns non-abstract classes
 4. `BaseTool` itself is marked `abstract!` - excluded from the registry
 
-**Deadlock-free design**: `eager_load!` collects constants to load inside the mutex, loads them outside (because `const_get` triggers Zeitwerk autoloading which calls `inherited` which needs the mutex), then sets the flag inside the mutex.
+**Deadlock-free design**: `eager_load!` walks `Tools.constants` and `const_get`s each one without holding the mutex, because `const_get` triggers Zeitwerk autoloading which calls `inherited`, which takes the mutex itself.
 
 ### MCP Server (`lib/rails_ai_context/server.rb`)
 
@@ -218,11 +220,12 @@ Thor-based CLI that works standalone (no Gemfile entry):
 
 ### Caching
 
-Three cache layers:
+Four cache layers:
 
 1. **Introspection cache** (`BaseTool.SHARED_CACHE`) - Mutex-protected, TTL + fingerprint invalidation
-2. **AST cache** (`AstCache`) - `Concurrent::Map`, SHA256 fingerprint per file
-3. **Session cache** (`BaseTool.SESSION_CONTEXT`) - Mutex-protected call history, resets on server restart
+2. **AST cache** (`AstCache`) - `Concurrent::Map`, SHA256 fingerprint per file, a stat shortcut for a settled file, bounded at 500
+3. **Run cache** (`RunCache`) - thread-local, lives for one `Introspector#call` or `generate_context`: file lists, stats and directory answers every section would otherwise ask again
+4. **Session cache** (`BaseTool.SESSION_CONTEXT`) - Mutex-protected call history, resets on server restart
 
 `LiveReload` watches files and calls `reset_all_caches!` when changes are detected.
 

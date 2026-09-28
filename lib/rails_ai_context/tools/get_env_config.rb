@@ -41,7 +41,7 @@ module RailsAiContext
 
           if environment
             names = list.map { |e| e[:name] }
-            match = find_closest_match(environment, names)
+            match = find_exact_match(environment, names)
             return not_found_response("Environment", environment, names, recovery_tool: "omit `environment` for all environments") unless match
 
             list = list.select { |e| e[:name] == match }

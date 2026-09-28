@@ -27,7 +27,7 @@ module RailsAiContext
         loader = Rails.autoloaders.main
         loader.eager_load_dir(path) if loader.respond_to?(:eager_load_dir)
       rescue StandardError, ScriptError => e
-        $stderr.puts "[rails-ai-context] eager_load_dir #{path} failed: #{e.message}" if ENV["DEBUG"]
+        RailsAiContext.debug_fail(e, label: "eager_load_dir #{path}")
       ensure
         load_individually(path)
       end

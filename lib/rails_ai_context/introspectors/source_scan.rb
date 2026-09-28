@@ -15,9 +15,17 @@ module RailsAiContext
 
       module_function
 
-      def paths(root, kind:, skip_concerns: true)
-        return enum_for(:paths, root, kind: kind, skip_concerns: skip_concerns) unless block_given?
+      # A run asks for the same kinds again and again (app/models five times on
+      # OpenProject), and the glob plus a realpath per file was a fifth of its CPU.
+      def paths(root, kind:, skip_concerns: true, &block)
+        return enum_for(:paths, root, kind: kind, skip_concerns: skip_concerns) unless block
 
+        RunCache.fetch([ :source_scan, root.to_s, kind, skip_concerns ]) do
+          [].tap { |found| scan(root, kind, skip_concerns) { |record| found << record } }
+        end.each(&block)
+      end
+
+      def scan(root, kind, skip_concerns)
         root = root.to_s
         real_root = File.realpath(root)
         PathResolver.dirs_for(root, kind).each do |dir|
@@ -40,6 +48,8 @@ module RailsAiContext
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
         nil
       end
+
+      private_class_method :scan
 
       def each(root, kind:, skip_concerns: true)
         return enum_for(:each, root, kind: kind, skip_concerns: skip_concerns) unless block_given?

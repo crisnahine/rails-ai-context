@@ -18,7 +18,8 @@ document is aspirational.
 - **Ruby:** 3.1 - 4.0 (gemspec: `required_ruby_version >= 3.1.0`, no upper cap)
 - **Rails (railties):** 7.0 - 8.1 (gemspec: `railties >= 7.0, < 9.0`)
 - **mcp gem:** `>= 0.13, < 2.0`
-- **thor:** `>= 1.0, < 3.0`
+- **thor:** `>= 1.2, < 3.0` (1.0 and 1.1 fail to load on Ruby 3.1+: they
+  reference `DidYouMean::SPELL_CHECKERS`, which did_you_mean removed)
 - **prism:** `>= 1.4, < 2.0` (a CI leg pins the floor exactly and runs the suite against it)
 - **concurrent-ruby:** `>= 1.2, < 3.0`
 - **json:** unconstrained by this gem, but `json >= 3.0` and Rails 7.0 to 8.0 do
@@ -37,8 +38,9 @@ CI.
 
 ### CI matrix
 
-Source: `.github/workflows/ci.yml`. 17 of 25 possible Ruby x Rails combinations
-run (`fail-fast: false`, so one failing cell doesn't hide the rest):
+Source: `.github/workflows/unit-matrix.yml`, which both `ci.yml` and
+`release.yml` call. 17 of 25 possible Ruby x Rails combinations run
+(`fail-fast: false`, so one failing cell doesn't hide the rest):
 
 | Ruby \ Rails | 7.0 | 7.1 | 7.2 | 8.0 | 8.1 |
 |:---|:---:|:---:|:---:|:---:|:---:|
@@ -53,8 +55,9 @@ run (`fail-fast: false`, so one failing cell doesn't hide the rest):
   upstream; they never needed 3.3).
 - Ruby 4.0 runs only against Rails 8.0/8.1 (7.x has no upstream Ruby 4
   support).
-- RuboCop runs once inside the matrix (Ruby 3.3 / Rails 8.0) and again in a
-  dedicated `lint` job pinned to Ruby 3.3.
+- RuboCop runs in a dedicated `lint` job pinned to Ruby 3.3. The release adds
+  a second run inside the matrix (Ruby 3.3 / Rails 8.0), since `release.yml`
+  has no `lint` job of its own.
 
 ### Rails 9
 
@@ -94,16 +97,16 @@ from the booted path:
 
 | Introspector | Static source |
 |:---|:---|
-| `schema` | `db/schema.rb` / `db/structure.sql` / migration replay |
-| `models` | `app/models/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
+| `schema` | `db/schema.rb` / `db/structure.sql` / migration replay over every `db/migrate` the repo owns, following the files a migration requires under `db/` |
+| `models` | `app/models/**/*.rb` (plus packs, in-repo engines/plugins/modules, extra paths) parsed, not constantized |
 | `routes` | `config/routes.rb` parsed with a dedicated Prism listener |
-| `controllers` | `app/controllers/**/*.rb` (plus packs/engines/extra paths) parsed, not constantized |
-| `jobs` | `app/jobs`, `app/mailers` and `app/channels` parsed for classes and their public methods |
+| `controllers` | `app/controllers/**/*.rb` (plus packs, in-repo engines/plugins/modules, extra paths) parsed, not constantized |
+| `jobs` | `app/jobs`, `app/workers`, `app/sidekiq`, `app/mailers` and `app/channels` parsed for classes and their public methods, plus any class elsewhere under `app/` whose parent chain reaches `ActionMailer::Base` |
 | `i18n` | `config.i18n.available_locales` read from `config/`, or every top-level key across `config/locales` when the app never assigns it; the default locale read from `config/`. The backend and the fallbacks stay in the answer and are declared unanswered, being facts about the running process |
 | `api` | every detection but the mode is a file read and runs unchanged; `config.api_only` comes from the assignment in `config/application.rb` |
 | `engines` | `config/routes.rb` mounts, plus the Gemfile |
 | `active_support` | concern and core-extension use read from source |
-| `middleware` | `app/middleware` and `config/initializers`; the booted stack and its count are declared unavailable |
+| `middleware` | `app/middleware`, `lib/middleware`, and the stack changes in `config/initializers`, `config/environments` and `config/application.rb`; the booted stack and its count are declared unavailable |
 
 **runtime-only** (8) report `{ unavailable: reason }` here, and only these:
 `conventions`, `database_stats`, `config`, `initializers`, `autoload`,
@@ -185,6 +188,7 @@ the proof list below the table.
 | Multi-DB `solid_*` schema dumps | static, `secondary_databases` [5] | n/a | n/a | n/a | n/a |
 | Packwerk `packs/` | n/a | static [5] | n/a | n/a | n/a |
 | In-repo `engines/` | n/a | n/a | n/a | static [5] | n/a |
+| In-repo `plugins/`, `modules/`, `gems/plugins/` | n/a | static [5] | n/a | static [5] | n/a |
 | Mongoid | `[UNAVAILABLE]`, honest signal [6] | static (fields + embeds) [6] | n/a | n/a | n/a |
 | Broken-boot (any full-stack app) | static [7] | static, per-file isolation [7] | static [7] | static [7] | `[UNAVAILABLE]` [8] |
 | Packs + engines under `--no-boot` | n/a | static [5] | n/a | static [5] | n/a |
@@ -204,6 +208,10 @@ Proof sources:
    (Ruby 3.4.10, 133 models, 102 controllers, 1630 ActiveInteraction services,
    516 Sidekiq workers) in the v5.27.0 QA round, booted and static tiers, with
    every report rebuilt on a minimal Rails 8.0.5.1 fixture before it was filed.
+   In the v5.30.0 release QA: Mastodon, Discourse, OpenProject, Canvas, Forem,
+   Whitehall, Consul, OpenFoodNetwork, Huginn, Errbit, Diaspora and Plots2 in
+   the static and failed-boot tiers, and the same private app in every tier
+   and both install paths.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified
@@ -281,10 +289,10 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   applicable" messaging for view/frontend tools on API-only apps only fires
   once the app has actually booted.
 - **Live multi-DB connections are not iterated, only dumps.**
-  `MultiDatabaseIntrospector` (replicas, sharding, per-model connection
-  assignment) has no static path and reports `[UNAVAILABLE]` in the static
-  tier. Only the schema introspector's own secondary-database dump parsing
-  (`db/*_schema.rb`, `db/*_structure.sql`) works without a boot.
+  `MultiDatabaseIntrospector` reads `config/database.yml` and the model source
+  in the static tier, so databases, replicas, sharding and `connects_to`
+  declarations come from the files rather than from the live connection
+  handlers. A database only a runtime `connects_to` names is missed.
 - **Inherited controller actions and filters are resolved by parent name, so
   some walks end early.** A controller that defines no action of its own takes
   the actions of the nearest app ancestor the listing holds, walked through the
@@ -305,8 +313,10 @@ Postgres instance in `spec/e2e/postgres_install_spec.rb`, opt-in via
   `Doorkeeper::AuthorizationsController` has no file under the app root at all.
   A booted run answers that one from reflection.
 - **Some route macros surface as a dynamic tally, not resolved entries.**
-  `RouteIntrospector#static_call` counts routes behind `devise_for`, `match`,
-  `direct`, `resolve`, a `draw` it cannot read, and a route whose `to:` is a
+  `RouteIntrospector#static_call` counts routes behind `devise_for`, a `match`
+  whose `via:` it cannot read, `direct`, `resolve`, a `draw` it cannot read, a block drawn
+  through an app class whose prefix is not a literal (and that class's own
+  `resources`), and a route whose `to:` is a
   lambda or a `redirect(...)` into a `dynamic_routes` count rather than
   fabricating per-route controller/action pairs it can't actually determine
   from source. Routing concerns and a `with_options` block that takes no block

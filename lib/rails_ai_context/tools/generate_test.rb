@@ -67,11 +67,7 @@ module RailsAiContext
         private
 
         def detect_framework
-          if Dir.exist?(File.join(rails_app.root, "spec"))
-            "rspec"
-          else
-            "minitest"
-          end
+          RailsAiContext::TestFramework.for(rails_app.root)
         end
 
         # The setup line follows the app's own specs: whether they name their
@@ -114,11 +110,44 @@ module RailsAiContext
           data = models[key]
           return text_response("Model #{key} has errors: #{data[:error]}") if data[:error]
 
-          if framework == "rspec"
+          if framework.to_s.include?("rspec")
             generate_rspec_model(key, data, tests_data)
           else
             generate_minitest_model(key, data, tests_data)
           end
+        end
+
+        # Where the app already files tests of this kind, else the convention. The second value is
+        # the subject's existing test, so the answer can point there instead of a new file.
+        def test_path(base, kind, stem, fallback_dir, fallback_suffix)
+          framework = RailsAiContext::TestFramework
+          root = rails_app.root.to_s
+          dir, suffix = framework.layout(root, base, kind, framework.subject_stems(cached_context, kind))
+          dir ||= fallback_dir
+          suffix ||= fallback_suffix
+          # Same lookup as rails_get_test_info, this base first.
+          existing = framework.candidates(root, kind, stem, cached_context)
+                              .partition { |rel| rel.start_with?("#{base}/") }.flatten.find do |rel|
+            full = File.expand_path(rel, root)
+            RailsAiContext::SafePath.contained?(full, root) && File.file?(full)
+          end
+          [ "#{dir}/#{stem}#{suffix}", existing, dir ]
+        rescue => e
+          RailsAiContext.debug_fail(e, [ "#{fallback_dir}/#{stem}#{fallback_suffix}", nil, fallback_dir ], label: "test_path")
+        end
+
+        def existing_test_response(path)
+          text_response("#{path} already exists. Add to it rather than writing a second test file for the same subject.")
+        end
+
+        # Namespaced names join with an underscore: Admin::User is admin_user, and
+        # test/fixtures/admin/users.yml is read through admin_users.
+        def record_name(model_name)
+          model_name.to_s.underscore.tr("/", "_")
+        end
+
+        def fixture_accessor(set)
+          set.to_s.tr("/", "_")
         end
 
         # The model's file, minus the models root and the extension.
@@ -140,24 +169,18 @@ module RailsAiContext
         def generate_rspec_model(name, data, tests_data)
           # The spec mirrors the model's own path, and underscoring the name
           # does not reproduce it: OAuthClientConfig is oauth_client_config.rb.
-          file_path = "spec/models/#{model_path_stem(name)}_spec.rb"
+          file_path, existing = test_path("spec", :model, model_path_stem(name), "spec/models", "_spec.rb")
+          return existing_test_response(existing) if existing
           factory = find_factory_name(name, tests_data)
           shoulda = shoulda?
-          lines = []
-          lines << "# #{file_path}"
-          lines << ""
-          lines << "```ruby"
-          lines << "# frozen_string_literal: true"
-          lines << ""
-          lines << "require \"rails_helper\""
-          lines << ""
+          lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
           lines << "RSpec.describe #{name}, type: :model do"
 
           # Factory/fixture setup
           if factory
             style = rspec_style
             if style[:let]
-              lines << "  let(:#{name.underscore}) { #{style[:factory]}(:#{factory}) }"
+              lines << "  let(:#{record_name(name)}) { #{style[:factory]}(:#{factory}) }"
             end
           end
 
@@ -165,6 +188,9 @@ module RailsAiContext
           # An association type with no matcher renders nothing, so the block
           # opens on the rows rather than on the association count.
           rows = (data[:associations] || []).filter_map do |a|
+            # A computed name is not a symbol a matcher can take: the spec
+            # either fails to parse or checks an association no model has.
+            next if a[:computed_name]
             next reflection_example(a) unless shoulda
 
             case a[:type]
@@ -207,6 +233,12 @@ module RailsAiContext
                   next
                 end
 
+                if (condition = validation_condition(v))
+                  lines.push("    it \"validates #{v[:kind]} of #{attr}\" do", conditional_validation_skip(condition, "      "), "    end")
+                  next
+                end
+
+                start = lines.size
                 case v[:kind]
                 when "presence"
                   lines << "    it { is_expected.to validate_presence_of(:#{attr}) }"
@@ -232,6 +264,9 @@ module RailsAiContext
                   lines << "    it \"validates #{v[:kind]} of #{attr}\" do"
                   lines << "      # TODO: implement #{v[:kind]} validation test"
                   lines << "    end"
+                end
+                if (context = validation_context(v)) && lines[start].start_with?("    it { ")
+                  lines[start] = lines[start].delete_suffix(" }") + ".on(:#{context}) }"
                 end
               end
             end
@@ -260,6 +295,8 @@ module RailsAiContext
             lines << ""
             lines << "  describe \"enums\" do"
             enums.each do |attr, values|
+              next if values.is_a?(String) # computed: no literal values to assert
+
               vals = values.is_a?(Hash) ? values.keys : Array(values)
               lines << if shoulda
                 "    it { is_expected.to define_enum_for(:#{attr}).with_values(#{vals.inspect}) }"
@@ -292,27 +329,21 @@ module RailsAiContext
         end
 
         def generate_minitest_model(name, data, tests_data)
-          file_path = "test/models/#{model_path_stem(name)}_test.rb"
+          file_path, existing = test_path("test", :model, model_path_stem(name), "test/models", "_test.rb")
+          return existing_test_response(existing) if existing
           factory = find_factory_name(name, tests_data)
           table = data[:table_name] || model_path_stem(name).split("/").last.pluralize
-          lines = []
-          lines << "# #{file_path}"
-          lines << ""
-          lines << "```ruby"
-          lines << "# frozen_string_literal: true"
-          lines << ""
-          lines << "require \"test_helper\""
-          lines << ""
+          lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
           lines << "class #{name}Test < ActiveSupport::TestCase"
 
-          setup_var = name.underscore
-          fixture_key = fixture_key_for(table, tests_data)
+          setup_var = record_name(name)
+          fixture_set, fixture_key = model_fixture(name, table, tests_data)
           # Determine data setup: factory > fixture > inline
           lines << "  setup do"
           if factory
             lines << "    @#{setup_var} = create(:#{factory})"
           elsif fixture_key
-            lines << "    @#{setup_var} = #{table}(:#{fixture_key})"
+            lines << "    @#{setup_var} = #{fixture_accessor(fixture_set)}(:#{fixture_key})"
           else
             lines << "    # TODO: no #{table} fixture found; build a valid record here"
             lines << "    @#{setup_var} = #{name}.new"
@@ -330,6 +361,16 @@ module RailsAiContext
                 next if seen.include?(key)
                 seen << key
                 lines << "  test \"validates #{v[:kind]} of #{attr}\" do"
+                if (condition = validation_condition(v))
+                  lines.push(conditional_validation_skip(condition, "    "), "  end", "")
+                  next
+                end
+                if macro_validation?(v)
+                  lines << "    skip \"implement #{v[:kind]} validation test\""
+                  lines << "  end"
+                  lines << ""
+                  next
+                end
                 case v[:kind]
                 when "presence"
                   lines << "    @#{setup_var}.#{attr} = nil"
@@ -353,7 +394,7 @@ module RailsAiContext
                 when "format"
                   lines << "    @#{setup_var}.#{attr} = \"invalid-format\""
                 end
-                lines << "    assert_not @#{setup_var}.valid?"
+                lines << "    assert_not @#{setup_var}.valid?#{"(:#{validation_context(v)})" if validation_context(v)}"
                 lines << "  end"
                 lines << ""
               end
@@ -452,12 +493,16 @@ module RailsAiContext
           snake = RailsAiContext::Payload.controller_route_key(cached_context, ctrl_class)
 
           routes = cached_context[:routes] || {}
-          by_ctrl = routes[:by_controller] || {}
+          by_ctrl = RouteCoverage.all_by_controller(routes)
           ctrl_routes = by_ctrl[snake] || by_ctrl[snake.pluralize] || []
+          chain = action_chain(ctrl_class, snake)
+          ctrl_routes, unimplemented = implemented_routes(ctrl_class, chain, ctrl_routes)
 
-          res = resource_info(ctrl_class, snake, tests_data)
+          res = resource_info(ctrl_class, snake, tests_data).merge(unimplemented: unimplemented, controller: ctrl_class,
+                                                                   route_key: snake, outcomes: {}, chain: chain,
+                                                                   route_names: RouteCoverage.by_controller(routes).values.flatten.filter_map { |r| r[:name] })
 
-          if framework == "rspec"
+          if framework.to_s.include?("rspec")
             generate_rspec_request(ctrl_class, snake, ctrl_routes, tests_data, res)
           else
             generate_minitest_controller(ctrl_class, snake, ctrl_routes, tests_data, res)
@@ -468,11 +513,21 @@ module RailsAiContext
         # the backing model, its fixture, the strong-params key, and the
         # permitted attributes (from strong params, falling back to schema
         # content columns).
+        # The model a route key names without its namespace: from the
+        # controller's namespace outward, else the one model of that own name
+        # (a line_items route serving Spree::LineItem).
+        def resource_model(keys, ctrl_class, name)
+          found = RailsAiContext::Introspectors::TableName.resolve_class(name, ctrl_class) { |candidate| fuzzy_find_key(keys, candidate) }
+          return found if keys.include?(found)
+
+          same = keys.select { |key| key.to_s.demodulize.casecmp?(name) }
+          same.first if same.one?
+        end
+
         def resource_info(ctrl_class, snake, tests_data)
           models = cached_context[:models] || {}
           singular = snake.split("/").last.singularize
-          model_key = fuzzy_find_key(models.keys, snake.singularize.camelize) ||
-            fuzzy_find_key(models.keys, singular.camelize)
+          model_key = fuzzy_find_key(models.keys, snake.singularize.camelize) || resource_model(models.keys, ctrl_class, singular.camelize)
           model_data = model_key ? models[model_key] : nil
           model_data = {} unless model_data.is_a?(Hash)
           table = model_data[:table_name] || singular.pluralize
@@ -497,12 +552,14 @@ module RailsAiContext
             .select { |v| v[:kind] == "uniqueness" }
             .flat_map { |v| Array(v[:attributes]).map(&:to_s) }
           unique_attrs = (validation_uniques + unique_index_columns(table)).uniq & attrs
+          fixture = model_key ? model_fixture(model_key, table, tests_data) : fixture_key_for(table, tests_data)&.then { |key| [ table, key ] }
 
           {
             name: singular,
             model: model_key,
             table: table,
-            fixture_key: fixture_key_for(table, tests_data),
+            fixture_set: fixture&.first,
+            fixture_key: fixture&.last,
             param_key: (sp && sp[:requires]) || singular,
             attrs: attrs.sort,
             record_attrs: (attrs - non_columns).sort,
@@ -512,15 +569,76 @@ module RailsAiContext
           }
         end
 
+        # The routes whose action the controller really has: one of the
+        # actions rails_get_controllers lists, one its chain defines, or a view
+        # template Rails renders without one. `resources` routes all seven
+        # actions whatever the controller defines, and a test for one it lacks
+        # fails with ActionNotFound. When the action list is unknown, every
+        # route stays; the note on a skipped one names what was not read.
+        #
+        # @return [Array(Array<Hash>, Array<String>)] the routes kept, and the
+        #   actions skipped
+        def implemented_routes(ctrl_class, chain, routes)
+          info = RailsAiContext::Payload.controllers(cached_context)[ctrl_class]
+          actions = info.is_a?(Hash) && !info[:error] ? info[:actions] : nil
+          # A gem's controller above this one (Devise::SessionsController) may define any action.
+          return [ routes, [] ] unless actions.is_a?(Array) && chain && chain.unread_parent.nil?
+
+          root = rails_app.root.to_s
+          known = actions.map(&:to_s)
+          kept, skipped = routes.partition do |route|
+            action = (route[:action] || "index").to_s
+            known.include?(action) || chain.defines?(action) ||
+              RailsAiContext::Introspectors::ActionPresence.template?(root, chain, action)
+          end
+          [ kept, skipped.map { |route| route[:action].to_s }.uniq ]
+        end
+
+        # The controller's chain, read once for the routes and the outcomes.
+        def action_chain(ctrl_class, snake)
+          root = rails_app.root.to_s
+          lookup = RailsAiContext::Introspectors::ActionPresence.lookup(root, RailsAiContext::Payload.controllers(cached_context))
+          RailsAiContext::Introspectors::ActionPresence.read(root, ctrl_class, lookup.call(ctrl_class), prefix: snake, lookup: lookup)
+        rescue => e
+          RailsAiContext.debug_fail(e, nil, label: "action_chain")
+        end
+
+        def no_routes_reason(ctrl_class, res, kind)
+          skipped = Array(res[:unimplemented])
+          return "no routes found for #{ctrl_class}; add #{kind} once routes exist" if skipped.empty?
+
+          "none of the routed actions (#{skipped.join(", ")}) is implemented by #{ctrl_class}"
+        end
+
+        def unimplemented_lines(ctrl_class, res)
+          unread = Array(res[:chain]&.unread)
+          Array(res[:unimplemented]).map do |action|
+            next "# Not tested: #{action} is routed, but #{ctrl_class} defines no #{action} method or template." if unread.empty?
+
+            "# Not tested: #{action} is routed, and no source read here defines it or a template " \
+              "(#{unread.join(', ')} not read)."
+          end
+        end
+
         def generate_minitest_controller(ctrl_class, snake, routes, tests_data, res)
-          file_path = "test/controllers/#{snake}_controller_test.rb"
+          file_path, existing, dir = test_path("test", :controller, snake, "test/controllers", "_controller_test.rb")
+          return existing_test_response(existing) if existing
+
+          style = RailsAiContext::TestFramework.test_style(rails_app.root, dir)
+          res = res.merge(test_case: style[:test_case] == true)
+          res[:factory] = find_factory_name(res[:model], tests_data) if style[:factories] && res[:model]
+          res[:parents] = route_parents(routes, res, tests_data, ref: "@") if res[:factory]
+
           lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"test_helper\"", "" ]
-          lines << "class #{ctrl_class}Test < ActionDispatch::IntegrationTest"
+          lines.concat(unimplemented_lines(ctrl_class, res))
+          lines << "class #{ctrl_class}Test < #{res[:test_case] ? "ActionController::TestCase" : "ActionDispatch::IntegrationTest"}"
 
           doorkeeper = doorkeeper_controller?(ctrl_class)
-          lines.concat(minitest_auth_lines(ctrl_class, tests_data, doorkeeper))
+          lines.concat(minitest_auth_lines(ctrl_class, tests_data, doorkeeper, res[:test_case]))
 
           setup = minitest_setup_lines(res, tests_data, doorkeeper)
+          setup.unshift(devise_mapping(res, routes)) if res[:test_case]
+          setup.compact!
           if setup.any?
             lines << "  setup do"
             setup.each { |l| lines << "    #{l}" }
@@ -529,13 +647,13 @@ module RailsAiContext
 
           name_by_path = route_names_by_path(routes)
           dedupe_routes(routes).each do |route|
-            lines << ""
+            lines << "" unless lines.last == ""
             lines.concat(minitest_route_test(route, name_by_path, res, tests_data))
           end
 
           if routes.empty?
             lines << "  test \"#{ctrl_class} responds\" do"
-            lines << "    skip \"TODO: no routes found for #{ctrl_class}; add tests once routes exist\""
+            lines << "    skip \"TODO: #{no_routes_reason(ctrl_class, res, "tests")}\""
             lines << "  end"
           end
 
@@ -547,13 +665,13 @@ module RailsAiContext
         # The Devise include is a fact about the app; the sign_in is only
         # emitted when the app owns a users fixture to sign in. A Doorkeeper
         # endpoint is not signed in at all, the same as the request-spec side.
-        def minitest_auth_lines(ctrl_class, tests_data, doorkeeper)
+        def minitest_auth_lines(ctrl_class, tests_data, doorkeeper, test_case = false)
           if doorkeeper
             return [ "  # TODO: these tests run unauthenticated; #{ctrl_class} authorizes with Doorkeeper, so pass a bearer token" ]
           end
           return [] unless devise_app?(tests_data)
 
-          lines = [ "  include Devise::Test::IntegrationHelpers" ]
+          lines = [ "  include #{devise_helpers(test_case)}" ]
           unless fixture_key_for("users", tests_data)
             lines << "  # TODO: these tests run unauthenticated; sign_in a user built from this app's own test data"
           end
@@ -566,15 +684,18 @@ module RailsAiContext
             lines << "@user = users(:#{user_key})"
             lines << "sign_in @user"
           end
-          if res[:model] && res[:fixture_key]
-            lines << "@#{res[:name]} = #{res[:table]}(:#{res[:fixture_key]})"
+          if res[:model] && res[:factory]
+            (res[:parents] || {}).each_value { |parent| lines << "#{parent[:ref]} = create(:#{parent[:factory]})" }
+            lines << "@#{res[:name]} = #{factory_create(res)}"
+          elsif res[:model] && res[:fixture_key]
+            lines << "@#{res[:name]} = #{fixture_accessor(res[:fixture_set])}(:#{res[:fixture_key]})"
           end
           lines
         end
 
         def minitest_route_test(route, name_by_path, res, tests_data)
           action = (route[:action] || "index").to_s
-          subject = res[:model] && res[:fixture_key] ? "@#{res[:name]}" : nil
+          subject = res[:model] && (res[:factory] || res[:fixture_key]) ? "@#{res[:name]}" : nil
 
           return minitest_generic_test(route, name_by_path, res, tests_data, subject) unless res[:model]
 
@@ -597,10 +718,10 @@ module RailsAiContext
         end
 
         def minitest_get_test(route, name_by_path, res, tests_data, label, subject)
-          resolved = url_expression(route, name_by_path, subject, res, tests_data)
-          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+          resolved = request_target(route, name_by_path, subject, res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
 
-          minitest_request_test(label, verb_for(route), resolved, res, "assert_response :success")
+          minitest_request_test(label, verb_for(route), resolved, res, response_assertions(route, res, :minitest))
         end
 
         def minitest_member_get_test(route, name_by_path, res, tests_data, label, subject)
@@ -611,15 +732,15 @@ module RailsAiContext
 
         def minitest_create_test(route, name_by_path, res, tests_data, subject)
           label = "should create #{res[:name]}"
-          resolved = url_expression(route, name_by_path, subject, res, tests_data)
-          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+          resolved = request_target(route, name_by_path, subject, res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
           if res[:attrs].empty?
             return minitest_skip_test(label, "no permitted attributes detected; fill in valid params for POST #{route[:path]}")
           end
 
           params = request_params_literal(res, subject ? :fixture : :placeholder)
           minitest_request_test(label, "post", resolved, res,
-            res[:json_api] ? "assert_response :success" : "assert_response :redirect",
+            response_assertions(route, res, :minitest),
             params_literal: params,
             difference: "\"#{res[:model]}.count\"",
             todos: params_todos(res, params))
@@ -629,15 +750,15 @@ module RailsAiContext
           label = "should update #{res[:name]}"
           return minitest_skip_test(label, "requires a #{res[:table]} fixture") unless subject
 
-          resolved = url_expression(route, name_by_path, subject, res, tests_data)
-          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+          resolved = request_target(route, name_by_path, subject, res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
           if res[:attrs].empty?
             return minitest_skip_test(label, "no permitted attributes detected; fill in valid params for #{route[:verb]} #{route[:path]}")
           end
 
           params = request_params_literal(res, :fixture)
           minitest_request_test(label, verb_for(route), resolved, res,
-            res[:json_api] ? "assert_response :success" : "assert_response :redirect",
+            response_assertions(route, res, :minitest),
             params_literal: params,
             todos: params_todos(res, params))
         end
@@ -646,18 +767,22 @@ module RailsAiContext
           label = "should destroy #{res[:name]}"
           return minitest_skip_test(label, "requires a #{res[:table]} fixture") unless subject
 
-          resolved = url_expression(route, name_by_path, res[:name], res, tests_data)
-          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+          resolved = request_target(route, name_by_path, res[:name], res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
 
-          setup_lines = [
-            "# Destroy a fresh record: deleting a fixture row can violate foreign keys other fixtures hold on it.",
-            "#{res[:name]} = #{res[:model]}.create!(#{subject}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res)})"
-          ]
+          setup_lines = if res[:factory]
+            [ "#{res[:name]} = #{factory_create(res)}" ]
+          else
+            [
+              "# Destroy a fresh record: deleting a fixture row can violate foreign keys other fixtures hold on it.",
+              "#{res[:name]} = #{res[:model]}.create!(#{subject}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res)})"
+            ]
+          end
           # String uniques are already randomized by destroy_attr_overrides;
           # only non-string uniques still need a hand-picked fresh value.
           unhandled_uniques = res[:unique_attrs].reject { |a| %w[string text].include?(schema_column_type(res[:table], a)) }
           minitest_request_test(label, "delete", resolved, res,
-            res[:json_api] ? "assert_response :success" : "assert_response :redirect",
+            response_assertions(route, res, :minitest),
             difference: "\"#{res[:model]}.count\", -1",
             setup_lines: setup_lines,
             todos: unhandled_uniques.any? ? [ "confirm the fresh record satisfies uniqueness validations" ] : [])
@@ -672,20 +797,26 @@ module RailsAiContext
             return minitest_skip_test(label, "provide params and assertions for #{action}")
           end
 
-          resolved = url_expression(route, name_by_path, subject, res, tests_data)
-          return minitest_skip_test(label, unresolved_reason(route)) unless resolved
+          resolved = request_target(route, name_by_path, subject, res, tests_data)
+          return minitest_skip_test(label, unresolved_reason(route, res)) unless resolved
 
-          minitest_request_test(label, verb, resolved, res, "assert_response :success")
+          minitest_request_test(label, verb, resolved, res, response_assertions(route, res, :minitest))
         end
 
         def minitest_request_test(label, verb, resolved, res, assertion, params_literal: nil, difference: nil, setup_lines: [], todos: [])
           json = res[:json_api] ? ", as: :json" : ""
-          params_part = params_literal ? ", params: #{params_literal}" : ""
+          segments = Array(resolved[:path_params]).map { |param, expr| "#{param}: #{expr}" }.join(", ")
+          params = if segments.empty? then params_literal
+          elsif params_literal then params_literal.sub(/\A\{ /, "{ #{segments}, ")
+          else "{ #{segments} }"
+          end
+          params_part = params ? ", params: #{params}" : ""
           request = "#{verb} #{resolved[:url]}#{params_part}#{json}"
 
           out = [ "  test \"#{label}\" do" ]
           todos.each { |t| out << "    # TODO: #{t}" }
-          (resolved[:prelude] + setup_lines).each { |l| out << "    #{l}" }
+          # The record comes first: the URL prelude may read its id.
+          (setup_lines + resolved[:prelude]).each { |l| out << "    #{l}" }
           if difference
             out << "    assert_difference(#{difference}) do"
             out << "      #{request}"
@@ -693,46 +824,184 @@ module RailsAiContext
           else
             out << "    #{request}"
           end
-          out << "    #{assertion}"
+          Array(assertion).each { |line| out << "    #{line}" }
           out << "  end"
           out
+        end
+
+        # A URL helper for an integration test; the action itself for an ActionController::TestCase,
+        # which needs no route resolved.
+        def request_target(route, name_by_path, subject, res, tests_data)
+          factories = res[:factory].present?
+          return url_expression(route, name_by_path, subject, res, tests_data, factories: factories) unless res[:test_case]
+
+          action_target(route, subject, res, tests_data, factories: factories)
+        end
+
+        # The action is named, so every dynamic segment is a param: :id alone raises
+        # UrlGenerationError on a nested route.
+        def action_target(route, subject, res, tests_data, factories:)
+          path_params = path_params_of(route).map do |param|
+            expr = path_param_expr(param, subject, tests_data, factories: factories, res: res) or return nil
+            [ param, expr ]
+          end
+          { url: ":#{route[:action] || "index"}", prelude: [], path_params: path_params }
+        end
+
+        def rspec_target(route, name_by_path, subject, res, tests_data)
+          return action_target(route, subject, res, tests_data, factories: true) if res[:controller_spec]
+
+          url_expression(route, name_by_path, subject, res, tests_data, factories: true)
+        end
+
+        def rspec_request(verb, resolved, body_params, json)
+          pairs = Array(resolved[:path_params]).map { |param, expr| "#{param}: #{expr}" }
+          pairs << body_params if body_params
+          params = pairs.empty? ? "" : ", params: { #{pairs.join(", ")} }"
+          "#{verb} #{resolved[:url]}#{params}#{json}"
+        end
+
+        # The segments a route requires: one inside parentheses is optional,
+        # and a request that leaves it out still routes.
+        def path_params_of(route)
+          depth = 0
+          optional = []
+          route[:path].to_s.scan(/[()]|[:*]\w+/) do |token|
+            case token
+            when "(" then depth += 1
+            when ")" then depth -= 1
+            else optional << token[1..] if depth.positive?
+            end
+          end
+          # A glob segment (*path) is required the same as a named one.
+          route[:path].to_s.scan(/[:*](\w+)/).flatten - optional - [ "format" ]
+        end
+
+        OUTCOME_REASONS = {
+          conditional: "The action answers differently depending on a condition, so only a server error fails this.",
+          unknown: "The action is defined outside the controller's own source, so only a server error fails this."
+        }.freeze
+
+        # The assertions for what the action answers, read from its body: a
+        # redirect is not a success, and neither is `head :no_content`.
+        def response_assertions(route, res, framework)
+          verb = verb_for(route).split("|").first
+          outcome = res[:controller] ? action_outcome((route[:action] || "index").to_s, verb, res) : { kind: :render }
+          rspec = framework == :rspec
+          status = ->(default) { literal = outcome[:status] || default; literal.is_a?(Symbol) ? ":#{literal}" : literal.to_s }
+          expect_status = ->(value) { rspec ? "expect(response).to have_http_status(#{value})" : "assert_response #{value}" }
+          media = ->(type) { rspec ? "expect(response.media_type).to eq(\"#{type}\")" : "assert_equal \"#{type}\", response.media_type" }
+
+          lines = case outcome[:kind]
+          when :render, :json, :plain
+            type = outcome[:content_type]
+            [ expect_status.call(status.call(:success)), (media.call(type) if type.is_a?(String)) ].compact
+          when :head then [ expect_status.call(status.call(:success)) ]
+          when :redirect
+            target = outcome[:target]
+            # A bare *_path call can be a private method of the controller, which a test cannot call.
+            target = nil if target && !target.start_with?('"', "'") && !Array(res[:route_names]).include?(target.sub(/_(path|url)\z/, ""))
+            target &&= rspec ? "expect(response).to redirect_to(#{target})" : "assert_redirected_to #{target}"
+            [ expect_status.call(status.call(:redirect)), target ].compact
+          else
+            [ "# #{OUTCOME_REASONS.fetch(outcome[:kind], OUTCOME_REASONS[:conditional])}",
+              rspec ? "expect(response.status).to be < 500" : "assert_operator response.status, :<, 500" ]
+          end
+          outcome[:assumed_valid] ? [ "# Asserts the branch valid params take." ] + lines : lines
+        end
+
+        # What the action answers: read from its def in the controller's file
+        # or an ancestor's, the implicit render for a template-only action,
+        # and unknown for one defined somewhere else (a concern, define_method).
+        def action_outcome(action, verb, res)
+          res[:outcomes][[ action, verb ]] ||= begin
+            methods = res[:chain]&.defs || {}
+            def_node = methods[action.to_sym]
+            if def_node
+              RailsAiContext::ActionOutcome.of(def_node, methods, format: res[:json_api] ? :json : :html, verb: verb)
+            elsif res[:chain] && RailsAiContext::Introspectors::ActionPresence.template?(rails_app.root.to_s, res[:chain], action)
+              { kind: :render }
+            else
+              { kind: :unknown }
+            end
+          end
+        rescue => e
+          RailsAiContext.debug_fail(e, { kind: :unknown }, label: "action_outcome")
+        end
+
+        # A Devise controller reached without the router raises for want of a
+        # mapping. Devise names its routes <scope>_<kind> (new_user_session),
+        # whatever the controller is called.
+        #
+        # @return [String, nil] the statement that sets the mapping, a TODO when
+        #   the scope cannot be read, nil for any other controller
+        def devise_mapping(res, routes)
+          stop = res[:chain]&.unread_parent
+          return nil unless stop&.delete_prefix("::")&.match?(/\ADevise(Controller\z|::)/)
+
+          scope = routes.filter_map do |route|
+            route[:name]&.sub(/\A(new|edit|cancel|destroy)_/, "")&.[](/\A(\w+)_(?:session|registration|password|confirmation|unlock)\z/, 1)
+          end.tally.max_by { |_, count| count }&.first
+          if scope
+            "@request.env[\"devise.mapping\"] = Devise.mappings[:#{scope}]"
+          else
+            "# TODO: set @request.env[\"devise.mapping\"] to the Devise mapping this controller serves"
+          end
         end
 
         def minitest_skip_test(label, reason)
           [ "  test \"#{label}\" do", "    skip \"TODO: #{reason}\"", "  end" ]
         end
 
+        # A route answering several verbs ("GET|POST", or "ANY" for `via: :all`)
+        # is requested with GET when it answers GET.
         def verb_for(route)
-          (route[:verb] || "GET").downcase
+          verbs = route[:verb].to_s.downcase.split("|")
+          return "get" if verbs.empty? || verbs.include?("get") || verbs.include?("any")
+
+          verbs.first
         end
 
-        def unresolved_reason(route)
+        def unresolved_reason(route, res = {})
+          if res[:test_case] || res[:controller_spec]
+            return "pass #{path_params_of(route).map { |param| ":#{param}" }.join(", ")} for #{route[:verb]} #{route[:path]}"
+          end
+
           "resolve the dynamic segments of #{route[:verb]} #{route[:path]} (no matching fixture found)"
         end
 
         # ── RSpec request generation ─────────────────────────────────────
 
         def generate_rspec_request(ctrl_class, snake, routes, tests_data, res)
-          file_path = "spec/requests/#{snake}_spec.rb"
+          file_path, existing = test_path("spec", :controller, snake, "spec/requests", "_spec.rb")
+          return existing_test_response(existing) if existing
           factory = find_factory_name(snake.singularize.camelize, tests_data)
+          res = res.merge(factory: factory, parents: factory ? route_parents(routes, res, tests_data, ref: "") : {})
+          # Among the app's controller specs a new one is a controller spec
+          # too, naming the action; elsewhere it is a request spec.
+          res[:controller_spec] = file_path.end_with?("_controller_spec.rb")
 
           lines = [ "# #{file_path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
-          lines << "RSpec.describe \"#{ctrl_class}\", type: :request do"
+          lines.concat(unimplemented_lines(ctrl_class, res))
+          lines << (res[:controller_spec] ? "RSpec.describe #{ctrl_class}, type: :controller do" : "RSpec.describe \"#{ctrl_class}\", type: :request do")
 
-          lines.concat(rspec_auth_lines(ctrl_class, tests_data))
+          lines.concat(rspec_auth_lines(ctrl_class, tests_data, res[:controller_spec]))
+          if res[:controller_spec] && (mapping = devise_mapping(res, routes))
+            lines.push(mapping.start_with?("#") ? "  #{mapping}" : "  before { #{mapping} }", "")
+          end
 
           subject_expr = rspec_subject_lines(lines, res, factory)
           attrs_available = rspec_attributes_lines(lines, res, factory)
 
           name_by_path = route_names_by_path(routes)
           dedupe_routes(routes).each do |route|
-            lines << ""
+            lines << "" unless lines.last == ""
             lines.concat(rspec_route_test(route, name_by_path, res, tests_data, subject_expr, attrs_available))
           end
 
           if routes.empty?
             lines << "  it \"has tests\" do"
-            lines << "    skip \"TODO: no routes found for #{ctrl_class}; add request specs once routes exist\""
+            lines << "    skip \"TODO: #{no_routes_reason(ctrl_class, res, "request specs")}\""
             lines << "  end"
           end
 
@@ -744,11 +1013,19 @@ module RailsAiContext
         # Auth setup for a request spec. sign_in cannot authenticate a
         # Doorkeeper endpoint, and it needs a user the app can actually build,
         # so each missing piece degrades to a TODO instead of a fabricated call.
-        def rspec_auth_lines(ctrl_class, tests_data)
+        # A test that drives the action itself (ActionController::TestCase, a
+        # controller spec) signs in through Devise's ControllerHelpers; one that
+        # sends a request, through IntegrationHelpers. The other one's sign_in
+        # does nothing there, and every signed-in test gets a redirect.
+        def devise_helpers(by_action)
+          "Devise::Test::#{by_action ? "ControllerHelpers" : "IntegrationHelpers"}"
+        end
+
+        def rspec_auth_lines(ctrl_class, tests_data, controller_spec = false)
           if doorkeeper_controller?(ctrl_class)
             [ "  # TODO: these examples run unauthenticated; #{ctrl_class} authorizes with Doorkeeper, so pass a bearer token", "" ]
           elsif devise_app?(tests_data)
-            lines = [ "  include Devise::Test::IntegrationHelpers", "" ]
+            lines = [ "  include #{devise_helpers(controller_spec)}", "" ]
             if (user_factory = find_factory_name("User", tests_data))
               lines << "  let(:user) { create(:#{user_factory}) }"
               lines << "  before { sign_in user }"
@@ -780,10 +1057,20 @@ module RailsAiContext
 
         # Emits the subject let and returns the expression tests use to
         # reference a persisted record (nil when one cannot be built).
+        # Names a request or controller spec already gives meaning to: `let(:post)`
+        # shadows the `post` the spec sends.
+        SPEC_METHOD_NAMES = %w[get post put patch delete head request response params session cookies flash controller].freeze
+
+        def rspec_let_name(name)
+          SPEC_METHOD_NAMES.include?(name.to_s) ? "#{name}_record" : name.to_s
+        end
+
         def rspec_subject_lines(lines, res, factory)
+          subject = rspec_let_name(res[:name])
           if factory
-            lines << "  let(:#{res[:name]}) { create(:#{factory}) }"
-            return res[:name]
+            res[:parents].each_value { |parent| lines << "  let(:#{parent[:ref]}) { create(:#{parent[:factory]}) }" }
+            lines << "  let(:#{subject}) { #{factory_create(res)} }"
+            return subject
           end
           return nil unless res[:model] && res[:record_attrs].any?
 
@@ -793,8 +1080,8 @@ module RailsAiContext
               "#{res[:table]}; set them the way the model expects"
           end
           lines << "  # TODO: adjust these attributes if validations reject the placeholder values"
-          lines << "  let(:#{res[:name]}) { #{res[:model]}.create!(#{placeholder}) }"
-          res[:name]
+          lines << "  let(:#{subject}) { #{res[:model]}.create!(#{placeholder}) }"
+          subject
         end
 
         def rspec_attributes_lines(lines, res, factory)
@@ -845,14 +1132,14 @@ module RailsAiContext
         # The route's own verb: `post 'orders/edit' => 'orders#edit'` is an
         # edit action reached with POST, and the example sent a GET.
         def rspec_get_body(route, name_by_path, res, tests_data, subject_expr, label)
-          resolved = url_expression(route, name_by_path, subject_expr, res, tests_data, rspec: true)
-          return rspec_skip_body(label, unresolved_reason(route)) unless resolved
+          resolved = rspec_target(route, name_by_path, subject_expr, res, tests_data)
+          return rspec_skip_body(label, unresolved_reason(route, res)) unless resolved
 
           json = res[:json_api] ? ", as: :json" : ""
           out = [ "  it \"#{label}\" do" ]
           resolved[:prelude].each { |l| out << "    #{l}" }
-          out << "    #{verb_for(route)} #{resolved[:url]}#{json}"
-          out << "    expect(response).to have_http_status(:success)"
+          out << "    #{rspec_request(verb_for(route), resolved, nil, json)}"
+          response_assertions(route, res, :rspec).each { |line| out << "    #{line}" }
           out << "  end"
           out
         end
@@ -861,17 +1148,16 @@ module RailsAiContext
           label = "creates a new #{res[:model] || res[:name]}"
           return rspec_skip_body(label, "no permitted attributes detected; fill in valid params") unless attrs_available && res[:model]
 
-          resolved = url_expression(route, name_by_path, nil, res, tests_data, rspec: true)
-          return rspec_skip_body(label, unresolved_reason(route)) unless resolved
+          resolved = rspec_target(route, name_by_path, nil, res, tests_data)
+          return rspec_skip_body(label, unresolved_reason(route, res)) unless resolved
 
           json = res[:json_api] ? ", as: :json" : ""
-          status = res[:json_api] ? ":success" : ":redirect"
           out = [ "  it \"#{label}\" do" ]
           resolved[:prelude].each { |l| out << "    #{l}" }
           out << "    expect {"
-          out << "      post #{resolved[:url]}, params: { #{res[:param_key]}: valid_attributes }#{json}"
+          out << "      #{rspec_request("post", resolved, "#{res[:param_key]}: valid_attributes", json)}"
           out << "    }.to change(#{res[:model]}, :count).by(1)"
-          out << "    expect(response).to have_http_status(#{status})"
+          response_assertions(route, res, :rspec).each { |line| out << "    #{line}" }
           out << "  end"
           out
         end
@@ -881,15 +1167,14 @@ module RailsAiContext
           return rspec_skip_body(label, "requires a persisted #{res[:name]} record") unless subject_expr
           return rspec_skip_body(label, "no permitted attributes detected; fill in valid params") unless attrs_available
 
-          resolved = url_expression(route, name_by_path, subject_expr, res, tests_data, rspec: true)
-          return rspec_skip_body(label, unresolved_reason(route)) unless resolved
+          resolved = rspec_target(route, name_by_path, subject_expr, res, tests_data)
+          return rspec_skip_body(label, unresolved_reason(route, res)) unless resolved
 
           json = res[:json_api] ? ", as: :json" : ""
-          status = res[:json_api] ? ":success" : ":redirect"
           out = [ "  it \"#{label}\" do" ]
           resolved[:prelude].each { |l| out << "    #{l}" }
-          out << "    #{verb_for(route)} #{resolved[:url]}, params: { #{res[:param_key]}: valid_attributes }#{json}"
-          out << "    expect(response).to have_http_status(#{status})"
+          out << "    #{rspec_request(verb_for(route), resolved, "#{res[:param_key]}: valid_attributes", json)}"
+          response_assertions(route, res, :rspec).each { |line| out << "    #{line}" }
           out << "  end"
           out
         end
@@ -898,16 +1183,17 @@ module RailsAiContext
           label = "destroys the #{res[:name]}"
           return rspec_skip_body(label, "requires a persisted #{res[:name]} record") unless subject_expr && res[:model]
 
-          resolved = url_expression(route, name_by_path, "record", res, tests_data, rspec: true)
-          return rspec_skip_body(label, unresolved_reason(route)) unless resolved
+          resolved = rspec_target(route, name_by_path, "record", res, tests_data)
+          return rspec_skip_body(label, unresolved_reason(route, res)) unless resolved
 
           json = res[:json_api] ? ", as: :json" : ""
           out = [ "  it \"#{label}\" do" ]
           out << "    record = #{res[:model]}.create!(#{subject_expr}.attributes.except(\"id\", \"created_at\", \"updated_at\")#{destroy_attr_overrides(res)})"
           resolved[:prelude].each { |l| out << "    #{l}" }
           out << "    expect {"
-          out << "      delete #{resolved[:url]}#{json}"
+          out << "      #{rspec_request("delete", resolved, nil, json)}"
           out << "    }.to change(#{res[:model]}, :count).by(-1)"
+          response_assertions(route, res, :rspec).each { |line| out << "    #{line}" }
           out << "  end"
           out
         end
@@ -944,10 +1230,10 @@ module RailsAiContext
         # or an interpolated path string when the route has no helper name.
         # Returns { url:, prelude: } or nil when a dynamic segment cannot be
         # satisfied from test data.
-        def url_expression(route, name_by_path, subject_expr, res, tests_data, rspec: false)
-          params = route[:params] || (route[:path] || "").scan(/:(\w+)/).flatten
+        def url_expression(route, name_by_path, subject_expr, res, tests_data, factories: false)
+          params = path_params_of(route)
           args = params.map do |p|
-            expr = path_param_expr(p, subject_expr, tests_data, rspec: rspec)
+            expr = path_param_expr(p, subject_expr, tests_data, factories: factories, res: res)
             return nil unless expr
             expr
           end
@@ -957,28 +1243,88 @@ module RailsAiContext
             url = args.empty? ? "#{helper}_url" : "#{helper}_url(#{args.join(', ')})"
             { url: url, prelude: [] }
           else
-            prelude = params.each_with_index.map { |p, i| "#{p} = #{args[i]}.id" }
-            quoted = (route[:path] || "/#{res[:table]}").gsub(/:(\w+)/, "\#{\\1}")
+            # A record's id is its key; a column value is already the segment.
+            prelude = params.each_with_index.map { |p, i| "#{p} = #{args[i]}#{".id" if p == "id" || p.end_with?("_id")}" }
+            path = route[:path] || "/#{res[:table]}"
+            path = path.gsub(/\([^()]*\)/, "") while path.match?(/\([^()]*\)/)
+            quoted = path.gsub(/[:*](\w+)/, "\#{\\1}")
             { url: "\"#{quoted}\"", prelude: prelude }
           end
         end
 
         # Dynamic path segments come from the subject record (:id) or a parent
-        # record (:parent_id). Minitest reads parents from fixtures; RSpec
-        # request specs do not load fixtures, so parents need a factory.
-        def path_param_expr(param, subject_expr, tests_data, rspec: false)
+        # record (:parent_id), built by factory or fixture, whichever the test uses.
+        def path_param_expr(param, subject_expr, tests_data, factories: false, res: {})
           if param == "id"
             subject_expr
           elsif param.end_with?("_id")
             parent = param.delete_suffix("_id")
-            if rspec
+            built = (res[:parents] || {})[param]
+            owned = owned_parent(parent, res)
+            if built
+              built[:ref]
+            elsif subject_expr && owned && !factories
+              "#{subject_expr}.#{owned}"
+            elsif factories
               factory = find_factory_name(parent.camelize, tests_data)
               factory && "create(:#{factory})"
             else
               key = fixture_key_for(parent.pluralize, tests_data)
               key && "#{parent.pluralize}(:#{key})"
             end
+          else
+            column_value(param, subject_expr, res)
           end
+        end
+
+        # A segment that names a column of the record the test builds, or of a
+        # route parent it builds, is that record's attribute: Plots2 routes
+        # `graph/file/:uid/:id` to csvfiles, whose rows carry a uid.
+        def column_value(param, subject_expr, res)
+          return "#{subject_expr}.#{param}" if subject_expr && res[:table] && !schema_column_type(res[:table], param).empty?
+
+          owner = (res[:parents] || {}).values.find do |parent|
+            !schema_column_type(parent_table(parent[:name]), param).empty?
+          end
+          owner && "#{owner[:ref]}.#{param}"
+        end
+
+        def parent_table(parent)
+          model = (cached_context[:models] || {})[parent.camelize]
+          (model.is_a?(Hash) && model[:table_name]) || parent.pluralize
+        end
+
+        # Each parent is built once so every request names the same one. `ref` is an ivar in
+        # minitest, a let in RSpec.
+        def route_parents(routes, res, tests_data, ref:)
+          params = Array(routes).flat_map { |route| path_params_of(route) }.uniq.select { |param| param.end_with?("_id") }
+          params.filter_map do |param|
+            parent = param.delete_suffix("_id")
+            factory = find_factory_name(parent.camelize, tests_data) or next
+            name = parent.tr("/", "_")
+            [ param, { name: parent, ref: ref.empty? ? rspec_let_name(name) : "#{ref}#{name}", factory: factory,
+                       assoc: owned_parent(parent, res) } ]
+          end.to_h
+        end
+
+        # The record's factory call, attached to each route parent it is found
+        # through, so a controller that scopes by the parent finds it.
+        def factory_create(res)
+          attach = (res[:parents] || {}).values.select { |parent| parent[:assoc] }
+                                         .map { |parent| ", #{parent[:assoc]}: #{parent[:ref]}" }.join
+          "create(:#{res[:factory]}#{attach})"
+        end
+
+        # One named for the parent, else the record's only polymorphic owner. A controller that
+        # finds the record through its parent 404s on any other parent.
+        def owned_parent(parent, res)
+          model = res[:model] && (cached_context[:models] || {})[res[:model]]
+          belongs = Array(model.is_a?(Hash) ? model[:associations] : nil).select { |a| a[:type].to_s == "belongs_to" }
+          named = belongs.find { |a| a[:name].to_s == parent || a[:foreign_key].to_s == "#{parent}_id" }
+          return named[:name].to_s if named
+
+          polymorphic = belongs.select { |a| a[:polymorphic] }
+          polymorphic.one? ? polymorphic.first[:name].to_s : nil
         end
 
         # Build the params hash literal for create/update, copying attribute
@@ -1089,7 +1435,7 @@ module RailsAiContext
         def generate_service_test(class_name, file, framework)
           entry = service_entry_point(file)
 
-          if framework == "rspec"
+          if framework.to_s.include?("rspec")
             path = "spec/services/#{class_name.underscore}_spec.rb"
             lines = [ "# #{path}", "", "```ruby", "# frozen_string_literal: true", "", "require \"rails_helper\"", "" ]
             lines << "RSpec.describe #{class_name} do"
@@ -1140,8 +1486,7 @@ module RailsAiContext
 
           RailsAiContext::SafeFile.read(path)
         rescue StandardError => e
-          $stderr.puts "[rails-ai-context] generate_test could not read #{file}: #{e.message}" if ENV["DEBUG"]
-          nil
+          RailsAiContext.debug_fail(e, nil, label: "generate_test read of #{file}")
         end
 
         # FactoryBot names a factory after the model, not after the
@@ -1150,7 +1495,7 @@ module RailsAiContext
         # because `create(:nothing)` raises where a skipped block does not.
         def find_factory_name(model_name, tests_data)
           factory_names = tests_data[:factory_names] || {}
-          candidates = [ model_name.to_s.underscore, model_name.to_s.demodulize.underscore ].uniq
+          candidates = [ record_name(model_name), model_name.to_s.demodulize.underscore ].uniq
           candidates.each do |candidate|
             factory_names.each_value do |names|
               return candidate.to_sym if names.include?(candidate.to_sym) || names.include?(candidate)
@@ -1164,7 +1509,38 @@ module RailsAiContext
           "    it { expect(described_class.reflect_on_association(:#{assoc[:name]}).macro).to eq(:#{assoc[:type]}) }"
         end
 
+        # A gem macro (`validates_date`) or `validates_with` is listed under the macro's name, not
+        # a kind `validators_on` reports, so no assertion can be written against it.
+        def macro_validation?(validation)
+          validation[:kind].to_s.start_with?("validates_")
+        end
+
+        # The if:/unless: a validation runs under, nil for one that always runs.
+        def validation_condition(validation)
+          options = validation[:options] || {}
+          conditions = options.slice(:if, :unless).map { |key, value| "#{key}: #{value.is_a?(Symbol) ? value.inspect : value}" }
+          conditions << "if: #{validation[:implicit_if]}" if validation[:implicit_if]
+          conditions.join(", ").presence
+        end
+
+        # The context an on: rule runs in (a saved record validates as :update).
+        def validation_context(validation)
+          validation.dig(:options, :on)&.to_s&.scan(/\w+/)&.first
+        end
+
+        def conditional_validation_skip(condition, indent)
+          "#{indent}skip \"TODO: this validation runs only #{condition.tr('"', "'")}\""
+        end
+
         def plain_validation_example(validation, attr)
+          if macro_validation?(validation)
+            return [
+              "    it \"validates #{validation[:kind]} of #{attr}\" do",
+              "      # TODO: implement #{validation[:kind]} validation test",
+              "    end"
+            ]
+          end
+
           [
             "    it \"validates #{validation[:kind]} of #{attr}\" do",
             "      # TODO: set up a record that fails this validation",

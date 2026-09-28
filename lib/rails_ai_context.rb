@@ -34,12 +34,18 @@ loader.ignore("#{__dir__}/rails_ai_context/polyfill")
 loader.setup
 
 module RailsAiContext
+  # How much of a static-tier reason a per-answer footer carries.
+  STATIC_REASON_HEAD = 140
+
   class Error < StandardError; end
   class ConfigurationError < Error; end
 
   class << self
     # Global configuration
     attr_writer :configuration
+
+    # True while the stdio transport owns $stdout for JSON-RPC.
+    attr_accessor :stdio_open
 
     def configuration
       @configuration ||= Configuration.new
@@ -54,7 +60,7 @@ module RailsAiContext
     # dummy apps); a logging call that raises inside a rescue block defeats the
     # fault isolation the rescue exists to provide.
     def log_warn(message)
-      if defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
+      if !stdio_open && defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
         Rails.logger.warn(message)
       else
         $stderr.puts(message)
@@ -90,6 +96,14 @@ module RailsAiContext
       tier == :static
     end
 
+    # The environment every tier answers with: the booted app's own, or what
+    # Rails itself would read from the shell.
+    def environment_name
+      return Rails.env.to_s if !static_tier? && defined?(Rails) && Rails.respond_to?(:env)
+
+      ENV["RAILS_ENV"] || ENV["RACK_ENV"] || "development"
+    end
+
     # One-line explanation of why the static tier is active (boot failure
     # summary, or a note that --no-boot was requested). Nil in runtime tier.
     attr_accessor :static_reason
@@ -97,6 +111,15 @@ module RailsAiContext
     # Why the static tier is active: :requested (--no-boot), :source_only
     # (no config/environment.rb) or :boot_failed. Nil in runtime tier.
     attr_accessor :static_kind
+
+    # A boot failure naming every unresolved gem runs to thousands of characters; the
+    # footer gets the head, and the CLI banner and `doctor` carry the whole of it.
+    def static_reason_brief
+      reason = static_reason
+      return reason if reason.nil? || reason.length <= STATIC_REASON_HEAD
+
+      "#{reason[0, STATIC_REASON_HEAD].rstrip}..."
+    end
 
     # Quick access to introspect the current Rails app
     # Returns a hash of all discovered context
@@ -119,8 +142,12 @@ module RailsAiContext
       # Only an unset selection means "all". An explicit empty list means
       # none, which is what the serializer has always done with `format: []`.
       format ||= selected.nil? ? :all : selected
-      context = introspect(app)
-      Serializers::ContextFileSerializer.new(context, format: format).call
+      # One run for both halves: the serializers scan app/services again, and
+      # the introspection just read those files.
+      RunCache.around do
+        context = introspect(app)
+        Serializers::ContextFileSerializer.new(context, format: format).call
+      end
     end
 
     # Start the MCP server programmatically

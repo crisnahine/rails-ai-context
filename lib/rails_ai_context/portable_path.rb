@@ -73,6 +73,13 @@ module RailsAiContext
         gem_checkouts.any? { |dir, _name| path.start_with?(dir) }
     end
 
+    # The relative form, or nil for a path no portable form names: the
+    # context is committed, so an absolute path is never carried.
+    def portable(path, root)
+      relative = relativize(path, root)
+      relative unless relative.start_with?(File::SEPARATOR)
+    end
+
     def relativize_all(paths, root)
       Array(paths).map { |path| relativize(path, root) }.uniq
     end

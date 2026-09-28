@@ -25,6 +25,7 @@ module RailsAiContext
             # its nested calls on one line, and a consumer pairing them by
             # line then attaches the second child to the first.
             offset:        node.location.start_offset,
+            end_offset:    node.location.end_offset,
             parent_offset: @enclosing.last&.location&.start_offset,
             location:      node.location.start_line,
             confidence:    confidence_for(node)

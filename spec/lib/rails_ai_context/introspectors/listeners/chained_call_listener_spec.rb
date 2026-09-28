@@ -4,13 +4,6 @@ require "spec_helper"
 require "prism"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::ChainedCallListener do
-  def parse_and_dispatch(source, *methods)
-    result     = Prism.parse(source)
-    listener   = described_class.new(*methods)
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects method calls with receivers" do
     results = parse_and_dispatch(<<~RUBY, :variant)
       class User < ApplicationRecord
@@ -70,13 +63,6 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ChainedCallListener do
 end
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::VariantCallListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects variant calls without constructor args" do
     results = parse_and_dispatch("image.variant(:thumb)")
     expect(results.size).to eq(1)

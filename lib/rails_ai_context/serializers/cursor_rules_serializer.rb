@@ -13,17 +13,11 @@ module RailsAiContext
     #     user report (v5.9.0 release QA): the chat agent didn't detect
     #     rules written only as .cursor/rules/*.mdc; adding .cursorrules
     #     alongside fixed it.
-    class CursorRulesSerializer
+    class CursorRulesSerializer < Base
       include TestCommandDetection
       include StackOverviewHelper
       include ToolGuideHelper
       include CompactSerializerHelper
-
-      attr_reader :context
-
-      def initialize(context)
-        @context = context
-      end
 
       # Split rule files (.cursor/rules/*.mdc) are fully gem-owned, written
       # as-is with no markers (the gem manages every file in that

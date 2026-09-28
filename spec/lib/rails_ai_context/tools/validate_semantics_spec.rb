@@ -23,6 +23,106 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     })
   end
 
+  # OFN's Spree views call the engine's helpers bare, and its Spree
+  # controllers answer routes in the engine's table.
+  describe "routes an app draws into an engine" do
+    let(:engine_routes) do
+      [ { engine: "Spree::Core::Engine", mount: "/", routes: [
+        { verb: "GET", path: "/admin/orders", controller: "spree/admin/orders", action: "index", name: "spree.admin_orders" },
+        { verb: "GET", path: "/admin/orders/:id/fire", controller: "spree/admin/orders", action: "fire" }
+      ] } ]
+    end
+
+    before do
+      allow(described_class).to receive(:cached_context).and_return({
+        routes: { by_controller: { "posts" => [ { verb: "GET", action: "index", name: "posts" } ] }, engine_routes: engine_routes },
+        controllers: { controllers: { "Spree::Admin::OrdersController" => { actions: %w[index] } } },
+        schema: { tables: {} }, models: {}
+      })
+    end
+
+    it "knows the engine's route helpers" do
+      with_app_file("app/views/spree/admin/orders/_x.html.erb", "<%= link_to 'x', admin_orders_path %>\n") do |file, path|
+        expect(described_class.check_rails_semantics(file, path).join).not_to include("admin_orders_path")
+      end
+    end
+
+    it "checks an engine controller against the engine's routes" do
+      with_app_file("app/controllers/spree/admin/orders_controller.rb",
+                    "module Spree\n  module Admin\n    class OrdersController < BaseController\n      def index; end\n    end\n  end\nend\n") do |file, path|
+        root = path.delete_suffix(file)
+        File.write(File.join(root, "app/controllers/spree/admin/base_controller.rb"),
+                   "module Spree\n  module Admin\n    class BaseController < ApplicationController\n    end\n  end\nend\n")
+        File.write(File.join(root, "app/controllers/application_controller.rb"), "class ApplicationController < ActionController::Base\nend\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+
+        expect(described_class.check_rails_semantics(file, path).join).to include("fire - action not found")
+      end
+    end
+  end
+
+  # OFN's ApplicationController includes Pagy::Backend, a gem module this
+  # check never reads, so it cannot say the gem defines no `show`.
+  describe "a routed action no source the app holds defines" do
+    def check(app_controller, extra = {}, predicate: false)
+      Dir.mktmpdir do |root|
+        files = {
+          "app/controllers/orders_controller.rb" => "class OrdersController < ApplicationController\n  def index; end\nend\n",
+          "app/controllers/application_controller.rb" => app_controller
+        }.merge(extra)
+        files.each do |relative, body|
+          FileUtils.mkdir_p(File.dirname(File.join(root, relative)))
+          File.write(File.join(root, relative), body)
+        end
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(root)))
+        allow(described_class).to receive(:cached_context).and_return({
+          routes: { by_controller: { "orders" => [ { verb: "GET", path: "/orders", action: "index" },
+                                                   { verb: "GET", path: "/orders/:id", action: "show" },
+                                                   { verb: "GET", path: "/orders/managed", action: predicate ? "managed?" : "managed" } ] } },
+          controllers: { controllers: { "OrdersController" => { actions: %w[index] } } },
+          schema: { tables: {} }, models: {}
+        })
+        file = "app/controllers/orders_controller.rb"
+        return described_class.check_rails_semantics(file, File.join(root, file)).join("\n")
+      end
+    end
+
+    it "names it missing when the app holds every ancestor and mixin" do
+      text = check("class ApplicationController < ActionController::Base\nend\n")
+
+      expect(text).to include("show - action not found").and include("managed - action not found")
+    end
+
+    it "says it is unverified when an ancestor includes a module the app does not hold" do
+      text = check("class ApplicationController < ActionController::Base\n  include Pagy::Backend\nend\n")
+
+      expect(text).not_to include("action not found")
+      expect(text).to include("show, managed").and include("Pagy::Backend")
+    end
+
+    it "says it is unverified when an ancestor is a gem's class" do
+      text = check("class ApplicationController < Spree::BaseController\nend\n")
+
+      expect(text).not_to include("action not found")
+      expect(text).to include("Spree::BaseController")
+    end
+
+    # Mastodon routes `get :merged, to: "requests#merged?"`.
+    it "finds a predicate-named action an ancestor defines" do
+      text = check("class ApplicationController < ActionController::Base\n  def show; end\n  def managed?; end\nend\n", predicate: true)
+
+      expect(text).not_to match(/show|managed/)
+    end
+
+    it "finds an action an app concern included by an ancestor defines, and one a template renders" do
+      text = check("class ApplicationController < ActionController::Base\n  include Managing\nend\n",
+                   { "app/controllers/concerns/managing.rb" => "module Managing\n  def managed; end\nend\n",
+                     "app/views/orders/show.html.erb" => "" })
+
+      expect(text).not_to match(/show|managed/)
+    end
+  end
+
   describe ".check_rails_semantics" do
     it "answers cleanly for a plain file" do
       with_app_file("app/models/widget.rb", "class Widget < ApplicationRecord\nend\n") do |file, path|
@@ -83,6 +183,40 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
           warnings = described_class.check_rails_semantics(file, path).join
           expect(warnings).not_to include("confirm_terms")
           expect(warnings).not_to include("promo_code")
+        end
+      end
+
+      # Lockbox's `has_encrypted :document_id` keeps a `_ciphertext` column.
+      it "says nothing about an encrypted attribute or a store key" do
+        source = <<~RUBY
+          class Subscription < ApplicationRecord
+            has_encrypted :document_id
+            encrypts :ssn
+            attr_encrypted :tax_id
+            store_accessor :settings, :color
+            store :prefs, accessors: [ :theme ], coder: JSON
+            validates :document_id, :ssn, :tax_id, :color, :theme, presence: true
+          end
+        RUBY
+
+        with_app_file("app/models/subscription.rb", source) do |file, path|
+          warnings = described_class.check_rails_semantics(file, path).join
+          %w[document_id ssn tax_id color theme].each { |name| expect(warnings).not_to include(name) }
+        end
+      end
+
+      it "reads an escaped symbol as the column name the schema carries" do
+        context = context_with_schema.dup
+        context[:schema] = { tables: { "subscriptions" => { columns: [ { name: "id" }, { name: "first\tname" } ] } } }
+        allow(described_class).to receive(:cached_context).and_return(context)
+        source = <<~'RUBY'
+          class Subscription < ApplicationRecord
+            validates :"first\tname", presence: true
+          end
+        RUBY
+
+        with_app_file("app/models/subscription.rb", source) do |file, path|
+          expect(described_class.check_rails_semantics(file, path).join).not_to include("not found")
         end
       end
 

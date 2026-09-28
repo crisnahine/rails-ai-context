@@ -51,6 +51,19 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
     # One machine, one scanner: the gem is installed, the app's bundle does
     # not carry it, and the scan runs it from outside the bundle rather than
     # refusing and pointing at another command.
+    context "when the app's lockfile carries brakeman and no run answers" do
+      it "says to install the locked gem rather than add it" do
+        allow(described_class).to receive(:load_brakeman).and_return(false)
+        allow(described_class).to receive(:brakeman_on_machine).and_return(nil)
+        allow(RailsAiContext::GemLock).to receive(:for).and_return(RailsAiContext::GemLock::Spec.new({ "brakeman" => "8.0.6" }))
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("Gemfile.lock carries brakeman 8.0.6").and include("bundle install")
+        expect(text).not_to include("gem 'brakeman'")
+      end
+    end
+
     context "when brakeman can only be reached outside the app's bundle" do
       let(:report) do
         {
@@ -95,6 +108,18 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
 
         expect(text).to include("brakeman 8.0.6")
         expect(text).to include("outside the app's bundle")
+      end
+
+      # Mastodon locks brakeman 8.0.6; the static run scans from outside only
+      # because this process never loads the app's bundle.
+      it "does not say the app's bundle lacks a brakeman its lockfile carries" do
+        allow(RailsAiContext::GemLock).to receive(:for).and_return(RailsAiContext::GemLock::Spec.new({ "brakeman" => "8.0.6" }))
+
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("Gemfile.lock carries brakeman 8.0.6")
+        expect(text).not_to include("does not carry it")
+        expect(text).not_to include("Add it to the Gemfile")
       end
 
       # With several installed, the newest on disk is not always the one the
@@ -200,6 +225,41 @@ RSpec.describe RailsAiContext::Tools::SecurityScan do
 
         expect(report).to include("warnings" => [])
         expect(report.dig("scan_info", "checks_performed")).to eq([ "SQL" ])
+      end
+
+      # Ruby prints an uncaught error, then its backtrace; the last line is a
+      # frame, which says where brakeman stopped, not why.
+      it "reports brakeman's message rather than the last backtrace frame" do
+        script = File.join(bin_dir, "brakeman")
+        File.write(script, <<~SH)
+          #!/bin/sh
+          echo "/gems/brakeman-8.0.6/lib/brakeman.rb:412:in 'scan': Please supply the path to a Rails application (Brakeman::NoApplication)" >&2
+          echo "	from /gems/brakeman-8.0.6/lib/brakeman.rb:77:in 'run'" >&2
+          echo "	from /gems/brakeman-8.0.6/bin/brakeman:9:in '<main>'" >&2
+          exit 1
+        SH
+        File.chmod(0o755, script)
+        allow(described_class).to receive(:brakeman_executable).and_return(script)
+
+        _report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
+
+        expect(failure).to eq("Please supply the path to a Rails application (Brakeman::NoApplication)")
+      end
+
+      it "reports the line brakeman printed when it is not an exception" do
+        script = File.join(bin_dir, "brakeman")
+        File.write(script, <<~SH)
+          #!/bin/sh
+          echo "Loading scanner..." >&2
+          echo "No Rails application found in /tmp/app" >&2
+          exit 1
+        SH
+        File.chmod(0o755, script)
+        allow(described_class).to receive(:brakeman_executable).and_return(script)
+
+        _report, failure = described_class.send(:run_brakeman_unbundled, 2, nil)
+
+        expect(failure).to eq("No Rails application found in /tmp/app")
       end
     end
 

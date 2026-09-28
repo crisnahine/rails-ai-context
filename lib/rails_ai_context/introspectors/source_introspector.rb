@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "prism"
+require "set"
 
 module RailsAiContext
   module Introspectors
@@ -24,6 +25,19 @@ module RailsAiContext
         mixins:       Listeners::MixinsListener
       }.freeze
 
+      # Receiverless calls outside any method (a class body, an `included do` block), by
+      # name, each keeping its call sites so a called method reads their arguments.
+      # `self_receiver:` counts `self.x = ...` too, a declaration written with a receiver.
+      def self.calls_outside_methods(node, found = {}, self_receiver: false)
+        return found if node.is_a?(Prism::DefNode)
+
+        if node.is_a?(Prism::CallNode) && (node.receiver.nil? || (self_receiver && node.receiver.is_a?(Prism::SelfNode)))
+          (found[node.name.to_s] ||= []) << node
+        end
+        node.child_nodes.compact.each { |child| calls_outside_methods(child, found, self_receiver: self_receiver) }
+        found
+      end
+
       # Introspect a file on disk (cached parse) with default listeners.
       def self.call(path)
         walk(path)
@@ -46,8 +60,11 @@ module RailsAiContext
         walk_dispatch(result, listener_map)
       end
 
+      # Walk a parse result the caller already holds, so a second reader of the
+      # same source does not parse it again.
       def self.walk_dispatch(parse_result, listener_map)
         listeners  = listener_map.transform_values { |spec| spec.is_a?(Proc) ? spec.call : spec.new }
+        listeners.each_value { |listener| listener.comments = parse_result.comments }
         dispatcher = ListenerRegistration.dispatcher_for(*listeners.values)
 
         dispatcher.dispatch(parse_result.value)
@@ -61,7 +78,6 @@ module RailsAiContext
       rescue => e
         RailsAiContext.debug_fail(e, listener_map.keys.each_with_object({}) { |key, h| h[key] = [] }, label: "SourceIntrospector walk_dispatch")
       end
-      private_class_method :walk_dispatch
     end
   end
 end

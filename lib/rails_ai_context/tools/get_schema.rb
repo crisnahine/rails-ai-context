@@ -102,7 +102,7 @@ module RailsAiContext
           when "summary"
             page = paginate(tables.keys.sort, offset: offset, limit: limit, default_limit: 50)
             paginated = page[:items]
-            return json_page_response(schema, tables, paginated) if format == "json"
+            return json_page_response(schema, tables, paginated, models_data) if format == "json"
 
             if paginated.empty? && total > 0
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
@@ -117,6 +117,8 @@ module RailsAiContext
               idx_count = data[:indexes]&.size || 0
               lines << "- **#{name}** - #{count_phrase(col_count, "column")}, #{count_phrase(idx_count, "index", plural: "indexes")}"
             end
+            coverage = model_coverage_lines(tables, models_data)
+            lines.concat([ "" ] + coverage) if coverage.any?
             lines.concat(secondary_databases_lines(schema))
             if page[:offset] + page[:limit] < total
               lines << "" << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more, or `table:\"name\"` for full detail._"
@@ -129,7 +131,7 @@ module RailsAiContext
             sorted = tables.keys.sort_by { |name| -(tables[name][:columns]&.size || 0) }
             page = paginate(sorted, offset: offset, limit: limit, default_limit: 25)
             paginated = page[:items]
-            return json_page_response(schema, tables, paginated) if format == "json"
+            return json_page_response(schema, tables, paginated, models_data) if format == "json"
 
             if paginated.empty?
               return text_response("No tables at offset #{page[:offset]}. Total tables: #{total}. Use `offset:0` to start from the beginning.")
@@ -141,12 +143,31 @@ module RailsAiContext
               data = tables[name]
               timestamp_cols = %w[id created_at updated_at]
 
-              # Build indexed/unique column sets for inline hints
-              indexed_cols = Set.new
-              unique_cols = Set.new
+              # A unique index on several columns constrains the set, so each names its partners.
+              # [indexed] means the column leads an index; a trailing one names what it sits behind.
+              indexed_cols = RailsAiContext::Introspectors::SchemaConventions.lookup_indexed_columns(data)
+              # A partial unique index constrains only the rows its WHERE
+              # picks; each column keeps every condition, and nil for none wins.
+              unique_cols = {}
+              unique_with = Hash.new { |hash, key| hash[key] = [] }
+              trailing = Hash.new { |hash, key| hash[key] = [] }
+              column_names = (data[:columns] || []).to_set { |col| col[:name].to_s }
+              shown = ->(key) { column_names.include?(key) ? key : "`#{key}`" }
               (data[:indexes] || []).each do |idx|
-                Array(idx[:columns]).each do |col|
-                  idx[:unique] ? unique_cols.add(col) : indexed_cols.add(col)
+                idx_cols = Array(idx[:columns]).map(&:to_s)
+                # An expression key hints no column of its own, but it is a
+                # partner, named as the expression.
+                columns_in = idx_cols.select { |col| column_names.include?(col) }
+                if idx[:unique] && idx_cols.size == 1
+                  columns_in.each do |col|
+                    (unique_cols[col] ||= []) << idx[:where]
+                  end
+                elsif idx[:unique]
+                  columns_in.each { |col| unique_with[col] << [ (idx_cols - [ col ]).map(&shown), idx[:where] ] }
+                else
+                  idx_cols.each_with_index do |col, i|
+                    trailing[col] << idx_cols.first(i).map(&shown) if i.positive? && column_names.include?(col)
+                  end
                 end
               end
 
@@ -161,14 +182,23 @@ module RailsAiContext
                 .reject { |c| timestamp_cols.include?(c[:name]) }
                 .map do |c|
                   hints = []
-                  hints << "unique" if unique_cols.include?(c[:name])
-                  hints << "indexed" if indexed_cols.include?(c[:name]) && !unique_cols.include?(c[:name])
+                  wheres = unique_cols[c[:name]]
+                  wheres = [ nil ] if wheres&.include?(nil)
+                  wheres&.uniq&.each { |where| hints << "unique#{RailsAiContext::Introspectors::SchemaConventions.where_clause(where)}" }
+                  hints << "indexed" if indexed_cols.include?(c[:name]) && !unique_cols.key?(c[:name])
+                  partners = unique_cols.key?(c[:name]) ? [] : unique_with.fetch(c[:name], []).uniq { |others, where| [ others.sort, where ] }
+                  partners.each { |others, where| hints << "unique with #{others.join(', ')}#{RailsAiContext::Introspectors::SchemaConventions.where_clause(where)}" }
+                  # Only for a column no other hint places in an index.
+                  unless indexed_cols.include?(c[:name]) || unique_cols.key?(c[:name]) || partners.any?
+                    trailing.fetch(c[:name], []).uniq.each { |before| hints << "in index after #{before.join(', ')}" }
+                  end
                   hints << "encrypted" if encrypted_cols.include?(c[:name])
                   # Show default value if present
                   if c.key?(:default) && !c[:default].nil? && c[:default] != ""
                     hints << "default: #{c[:default]}"
                   end
-                  hint_str = hints.any? ? " [#{hints.join(', ')}]" : ""
+                  # A clause can hold a column list, so clauses part with a semicolon.
+                  hint_str = hints.any? ? " [#{hints.join('; ')}]" : ""
                   "#{c[:name]}:#{c[:type]}#{hint_str}"
                 end.join(", ")
               # Inline model info so AI doesn't need a separate get_model_details call
@@ -194,14 +224,8 @@ module RailsAiContext
               lines << ""
             end
 
-            unclaimed = paginated.select { |name| models_for_table(name, models_data).empty? } - habtm_join_tables(models_data).to_a
-            if unclaimed.any?
-              lines << "\u26A0 **Tables with no model file in this app**: #{unclaimed.join(', ')}"
-              lines << "A gem that owns a table declares its model in the gem, so check the Gemfile before " \
-                       "treating one of these as dead."
-              lines << ""
-            end
-
+            coverage = model_coverage_lines(tables, models_data)
+            lines.concat(coverage + [ "" ]) if coverage.any?
             lines.concat(secondary_databases_lines(schema))
             lines << "_Use `detail:\"summary\"` for all #{count_phrase(total, "table")}, `detail:\"full\"` for indexes/FKs, or `table:\"name\"` for one table._" if total > page[:limit]
             text_response(lines.join("\n"))
@@ -209,26 +233,26 @@ module RailsAiContext
           when "full"
             page = paginate(tables.keys.sort, offset: offset, limit: limit, default_limit: 10)
             paginated = page[:items]
-            return json_page_response(schema, tables, paginated) if format == "json"
+            return json_page_response(schema, tables, paginated, models_data) if format == "json"
 
             if paginated.empty? && total > 0
               return text_response("No tables at offset #{page[:offset]}. Total: #{total}. Use `offset:0` to start over.")
             end
 
             lines = [ "# Schema Full Detail (#{paginated.size} of #{count_phrase(total, "table")})", "" ]
+            lines.concat(note_lines(schema))
             paginated.each do |name|
               lines << format_table_markdown(name, tables[name], models_data)
               lines << ""
             end
+            coverage = model_coverage_lines(tables, models_data)
+            lines.concat(coverage + [ "" ]) if coverage.any?
             lines.concat(secondary_databases_lines(schema))
             if page[:offset] + page[:limit] < total
               lines << "_Showing #{paginated.size} of #{total}. Use `offset:#{page[:offset] + page[:limit]}` for more._"
               lines << "_cache_key: #{cache_key}_"
             end
             text_response(lines.join("\n"))
-          else
-            # Fallback to full dump (backward compat)
-            text_response(format_schema_markdown(schema, ctx))
           end
         end
       end
@@ -237,32 +261,63 @@ module RailsAiContext
       # locally is how one app came to be told it runs on PostgreSQL by
       # CLAUDE.md and on "unknown" by this tool, in the same session.
       private_class_method def self.adapter_label(ctx)
-        RailsAiContext::SchemaAdapter.label(ctx)
+        RailsAiContext::SchemaAdapter.label_with_reason(ctx)
       end
 
       # Rails builds no model for a has_and_belongs_to_many join table, so one
       # is not a table whose model is missing. The name is the two tables
       # sorted, unless the association writes :join_table itself.
       private_class_method def self.habtm_join_tables(models)
-        models.each_with_object(Set.new) do |(_name, data), found|
+        models.each_with_object(Set.new) do |(name, data), found|
           next unless data.is_a?(Hash)
 
           Array(data[:associations]).each do |assoc|
             next unless assoc[:type].to_s == "has_and_belongs_to_many"
 
             options = assoc[:options].is_a?(Hash) ? assoc[:options] : {}
-            if options[:join_table]
-              found << options[:join_table].to_s
+            if (declared = assoc[:join_table] || options[:join_table])
+              found << declared.to_s
               next
             end
             next unless data[:table_name]
 
-            other = (assoc[:class_name] || options[:class_name] || assoc[:name]).to_s.tableize
-            found << [ data[:table_name].to_s, other ].sort.join("_")
+            written = assoc[:class_name] || options[:class_name] || assoc[:name].to_s.camelize.singularize
+            other = RailsAiContext::Introspectors::TableName.resolve_class(written, name) { |candidate| candidate if models.key?(candidate) }
+            found << RailsAiContext::Introspectors::HabtmJoinTables.join_table_name(
+              data[:table_name], RailsAiContext::Introspectors::TableName.for_model_name(other, models)
+            )
           end
         end
       rescue => e
         RailsAiContext.debug_fail(e, Set.new, label: "habtm_join_tables")
+      end
+
+      # Tables a gem creates and declares its model for, by the names its install migration uses.
+      GEM_TABLES = {
+        "good_job" => /\Agood_job/, "doorkeeper" => /\Aoauth_(?:applications|access_grants|access_tokens|openid_requests)\z/,
+        "solid_queue" => /\Asolid_queue_/, "solid_cache" => /\Asolid_cache_/, "solid_cable" => /\Asolid_cable_/,
+        "activestorage" => /\Aactive_storage_/, "actiontext" => /\Aaction_text_/, "actionmailbox" => /\Aaction_mailbox_/,
+        "noticed" => /\Anoticed_/, "delayed_job_active_record" => /\Adelayed_jobs\z/,
+        "friendly_id" => /\Afriendly_id_slugs\z/, "closure_tree" => /_hierarchies\z/,
+        "paper_trail" => /\Aversions\z/, "acts-as-taggable-on" => /\A(?:tags|taggings)\z/, "pghero" => /\Apghero_/
+      }.freeze
+
+      # {gem => its tables}, for each gem the app's lockfile or Gemfile has.
+      private_class_method def self.gem_owned(tables)
+        lock = RailsAiContext::GemLock.for(rails_app.root)
+        GEM_TABLES.each_with_object({}) do |(gem, pattern), found|
+          owned = tables.grep(pattern)
+          found[gem] = owned if owned.any? && lock.present?(gem)
+        end
+      rescue => e
+        RailsAiContext.debug_fail(e, {}, label: "gem_owned")
+      end
+
+      # The same, for a habtm declared outside the model files: a lib patch, an engine.
+      private_class_method def self.declared_join_tables(models)
+        RailsAiContext::Introspectors::HabtmJoinTables.declared(rails_app.root, models)
+      rescue => e
+        RailsAiContext.debug_fail(e, Set.new, label: "declared_join_tables")
       end
 
       private_class_method def self.models_for_table(table_name, models)
@@ -284,8 +339,12 @@ module RailsAiContext
       # Static-parse extras: the SQL dialect the dump was written in, the
       # schema version recorded by the dump, and migration files it doesn't
       # cover - the static-tier stand-ins for a live connection's answers.
+      private_class_method def self.note_lines(schema)
+        schema[:note].to_s.empty? ? [] : [ "_#{schema[:note]}_" ]
+      end
+
       private_class_method def self.static_source_lines(schema)
-        lines = []
+        lines = note_lines(schema)
         lines << "**Dialect:** #{schema[:dialect]} (db/structure.sql)" if schema[:dialect] && schema[:dialect] != "unknown"
         lines << "**Schema version:** #{schema[:schema_version]}" if schema[:schema_version]
         # The header pairs a live table count with the version stamp read off
@@ -330,9 +389,43 @@ module RailsAiContext
       # One JSON shape for every detail level: the schema as introspected,
       # with :tables cut down to the page the same pagination produced for
       # markdown. `detail` still decides how many tables a page holds.
-      private_class_method def self.json_page_response(schema, tables, names)
+      private_class_method def self.json_page_response(schema, tables, names, models = {})
         page = names.to_h { |name| [ name, tables[name] ] }
-        json_response(schema.merge(tables: page))
+        coverage = model_coverage(tables, models)
+        json_response(schema.merge(tables: page, gem_owned_tables: coverage[:gems], tables_without_model_file: coverage[:unclaimed]))
+      end
+
+      COVERAGE_CAP = 15
+
+      # Over every table, not the page: which ones no model file claims, and
+      # of those, which a gem the app bundles owns.
+      private_class_method def self.model_coverage(tables, models)
+        unclaimed = tables.keys.sort.select { |name| models_for_table(name, models).empty? } - habtm_join_tables(models).to_a
+        unclaimed -= declared_join_tables(models).to_a if unclaimed.any?
+        gems = gem_owned(unclaimed)
+        { gems: gems, unclaimed: unclaimed - gems.values.flatten }
+      end
+
+      private_class_method def self.model_coverage_lines(tables, models)
+        coverage = model_coverage(tables, models)
+        lines = coverage[:gems].map { |gem, owned| "Tables the #{gem} gem owns: #{capped(owned)}" }
+        unclaimed = coverage[:unclaimed]
+        if unclaimed.any?
+          lines << "\u26A0 **Tables with no model file in this app**: #{capped(unclaimed)}"
+          lines << "A gem that owns a table declares its model in the gem, so check the Gemfile before " \
+                   "treating one of these as dead."
+        end
+        lists = [ unclaimed, *coverage[:gems].values ]
+        if lists.any? { |list| list.size > COVERAGE_CAP }
+          lines << "_`format:\"json\"` lists all #{unclaimed.size} in `tables_without_model_file` and the gems' in `gem_owned_tables`._"
+        end
+        lines
+      end
+
+      private_class_method def self.capped(names)
+        return names.join(", ") if names.size <= COVERAGE_CAP
+
+        "#{names.first(COVERAGE_CAP).join(', ')}, and #{names.size - COVERAGE_CAP} more"
       end
 
       private_class_method def self.format_table_markdown(name, data, models)
@@ -369,7 +462,7 @@ module RailsAiContext
           lines << "" << "### Indexes"
           data[:indexes].each do |idx|
             unique = idx[:unique] ? " (unique)" : ""
-            lines << "- `#{idx[:name]}` on (#{Array(idx[:columns]).join(', ')})#{unique}"
+            lines << "- `#{idx[:name]}` on (#{Array(idx[:columns]).join(', ')})#{unique}#{RailsAiContext::Introspectors::SchemaConventions.where_clause(idx[:where])}"
           end
         end
 
@@ -406,26 +499,6 @@ module RailsAiContext
           end
         end
 
-        lines.join("\n")
-      end
-
-      private_class_method def self.format_schema_markdown(schema, ctx)
-        lines = [
-          "# Database Schema",
-          "",
-          "- Adapter: #{adapter_label(ctx)}",
-          "- Tables: #{schema[:total_tables]}",
-          ""
-        ]
-
-        (schema[:tables] || {}).each do |name, data|
-          cols = (data[:columns] || []).map { |c| "#{c[:name]}:#{c[:type]}" }.join(", ")
-          lines << "### #{name}"
-          lines << cols
-          lines << ""
-        end
-
-        lines.concat(secondary_databases_lines(schema))
         lines.join("\n")
       end
     end

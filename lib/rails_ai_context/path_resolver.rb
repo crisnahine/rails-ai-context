@@ -1,12 +1,32 @@
 # frozen_string_literal: true
 
+require "concurrent"
+
 module RailsAiContext
   # Resolves where a kind of Rails app code can live for a given app root.
-  # Conventional layout first, then packwerk packs (packs/*/app/<kind>),
-  # then in-repo engines (engines/*/app/<kind>), then any configured
-  # extra_app_paths. Only existing directories are returned so callers can
-  # glob the list without their own existence guards.
+  # Conventional layout, packs, in-repo code roots, then extra_app_paths. Only
+  # existing directories come back, so callers glob without their own guards.
   module PathResolver
+    # An app/ holding one of these is a Rails tree rather than a coincidence.
+    RAILS_APP_DIRS = %w[
+      models controllers views helpers jobs mailers channels
+      serializers services workers components javascript
+    ].freeze
+
+    # The app's own tree, dependency output, and where dummy apps live.
+    SKIP_DIRS = %w[
+      app lib config db bin script spec test tmp log public
+      vendor node_modules coverage doc docs storage
+    ].freeze
+
+    # gems/plugins/<name> is the deepest real case; the bound keeps a monorepo cheap to scan.
+    MAX_ROOT_DEPTH = 3
+
+    CODE_ROOTS = Concurrent::Map.new
+    DECLARED_ROOTS = Concurrent::Map.new
+    APP_ROOTS = Concurrent::Map.new
+    PATH_GEM_LIBS = Concurrent::Map.new
+
     module_function
 
     def model_dirs(root) = dirs_for(root, "app/models")
@@ -15,21 +35,237 @@ module RailsAiContext
 
     def view_dirs(root) = dirs_for(root, "app/views")
 
+    # The initializers an app spells for `name`, however it spells them: a
+    # load-order prefix (`009-omniauth.rb`), a hyphen where the gem uses an
+    # underscore (`rack-attack.rb`), or a compound name (`custom_devise.rb`).
+    def initializer_files(root, name)
+      target = normalize_initializer_name(name)
+      Dir.glob(File.join(root.to_s, "config", "initializers", "*.rb")).sort.select do |path|
+        base = normalize_initializer_name(File.basename(path, ".rb"))
+        base == target || base.end_with?("_#{target}")
+      end
+    end
+
+    # The same list app-relative, which is the spelling every answer prints.
+    def app_initializer_files(root, name)
+      initializer_files(root, name).map { |path| path.sub("#{root}/", "") }
+    end
+
+    def normalize_initializer_name(name)
+      name.to_s.sub(/\.rb\z/, "").tr("-", "_").sub(/\A\d+_/, "")
+    end
+
+    # Every directory Rails autoloads from: each app/* directory, the concerns
+    # inside them (railties globs `{*,*/concerns}`), lib, and what it declares.
+    def autoload_roots(root)
+      app_roots(root) +
+        ConcernPaths.resolve(root) +
+        dirs_for(root, "lib") +
+        declared_roots(root)
+    rescue StandardError => e
+      RailsAiContext.debug_fail(e, [], label: "PathResolver.autoload_roots")
+    end
+
+    def app_roots(root)
+      APP_ROOTS.compute_if_absent(File.expand_path(root.to_s)) do
+        dirs_for(root, "app").flat_map { |tree| Dir.glob(File.join(tree, "*")).select { |dir| File.directory?(dir) }.sort }.freeze
+      end
+    end
+
+    # Only path gems inside the repo (`path "../gems" do` locks as `remote: gems`);
+    # one outside is an installed gem as far as the app's source goes.
+    def path_gem_libs(root)
+      key = File.expand_path(root.to_s)
+      PATH_GEM_LIBS.compute_if_absent(key) { read_path_gem_libs(key) }
+    end
+
+    def read_path_gem_libs(root)
+      lock = SafeFile.read(File.join(root, "Gemfile.lock"))
+      return [] unless lock
+
+      real_root = File.realpath(root)
+      remotes = lock.scan(/^PATH\r?\n  remote: (.+?)\r?$/).flatten.map(&:strip)
+      remotes.flat_map do |remote|
+        base = File.expand_path(remote, root)
+        next [] unless Dir.exist?(base) && SafePath.contained?(File.realpath(base), real_root)
+
+        # Bundler's own glob for the gemspecs a path source holds.
+        Dir.glob(File.join(base, "{,*,*/*}.gemspec")).map { |spec| File.join(File.dirname(spec), "lib") }
+      end.uniq.select { |dir| Dir.exist?(dir) }.sort
+    rescue StandardError => e
+      RailsAiContext.debug_fail(e, [], label: "PathResolver.path_gem_libs")
+    end
+    private_class_method :read_path_gem_libs
+
+    # The roots config/application.rb adds by hand, such as lib_static.
+    def declared_roots(root)
+      key = File.expand_path(root.to_s)
+      DECLARED_ROOTS.compute_if_absent(key) { read_declared_roots(key) }
+    end
+
+    def read_declared_roots(root)
+      path = File.join(root, "config", "application.rb")
+      return [] unless File.file?(path)
+
+      declared = Introspectors::SourceIntrospector.walk(
+        path, { autoload: Introspectors::Listeners::AutoloadPathsListener }
+      )[:autoload]
+      real_root = File.realpath(root)
+      declared.uniq.map { |relative| File.join(root, relative) }.select { |dir| contained_dir?(dir, real_root) }
+    rescue StandardError => e
+      RailsAiContext.debug_fail(e, [], label: "PathResolver.declared_roots")
+    end
+
+    # A declared root is still a path the file wrote: `#{config.root}/../shared`
+    # names a tree the app does not own.
+    def contained_dir?(dir, real_root)
+      Dir.exist?(dir) && SafePath.contained?(File.realpath(dir), real_root)
+    rescue SystemCallError
+      false
+    end
+
+    # `roots:` takes pre-resolved roots, so a caller with many constants resolves once.
+    def file_for_constant(root, name, roots: nil)
+      relative = name.to_s.underscore
+      return nil if relative.empty? || relative.include?("..")
+
+      (roots || autoload_roots(root)).lazy
+        .map { |dir| File.join(dir, "#{relative}.rb") }.find { |path| File.file?(path) }
+    end
+
+    # The files a constant can be declared in, its own first, then each enclosing
+    # namespace's (`CanonicalURL::Helpers` lives in `canonical_url.rb`).
+    def namespace_files(root, name, roots: nil)
+      roots ||= autoload_roots(root)
+      parts = name.to_s.split("::")
+      parts.size.downto(1).lazy.filter_map { |n| file_for_constant(root, parts.first(n).join("::"), roots: roots) }
+    end
+
+    # Kept for one run only: the answer lists directories that exist, so one
+    # created later is seen next run. Keyed by real path, answered per spelling.
     def dirs_for(root, kind)
       root = root.to_s
-      candidates = [ File.join(root, kind) ]
-      candidates += Dir.glob(File.join(root, "packs", "*", kind)).sort
-      candidates += Dir.glob(File.join(root, "engines", "*", kind)).sort
+      extra = Array(RailsAiContext.configuration.extra_app_paths).map(&:to_s)
+      # The spelling is looked up first: the real path costs a syscall, and
+      # this is asked thousands of times in a run.
+      RunCache.fetch([ :dirs_for_spelled, root, kind, extra ]) do
+        relative = RunCache.fetch([ :dirs_for, root_key(root), kind, extra ]) do
+          resolve_dirs(root, kind).map { |dir| dir.start_with?("#{root}/") ? dir.delete_prefix("#{root}/") : dir }
+        end
+        relative.map { |dir| dir.start_with?(File::SEPARATOR) ? dir : File.join(root, dir) }.freeze
+      end
+    end
+
+    def root_key(root)
+      File.realpath(root)
+    rescue SystemCallError
+      File.expand_path(root)
+    end
+
+    # Relative to the root, for an answer that has to say where it looked.
+    def search_patterns(root, kind)
+      places(root, kind).map(&:first).uniq
+    end
+
+    def resolve_dirs(root, kind)
+      places(root, kind).flat_map { |_shown, path, glob| glob ? Dir.glob(path).sort : [ path ] }
+        .uniq.select { |dir| Dir.exist?(dir) }.freeze
+    end
+    private_class_method :resolve_dirs
+
+    # The one list of places a kind can live: what an answer says it searched,
+    # the path read, and whether that path is a glob.
+    def places(root, kind)
+      root = root.to_s
+      expanded = File.expand_path(root)
+      places = [
+        [ kind, File.join(root, kind), false ],
+        [ "packs/*/#{kind}", File.join(root, "packs", "*", kind), true ],
+        [ "engines/*/#{kind}", File.join(root, "engines", "*", kind), true ]
+      ]
+      places += code_roots(root).map { |dir| [ File.join(dir.delete_prefix("#{expanded}/"), kind), File.join(dir, kind), false ] }
       Array(RailsAiContext.configuration.extra_app_paths).each do |extra|
-        candidates << File.join(root, extra, kind)
+        places << [ File.join(extra, kind), File.join(root, extra, kind), false ]
         # `custom/app` is the natural way to write an entry whose tree is
         # custom/app/models; appending the full kind would look in
         # custom/app/app/models and silently miss. Accept both spellings.
         if extra.to_s.chomp("/").end_with?("/app") || extra.to_s.chomp("/") == "app"
-          candidates << File.join(root, extra, kind.delete_prefix("app/"))
+          short = kind.delete_prefix("app/")
+          places << [ File.join(extra, short), File.join(root, extra, short), false ]
         end
       end
-      candidates.uniq.select { |dir| Dir.exist?(dir) }
+      places
+    end
+    private_class_method :places
+
+    # Read from the layout: plugins that are not gems, or modules a Gemfile globs
+    # at load time, are not in the Gemfile to find.
+    def code_roots(root)
+      root = File.expand_path(root.to_s)
+      CODE_ROOTS.compute_if_absent(root) { discover_code_roots(root) }
+    end
+
+    def clear_code_roots
+      CODE_ROOTS.clear
+      DECLARED_ROOTS.clear
+      APP_ROOTS.clear
+      PATH_GEM_LIBS.clear
+    end
+
+    def discover_code_roots(root)
+      found = []
+      queue = [ [ root, 0 ] ]
+      until queue.empty?
+        dir, depth = queue.shift
+        children(dir).each do |name|
+          next if name.start_with?(".") || SKIP_DIRS.include?(name)
+
+          path = File.join(dir, name)
+          next unless File.directory?(path) && !File.symlink?(path)
+
+          if code_root?(path)
+            found << path
+          elsif depth + 1 < MAX_ROOT_DEPTH
+            queue << [ path, depth + 1 ]
+          end
+        end
+      end
+      found.sort
+    end
+    private_class_method :discover_code_roots
+
+    # A Rails-shaped app/ plus something that says Ruby loads it: without the
+    # second half an Ember tree reads as a Rails engine.
+    def code_root?(path)
+      app = File.join(path, "app")
+      return false unless Dir.exist?(app)
+      return false if (children(app) & RAILS_APP_DIRS).empty?
+
+      ruby_root?(path)
+    end
+    private_class_method :code_root?
+
+    def ruby_root?(path)
+      Dir.glob(File.join(path, "{*.gemspec,plugin.rb}")).any? ||
+        Dir.glob(File.join(path, "lib", "**", "engine.rb")).any?
+    end
+    private_class_method :ruby_root?
+
+    # In-repo gems, engines and plugins that carry config/locales, app/ or not:
+    # a Discourse plugin loads its locales without one.
+    def locale_roots(root)
+      root = File.expand_path(root.to_s)
+      depths = (1..MAX_ROOT_DEPTH).map { |depth| Array.new(depth, "*").join("/") }.join(",")
+      Dir.glob(File.join(root, "{#{depths}}", "config", "locales")).map { |dir| File.dirname(dir, 2) }
+        .reject { |dir| dir.delete_prefix("#{root}/").split("/").intersect?(SKIP_DIRS) }
+        .select { |dir| ruby_root?(dir) }.sort
+    end
+
+    # A directory's entries, or none for one that cannot be read.
+    def children(dir)
+      Dir.children(dir)
+    rescue SystemCallError
+      []
     end
   end
 end

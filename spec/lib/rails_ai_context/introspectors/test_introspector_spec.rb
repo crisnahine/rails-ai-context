@@ -93,6 +93,31 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       expect(result[:test_files]).to be_a(Hash)
     end
 
+    # Errbit sets Devise up in spec/support/devise.rb, not in rails_helper.
+    it "reads the helper setup an app keeps in spec/support" do
+      support = File.join(Rails.root, "spec/support/devise_setup.rb")
+      FileUtils.mkdir_p(File.dirname(support))
+      File.write(support, "RSpec.configure do |config|\n  config.include Devise::Test::ControllerHelpers, type: :controller\nend\n")
+
+      File.write(File.join(File.dirname(support), "page_helpers.rb"), "module PageHelpers\n  include Capybara::DSL\nend\n")
+
+      expect(result[:test_helper_setup]).to include("Devise::Test::ControllerHelpers")
+      expect(result[:test_helper_setup]).not_to include("Capybara::DSL")
+    ensure
+      FileUtils.rm_rf(File.dirname(support))
+    end
+
+    it "reads a helper included for tagged examples as the helper, not the tag" do
+      support = File.join(Rails.root, "spec/support/browser_setup.rb")
+      FileUtils.mkdir_p(File.dirname(support))
+      File.write(support, "RSpec.configure do |config|\n  config.include BrowserHelpers, :js\nend\n")
+
+      expect(result[:test_helper_setup]).to include("BrowserHelpers")
+      expect(result[:test_helper_setup]).not_to include("js")
+    ensure
+      FileUtils.rm_rf(File.dirname(support))
+    end
+
     context "with fixtures" do
       let(:fixtures_dir) { File.join(Rails.root, "test/fixtures") }
 
@@ -373,19 +398,83 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
     end
   end
 
-  describe "#detect_framework_from_lockfile" do
+  # Rails names the set in test/fixtures/admin/notes.yml `admin/notes`;
+  # keyed by its basename it answered for a notes.yml the app does not have.
+  describe "fixture names in a nested fixture directory" do
     around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
 
-    it "sees rspec-rails in the GIT section" do
-      lock = <<~LOCK
-        GIT
-          remote: https://github.com/rspec/rspec-rails.git
-          revision: 0123456789abcdef0123456789abcdef01234567
-          specs:
-            rspec-rails (7.1.0)
-      LOCK
-      File.write(File.join(@root, "Gemfile.lock"), lock)
-      expect(described_class.new(double("app", root: @root)).send(:detect_framework_from_lockfile)).to eq("rspec")
+    it "keys a nested fixture set by its path under the fixtures directory" do
+      FileUtils.mkdir_p(File.join(@root, "test", "fixtures", "admin"))
+      File.write(File.join(@root, "test", "fixtures", "admin", "notes.yml"), "one:\n  title: A\n")
+      File.write(File.join(@root, "test", "fixtures", "users.yml"), "bob:\n  name: B\n")
+
+      names = described_class.new(double("app", root: @root)).call[:fixture_names]
+
+      expect(names).to eq("admin/notes" => %w[one], "users" => %w[bob])
+    end
+  end
+
+  # A spec/fixtures directory can hold hundreds of JSON, XML and binary files
+  # for file_fixture beside one YAML file; "(1 file)" read as the whole directory.
+  describe "a fixtures directory that holds more than fixture sets" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    it "counts the YAML fixture sets and the other files apart" do
+      FileUtils.mkdir_p(File.join(@root, "spec", "fixtures", "files"))
+      File.write(File.join(@root, "spec", "fixtures", "users.yml"), "bob:\n  name: B\n")
+      %w[a.json b.json c.pdf].each { |f| File.write(File.join(@root, "spec", "fixtures", "files", f), "x") }
+
+      fixtures = described_class.new(double("app", root: @root)).call[:fixtures]
+
+      expect(fixtures).to eq(location: "spec/fixtures", count: 1, other_files: 3)
+    end
+  end
+
+  # Consul defines a comment factory per model in a loop,
+  # `factory :"#{model}_comment"`. Its name is computed, so it is left out of
+  # the names, and counted so no total claims to be exact.
+  describe "a factory whose name is computed" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    it "keeps it out of the names and counts it apart" do
+      FileUtils.mkdir_p(File.join(@root, "spec", "factories"))
+      File.write(File.join(@root, "spec", "factories", "comments.rb"), <<~'RUBY')
+        FactoryBot.define do
+          factory :comment do
+            trait :hidden do
+            end
+          end
+          %w[debate proposal].each do |model|
+            factory :"#{model}_comment" do
+            end
+          end
+        end
+      RUBY
+
+      result = described_class.new(double("app", root: @root)).call
+
+      expect(result[:factory_names]).to eq("spec/factories/comments.rb" => %w[comment])
+      expect(result[:computed_factories]).to eq(1)
+      expect(result[:factory_traits]).to eq("comments.rb" => %w[hidden])
+    end
+  end
+
+  describe "#detect_framework" do
+    around { |example| Dir.mktmpdir { |dir| @root = dir; example.run } }
+
+    def write(rel, body = "")
+      path = File.join(@root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    it "does not call a Jasmine spec directory RSpec when test/ holds the suite" do
+      write("spec/javascripts/admin_spec.js")
+      write("spec/support/jasmine-browser.json", "{}")
+      write("test/unit/user_test.rb")
+      write("Gemfile.lock", "GEM\n  specs:\n    minitest (5.25.4)\n\nDEPENDENCIES\n  minitest\n")
+
+      expect(described_class.new(double("app", root: @root)).call[:framework]).to eq("minitest")
     end
   end
 end

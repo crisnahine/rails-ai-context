@@ -74,6 +74,15 @@ rather than answering nothing. Name it explicitly on a machine that runs more
 than one environment, because the environment decides which database
 configuration the booted tier reads.
 
+After the name of a tool that declares an `environment` parameter of its own
+(`env_config`), `--environment` is that tool's filter and does not set
+`RAILS_ENV`: `tool env_config --environment production` lists production and
+boots the app in its usual environment. Set `RAILS_ENV` through the
+environment variable, or put `--environment` before the command name, to boot
+in another one. Every other tool reads the flag as `RAILS_ENV`. A custom tool
+that declares the parameter gets the value both ways, since its schema cannot
+be read before the app boots.
+
 #### Exit status
 
 `tool` exits 0 when the tool answered and 1 when it could not. A required

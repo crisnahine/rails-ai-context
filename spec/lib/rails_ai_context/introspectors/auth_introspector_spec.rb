@@ -13,6 +13,19 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       expect(result).not_to have_key(:error)
     end
 
+    context "when the source walk raises" do
+      before { allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_raise(ArgumentError, "boom") }
+
+      it "scans app/models and app/controllers once each" do
+        scan = RailsAiContext::Introspectors::SourceScan
+        allow(scan).to receive(:paths).and_call_original
+        expect(scan).to receive(:paths).with(anything, hash_including(kind: "app/models")).once.and_call_original
+        expect(scan).to receive(:paths).with(anything, hash_including(kind: "app/controllers")).once.and_call_original
+
+        expect(result[:devise_modules_per_model]).to eq({})
+      end
+    end
+
     it "returns authentication as a hash" do
       expect(result[:authentication]).to be_a(Hash)
     end
@@ -104,7 +117,7 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       end
     end
 
-    context "with Pundit policies" do
+    context "with a policies directory and no pundit in the lockfile" do
       let(:policies_dir) { File.join(Rails.root, "app/policies") }
 
       before do
@@ -114,8 +127,89 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
 
       after { FileUtils.rm_rf(policies_dir) }
 
-      it "detects Pundit policies" do
-        expect(result[:authorization][:pundit]).to include("PostPolicy")
+      it "names the policy classes without calling them Pundit" do
+        expect(result[:authorization][:policies]).to include("PostPolicy")
+        expect(result[:authorization][:pundit]).to be_nil
+      end
+    end
+
+    context "with policies and pundit in the lockfile" do
+      it "names Pundit" do
+        Dir.mktmpdir do |dir|
+          root = File.realpath(dir)
+          FileUtils.mkdir_p(File.join(root, "app/policies"))
+          File.write(File.join(root, "app/policies/post_policy.rb"), "class PostPolicy; end")
+          File.write(File.join(root, "Gemfile.lock"), <<~LOCK)
+            GEM
+              remote: https://rubygems.org/
+              specs:
+                pundit (2.4.0)
+
+            DEPENDENCIES
+              pundit
+          LOCK
+
+          authz = described_class.new(RailsAiContext::StaticApp.new(root)).call[:authorization]
+
+          expect(authz[:pundit]).to eq([ "PostPolicy" ])
+          expect(authz[:policies]).to be_nil
+        end
+      end
+    end
+
+    # OpenProject keeps it in config/initializers/rack-cors.rb, which the api
+    # section already reads; the two sections name one file.
+    it "finds the CORS initializer the api section reads" do
+      Dir.mktmpdir do |dir|
+        root = File.realpath(dir)
+        FileUtils.mkdir_p(File.join(root, "config/initializers"))
+        File.write(File.join(root, "config/initializers/rack-cors.rb"), <<~RUBY)
+          Rails.application.config.middleware.insert_before 0, Rack::Cors do
+            allow { origins "*" }
+          end
+        RUBY
+        File.write(File.join(root, "Gemfile.lock"), <<~LOCK)
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rack-cors (2.0.2)
+
+          DEPENDENCIES
+            rack-cors
+        LOCK
+        app = RailsAiContext::StaticApp.new(root)
+
+        expect(RailsAiContext::Introspectors::ApiIntrospector.new(app).static_call[:cors_config]).to include(file: "config/initializers/rack-cors.rb")
+        expect(described_class.new(app).call[:security][:cors]).to eq(configured: true)
+      end
+    end
+
+    # The generator's cors.rb ships commented out, and a file named for CORS
+    # may configure something else: neither configures CORS in either section.
+    it "calls CORS configured only when the api section reads a configuration" do
+      [ "# Rails.application.config.middleware.insert_before 0, Rack::Cors do\n#   allow { origins \"*\" }\n# end\n",
+        "CORS_ORIGINS = %w[a b].freeze\n" ].each do |body|
+        Dir.mktmpdir do |dir|
+          root = File.realpath(dir)
+          FileUtils.mkdir_p(File.join(root, "config/initializers"))
+          File.write(File.join(root, "config/initializers/cors.rb"), body)
+          File.write(File.join(root, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n    rack-cors (2.0.2)\n")
+
+          expect(described_class.new(RailsAiContext::StaticApp.new(root)).call[:security][:cors]).to eq(configured: false)
+        end
+      end
+    end
+
+    context "with an Ability class and no cancancan in the lockfile" do
+      let(:ability_path) { File.join(Rails.root, "app/models/ability.rb") }
+
+      before { File.write(ability_path, "class Ability; end") }
+
+      after { FileUtils.rm_f(ability_path) }
+
+      it "names the file without calling it CanCanCan" do
+        expect(result[:authorization][:ability_class]).to eq("app/models/ability.rb")
+        expect(result[:authorization][:cancancan]).to be_nil
       end
     end
 
@@ -133,23 +227,23 @@ RSpec.describe RailsAiContext::Introspectors::AuthIntrospector do
       after { FileUtils.rm_rf(policies_dir) }
 
       it "keeps the namespace in the constant name" do
-        expect(result[:authorization][:pundit]).to include("Admin::CollectionPolicy", "Admin::StatusPolicy")
+        expect(result[:authorization][:policies]).to include("Admin::CollectionPolicy", "Admin::StatusPolicy")
       end
 
       it "still lists the top-level policy of the same base name" do
-        expect(result[:authorization][:pundit]).to include("CollectionPolicy", "StatusPolicy")
+        expect(result[:authorization][:policies]).to include("CollectionPolicy", "StatusPolicy")
       end
 
       it "does not report one name twice for two different classes" do
-        pundit = result[:authorization][:pundit]
-        expect(pundit.uniq.size).to eq(pundit.size)
+        policies = result[:authorization][:policies]
+        expect(policies.uniq.size).to eq(policies.size)
       end
 
       it "handles a namespace nested more than one level deep" do
         FileUtils.mkdir_p(File.join(policies_dir, "admin", "reports"))
         File.write(File.join(policies_dir, "admin", "reports", "note_policy.rb"), "class Admin::Reports::NotePolicy; end")
 
-        expect(result[:authorization][:pundit]).to include("Admin::Reports::NotePolicy")
+        expect(result[:authorization][:policies]).to include("Admin::Reports::NotePolicy")
       end
     end
 

@@ -4,23 +4,18 @@ module RailsAiContext
   module Introspectors
     # Discovers test infrastructure: framework, factories/fixtures,
     # system tests, helpers, CI config, coverage.
-    class TestIntrospector
+    class TestIntrospector < Base
       extend StaticTier
       static_tier :files_only
 
       TEST_FILE_GLOB = "*_{spec,test}.rb"
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
           framework: detect_framework,
           factories: detect_factories,
           factory_names: detect_factory_names,
+          computed_factories: factory_definitions[:computed].nonzero?,
           fixtures: detect_fixtures,
           fixture_names: detect_fixture_names,
           system_tests: detect_system_tests,
@@ -35,43 +30,14 @@ module RailsAiContext
           shared_examples: detect_shared_examples,
           database_cleaner: detect_database_cleaner
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
 
-      def root
-        app.root.to_s
-      end
-
       def detect_framework
-        if Dir.exist?(File.join(root, "spec"))
-          "rspec"
-        elsif Dir.exist?(File.join(root, "test"))
-          "minitest"
-        else
-          # No test/spec directory yet (e.g. an app scaffolded with --skip-test,
-          # or before the first test is written). The framework is still
-          # knowable from the bundle: rspec-rails means RSpec, otherwise a Rails
-          # app uses its bundled minitest default. Reporting "unknown" here
-          # contradicts gems/generate_test, which both already resolve it.
-          detect_framework_from_lockfile || "unknown"
-        end
-      end
-
-      # Resolve the test framework from Gemfile.lock when no test directory
-      # exists. rspec-rails wins (it replaces the convention); otherwise
-      # minitest, which ships with every Rails app. Returns nil when there is
-      # no lockfile or no recognizable test gem.
-      def detect_framework_from_lockfile
-        lock = RailsAiContext::GemLock.for(root)
-        return "rspec" if lock.present?("rspec-rails")
-        return "minitest" if lock.present?("minitest")
-
-        nil
+        RailsAiContext::TestFramework.for(root)
       rescue => e
-        RailsAiContext.debug_fail(e, nil, label: "detect_framework_from_lockfile")
+        RailsAiContext.debug_fail(e, "unknown", label: "detect_framework")
       end
 
       # First listed wins: an app holding the same thing under spec/ and test/
@@ -92,8 +58,15 @@ module RailsAiContext
         first_dir_with("*.rb", "spec/factories", "test/factories")
       end
 
+      # The YAML fixture sets Rails loads, and apart from them the other files
+      # a fixtures directory holds for file_fixture: an app can keep one YAML file
+      # beside hundreds of JSON, XML and binary ones.
       def detect_fixtures
-        first_dir_with("*.yml", "spec/fixtures", "test/fixtures")
+        found = first_dir_with("*.yml", "spec/fixtures", "test/fixtures") or return nil
+
+        dir = File.join(root, found[:location])
+        others = Dir.glob(File.join(dir, "**", "*")).count { |path| File.file?(path) && File.extname(path) != ".yml" }
+        others.positive? ? found.merge(other_files: others) : found
       end
 
       # Both bases are summed: an app that keeps system tests under spec/ and
@@ -124,20 +97,42 @@ module RailsAiContext
       end
 
       def detect_factory_names
-        %w[spec/factories test/factories].each do |dir_rel|
-          dir = File.join(root, dir_rel)
-          next unless Dir.exist?(dir)
+        factory_definitions[:names]
+      end
 
-          names = {}
-          Dir.glob(File.join(dir, "**/*.rb")).each do |path|
-            file = path.sub("#{root}/", "")
-            ast_data = SourceIntrospector.walk(path, { factories: -> { Listeners::GenericMacroListener.new(:factory) } })
-            factories = ast_data[:factories].map { |e| e[:args].first.to_s }.reject(&:empty?)
-            names[file] = factories if factories.any?
+      # One walk per factory file for both the factories and their traits.
+      # A factory whose name is computed (`factory :"#{model}_comment"` in a
+      # loop, as Consul writes) has no name to list, so it is counted apart.
+      # The first factory directory that has any factory wins.
+      def factory_definitions
+        @factory_definitions ||= begin
+          found = { names: nil, traits: nil, computed: 0 }
+          %w[spec/factories test/factories].each do |dir_rel|
+            dir = File.join(root, dir_rel)
+            next unless Dir.exist?(dir)
+
+            names = {}
+            traits = {}
+            computed = 0
+            Dir.glob(File.join(dir, "**/*.rb")).each do |path|
+              ast_data = SourceIntrospector.walk(path, {
+                factories: -> { Listeners::GenericMacroListener.new(:factory) },
+                traits: -> { Listeners::GenericMacroListener.new(:trait) }
+              })
+              named = ast_data[:factories].map { |hit| hit[:args].first.to_s }
+              computed += named.count(&:empty?)
+              named = named.reject(&:empty?)
+              trait_names = ast_data[:traits].map { |hit| hit[:args].first.to_s }.reject(&:empty?)
+              names[path.sub("#{root}/", "")] = named if named.any?
+              traits[File.basename(path)] = trait_names if trait_names.any?
+            end
+            next if names.empty? && traits.empty? && computed.zero?
+
+            found = { names: names.presence, traits: traits.presence, computed: computed }
+            break
           end
-          return names if names.any?
+          found
         end
-        nil
       end
 
       def detect_fixture_names
@@ -147,7 +142,8 @@ module RailsAiContext
 
           names = {}
           Dir.glob(File.join(dir, "**/*.yml")).each do |path|
-            file = File.basename(path, ".yml")
+            # The set's name, as Rails reads it: its path under the directory.
+            file = path.delete_prefix("#{dir}/").delete_suffix(".yml")
             content = RailsAiContext::SafeFile.read(path) or next
             keys = content.scan(/^(\w+):/).flatten.select { |key| RailsAiContext::FixtureKeys.name?(key) }
             names[file] = keys if keys.any?
@@ -158,20 +154,21 @@ module RailsAiContext
       end
 
       def detect_test_helper_setup
-        helpers = %w[
-          spec/rails_helper.rb spec/spec_helper.rb
-          test/test_helper.rb
-        ]
+        helpers = %w[spec/rails_helper.rb spec/spec_helper.rb test/test_helper.rb].map { |rel| File.join(root, rel) }
+        # Apps also configure helpers in support files (Errbit's spec/support/devise.rb). A bare
+        # include there is usually a support module's own mixin, so only config.include counts.
+        support = %w[spec/support test/support].flat_map { |rel| Dir.glob(File.join(root, rel, "**", "*.rb")).sort }
 
         setup = []
-        helpers.each do |rel|
-          path = File.join(root, rel)
-          next unless File.exist?(path)
+        (helpers + support).each do |path|
+          next unless File.file?(path)
           ast = SourceIntrospector.walk(path, {
             bare:    -> { Listeners::GenericMacroListener.new(:include) },
             chained: -> { Listeners::ChainedCallListener.new(:include, receiver: :config) }
           })
-          (ast[:bare] + ast[:chained]).each { |hit| setup.concat(hit[:values].map(&:to_s)) }
+          hits = helpers.include?(path) ? ast[:bare] + ast[:chained] : ast[:chained]
+          # `config.include Helpers, :js` scopes Helpers to tagged examples; the tag is no helper.
+          hits.each { |hit| setup.concat(hit[:values].map(&:to_s).grep(/\A[A-Z]\w*(?:::[A-Z]\w*)*\z/)) }
         end
         setup.uniq
       end
@@ -194,20 +191,7 @@ module RailsAiContext
       end
 
       def detect_factory_traits
-        %w[spec/factories test/factories].each do |dir_rel|
-          dir = File.join(root, dir_rel)
-          next unless Dir.exist?(dir)
-
-          traits = {}
-          Dir.glob(File.join(dir, "**/*.rb")).each do |path|
-            file = File.basename(path)
-            ast_data = SourceIntrospector.walk(path, { traits: -> { Listeners::GenericMacroListener.new(:trait) } })
-            found_traits = ast_data[:traits].map { |e| e[:args].first.to_s }.reject(&:empty?)
-            traits[file] = found_traits if found_traits.any?
-          end
-          return traits if traits.any?
-        end
-        nil
+        factory_definitions[:traits]
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "detect_factory_traits")
       end

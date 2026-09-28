@@ -228,8 +228,8 @@ module RailsAiContext
     # :full    - current behavior, dumps everything into context files
     attr_accessor :context_mode
 
-    # Max lines for generated CLAUDE.md (only applies in :compact mode)
-    attr_accessor :claude_max_lines
+    # Max non-blank lines per compact context file (only applies in :compact mode)
+    attr_reader :claude_max_lines
 
     # Max characters for any single MCP tool response (safety net)
     attr_accessor :max_tool_response_chars
@@ -277,8 +277,8 @@ module RailsAiContext
     attr_accessor :max_schema_file_size   # schema.rb / structure.sql parse limit (default: 10MB)
     # Doctor thresholds, not read caps: the view tools do not stop at them.
     attr_accessor :max_view_total_size    # Size of app/views doctor warns past (default: 10MB)
-    attr_accessor :max_view_file_size     # Named in that warning's fix line (default: 1MB)
-    attr_accessor :max_search_results     # Max search results per call (default: 100)
+    attr_accessor :max_view_file_size     # Accepted and stored; no check reads it (default: 1MB)
+    attr_accessor :max_search_results     # Max lines a search may emit, matches and context together (default: 200)
     attr_accessor :max_validate_files     # Max files per validate call (default: 20)
 
     # Additional MCP tool classes to register alongside built-in tools
@@ -328,11 +328,13 @@ module RailsAiContext
       Rack::MethodOverride ActionDispatch::Session::AbstractSecureStore
     ].freeze
 
+    # Each pattern ends on a whole namespace segment: Whitehall's own
+    # ActiveRecordLikeInterface is not ActiveRecord's.
     DEFAULT_EXCLUDED_CONCERNS = [
-      /::Generated/,
-      /\A(ActiveRecord|ActiveModel|ActiveSupport|ActionText|ActionMailbox|ActiveStorage)/,
-      /\A(ActionDispatch|ActionController|ActionView|AbstractController)/,
-      /\A(Devise::Models|Devise::Orm|Bullet::|Turbo::|GlobalID::|Rolify::)/,
+      /::Generated(Association|Attribute|Relation)Methods\z/,
+      /\A(ActiveRecord|ActiveModel|ActiveSupport|ActionText|ActionMailbox|ActiveStorage)(::|\z)/,
+      /\A(ActionDispatch|ActionController|ActionView|AbstractController)(::|\z)/,
+      /\A(Devise::Models|Devise::Orm|Bullet|Turbo|GlobalID|Rolify)(::|\z)/,
       # The `debug` gem (default in Rails 7.0+ Gemfiles) prepends this onto
       # Kernel, so it shows up in every model's ancestors - not a real concern.
       /\ADEBUGGER__::/
@@ -356,7 +358,7 @@ module RailsAiContext
     attr_accessor :excluded_association_names # Framework association names hidden from model output
 
     # Search and file discovery
-    attr_accessor :search_extensions      # File extensions the Ruby fallback searches; ripgrep searches every file
+    attr_accessor :search_extensions      # Narrow the Ruby fallback to these extensions; nil (default) searches every file, as ripgrep does
     attr_accessor :concern_paths          # Where to look for concern source files (default: nil, discovers app/*/concerns)
 
     # Frontend framework detection (optional overrides - auto-detected if nil)
@@ -385,14 +387,18 @@ module RailsAiContext
       @server_name         = "rails-ai-context"
       @introspectors       = PRESETS[:full].dup
       @excluded_paths      = %w[node_modules tmp log vendor .git doc docs]
+      # Files each tool's own docs say to gitignore. The patterns leave the placeholder
+      # beside one (config/application.example.yml, .env.example) readable.
       @sensitive_patterns  = %w[
-        .env .env.*
+        .env .env.* *.env .envrc
         config/master.key
         config/credentials.yml.enc config/credentials/*.yml.enc
-        config/database.yml config/secrets.yml
+        config/database.yml config/secrets*.yml config/secrets*.yml.enc
+        config/application.yml
+        config/settings.local.yml config/settings/*.local.yml
         config/cable.yml config/storage.yml
         config/mongoid.yml config/redis.yml
-        *.pem *.key *.p12 *.pfx *.jks *.keystore
+        *.pem *.key *.p8 *.p12 *.pfx *.jks *.keystore
         **/id_rsa **/id_ed25519 **/id_ecdsa **/id_dsa
         .ssh/* .aws/credentials .aws/config .netrc .pgpass .my.cnf
       ]
@@ -434,7 +440,7 @@ module RailsAiContext
       @skip_tools               = []
       @ai_tools                 = nil
       @tool_mode                = :mcp
-      @search_extensions        = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
+      @search_extensions        = nil
       @concern_paths            = nil
       @frontend_paths           = nil
       @extra_app_paths          = []
@@ -496,6 +502,12 @@ module RailsAiContext
       value = value.to_i
       raise ArgumentError, "cache_ttl must be positive (got #{value})" unless value > 0
       @cache_ttl = value
+    end
+
+    def claude_max_lines=(value)
+      value = value.to_i
+      raise ArgumentError, "claude_max_lines must be positive (got #{value})" unless value > 0
+      @claude_max_lines = value
     end
 
     def max_tool_response_chars=(value)

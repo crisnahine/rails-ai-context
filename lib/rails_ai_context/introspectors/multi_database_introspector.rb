@@ -1,66 +1,53 @@
 # frozen_string_literal: true
 
+require "yaml"
+
 module RailsAiContext
   module Introspectors
     # Discovers multi-database configuration: multiple databases, replicas,
     # sharding, and database-specific model assignments.
-    class MultiDatabaseIntrospector
+    class MultiDatabaseIntrospector < Base
       extend StaticTier
       static_tier :files_only
 
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
+      ERB_SENTINEL = "__rails_ai_context_erb__"
+      # `ENV["X"].presence || "mysql2"`: the literal is what runs with the variable unset.
+      ERB_DEFAULT = /\|\|\s*(["'])([\w.-]+)\1\s*\z/
 
       # @return [Hash] multi-database configuration
       def call
         dbs = discover_databases
         {
           databases: dbs,
-          replicas: discover_replicas,
+          replicas: dbs.select { |d| d[:replica] }.map { |d| { name: d[:name], adapter: d[:adapter] } },
           sharding: detect_sharding,
           model_connections: detect_model_connections,
           multi_db: dbs.size > 1
-        }
-      rescue => e
-        { error: e.message }
+        }.merge({ example_adapters: example_adapters }.compact)
       end
 
       private
 
-      def root
-        app.root.to_s
-      end
-
       def discover_databases
-        if defined?(ActiveRecord::Base)
-          configs = ActiveRecord::Base.configurations.configs_for(env_name: Rails.env)
-          configs.map do |config|
-            info = { name: config.name, adapter: config.adapter }
-            info[:database] = anonymize_db_name(config.database) if config.database
-            info[:replica] = true if config.respond_to?(:replica?) && config.replica?
-            info
-          end
-        else
-          parse_database_yml
-        end
+        booted = booted_databases
+        # A boot that failed leaves the handlers empty without raising, and an
+        # app that declares two databases is not an app with none.
+        booted.any? ? booted : file_databases
       rescue => e
-        RailsAiContext.debug_fail(e, parse_database_yml, label: "discover_databases")
+        RailsAiContext.debug_fail(e, file_databases, label: "discover_databases")
       end
 
-      def discover_replicas
-        if defined?(ActiveRecord::Base)
-          configs = ActiveRecord::Base.configurations.configs_for(env_name: Rails.env)
-          configs.select { |c| c.respond_to?(:replica?) && c.replica? }.map do |config|
-            { name: config.name, adapter: config.adapter }
-          end
-        else
-          []
+      # Adapters in the example database files of an app that commits none, read by line since
+      # an example need not parse; a commented-out adapter does not count.
+      def example_adapters
+        return nil if File.exist?(File.join(root, "config/database.yml"))
+
+        names = Dir.glob(File.join(root, "config/database.yml.*")).flat_map do |path|
+          RailsAiContext::SafeFile.read(path).to_s.scan(/^\s*adapter:\s*["']?(\w+)["']?\s*(?:#.*)?$/).flatten
         end
+        names.uniq.sort.presence
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "discover_replicas")
+        RailsAiContext.debug_fail(e, nil, label: "example_adapters")
       end
 
       def detect_sharding
@@ -112,7 +99,7 @@ module RailsAiContext
             connections << { model: model_name, uses_connected_to: true } unless connections.any? { |c| c[:model] == model_name }
           end
         rescue => e
-          $stderr.puts "[rails-ai-context] detect_model_connections failed: #{e.message}" if ENV["DEBUG"]
+          RailsAiContext.debug_fail(e, label: "detect_model_connections")
           next
         end
 
@@ -132,54 +119,73 @@ module RailsAiContext
         end
       end
 
-      def parse_database_yml
+      def booted_databases
+        return [] unless defined?(ActiveRecord::Base)
+
+        ActiveRecord::Base.configurations.configs_for(env_name: Rails.env, include_hidden: true).map do |config|
+          info = { name: config.name, adapter: config.adapter }
+          info[:database] = anonymize_db_name(config.database) if config.database
+          info[:replica] = true if config.respond_to?(:replica?) && config.replica?
+          info
+        end
+      end
+
+      # Read as YAML so anchors, merge keys and comments follow the file format itself.
+      def file_databases
+        config = database_yml_env
+        return [] unless config.is_a?(Hash) && config.any?
+
+        # Rails' own rule: an env whose values are all Hashes names one
+        # database per key, anything else is a single primary config.
+        if config.values.all? { |value| value.is_a?(Hash) }
+          config.map { |name, entry| database_entry(name, entry) }
+        else
+          [ database_entry("primary", config) ]
+        end
+      end
+
+      def database_entry(name, entry)
+        adapter, from_default = adapter_value(entry["adapter"])
+        info = { name: name.to_s, adapter: adapter }
+        info[:adapter_default] = true if from_default
+        info[:replica] = true if entry["replica"] == true
+        info
+      end
+
+      # An ERB-computed value is unknown, unless the whole value is one tag carrying its own
+      # literal default, which the sentinel keeps; two tags compose into something neither said.
+      def adapter_value(value)
+        return [ nil, false ] if value.nil?
+
+        text = value.to_s
+        return [ text, false ] unless text.include?(ERB_SENTINEL)
+        return [ nil, false ] unless text.start_with?(ERB_SENTINEL) && text.scan(ERB_SENTINEL).size == 1
+
+        literal = text.delete_prefix(ERB_SENTINEL)
+        literal.empty? ? [ nil, false ] : [ literal, true ]
+      end
+
+      def database_yml_env
         path = File.join(root, "config/database.yml")
-        return [] unless File.exist?(path)
+        return nil unless File.exist?(path)
 
         content = RailsAiContext::SafeFile.read(path)
-        return [] unless content
-        databases = []
-        current_env = defined?(Rails) ? Rails.env : "development"
-        in_env = false
-        skip_keys = %w[adapter database host port username password encoding pool timeout socket url replica]
-        current_db = nil
+        return nil unless content
 
-        content.each_line do |line|
-          if line.match?(/\A#{Regexp.escape(current_env)}:/)
-            in_env = true
-            next
-          elsif line.match?(/\A\w+:/) && in_env
-            break
-          end
+        data = YAML.safe_load(neutralize_erb(content), aliases: true, permitted_classes: [ Symbol ])
+        return nil unless data.is_a?(Hash)
 
-          next unless in_env
-
-          # 2-space indent = database name (primary, cache, etc.) or flat config key
-          if (match = line.match(/\A\s{2}(\w+):\s*(.*)/)) && !line.include?("<<")
-            key = match[1]
-            value = match[2].strip
-            if skip_keys.include?(key)
-              # Flat config (single-db): extract adapter/database inline
-              if key == "adapter" && databases.empty?
-                databases << { name: "primary", adapter: value }
-              end
-            else
-              # This is a named database (multi-db config)
-              current_db = { name: key }
-              databases << current_db
-            end
-          # 4-space indent = settings under a named database
-          elsif current_db && (match = line.match(/\A\s{4}(\w+):\s*(.*)/))
-            key = match[1]
-            value = match[2].strip
-            current_db[:adapter] = value if key == "adapter"
-            current_db[:replica] = true if key == "replica" && value == "true"
-          end
-        end
-
-        databases
+        data[RailsAiContext.environment_name]
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "parse_database_yml")
+        RailsAiContext.debug_fail(e, nil, label: "database_yml")
+      end
+
+      # ERB never runs: an output tag becomes an unknown marker, other tags go, and both keep
+      # their newlines so the rest of the file parses at its written indentation.
+      def neutralize_erb(content)
+        content.gsub(RailsAiContext::ErbSource::TAG) do |tag|
+          (tag.start_with?("<%=") ? ERB_SENTINEL + Regexp.last_match(1).to_s[ERB_DEFAULT, 2].to_s : "") + ("\n" * tag.count("\n"))
+        end
       end
 
       def anonymize_db_name(name)

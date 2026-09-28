@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "find"
+
 module RailsAiContext
   # Diagnostic checker that validates the environment and reports
   # AI readiness with pass/warn/fail checks and a readiness score.
@@ -72,6 +74,18 @@ module RailsAiContext
     end
 
     private
+
+    # A standalone install has neither the rake tasks nor the generator, so a
+    # fix names the command this install actually has.
+    def command(job)
+      InstallMode.command(job, standalone: standalone?)
+    end
+
+    def standalone?
+      return @standalone if defined?(@standalone)
+
+      @standalone = InstallMode.standalone?
+    end
 
     # All configured AI tools; nil (unconfigured) means every tool in the table.
     ALL_AI_TOOLS = Install::AiTool.all.map(&:key).freeze
@@ -158,11 +172,11 @@ module RailsAiContext
     end
 
     def check_tests
-      if Dir.exist?(File.join(app.root, "spec")) || Dir.exist?(File.join(app.root, "test"))
-        framework = Dir.exist?(File.join(app.root, "spec")) ? "RSpec" : "Minitest"
-        Check.new(name: "Tests", status: :pass, message: "#{framework} test directory found", fix: nil)
+      suites = RailsAiContext::TestFramework.suites(app.root)
+      if suites.any?
+        Check.new(name: "Tests", status: :pass, message: "#{suites.join(", ")} test suite found", fix: nil)
       else
-        Check.new(name: "Tests", status: :warn, message: "No test directory found",
+        Check.new(name: "Tests", status: :warn, message: "No test suite found",
           fix: "Run `rails generate rspec:install` or use default Minitest")
       end
     end
@@ -221,7 +235,7 @@ module RailsAiContext
       unless context_file
         return Check.new(name: "Context files", status: :warn,
           message: "No context files generated",
-          fix: "Run `rails ai:context`")
+          fix: "Run `#{command(:context)}`")
       end
 
       generated_at = if File.directory?(context_file)
@@ -243,7 +257,7 @@ module RailsAiContext
       else
         Check.new(name: "Context files", status: :warn,
           message: "#{context_label} may be stale - #{stale_dirs.join(', ')} changed since last generation",
-          fix: "Run `rails ai:context` to regenerate")
+          fix: "Run `#{command(:context)}` to regenerate")
       end
     end
 
@@ -278,7 +292,7 @@ module RailsAiContext
 
       Check.new(name: "Initializer guard", status: :warn,
         message: "config/initializers/rails_ai_context.rb guards on `defined?(RailsAiContext)` alone",
-        fix: "Re-run `rails generate rails_ai_context:install`, or add `&& RailsAiContext.respond_to?(:configure)` to the guard")
+        fix: "Re-run `#{command(:install)}`, or add `&& RailsAiContext.respond_to?(:configure)` to the guard")
     end
 
     def check_mcp_json
@@ -300,7 +314,7 @@ module RailsAiContext
         unless File.exist?(full_path)
           next Check.new(name: cfg[:label], status: :warn,
             message: "No #{cfg[:path]} for MCP auto-discovery",
-            fix: "Run `rails generate rails_ai_context:install`")
+            fix: "Run `#{command(:install)}`")
         end
 
         if cfg[:path].end_with?(".toml")
@@ -312,7 +326,7 @@ module RailsAiContext
           rescue JSON::ParserError => e
             Check.new(name: cfg[:label], status: :fail,
               message: "#{cfg[:path]} has invalid JSON: #{e.message}",
-              fix: "Run `rails generate rails_ai_context:install` to regenerate")
+              fix: "Run `#{command(:install)}` to regenerate")
           end
         end
       end
@@ -329,7 +343,7 @@ module RailsAiContext
         worst_status = failures.any? { |c| c.status == :fail } ? :fail : :warn
         Check.new(name: "MCP configs", status: worst_status,
           message: "#{failures.size} of #{count_phrase(checks.size, "MCP config")} #{failures.size == 1 ? "needs" : "need"} attention: #{labels.join(', ')}",
-          fix: "Run `rails generate rails_ai_context:install` to fix")
+          fix: "Run `#{command(:install)}` to fix")
       end
     end
 
@@ -364,7 +378,7 @@ module RailsAiContext
       else
         Check.new(name: "Codex env snapshot", status: :warn,
           message: "Codex MCP env snapshot is stale - GEM_HOME #{snapshot_gem_home} no longer exists. Re-run the install generator to update.",
-          fix: "Run `rails generate rails_ai_context:install` or `rails-ai-context init`")
+          fix: "Run `#{command(:install)}`")
       end
     end
 
@@ -385,7 +399,7 @@ module RailsAiContext
     # In-Gemfile installs activate through the lockfile and are immune.
     def check_stdio_activation_hygiene
       return Check.new(name: "MCP stdio hygiene", status: :pass,
-        message: "in-Gemfile install activates via bundler (no resolver output)", fix: nil) unless InstallMode.standalone?
+        message: "in-Gemfile install activates via bundler (no resolver output)", fix: nil) unless standalone?
 
       require "open3"
       # An MCP client launches the binstub from a clean shell; simulate that
@@ -467,10 +481,9 @@ module RailsAiContext
       config = RailsAiContext.configuration
       suggestions = []
 
-      stimulus_dir = File.join(app.root, "app/javascript/controllers")
-      if Dir.exist?(stimulus_dir) && Dir.glob(File.join(stimulus_dir, "**/*_controller.{js,ts}")).any? && !config.introspectors.include?(:stimulus)
-        stimulus_count = Dir.glob(File.join(stimulus_dir, "**/*_controller.{js,ts}")).size
-        suggestions << "stimulus (#{count_phrase(stimulus_count, "controller")} found)"
+      unless config.introspectors.include?(:stimulus)
+        stimulus_count = Introspectors::StimulusIntrospector.controller_count(app.root.to_s)
+        suggestions << "stimulus (#{count_phrase(stimulus_count, "controller")} found)" if stimulus_count.positive?
       end
 
       views_dir = File.join(app.root, "app/views")
@@ -521,13 +534,30 @@ module RailsAiContext
         fix: "Add: `gem 'prism'` (included in Ruby 3.3+)")
     end
 
+    # Asked of the scanner rather than `require`: brakeman outside the app's bundle still scans.
     def check_brakeman
-      require "brakeman"
-      Check.new(name: "Brakeman", status: :pass, message: "Brakeman available for security scanning", fix: nil)
-    rescue LoadError
-      Check.new(name: "Brakeman", status: :warn,
-        message: "Brakeman not installed (rails_security_scan tool will return install instructions)",
-        fix: "Add: `gem 'brakeman', group: :development`")
+      where, version = Tools::SecurityScan.brakeman_location
+      locked = GemLock.for(@app.root.to_s).version("brakeman")
+      case where
+      when :bundle
+        Check.new(name: "Brakeman", status: :pass, message: "Brakeman #{version} available for security scanning", fix: nil)
+      when :machine
+        return Check.new(name: "Brakeman", status: :pass, fix: nil,
+          message: "Brakeman #{version} on this machine, and the app's Gemfile.lock carries brakeman #{locked} " \
+                   "(rails_security_scan runs it as its own process)") if locked
+
+        Check.new(name: "Brakeman", status: :pass,
+          message: "Brakeman #{version} on this machine, outside the app's bundle (rails_security_scan runs it from there)",
+          fix: "Add: `gem 'brakeman', group: :development` to scan in this process")
+      else
+        return Check.new(name: "Brakeman", status: :warn,
+          message: "The app's Gemfile.lock carries brakeman #{locked}, but it is not installed",
+          fix: "Run `bundle install`") if locked
+
+        Check.new(name: "Brakeman", status: :warn,
+          message: "Brakeman not installed (rails_security_scan tool will return install instructions)",
+          fix: "Add: `gem 'brakeman', group: :development`")
+      end
     end
 
     def check_live_reload
@@ -543,112 +573,72 @@ module RailsAiContext
 
     def check_security_gitignore
       gitignore_path = File.join(app.root, ".gitignore")
-      gitignore_exists = File.exist?(gitignore_path)
+      sensitive_files = present_sensitive_files
 
-      sensitive_files = []
-      sensitive_files << ".env" if File.exist?(File.join(app.root, ".env"))
-      sensitive_files << "config/master.key" if File.exist?(File.join(app.root, "config/master.key"))
-      # Written by our own install, and it embeds this machine's PATH and GEM_HOME.
-      sensitive_files << ".codex/config.toml" if File.exist?(File.join(app.root, ".codex/config.toml"))
+      return Check.new(name: "Secrets in .gitignore", status: :pass, message: "No sensitive files found", fix: nil) if sensitive_files.empty?
 
-      return Check.new(name: "Secrets in .gitignore", status: :pass, message: "No sensitive files to check", fix: nil) if sensitive_files.empty?
-
-      unless gitignore_exists
+      unless File.exist?(gitignore_path)
         return Check.new(name: "Secrets in .gitignore", status: :fail,
           message: "No .gitignore found - #{sensitive_files.join(', ')} would be committed to version control",
           fix: "Create .gitignore with: #{sensitive_files.map { |f| "`#{f}`" }.join(', ')}")
       end
 
       gitignore = File.read(gitignore_path)
-      issues = []
-      issues << ".env exists but not in .gitignore" if sensitive_files.include?(".env") && !gitignore_covers?(gitignore, ".env")
-      issues << "config/master.key not in .gitignore" if sensitive_files.include?("config/master.key") && !gitignore_covers?(gitignore, "config/master.key")
-      issues << ".codex/config.toml not in .gitignore" if sensitive_files.include?(".codex/config.toml") && !gitignore_covers?(gitignore, ".codex/config.toml")
+      exposed = sensitive_files.reject { |file| gitignore_covers?(gitignore, file) }
+      never, others = exposed.partition { |file| NEVER_COMMIT.any? { |pattern| File.fnmatch(pattern, file, File::FNM_PATHNAME | File::FNM_DOTMATCH) } }
 
-      if issues.empty?
-        Check.new(name: "Secrets in .gitignore", status: :pass, message: "Sensitive files properly gitignored", fix: nil)
+      if never.any?
+        message = never.map { |file| "#{file} not in .gitignore" }.join("; ")
+        message += "; also committed: #{others.join(', ')}" if others.any?
+        Check.new(name: "Secrets in .gitignore", status: :fail, message: message,
+          fix: "Add to .gitignore: #{never.map { |file| "`#{file}`" }.join(', ')}")
+      elsif others.any?
+        Check.new(name: "Secrets in .gitignore", status: :warn,
+          message: "Committed, and never read by the tools: #{others.join(', ')}",
+          fix: "Make sure these hold no secrets, or gitignore them")
       else
-        Check.new(name: "Secrets in .gitignore", status: :fail,
-          message: issues.join("; "),
-          fix: "Add to .gitignore: #{issues.map { |i| "`#{i.split(' ').first}`" }.join(', ')}")
+        Check.new(name: "Secrets in .gitignore", status: :pass,
+          message: "Sensitive files gitignored: #{sensitive_files.join(', ')}", fix: nil)
       end
     end
 
-    # Substring checks miss glob entries (Rails 8.1 generates `/config/*.key`
-    # rather than a literal master.key line), so match .gitignore patterns
-    # the way git does: anchored when the pattern contains a slash (* stops
-    # at separators), basename-at-any-depth when it doesn't, last-match-wins
-    # ordering, and git's negation rules - a `pattern/` entry only concerns
-    # directories, a negation must match the file itself (not a container),
-    # and a file cannot be re-included while a parent directory is excluded.
+    # Of the files the tools refuse, those no app commits on purpose; `database.yml`,
+    # `credentials.yml.enc` and `.env.development` often are, so they only warn.
+    NEVER_COMMIT = %w[
+      .env config/master.key config/credentials/*.key config/application.yml .codex/config.toml
+      .netrc .pgpass .aws/credentials **/id_rsa **/id_ed25519 **/id_ecdsa **/id_dsa .ssh/*
+    ].freeze
+
+    # Every file the tools refuse to read (the one sensitive-pattern list), plus the Codex
+    # config our own install writes with this machine's PATH and GEM_HOME. Excluded
+    # directories (node_modules, vendor, tmp) are not walked.
+    def present_sensitive_files
+      root = app.root.to_s
+      excluded = RailsAiContext.configuration.excluded_paths.to_set
+      found = []
+      Find.find(root) do |path|
+        relative = path.delete_prefix("#{root}/")
+        next if path == root
+        if File.directory?(path)
+          Find.prune if excluded.include?(relative) || excluded.include?(File.basename(path)) || File.symlink?(path)
+          next
+        end
+        found << relative if SafePath.sensitive?(relative) || relative == ".codex/config.toml"
+      end
+      found.sort
+    rescue SystemCallError
+      found.sort
+    end
+
     def gitignore_covers?(content, path)
-      gitignore_path_ignored?(parse_gitignore_rules(content), path, dir: false)
+      GitIgnore.ignored?(GitIgnore.parse(content), path,
+                         dir: false, case_insensitive: gitignore_case_insensitive?)
     end
 
-    def parse_gitignore_rules(content)
-      content.each_line.filter_map do |line|
-        pattern = line.strip
-        next if pattern.empty? || pattern.start_with?("#")
-
-        negation = pattern.start_with?("!")
-        pattern = pattern.delete_prefix("!")
-        dir_only = pattern.end_with?("/")
-        anchored = pattern.chomp("/").include?("/")
-        pattern = pattern.delete_prefix("/").chomp("/")
-        next if pattern.empty?
-
-        { negation: negation, dir_only: dir_only, anchored: anchored, pattern: pattern }
-      end
-    end
-
-    # Mirrors git's evaluation order: if any ancestor directory ends up
-    # ignored (itself evaluated with the same rules, negations included),
-    # everything beneath it is ignored and cannot be re-included. Otherwise
-    # the path is judged by the last rule matching the path ITSELF - there
-    # is no "descend" globbing, which is what made `config/` + `!config/`
-    # (a re-included directory) falsely read as still covering its files.
-    def gitignore_path_ignored?(rules, path, dir:)
-      return true if gitignore_parent_ignored?(rules, path)
-
-      ignored = false
-      rules.each do |rule|
-        # `pattern/` entries concern directories only, in both polarities.
-        next if rule[:dir_only] && !dir
-        next if rule[:negation] && !ignored
-
-        ignored = !rule[:negation] if gitignore_pattern_matches?(rule, path)
-      end
-      ignored
-    end
-
-    def gitignore_parent_ignored?(rules, path)
-      parts = path.split("/")[0..-2]
-      parents = parts.each_index.map { |i| parts[0..i].join("/") }
-      parents.any? { |parent| gitignore_path_ignored?(rules, parent, dir: true) }
-    end
-
-    def gitignore_pattern_matches?(rule, path)
-      flags = File::FNM_PATHNAME | File::FNM_DOTMATCH
-      flags |= File::FNM_CASEFOLD if gitignore_case_insensitive?
-      if rule[:anchored]
-        File.fnmatch?(rule[:pattern], path, flags) || path == rule[:pattern]
-      else
-        File.fnmatch?(rule[:pattern], File.basename(path), flags)
-      end
-    end
-
-    # git sets core.ignorecase from the filesystem; mirror it by probing
-    # whether the .gitignore file itself resolves case-insensitively
-    # (APFS/NTFS default). The .gitignore basename always carries cased
-    # letters, unlike the app root (which can be all digits).
     def gitignore_case_insensitive?
       return @gitignore_case_insensitive if defined?(@gitignore_case_insensitive)
 
-      gitignore = File.join(app.root.to_s, ".gitignore")
-      swapped = File.join(app.root.to_s, ".GITIGNORE")
-      @gitignore_case_insensitive = File.exist?(gitignore) && File.identical?(gitignore, swapped)
-    rescue StandardError
-      @gitignore_case_insensitive = false
+      @gitignore_case_insensitive = GitIgnore.case_insensitive?(app.root)
     end
 
     def check_security_auto_mount
@@ -694,15 +684,16 @@ module RailsAiContext
       views_dir = File.join(app.root, "app/views")
       return nil unless Dir.exist?(views_dir)
 
-      count = Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim}")).size
-      total_size = Dir.glob(File.join(views_dir, "**/*.{erb,haml,slim}")).sum { |f| File.size(f) rescue 0 }
+      templates = Dir.glob(File.join(views_dir, RailsAiContext::ViewFile::MARKUP_GLOB))
+      count = templates.size
+      total_size = templates.sum { |f| File.size(f) rescue 0 }
       limit = config.max_view_total_size
       pct = ((total_size.to_f / limit) * 100).round
 
       if pct >= 80
         Check.new(name: "View aggregation size", status: :warn,
           message: "#{count_phrase(count, "erb/haml/slim template")} totaling #{(total_size / 1_000_000.0).round(1)}MB (#{pct}% of #{(limit / 1_000_000.0).round}MB limit for UI pattern extraction)",
-          fix: "Increase `config.max_view_total_size` or `config.max_view_file_size`")
+          fix: "Increase `config.max_view_total_size`")
       else
         Check.new(name: "View aggregation size", status: :pass,
           message: "#{count_phrase(count, "erb/haml/slim template")} (#{(total_size / 1024.0).round}KB total, within limits)",
@@ -722,7 +713,7 @@ module RailsAiContext
         else 0
         end
       end
-      ((earned.to_f / total) * 100).round
+      Percent.floor(earned, total, decimals: 0)
     end
   end
 end

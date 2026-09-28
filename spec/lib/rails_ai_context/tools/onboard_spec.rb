@@ -5,6 +5,23 @@ require "spec_helper"
 RSpec.describe RailsAiContext::Tools::Onboard do
   before { described_class.reset_cache! }
 
+  # Errbit: no ActiveRecord schema, so the stack line said "on unknown".
+  describe "a Mongoid app" do
+    it "names Mongoid and the database mongoid.yml names" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "mongoid.yml"),
+                   "development:\n  clients:\n    default:\n      uri: mongodb://localhost/errbit_development\n")
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(dir)))
+        allow(described_class).to receive(:cached_context).and_return({ app_name: "Errbit", models: {} })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("on MongoDB through Mongoid (database errbit_development)")
+      end
+    end
+  end
+
   describe ".call" do
     it "returns an MCP::Tool::Response" do
       result = described_class.call
@@ -39,11 +56,92 @@ RSpec.describe RailsAiContext::Tools::Onboard do
       expect(text).to include("cd #{File.basename(RailsAiContext.default_app.root.to_s)}")
     end
 
+    # The Commands section and Getting Started decide the server command in
+    # one place, so they cannot name two different ones.
+    it "starts the app with the command the generated Commands section names" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "bin"))
+        File.write(File.join(dir, "bin", "rails"), "")
+        allow(RailsAiContext).to receive(:default_app).and_return(RailsAiContext::StaticApp.new(dir))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("bin/rails server")
+        expect(text).not_to include("bin/dev")
+        expect(text).not_to match(/^rails server$/)
+        expect(text).not_to include("db:setup")
+      end
+    end
+
     it "full mode includes additional sections beyond standard" do
       result = described_class.call(detail: "full")
       text = result.content.first[:text]
       expect(text).to include("## Stack")
       expect(text).to include("Full Walkthrough")
+    end
+
+    # Every model tying on association count is the normal case for an app
+    # whose models all include the same concern; with each list sorting on
+    # its own the two named disjoint sets of "key" models.
+    it "names the same key models as the generated context file when every model ties" do
+      models = %w[Zebra Alpha Mango Beta Kiwi Delta Echo Foxtrot].each_with_object({}) do |name, h|
+        h[name] = { table_name: name.downcase, associations: [ { type: "belongs_to", name: "user" } ], validations: [] }
+      end
+      ctx = {
+        app_name: "TiedApp", rails_version: "8.0", ruby_version: "3.4",
+        generated_at: Time.now.iso8601, schema: {}, models: models,
+        routes: {}, gems: {}, conventions: {}
+      }
+      allow(described_class).to receive(:cached_context).and_return(ctx)
+
+      onboard = described_class.call(detail: "standard").content.first[:text]
+      generated = RailsAiContext::Serializers::ClaudeSerializer.new(ctx).call
+
+      order = ->(text) { models.keys.select { |name| text.include?("**#{name}**") }.sort_by { |name| text.index("**#{name}**") } }
+      expect(order.call(onboard)).to eq(order.call(generated).first(7))
+      expect(order.call(onboard).first).to eq("Alpha")
+    end
+
+    # A payload entry is not always a Hash: a section the introspector could
+    # not build leaves a marker string. Counted as central it took one of the
+    # seven slots and printed nothing, so a real model fell off the list.
+    it "spends no central slot on an entry that is not a model record" do
+      models = { "AAABroken" => "[UNAVAILABLE]" }
+      ("A".."H").each_with_index { |l, i| models["Model#{l}"] = { table_name: "t#{i}", associations: [], validations: [] } }
+      ctx = {
+        app_name: "OddApp", rails_version: "8.0", ruby_version: "3.4",
+        generated_at: Time.now.iso8601, schema: {}, models: models,
+        routes: {}, gems: {}, conventions: {}
+      }
+      allow(described_class).to receive(:cached_context).and_return(ctx)
+
+      text = described_class.call(detail: "standard").content.first[:text]
+
+      expect(text.scan(/\*\*Model[A-H]\*\*/).size).to eq(7)
+      expect(text).not_to include("AAABroken")
+    end
+
+    # The ranking reads every entry, and a model whose file could not be read
+    # carries an error hash rather than an association list.
+    it "ranks past a model whose introspection failed without naming it central" do
+      models = {
+        "Broken" => { error: "file is unreadable" },
+        "Widget" => { table_name: "widgets", associations: [ { type: "has_many", name: "parts" } ], validations: [] }
+      }
+      ctx = {
+        app_name: "PartialApp", rails_version: "8.0", ruby_version: "3.4",
+        generated_at: Time.now.iso8601, schema: {}, models: models,
+        routes: {}, gems: {}, conventions: {}
+      }
+      allow(described_class).to receive(:cached_context).and_return(ctx)
+
+      onboard = described_class.call(detail: "standard").content.first[:text]
+      generated = RailsAiContext::Serializers::ClaudeSerializer.new(ctx).call
+
+      expect(onboard).to include("**Widget**")
+      expect(onboard).not_to include("**Broken**")
+      expect(generated).to include("- **Broken** [UNAVAILABLE: file is unreadable]")
     end
 
     it "handles missing context data gracefully" do
@@ -200,6 +298,69 @@ RSpec.describe RailsAiContext::Tools::Onboard do
         expect(text).to include("Hotwire + Phlex frontend")
       end
 
+      it "names the rspec command when the app runs both suites" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "MyApp",
+          rails_version: "8.0",
+          ruby_version: "3.4",
+          schema: { adapter: "SQLite", total_tables: 5 },
+          models: {},
+          jobs: { jobs: [] },
+          conventions: { architecture: [] },
+          gems: { notable_gems: [] },
+          tests: { framework: "rspec, minitest", factories: nil }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("bundle exec rspec")
+        expect(text).not_to include("rails test")
+      end
+
+      it "says the app has no tests rather than naming a framework it does not run" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "Lab", rails_version: "8.0", ruby_version: "3.4",
+          schema: { adapter: "SQLite", total_tables: 2 }, models: {}, jobs: { jobs: [] },
+          conventions: { architecture: [] }, gems: { notable_gems: [] },
+          tests: { framework: "no tests yet (minitest in the bundle)" }
+        })
+
+        text = described_class.call(detail: "quick").content.first[:text]
+
+        expect(text).to include("no tests yet")
+        expect(text).not_to include("tested with")
+      end
+
+      # One factory file commonly defines several factories, and the count
+      # said the number of files.
+      it "counts factory definitions, and names the files they sit in" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "Api", rails_version: "8.0", ruby_version: "3.4",
+          schema: { adapter: "PostgreSQL", total_tables: 2 }, models: {}, jobs: { jobs: [] },
+          conventions: { architecture: [] }, gems: { notable_gems: [] },
+          tests: { framework: "rspec", factories: { location: "spec/factories", count: 2 },
+                   factory_names: { "spec/factories/users.rb" => %w[user admin], "spec/factories/posts.rb" => %w[post] } }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("Data setup: FactoryBot (3 factories in 2 files).")
+      end
+
+      it "marks the factory count a floor when some names are computed" do
+        allow(described_class).to receive(:cached_context).and_return({
+          app_name: "Api", rails_version: "8.0", ruby_version: "3.4",
+          schema: { adapter: "PostgreSQL", total_tables: 2 }, models: {}, jobs: { jobs: [] },
+          conventions: { architecture: [] }, gems: { notable_gems: [] },
+          tests: { framework: "rspec", factories: { location: "spec/factories", count: 1 },
+                   factory_names: { "spec/factories/comments.rb" => %w[comment] }, computed_factories: 1 }
+        })
+
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("Data setup: FactoryBot (2+ factories in 1 file).")
+      end
+
       it "names no guessed domain, only the app" do
         allow(described_class).to receive(:cached_context).and_return({
           app_name: "Acme",
@@ -323,6 +484,34 @@ RSpec.describe RailsAiContext::Tools::Onboard do
 
         expect(onboard_total).to eq(routes_total)
       end
+    end
+  end
+
+  describe "section lists" do
+    it "names a section builder for every listed section" do
+      listed = (described_class::STANDARD_SECTIONS + described_class::FULL_SECTIONS).uniq
+      missing = listed.reject { |name| described_class.private_methods.include?(:"section_#{name}") }
+
+      expect(missing).to be_empty
+    end
+  end
+  # The lists are the render order, which the builder guard above cannot see.
+  describe "section order" do
+    def headings(detail)
+      described_class.call(detail: detail).content.first[:text].scan(/^## (.+)$/).flatten
+    end
+
+    it "renders the standard walkthrough in STANDARD_SECTIONS order" do
+      expect(headings("standard")).to eq(
+        [ "Stack", "Data Model", "Key Flows", "Background Jobs & Async", "Frontend", "Testing", "Getting Started" ]
+      )
+    end
+
+    it "renders the full walkthrough in FULL_SECTIONS order" do
+      expect(headings("full")).to eq(
+        [ "Stack", "Data Model", "Key Flows", "Background Jobs & Async", "Frontend", "Real-Time Features",
+          "File Storage & Rich Text", "API", "Deployment & DevOps", "Testing", "Getting Started" ]
+      )
     end
   end
 end

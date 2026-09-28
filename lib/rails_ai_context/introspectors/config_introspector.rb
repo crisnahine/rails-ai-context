@@ -4,7 +4,7 @@ module RailsAiContext
   module Introspectors
     # Extracts application configuration: cache store, session store,
     # timezone, middleware stack, initializers, credentials status.
-    class ConfigIntrospector
+    class ConfigIntrospector < Base
       extend StaticTier
       static_tier :runtime_only
 
@@ -17,12 +17,6 @@ module RailsAiContext
         "appsignal" => %w[appsignal]
       }.freeze
       private_constant :ERROR_MONITORS
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         result = {
@@ -46,15 +40,9 @@ module RailsAiContext
         end
 
         result.compact
-      rescue => e
-        { error: e.message }
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def detect_cache_store
         store = app.config.cache_store

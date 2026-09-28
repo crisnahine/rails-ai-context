@@ -22,7 +22,7 @@ module RailsAiContext
       # failure said. Forked copies drift, and a single run then emits two
       # different explanations for the same condition.
       def self.unavailable_reason
-        reason = RailsAiContext.static_reason
+        reason = RailsAiContext.static_reason_brief
         base = "requires a booted Rails app"
         reason ? "#{base} (#{reason})" : base
       end

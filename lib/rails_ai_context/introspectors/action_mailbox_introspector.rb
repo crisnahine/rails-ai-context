@@ -3,30 +3,18 @@
 module RailsAiContext
   module Introspectors
     # Discovers Action Mailbox setup: mailbox classes, routing patterns.
-    class ActionMailboxIntrospector
+    class ActionMailboxIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
           installed: defined?(ActionMailbox) ? true : false,
           mailboxes: extract_mailboxes
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def extract_mailboxes
         dir = File.join(root, "app/mailboxes")

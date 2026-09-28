@@ -12,6 +12,14 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
   let(:controller_concerns_dir) { File.join(tmpdir, "app", "controllers", "concerns") }
   let(:models_dir) { File.join(tmpdir, "app", "models") }
 
+  # What rails_get_active_support prints in its Concerns header: the
+  # directories' modules, less the validator classes sitting among them.
+  def active_support_total
+    RailsAiContext::Introspectors::ActiveSupportIntrospector
+      .new(RailsAiContext::StaticApp.new(tmpdir)).send(:extract_concerns)
+      .values.flatten.count { |m| !m[:validator] }
+  end
+
   before do
     FileUtils.mkdir_p(model_concerns_dir)
     FileUtils.mkdir_p(controller_concerns_dir)
@@ -400,6 +408,15 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         expect(text).to include("inside_block")
         expect(text).to include("after_block")
       end
+
+      # The listed name is `x` where the source says `def self.x`; the body
+      # is looked up under both.
+      it "renders the body of a def self. class method at detail:full" do
+        text = described_class.call(name: "MixedMethods", detail: "full").content.first[:text]
+
+        expect(text).to include("def self.after_block")
+        expect(text).to include("def inside_block")
+      end
     end
 
     context "callbacks in concerns" do
@@ -639,14 +656,389 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       it "agrees with the ActiveSupport introspector on the total" do
         listed = described_class.call.content.first[:text][/# Concerns \((\d+)\)/, 1].to_i
 
-        app = double("app", root: Pathname.new(tmpdir))
-        introspected = RailsAiContext::Introspectors::ActiveSupportIntrospector
-                         .new(app).send(:extract_concerns).values.flatten.size
-
-        expect(listed).to eq(introspected)
+        expect(listed).to eq(active_support_total)
       end
     end
   end
+  # An app inflection makes a directory segment an acronym, so the constant
+  # the file declares is not the one the path camelizes to. Listing the
+  # camelized path named a constant the app does not have, and the two
+  # spellings answered under two names.
+  context "on an app that keeps its concerns in app/concerns" do
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "concerns"))
+      File.write(File.join(tmpdir, "app", "concerns", "email_concern.rb"), <<~RUBY)
+        module EmailConcern
+          extend ActiveSupport::Concern
+
+          def deliver_digest
+          end
+        end
+      RUBY
+      File.write(File.join(models_dir, "agent.rb"), <<~RUBY)
+        class Agent < ApplicationRecord
+          include EmailConcern
+        end
+      RUBY
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "lists, reads and finds the includers of a concern there" do
+      listing = described_class.call.content.first[:text]
+      expect(listing).to include("**EmailConcern**")
+      expect(listing).to include("app/concerns/email_concern.rb")
+
+      text = described_class.call(name: "EmailConcern").content.first[:text]
+      expect(text).to include("deliver_digest")
+      expect(text).to include("Agent")
+    end
+  end
+
+  # A module that extends ActiveSupport::Concern is a concern wherever it
+  # lives: the services listing leaves one under app/services out as a
+  # concern, and this tool said the app had none.
+  context "on an app that keeps a concern outside every concerns directory" do
+    before do
+      csv = File.join(tmpdir, "app", "services", "reports", "csv")
+      FileUtils.mkdir_p(csv)
+      File.write(File.join(csv, "row_helpers.rb"), <<~RUBY)
+        module Reports
+          module Csv
+            module RowHelpers
+              extend ActiveSupport::Concern
+
+              def to_row
+              end
+            end
+          end
+        end
+      RUBY
+      File.write(File.join(csv, "exporter.rb"), <<~RUBY)
+        module Reports
+          module Csv
+            class Exporter
+              include RowHelpers
+            end
+          end
+        end
+      RUBY
+      nested = File.join(tmpdir, "app", "services", "accessibility", "concerns")
+      FileUtils.mkdir_p(nested)
+      File.write(File.join(nested, "queueable.rb"), "module Accessibility\n  module Concerns\n    module Queueable\n    end\n  end\nend\n")
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "lists it where it lives, under a type that says where" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## Service Concerns (2)")
+      expect(text).to include("**Reports::Csv::RowHelpers** - 1 method (`app/services/reports/csv/row_helpers.rb`)")
+      expect(text).to include("**Accessibility::Concerns::Queueable**")
+      expect(text).not_to include("Exporter")
+    end
+
+    it "answers it by name, and counts it as the ActiveSupport introspector does" do
+      text = described_class.call(name: "Reports::Csv::RowHelpers").content.first[:text]
+
+      expect(text).to include("# Reports::Csv::RowHelpers")
+      expect(text).to include("**Type:** service concern")
+      expect(text).to include("to_row")
+
+      listed = described_class.call.content.first[:text][/# Concerns \((\d+)\)/, 1].to_i
+      expect(listed).to eq(active_support_total)
+    end
+
+    it "is not a service in the services listing" do
+      expect(RailsAiContext::Introspectors::ServiceClasses.names(tmpdir)).to eq([ "Reports::Csv::Exporter" ])
+    end
+
+    # Every type a heading prints is a value the filter takes, spelled as the
+    # heading spells it or as the directory does; a closed enum refused
+    # `service`, and the CLI then fell back to listing everything.
+    it "filters to the type a heading prints, in either spelling" do
+      %w[service Service].each do |type|
+        text = described_class.call(type: type).content.first[:text]
+        expect(text).to include("## Service Concerns (2)")
+        expect(text).not_to include("Searchable")
+      end
+      expect(described_class.input_schema.to_h.dig(:properties, :type)).not_to have_key(:enum)
+    end
+
+    it "names the types the app has for a type it does not have" do
+      text = described_class.call(type: "widget").content.first[:text]
+
+      expect(text).to include("No concerns of type `widget`")
+      expect(text).to include("`controller`, `model`, `service`")
+    end
+
+    it "names only the types that hold a concern, not a directory holding .keep" do
+      FileUtils.rm_rf(controller_concerns_dir)
+      FileUtils.mkdir_p(controller_concerns_dir)
+      File.write(File.join(controller_concerns_dir, ".keep"), "")
+
+      text = described_class.call(type: "widget").content.first[:text]
+
+      expect(text).to include("`model`, `service`.")
+      expect(text).not_to include("`controller`")
+    end
+  end
+
+  # Huginn's LiquidDroppable defines nothing of its own: every method and the
+  # `include Enumerable` belong to nested Drop classes, which the answer
+  # credited to the concern.
+  context "on a concern whose nested classes carry the methods and includes" do
+    before do
+      File.write(File.join(model_concerns_dir, "liquid_droppable.rb"), <<~RUBY)
+        module LiquidDroppable
+          extend ActiveSupport::Concern
+
+          included do
+            include Comparable
+          end
+
+          def to_liquid
+          end
+
+          class Drop
+            include Enumerable
+
+            def each
+            end
+          end
+        end
+      RUBY
+      described_class.reset_cache!
+    end
+
+    it "reads includes and methods off the module's own body" do
+      text = described_class.call(name: "LiquidDroppable").content.first[:text]
+
+      expect(text).to include("**Includes:** Comparable")
+      expect(text).not_to include("Enumerable")
+      expect(text).to include("to_liquid")
+      expect(text).not_to include("`each`")
+      expect(described_class.call.content.first[:text]).to include("**LiquidDroppable** - 1 method")
+    end
+  end
+
+  # Mastodon's Cacheable writes its class methods in `module ClassMethods`,
+  # which ActiveSupport::Concern extends the includer with.
+  it "reads a concern's module ClassMethods as its class methods" do
+    File.write(File.join(model_concerns_dir, "cacheable.rb"), <<~RUBY)
+      module Cacheable
+        extend ActiveSupport::Concern
+
+        module ClassMethods
+          def cache_associated(*associations); end
+
+          def cache_ids; end
+        end
+      end
+    RUBY
+    described_class.reset_cache!
+
+    expect(described_class.call.content.first[:text]).to include("**Cacheable** - 2 methods")
+    text = described_class.call(name: "Cacheable").content.first[:text]
+    expect(text).to include("## Class Methods")
+    expect(text).to include("cache_ids")
+  end
+
+  # A concern that only adds private helpers read as an empty module.
+  context "on a concern whose methods are all private" do
+    before do
+      File.write(File.join(model_concerns_dir, "sanitizable.rb"), <<~RUBY)
+        module Sanitizable
+          extend ActiveSupport::Concern
+
+          private
+
+          def sanitize_body
+          end
+
+          def strip_tags
+          end
+        end
+      RUBY
+      described_class.reset_cache!
+    end
+
+    it "says how many private methods it has, and lists them" do
+      expect(described_class.call.content.first[:text]).to include("**Sanitizable** - 0 public methods (2 private)")
+
+      text = described_class.call(name: "Sanitizable").content.first[:text]
+      expect(text).to include("## Private Methods")
+      expect(text).to include("- `sanitize_body`")
+    end
+  end
+
+  # plugins/discourse-subscriptions/app/controllers/concerns/group.rb
+  # declares DiscourseSubscriptions::Group; named "Group" it collided with
+  # the core model and could not be asked for by its real name.
+  context "on a plugin concern that declares a namespace its path does not carry" do
+    before do
+      plugin = File.join(tmpdir, "plugins", "discourse-subscriptions")
+      FileUtils.mkdir_p(File.join(plugin, "app", "controllers", "concerns"))
+      File.write(File.join(plugin, "plugin.rb"), "# name: discourse-subscriptions\n")
+      File.write(File.join(plugin, "app", "controllers", "concerns", "group.rb"), <<~RUBY)
+        module DiscourseSubscriptions
+          module Group
+            extend ActiveSupport::Concern
+
+            def plan_group; end
+          end
+        end
+      RUBY
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "lists it and answers it under the constant the file declares" do
+      expect(described_class.call.content.first[:text]).to include("**DiscourseSubscriptions::Group**")
+
+      text = described_class.call(name: "DiscourseSubscriptions::Group").content.first[:text]
+      expect(text).to include("# DiscourseSubscriptions::Group")
+      expect(text).to include("plan_group")
+    end
+  end
+
+  # Mastodon keeps Admin::ExportControllerConcern and
+  # Settings::ExportControllerConcern; matching the last segment credited
+  # every includer of either to both.
+  context "on two concerns of one short name in two namespaces" do
+    before do
+      %w[admin settings].each do |ns|
+        FileUtils.mkdir_p(File.join(controller_concerns_dir, ns))
+        File.write(File.join(controller_concerns_dir, ns, "export_controller_concern.rb"),
+                   "module #{ns.camelize}::ExportControllerConcern\n  extend ActiveSupport::Concern\nend\n")
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "controllers", ns))
+      end
+      File.write(File.join(tmpdir, "app", "controllers", "admin", "export_domain_blocks_controller.rb"), <<~RUBY)
+        module Admin
+          class ExportDomainBlocksController < BaseController
+            include ExportControllerConcern
+            include ExportControllerConcern
+          end
+        end
+      RUBY
+      File.write(File.join(tmpdir, "app", "controllers", "settings", "exports_controller.rb"), <<~RUBY)
+        module Settings
+          class ExportsController < BaseController
+            include ExportControllerConcern
+
+            class Helper
+            end
+          end
+        end
+      RUBY
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "credits each includer to the concern its include resolves to, once, by its constant" do
+      admin = described_class.call(name: "Admin::ExportControllerConcern").content.first[:text]
+      expect(admin).to include("## Included By (1)")
+      expect(admin).to include("- Admin::ExportDomainBlocksController")
+
+      settings = described_class.call(name: "Settings::ExportControllerConcern").content.first[:text]
+      expect(settings).to include("## Included By (1)")
+      expect(settings).to include("- Settings::ExportsController")
+    end
+  end
+
+  # OpenProject::StaticRouting lives in lib_static; the answer searched
+  # app/lib_statics, which does not exist, and said nothing included it while
+  # a model does. Huginn's lib/location.rb includes a concern from app/concerns.
+  context "on concerns whose includers live outside the concern's own kind" do
+    before do
+      FileUtils.mkdir_p(File.join(tmpdir, "lib_static", "open_project"))
+      FileUtils.mkdir_p(File.join(tmpdir, "config"))
+      File.write(File.join(tmpdir, "config", "application.rb"),
+                 "module App\n  class Application < Rails::Application\n    config.autoload_once_paths << Rails.root.join(\"lib_static\").to_s\n    config.autoload_paths << Rails.root.join(\"lib\").to_s\n  end\nend\n")
+      File.write(File.join(tmpdir, "lib_static", "open_project", "static_routing.rb"),
+                 "module OpenProject\n  module StaticRouting\n    extend ActiveSupport::Concern\n  end\nend\n")
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models", "activities"))
+      File.write(File.join(tmpdir, "app", "models", "activities", "base_activity_provider.rb"),
+                 "class Activities::BaseActivityProvider\n  include OpenProject::StaticRouting\nend\n")
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "concerns"))
+      File.write(File.join(tmpdir, "app", "concerns", "liquid_droppable.rb"), "module LiquidDroppable\n  extend ActiveSupport::Concern\nend\n")
+      FileUtils.mkdir_p(File.join(tmpdir, "lib"))
+      File.write(File.join(tmpdir, "lib", "location.rb"), "class Location\n  include LiquidDroppable\nend\n")
+      File.write(File.join(tmpdir, "lib", "orphan.rb"), "module Orphan\n  extend ActiveSupport::Concern\nend\n")
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      RailsAiContext::PathResolver.clear_code_roots
+      described_class.reset_cache!
+    end
+
+    it "finds the includers wherever the app's code lives" do
+      static_routing = described_class.call(name: "OpenProject::StaticRouting").content.first[:text]
+      expect(static_routing).to include("## Included By (1)")
+      expect(static_routing).to include("- Activities::BaseActivityProvider")
+
+      expect(described_class.call(name: "LiquidDroppable").content.first[:text]).to include("- Location")
+    end
+
+    it "says what it searched when nothing includes the concern" do
+      text = described_class.call(name: "Orphan").content.first[:text]
+
+      expect(text).to include("_Nothing under app/, lib/ or lib_static/ includes this concern._")
+      expect(text).not_to include("app/libs")
+    end
+  end
+
+  describe "a concern whose namespace the path does not camelize to" do
+    before do
+      FileUtils.mkdir_p(File.join(model_concerns_dir, "sdg"))
+      File.write(File.join(model_concerns_dir, "sdg", "tag_list.rb"), <<~RUBY)
+        module SDG::TagList
+          extend ActiveSupport::Concern
+
+          def tag_list
+          end
+        end
+      RUBY
+      allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
+      described_class.reset_cache!
+    end
+
+    it "lists it under the constant the file declares" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**SDG::TagList**")
+      expect(text).not_to include("Sdg::TagList")
+    end
+
+    it "answers the camelized spelling under the declared name" do
+      text = described_class.call(name: "Sdg::TagList").content.first[:text]
+
+      expect(text).to include("# SDG::TagList")
+      expect(text).to include("app/models/concerns/sdg/tag_list.rb")
+    end
+
+    it "answers the declared spelling under the same name" do
+      text = described_class.call(name: "SDG::TagList").content.first[:text]
+
+      expect(text).to include("# SDG::TagList")
+    end
+
+    it "suggests the declared name for a partial one" do
+      text = described_class.call(name: "TagList").content.first[:text]
+
+      expect(text).to include("SDG::TagList")
+      expect(text).not_to include("Sdg::TagList")
+    end
+
+    it "is named the same way by the ActiveSupport introspector" do
+      names = RailsAiContext::Introspectors::ActiveSupportIntrospector
+                .new(RailsAiContext::StaticApp.new(tmpdir)).send(:extract_concerns)
+                .values.flatten.map { |m| m[:name] }
+
+      expect(names).to include("SDG::TagList")
+      expect(names).not_to include("Sdg::TagList")
+    end
+  end
+
   # A class under app/models/concerns that subclasses ActiveModel::Validator
   # is not a concern: nothing includes it, and `validates_with` is how it is
   # wired. The type came from the directory alone, so 37 validators on one app
@@ -658,8 +1050,8 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
       described_class.reset_cache!
       FileUtils.mkdir_p(validator_dir)
       FileUtils.mkdir_p(File.join(tmpdir, "app", "models"))
-      File.write(File.join(validator_dir, "address_validator.rb"), <<~RUBY)
-        class AddressValidator < ActiveModel::Validator
+      File.write(File.join(validator_dir, "zip_code_validator.rb"), <<~RUBY)
+        class ZipCodeValidator < ActiveModel::Validator
           def validate(record); end
         end
       RUBY
@@ -672,21 +1064,67 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         class Order < ApplicationRecord
           validates :email, email: true
 
-          validates_with AddressValidator
+          validates_with ZipCodeValidator
         end
       RUBY
       allow(described_class).to receive(:rails_app).and_return(RailsAiContext::StaticApp.new(tmpdir))
     end
 
+    # A concern that nests its own validator class declares both, and the
+    # file is named for the concern. Reading every declaration in the file
+    # filed the concern as a validator, and the two tools then disagreed on
+    # how many concerns the app has.
+    context "when the file is a concern that nests a validator class" do
+      before do
+        File.write(File.join(validator_dir, "date_validation.rb"), <<~RUBY)
+          module DateValidation
+            extend ActiveSupport::Concern
+
+            included do
+              validates_with DateValidator
+            end
+
+            class DateValidator < ActiveModel::Validator
+              def validate(record); end
+            end
+          end
+        RUBY
+        described_class.reset_cache!
+      end
+
+      it "reads it as a concern" do
+        text = described_class.call(name: "DateValidation").content.first[:text]
+
+        expect(text).to include("**Type:** model concern")
+        expect(text).not_to include("**Type:** validator")
+      end
+
+      it "lists it among the concerns, counted as the ActiveSupport introspector counts it" do
+        listing = described_class.call.content.first[:text]
+        listed = listing[/# Concerns \((\d+)\)/, 1].to_i
+
+        expect(listing).to include("**DateValidation**")
+        expect(listed).to eq(active_support_total)
+      end
+    end
+
     it "calls it a validator rather than a model concern" do
-      text = described_class.call(name: "AddressValidator").content.first[:text]
+      text = described_class.call(name: "ZipCodeValidator").content.first[:text]
 
       expect(text).to include("**Type:** validator")
       expect(text).not_to include("**Type:** model concern")
     end
 
+    # The name arrives in whatever spelling the caller has, and the chain
+    # walk compares it against the constant the file declares.
+    it "calls it a validator when asked for by its file name" do
+      text = described_class.call(name: "zip_code_validator").content.first[:text]
+
+      expect(text).to include("**Type:** validator")
+    end
+
     it "names the model that wires it with validates_with" do
-      text = described_class.call(name: "AddressValidator").content.first[:text]
+      text = described_class.call(name: "ZipCodeValidator").content.first[:text]
 
       expect(text).to include("Order")
       expect(text).not_to include("Nothing in app/models includes this concern")
@@ -697,7 +1135,7 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
     it "finds the namespaced and hash-rocket wirings" do
       File.write(File.join(tmpdir, "app", "models", "order.rb"), <<~RUBY)
         class Order < ApplicationRecord
-          validates_with Checks::AddressValidator
+          validates_with Checks::ZipCodeValidator
         end
       RUBY
       File.write(File.join(tmpdir, "app", "models", "account.rb"), <<~RUBY)
@@ -706,7 +1144,7 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
         end
       RUBY
 
-      expect(described_class.call(name: "AddressValidator").content.first[:text]).to include("- Order")
+      expect(described_class.call(name: "ZipCodeValidator").content.first[:text]).to include("- Order")
       expect(described_class.call(name: "EmailValidator").content.first[:text]).to include("- Account")
     end
 
@@ -725,12 +1163,12 @@ RSpec.describe RailsAiContext::Tools::GetConcern do
           extend ActiveSupport::Concern
 
           included do
-            validates_with AddressValidator
+            validates_with ZipCodeValidator
           end
         end
       RUBY
 
-      text = described_class.call(name: "AddressValidator").content.first[:text]
+      text = described_class.call(name: "ZipCodeValidator").content.first[:text]
 
       expect(text).to include("- Addressable (concern)")
       expect(text).not_to include("No model or concern in app/models wires this validator")

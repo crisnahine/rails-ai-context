@@ -4,8 +4,10 @@ require "spec_helper"
 require "tmpdir"
 
 RSpec.describe RailsAiContext::Fingerprinter do
-  # A throwaway copy of the fixture app: these examples push mtimes into the
-  # future, which must not follow the suite back into spec/internal.
+  # A throwaway copy of the fixture app for every example here. The shared
+  # spec/internal is written by some twenty other specs and by any second run
+  # in the same checkout, so two reads of it a moment apart can disagree; and
+  # these examples touch files, which must not reach anyone else's reads.
   let(:app) do
     @tmp_app_root = Dir.mktmpdir
     FileUtils.cp_r(File.join(Rails.root.to_s, "."), @tmp_app_root)
@@ -17,60 +19,77 @@ RSpec.describe RailsAiContext::Fingerprinter do
 
   describe ".compute" do
     it "returns a hex digest string" do
-      result = described_class.compute(Rails.application)
+      result = described_class.compute(app)
       expect(result).to match(/\A[a-f0-9]{64}\z/)
     end
 
     it "returns the same value on repeated calls with no changes" do
-      a = described_class.compute(Rails.application)
-      b = described_class.compute(Rails.application)
+      a = described_class.compute(app)
+      b = described_class.compute(app)
       expect(a).to eq(b)
     end
 
     it "detects changes to .rake files" do
-      before = described_class.compute(Rails.application)
-      rake_file = File.join(Rails.root, "lib/tasks/example.rake")
-      original_mtime = File.mtime(rake_file)
-
-      # Touch the file to change mtime
-      FileUtils.touch(rake_file)
-      after = described_class.compute(Rails.application)
-
-      # Restore original mtime
-      File.utime(original_mtime, original_mtime, rake_file)
+      before = described_class.compute(app)
+      File.utime(Time.now + 5, Time.now + 5, File.join(app.root, "lib/tasks/example.rake"))
+      after = described_class.compute(app)
 
       expect(before).not_to eq(after)
     end
 
     it "detects changes to .erb view files" do
-      before = described_class.compute(Rails.application)
-      erb_file = File.join(Rails.root, "app/views/posts/index.html.erb")
-      original_mtime = File.mtime(erb_file)
-
-      FileUtils.touch(erb_file)
-      after = described_class.compute(Rails.application)
-
-      File.utime(original_mtime, original_mtime, erb_file)
+      before = described_class.compute(app)
+      File.utime(Time.now + 5, Time.now + 5, File.join(app.root, "app/views/posts/index.html.erb"))
+      after = described_class.compute(app)
 
       expect(before).not_to eq(after)
     end
 
     it "detects changes to .js stimulus controllers" do
-      # Use permanent hello_controller.js fixture
-      js_file = File.join(Rails.root, "app/javascript/controllers/hello_controller.js")
-      original_mtime = File.mtime(js_file)
-
-      before = described_class.compute(Rails.application)
-      FileUtils.touch(js_file)
-      after = described_class.compute(Rails.application)
-
-      File.utime(original_mtime, original_mtime, js_file)
+      before = described_class.compute(app)
+      File.utime(Time.now + 5, Time.now + 5, File.join(app.root, "app/javascript/controllers/hello_controller.js"))
+      after = described_class.compute(app)
 
       expect(before).not_to eq(after)
     end
 
+    it "detects a change to a controller outside app/javascript" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/webpacker/controllers"))
+        js_file = File.join(root, "app/webpacker/controllers/bulk_form_controller.js")
+        File.write(js_file, %(import { Controller } from "@hotwired/stimulus";\n))
+        app = RailsAiContext::StaticApp.new(root)
+
+        mark = described_class.mark(app)
+        File.utime(Time.now + 5, Time.now + 5, js_file)
+
+        expect(described_class).to be_stale(app, mark)
+      end
+    end
+
     it "includes app/components in WATCHED_DIRS" do
       expect(described_class::WATCHED_DIRS).to include("app/components")
+    end
+
+    # The job introspector reads three directories, so an app that keeps its
+    # workers in app/sidekiq served a cached answer that had never seen the
+    # edit.
+    it "watches every directory the job introspector reads" do
+      expect(described_class::WATCHED_DIRS)
+        .to include(*RailsAiContext::Introspectors::JobIntrospector::JOB_DIRS)
+      expect(described_class::RESOLVED_KINDS)
+        .to include(*RailsAiContext::Introspectors::JobIntrospector::JOB_DIRS)
+    end
+
+    it "detects a change to a worker in app/sidekiq" do
+      dir = File.join(app.root, "app/sidekiq")
+      FileUtils.mkdir_p(dir)
+
+      before = described_class.compute(app)
+      File.write(File.join(dir, "fingerprint_probe_job.rb"), "class FingerprintProbeJob; include Sidekiq::Job; end\n")
+      after = described_class.compute(app)
+
+      expect(before).not_to eq(after)
     end
 
     it "includes package.json in WATCHED_FILES" do
@@ -104,16 +123,12 @@ RSpec.describe RailsAiContext::Fingerprinter do
     end
 
     it "detects changes to package.json" do
-      package_json = File.join(Rails.root, "package.json")
-      next unless File.exist?(package_json)
+      package_json = File.join(app.root, "package.json")
+      File.write(package_json, "{}\n") unless File.exist?(package_json)
 
-      before = described_class.compute(Rails.application)
-      original_mtime = File.mtime(package_json)
-
-      FileUtils.touch(package_json)
-      after = described_class.compute(Rails.application)
-
-      File.utime(original_mtime, original_mtime, package_json)
+      before = described_class.compute(app)
+      File.utime(Time.now + 5, Time.now + 5, package_json)
+      after = described_class.compute(app)
 
       expect(before).not_to eq(after)
     end
@@ -145,12 +160,6 @@ RSpec.describe RailsAiContext::Fingerprinter do
       File.utime(Time.now + 5, Time.now + 5, path)
       expect(described_class.changed_since(app.root, Time.now)).to include("app/models")
       expect(described_class.changed_since(app.root, Time.now + 10)).to eq([])
-    end
-  end
-
-  describe ".watched_files" do
-    it "lists the root manifests that exist" do
-      expect(described_class.watched_files(app.root)).to include(File.join(app.root, "Gemfile.lock"))
     end
   end
 end

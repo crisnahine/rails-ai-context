@@ -334,10 +334,8 @@ module RailsAiContext
         cmd
       end
 
-      # `rails ai:serve` for in-Gemfile installs; `rails-ai-context serve` for
-      # standalone installs where the rake task does not exist.
       def serve_cmd
-        standalone_install? ? "rails-ai-context serve" : "rails ai:serve"
+        RailsAiContext::InstallMode.command(:serve, standalone: standalone_install?)
       end
 
       # Delegates to InstallMode (shared with the CLI surfaces), memoized per

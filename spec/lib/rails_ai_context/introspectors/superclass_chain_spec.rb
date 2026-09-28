@@ -96,4 +96,97 @@ RSpec.describe RailsAiContext::Introspectors::SuperclassChain do
       expect(described_class.to("# just a comment\n", bases: %w[ActiveModel::Validator])).to eq([])
     end
   end
+
+  # Ruby resolves a bare superclass from the enclosing namespace outward, and
+  # three walks each wrote that loop, two of them innermost-first and one
+  # bare-first.
+  describe ".resolve_in_scope" do
+    let(:known) { %w[Fasp::BaseWorker BaseWorker Trackers::Base] }
+
+    it "prefers the nearest enclosing namespace over the bare name" do
+      resolved = described_class.resolve_in_scope("Fasp::BackfillWorker", "BaseWorker") do |name|
+        name if known.include?(name)
+      end
+
+      expect(resolved).to eq("Fasp::BaseWorker")
+    end
+
+    it "falls back to the bare name when no namespace carries it" do
+      resolved = described_class.resolve_in_scope("Other::Thing", "BaseWorker") do |name|
+        name if known.include?(name)
+      end
+
+      expect(resolved).to eq("BaseWorker")
+    end
+
+    # `class CostQuery::Export < Export` names the top-level Export: the
+    # nearest-scope candidate here is the class itself, and resolving a class
+    # to its own name makes the walk read it as its own parent.
+    it "never resolves a class to itself" do
+      resolved = described_class.resolve_in_scope("CostQuery::Export", "Export") do |name|
+        name if %w[CostQuery::Export Export].include?(name)
+      end
+
+      expect(resolved).to eq("Export")
+    end
+
+    it "answers what the block answers, not the name" do
+      resolved = described_class.resolve_in_scope("Trackers::Null", "Base") { |name| known.index(name) }
+
+      expect(resolved).to eq(2)
+    end
+
+    it "answers nothing for no superclass" do
+      expect(described_class.resolve_in_scope("Fasp::BackfillWorker", nil) { |n| n }).to be_nil
+    end
+  end
+
+  # Three callers answered "is this an abstract base" three ways, and
+  # disagreed about ApplicationJobBase.
+  describe ".abstract_base?" do
+    it "calls a Base-named class with a subclass a base" do
+      expect(described_class.abstract_base?("Trackers::Base", inherited: true)).to be(true)
+      expect(described_class.abstract_base?("ApplicationJobBase", inherited: true)).to be(true)
+      expect(described_class.abstract_base?("BaseService", inherited: true)).to be(true)
+    end
+
+    # A base nobody inherits from is somebody's only job.
+    it "does not call a Base-named class with no subclass a base" do
+      expect(described_class.abstract_base?("BaseService", inherited: false)).to be(false)
+    end
+
+    # Rails' own base is one whether or not this app got round to using it.
+    it "calls an Application base one with no subclass" do
+      expect(described_class.abstract_base?("ApplicationService", inherited: false)).to be(true)
+      expect(described_class.abstract_base?("Admin::ApplicationJob", inherited: false)).to be(true)
+    end
+
+    # Mastodon's FollowService has a subclass and is called everywhere.
+    it "does not call a subclassed service with an ordinary name a base" do
+      expect(described_class.abstract_base?("FollowService", inherited: true)).to be(false)
+    end
+
+    # "Base" anywhere in a name caught the word rather than the role:
+    # TimeBasedJob and KnowledgeBaseImporter are the work, not the base of it.
+    it "does not read the word base inside an ordinary name" do
+      %w[TimeBasedJob RoleBasedAccessWorker KnowledgeBaseImporter DatabaseCleanupJob].each do |name|
+        expect(described_class.abstract_base?(name, inherited: true)).to be(false), name
+      end
+    end
+
+    it "still reads the shapes apps write a base in" do
+      %w[Base BaseWorker JobBase BaseService BaseBookmarkable DeriveProgressValuesBase
+         BustCacheBaseWorker Jobs::Base].each do |name|
+        expect(described_class.abstract_base?(name, inherited: true)).to be(true), name
+      end
+    end
+  end
+
+  describe ".conventional_base?" do
+    it "reads an engine's own copy of the layer base" do
+      expect(described_class.conventional_base?("Admin::ApplicationController", "ApplicationController")).to be(true)
+      expect(described_class.conventional_base?("ApplicationController", "ApplicationController")).to be(true)
+      expect(described_class.conventional_base?("ReportsController", "ApplicationController")).to be(false)
+    end
+  end
 end

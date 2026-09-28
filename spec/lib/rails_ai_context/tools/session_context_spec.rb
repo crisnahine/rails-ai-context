@@ -71,6 +71,27 @@ RSpec.describe RailsAiContext::Tools::SessionContext do
       expect(annotations.read_only_hint).to eq(true)
     end
   end
+
+  # The note tells an agent which surface cannot track a session; in a
+  # standalone install the CLI is the binary, not a rake task.
+  describe "the note about the CLI" do
+    def note(standalone:)
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(standalone)
+      RailsAiContext::Tools::BaseTool.session_reset!
+      described_class.call(action: "status").content.first[:text]
+    end
+
+    it "names the binary in a standalone install" do
+      text = note(standalone: true)
+
+      expect(text).to include("CLI (`rails-ai-context tool`)")
+      expect(text).not_to include("rails ai:tool")
+    end
+
+    it "names the rake task where the app bundles the gem" do
+      expect(note(standalone: false)).to include("CLI (`rails ai:tool`)")
+    end
+  end
 end
 
 RSpec.describe "BaseTool session helpers" do

@@ -125,6 +125,9 @@ module RailsAiContext
           text_response(lines.join("\n"))
 
         when "standard"
+          # One read per template: the listing and the hydrator below both
+          # want the same file's metadata.
+          metadata = Hash.new { |h, name| h[name] = extract_view_metadata(name) }
           all_dirs = view_groups(templates, partials)
           lines = views_header_lines(templates, partials, layouts)
 
@@ -146,7 +149,7 @@ module RailsAiContext
             lines << "## #{group_heading(ctrl)}" unless controller && all_dirs.size == 1
             ctrl_templates.sort.each do |name, meta|
               detail_parts = []
-              extra = extract_view_metadata(name)
+              extra = metadata[name]
 
               if meta[:phlex]
                 # Phlex views: show components, helpers, stimulus, ivars
@@ -185,9 +188,7 @@ module RailsAiContext
             # The same reader the introspector uses, so the hydrator cannot
             # be handed a name the listing never showed: a bare scan read a
             # CSS `@page` rule and a handle inside a quoted string as ivars.
-            all_ivars = templates.flat_map { |path, _meta|
-              Introspectors::ViewTemplateIntrospector.ivars_in(read_view_content(path), path: path)
-            }.uniq
+            all_ivars = templates.flat_map { |path, _meta| metadata[path][:ivars] }.uniq
             hydration = Hydrators::ViewHydrator.call(all_ivars, context: cached_context)
             hydration_text = Hydrators::HydrationFormatter.format(hydration)
             lines << hydration_text << "" unless hydration_text.empty?
@@ -271,27 +272,22 @@ module RailsAiContext
         lines
       end
 
-      # The template and partial maps exclude app/views/layouts, so the
-      # directory is the only statement of what is in it.
+      # The template map excludes app/views/layouts, so the directory is the
+      # only statement of what is in it.
       private_class_method def self.layout_files
-        layouts_dir = rails_app.root.join("app", "views", "layouts")
-        return [] unless Dir.exist?(layouts_dir)
-
-        Dir.glob(File.join(layouts_dir, "*")).reject { |f| File.directory?(f) }.sort
+        RailsAiContext::ViewFile.each(rails_app.root.to_s, "layouts/*")
+          .select { |path, _relative| RailsAiContext::ViewFile.layout?(path) }
+          .map(&:first).sort
       end
 
       private_class_method def self.list_layouts(detail)
-        layouts_dir = rails_app.root.join("app", "views", "layouts")
-        return text_response("No app/views/layouts/ directory found.") unless Dir.exist?(layouts_dir)
-
         files = layout_files
-        return text_response("No layout files found.") if files.empty?
+        return text_response("No app/views/layouts/ directory found.") if files.empty?
 
-        views_dir = rails_app.root.join("app", "views")
         lines = [ "# Layouts (#{count_phrase(files.size, "file")})", "" ]
         files.each do |path|
           relative = "layouts/#{File.basename(path)}"
-          located = RailsAiContext::SafePath.locate(relative, under: views_dir, root: rails_app.root)
+          located = RailsAiContext::ViewFile.locate(rails_app.root.to_s, relative)
           next unless located.ok?
 
           real = located.realpath
@@ -314,8 +310,8 @@ module RailsAiContext
         when :too_large then return text_response("File too large: #{path}")
         when :missing
           dir = File.dirname(path.to_s.delete_prefix("app/views/"))
-          views_dir = rails_app.root.join("app", "views")
-          siblings = Dir.glob(File.join(views_dir, dir, "*")).map { |f| "#{dir}/#{File.basename(f)}" }.sort.first(10)
+          siblings = RailsAiContext::ViewFile.each(rails_app.root.to_s, File.join(dir, "*"))
+            .map { |_file, relative| relative }.sort.first(10)
           hint = siblings.any? ? " Files in #{dir}/: #{siblings.join(', ')}" : ""
           return empty_response("View not found: #{path}.#{hint}")
         end
@@ -398,44 +394,14 @@ module RailsAiContext
         result = { ivars: ivars, turbo: turbo.uniq }
 
         # For Phlex views (.rb), extract component renders and helper calls
-        if relative_path.end_with?(".rb") && phlex_view_content?(content)
-          result[:components] = extract_phlex_components(content)
-          result[:helpers] = extract_phlex_helpers(content)
+        if Introspectors::ViewTemplateIntrospector.phlex_view?(relative_path, content)
+          result[:components] = Introspectors::ViewTemplateIntrospector.extract_phlex_component_renders(content)
+          result[:helpers] = Introspectors::ViewTemplateIntrospector.extract_phlex_helper_calls(content)
         end
 
         result
       rescue => e
         RailsAiContext.debug_fail(e, { ivars: [], turbo: [], components: [], helpers: [] }, label: "extract_view_metadata")
-      end
-
-      # Detect if content is a Phlex view class
-      private_class_method def self.phlex_view_content?(content)
-        content.match?(/class\s+\S+\s*<\s*\S+/) && content.match?(/def\s+view_template\b/)
-      end
-
-      # Extract component render calls from Phlex Ruby DSL
-      private_class_method def self.extract_phlex_components(content)
-        components = Set.new
-        content.scan(/render[\s(]+([A-Z]\w+(?:::\w+)*)\.new/).each do |match|
-          components << match[0]
-        end
-        components.to_a.sort
-      end
-
-      # Extract helper method calls from Phlex views
-      PHLEX_HELPERS = %w[
-        link_to image_tag content_for button_to form_with form_for
-        content_tag tag number_to_currency number_to_human
-        time_ago_in_words distance_of_time_in_words
-        truncate pluralize raw sanitize dom_id
-      ].freeze
-
-      private_class_method def self.extract_phlex_helpers(content)
-        helpers = []
-        PHLEX_HELPERS.each do |method|
-          helpers << method if content.match?(/\b#{method}\b/)
-        end
-        helpers
       end
 
       # Scan templates that render a partial to extract locals keys
@@ -459,8 +425,7 @@ module RailsAiContext
       end
 
       private_class_method def self.read_from_disk(controller:, path:, detail:)
-        views_dir = rails_app.root.join("app", "views")
-        unless Dir.exist?(views_dir)
+        if RailsAiContext::PathResolver.view_dirs(rails_app.root.to_s).empty?
           note = api_only_note("app/views")
           return text_response(note) if note
 
@@ -476,10 +441,10 @@ module RailsAiContext
         return list_layouts(detail) if controller&.downcase == "layouts"
 
         # List views from disk
-        files = Dir.glob(File.join(views_dir, "**", "*"))
-          .reject { |f| File.directory?(f) || f.include?("/layouts/") }
-          .select { |f| RailsAiContext::ViewFile.template?(f) }
-          .map { |f| f.sub("#{views_dir}/", "") }
+        files = RailsAiContext::ViewFile.each(rails_app.root.to_s)
+          .reject { |path, _relative| path.include?("/layouts/") }
+          .select { |path, _relative| RailsAiContext::ViewFile.template?(path) }
+          .map { |_path, relative| relative }
           .sort
 
         if controller

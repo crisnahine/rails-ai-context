@@ -19,9 +19,16 @@ module RailsAiContext
       # One link: the class, the superclass it names, and the source declaring it.
       Link = Data.define(:name, :superclass, :source)
 
+      # A validator is wired with `validates_with` or an option, never `include`, so a mixin
+      # catalogue must not count one.
+      VALIDATOR_BASES = %w[ActiveModel::Validator ActiveModel::EachValidator].freeze
+
       # Hops, not names: a chain longer than this is a cycle, or a hierarchy
       # no reader is following either.
       MAX_DEPTH = 8
+
+      # Application*, Base* or *Base[Worker|Job|Service]; Base mid-name is a word (TimeBasedJob).
+      ABSTRACT_BASE_NAME = /\A(?:Application\w*|Base\w*|\w+Base(?:Worker|Job|Service)?)\z/
 
       module_function
 
@@ -31,11 +38,14 @@ module RailsAiContext
       # @param source [String] the file's source
       # @param bases [Array<String>] the superclass names the walk is looking for
       # @param lookup [#call, nil] constant name -> that class's source
+      # @param only [String, nil] answer for this class name alone, ignoring the file's other
+      #   declarations (a concern that nests a validator class declares both)
       # @return [Array<Link>]
-      def to(source, bases:, lookup: nil, seen: [])
+      def to(source, bases:, lookup: nil, seen: [], only: nil)
         return [] if source.nil? || seen.size >= MAX_DEPTH
 
         declarations = DeclaredConstant.declarations(source)
+        declarations = [ DeclaredConstant.declaration_named(declarations, only) ].compact if only
         return [] if declarations.empty?
 
         declaration = declarations.find { |d| bases.include?(d.superclass) }
@@ -55,6 +65,61 @@ module RailsAiContext
         []
       end
 
+      # The validator base the class `name` reaches, or nil for anything else. A concern that
+      # nests its own validator class declares both.
+      #
+      # The name arrives in whatever spelling the caller has, and a file name
+      # is not the constant a class declares.
+      def validator_base(source, name:, lookup: nil)
+        constant = name.to_s.split("::").last.to_s.camelize
+        to(source, bases: VALIDATOR_BASES, lookup: lookup, only: constant).last&.superclass
+      end
+
+      # Needs both the name and a subclass: an unsubclassed Base is called directly, and a
+      # subclassed service is still a service. Rails' Application* bases count either way.
+      def abstract_base?(name, inherited:)
+        segment = name.to_s.split("::").last.to_s
+        return false unless ABSTRACT_BASE_NAME.match?(segment)
+
+        inherited || segment.start_with?("Application")
+      end
+
+      # The name half alone, for a caller with no inheritance to check (a directory glob).
+      def abstract_base_name?(name)
+        ABSTRACT_BASE_NAME.match?(name.to_s.split("::").last.to_s)
+      end
+
+      # Rails' own base for one layer, plain or an engine's namespaced copy.
+      def conventional_base?(name, base)
+        name = name.to_s
+        name == base || name.end_with?("::#{base}")
+      end
+
+      # Ruby resolves a bare superclass from the enclosing namespace outward,
+      # so `Fasp::BackfillWorker < BaseWorker` means Fasp::BaseWorker where
+      # that exists and ::BaseWorker where it does not.
+      #
+      # @param declared [String] the subclass's fully qualified name
+      # @param parent [String, nil] the superclass as the source writes it
+      # @yieldparam candidate [String] a name to try, nearest scope first
+      # @return [Object, nil] the block's first truthy answer
+      def resolve_in_scope(declared, parent)
+        parent = parent.to_s.delete_prefix("::")
+        return nil if parent.empty?
+
+        scope = declared.to_s.split("::")[0..-2]
+        scope.size.downto(0) do |i|
+          candidate = (scope.first(i) + [ parent ]).join("::")
+          # `class CostQuery::Export < Export` names the top-level Export; the
+          # nearest candidate is the class itself, which is nobody's parent.
+          next if candidate == declared.to_s
+
+          found = yield(candidate)
+          return found if found
+        end
+        nil
+      end
+
       # A callable from a constant name to the source of the file declaring
       # it, probed against the app's autoload roots rather than a walk over
       # the tree: Zeitwerk resolves a constant to one path under one root, and
@@ -72,27 +137,13 @@ module RailsAiContext
         roots = nil
         sources = {}
         lambda do |name|
-          roots ||= autoload_roots(root)
+          roots ||= PathResolver.autoload_roots(root)
           sources.fetch(name) do
-            relative = "#{name.to_s.underscore}.rb"
-            path = roots.lazy.map { |dir| File.join(dir, relative) }.find { |candidate| File.file?(candidate) }
+            path = PathResolver.file_for_constant(root, name, roots: roots)
             sources[name] = path && SafeFile.read(path)
           end
         end
       end
-
-      # Every directory Rails autoloads constants from: each app/* directory,
-      # the concerns directories inside them (railties globs `{*,*/concerns}`),
-      # and lib. Packs and in-repo engines come with PathResolver.
-      def autoload_roots(root)
-        app_trees = PathResolver.dirs_for(root, "app")
-        app_trees.flat_map { |tree| Dir.glob(File.join(tree, "*")).select { |dir| File.directory?(dir) } } +
-          ConcernPaths.resolve(root) +
-          PathResolver.dirs_for(root, "lib")
-      rescue StandardError => e
-        RailsAiContext.debug_fail(e, [], label: "SuperclassChain.autoload_roots")
-      end
-      private_class_method :autoload_roots
     end
   end
 end

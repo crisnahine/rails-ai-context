@@ -47,8 +47,29 @@ RSpec.describe RailsAiContext::Introspectors::ConnectionPoolIntrospector do
       expect(has_extras).to eq(true).or(eq(false))
     end
 
+    it "lists a replica, which configs_for hides unless asked" do
+      configurations = ActiveRecord::DatabaseConfigurations.new(
+        Rails.env => { "primary" => { "adapter" => "sqlite3", "database" => ":memory:" },
+                       "replica" => { "adapter" => "sqlite3", "database" => ":memory:", "replica" => true } }
+      )
+      allow(ActiveRecord::Base).to receive(:configurations).and_return(configurations)
+
+      databases = described_class.new(Rails.application).call[:databases]
+
+      expect(databases.map { |d| [ d[:name], d[:replica] ] }).to eq([ [ "primary", false ], [ "replica", true ] ])
+    end
+
     it "returns pool_handlers as array" do
       expect(result[:pool_handlers]).to be_an(Array)
+    end
+
+    it "skips a role whose pool list raises" do
+      handler = instance_double(ActiveRecord::ConnectionAdapters::ConnectionHandler)
+      allow(handler).to receive(:connection_pool_list).with(:writing).and_return([ :pool ])
+      allow(handler).to receive(:connection_pool_list).with(:reading).and_raise(ArgumentError)
+      allow(ActiveRecord::Base).to receive(:connection_handler).and_return(handler)
+
+      expect(result[:pool_handlers]).to eq([ { role: "writing", pool_count: 1 } ])
     end
 
     it "automatic_shard_selector is boolean" do

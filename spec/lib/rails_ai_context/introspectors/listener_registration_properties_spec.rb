@@ -40,6 +40,7 @@ RSpec.describe "Listener registration properties" do
           def run
             @state = 1
             scope.where(id: 1).order(:id)
+            config.autoload_paths += %w[lib_static]
 
             if @state == 1
               config.cache_store = :memory_store
@@ -67,7 +68,7 @@ RSpec.describe "Listener registration properties" do
     Dir.glob(File.join(listeners_dir, "*.rb")).sort.filter_map { |path|
       name = File.basename(path, ".rb").split("_").map(&:capitalize).join
       klass = RailsAiContext::Introspectors::Listeners.const_get(name)
-      klass unless klass == RailsAiContext::Introspectors::Listeners::BaseListener
+      klass if klass.is_a?(Class) && klass != RailsAiContext::Introspectors::Listeners::BaseListener
     }
   end
 

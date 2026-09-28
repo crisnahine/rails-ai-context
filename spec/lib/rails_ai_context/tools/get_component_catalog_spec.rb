@@ -38,6 +38,72 @@ RSpec.describe RailsAiContext::Tools::GetComponentCatalog do
       expect(text).to include("2 slots")
     end
 
+    # "559 components (403 ViewComponent, 0 Phlex)" leaves 156 in no bucket
+    # and reads as an arithmetic error.
+    it "names the components it could not place, so the header adds up" do
+      component_data[:summary] = { total: 3, view_component: 2, phlex: 0, unclassified: 1,
+                                   with_slots: 2, with_previews: 0 }
+
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("**Total:** 3 components (2 ViewComponent, 0 Phlex, 1 of no known base class)")
+    end
+
+    it "leaves the remainder out of the header when every component is placed" do
+      text = described_class.call(detail: "summary").content.first[:text]
+
+      expect(text).to include("**Total:** 2 components (2 ViewComponent, 0 Phlex)")
+    end
+
+    # One short name under three namespaces is a question, not a resolution:
+    # answering with the first in sorted order gave one component's props for
+    # another's.
+    context "when a short name names more than one component" do
+      before do
+        component_data[:components] = [
+          { name: "Activities::ItemComponent", type: :view_component,
+            file: "app/components/activities/item_component.rb", props: [], slots: [] },
+          { name: "Admin::Enumerations::ItemComponent", type: :view_component,
+            file: "app/components/admin/enumerations/item_component.rb", props: [], slots: [] }
+        ]
+      end
+
+      it "lists them and asks for the full name" do
+        text = described_class.call(component: "ItemComponent").content.first[:text]
+
+        expect(text).to include("Component 'ItemComponent' names 2 components:")
+        expect(text).to include("**Activities::ItemComponent** (`app/components/activities/item_component.rb`)")
+        expect(text).to include("**Admin::Enumerations::ItemComponent**")
+        expect(text).to include("Activities::ItemComponent`")
+      end
+
+      it "answers the one asked for by its full name" do
+        text = described_class.call(component: "Admin::Enumerations::ItemComponent").content.first[:text]
+
+        expect(text).to include("# Admin::Enumerations::ItemComponent")
+        expect(text).not_to include("names 2 components")
+      end
+    end
+
+    it "finds a namespaced component by the name without its namespace" do
+      component_data[:components][0][:name] = "Admin::Flash::AlertComponent"
+
+      text = described_class.call(component: "alert").content.first[:text]
+
+      expect(text).to include("# Admin::Flash::AlertComponent")
+    end
+
+    it "names the base components apart from the catalog" do
+      component_data[:bases] = [ { name: "Wizard::BaseComponent", type: :view_component,
+                                   file: "app/components/wizard/base_component.rb", props: [], slots: [] } ]
+
+      text = described_class.call(detail: "summary").content.first[:text]
+      expect(text).to include("_Base classes not counted as components: Wizard::BaseComponent.")
+
+      base = described_class.call(component: "Wizard::BaseComponent").content.first[:text]
+      expect(base).to include("# Wizard::BaseComponent")
+    end
+
     it "returns standard detail with props and slots" do
       response = described_class.call(detail: "standard")
       text = response.content.first[:text]

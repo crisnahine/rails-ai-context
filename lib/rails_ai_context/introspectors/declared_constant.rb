@@ -21,6 +21,9 @@ module RailsAiContext
     module DeclaredConstant
       Declaration = Data.define(:name, :superclass)
 
+      DECLARATIONS = ObjectSpace::WeakMap.new
+      MODULE_NAMES = ObjectSpace::WeakMap.new
+
       module_function
 
       # @param source [String] the file's source
@@ -30,6 +33,65 @@ module RailsAiContext
         declared_names(source).find { |name| name.casecmp?(path_name) } ||
           declared_module_names(source).find { |name| name.casecmp?(path_name) } ||
           path_name
+      end
+
+      # The constant a file declares for `path_name`: the same name ignoring case, else the
+      # shortest that ends in it (a plugin nests its tree under its own namespace).
+      #
+      # @return [String] the declared constant, or `path_name` when none fits
+      def named(source, path_name)
+        names = declared_names(source) + declared_module_names(source)
+        suffix = "::#{path_name.to_s.downcase}"
+        names.find { |name| name.casecmp?(path_name.to_s) } ||
+          names.select { |name| name.downcase.end_with?(suffix) }.min_by(&:length) ||
+          path_name
+      end
+
+      # Which of the classes a file declares the file is named for: the path
+      # in full first, then the declaration whose last segment the path names.
+      #
+      # @param declarations [Array<Declaration>]
+      # @param path_name [String] the name the file's path camelizes to
+      # @return [Declaration, nil]
+      def declaration_named(declarations, path_name)
+        segment = path_name.to_s.split("::").last.to_s
+        declarations.find { |d| d.name.casecmp?(path_name.to_s) } ||
+          declarations.find { |d| d.name.split("::").last.casecmp?(segment) }
+      end
+
+      # As `declaration_named`, but a file declaring one class is named for it however the
+      # path spells it. For a named class, ask `declaration_named`.
+      #
+      # @return [Declaration, nil]
+      def declaration_for(declarations, path_name)
+        declaration_named(declarations, path_name) || only_own_class(declarations, path_name)
+      end
+
+      # The file's one class, when the file can be named for it: not a class reopened with
+      # no superclass (an override or a namespace), nor one nested in the path's constant.
+      def only_own_class(declarations, path_name)
+        return nil unless declarations.one?
+
+        declaration = declarations.first
+        return nil if declaration.superclass.nil?
+        return nil if declaration.name.downcase.start_with?("#{path_name.to_s.downcase}::")
+
+        declaration
+      end
+
+      # Whether a relative path, without extension, is where a constant lives whatever
+      # acronyms the app registers: segments compare without underscores, ignoring case.
+      #
+      # @param relative [String] e.g. "activitypub/process_account_service"
+      # @param name [String] e.g. "ActivityPub::ProcessAccountService"
+      def path_for?(relative, name)
+        want = name.to_s.underscore.split("/")
+        have = relative.to_s.split("/")
+        want.size == have.size && want.zip(have).all? { |w, h| same_segment?(w, h) }
+      end
+
+      def same_segment?(one, other)
+        one.delete("_").casecmp?(other.delete("_"))
       end
 
       # A loaded class that answers a name no constant carries belongs to no
@@ -66,7 +128,7 @@ module RailsAiContext
         root = AstCache.parse_string(source)&.value
         return [] unless root
 
-        [].tap { |found| collect_modules(root, [], found) }
+        (MODULE_NAMES[root] ||= constants(root).filter_map { |name, node| name if node.is_a?(Prism::ModuleNode) }.freeze).dup
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")
       end
@@ -80,41 +142,56 @@ module RailsAiContext
         root = AstCache.parse_string(source)&.value
         return [] unless root
 
-        [].tap { |found| collect(root, [], found) }
+        # Keyed by the cached tree, so the entry lives as long as the parse:
+        # one run asks the same file three or four times.
+        (DECLARATIONS[root] ||= constants(root).filter_map do |name, node|
+          Declaration.new(name: name, superclass: superclass_name(node.superclass)) if node.is_a?(Prism::ClassNode)
+        end.freeze).dup
       rescue StandardError, ScriptError => e
         RailsAiContext.debug_fail(e, [], label: "DeclaredConstant")
       end
 
-      def collect(node, scope, found)
-        case node
-        when Prism::ClassNode
-          found << Declaration.new(name: qualify(scope, node), superclass: superclass_name(node.superclass))
-          descend(node, scope + [ segment(node) ], found)
-        when Prism::ModuleNode
-          descend(node, scope + [ segment(node) ], found)
-        else
-          descend(node, scope, found)
+      # The module a parsed file declares under this fully qualified name, for
+      # a mixin that lives inside another module's file rather than its own.
+      #
+      # @param root [Prism::Node] the file's parse tree
+      # @return [Prism::ModuleNode, nil]
+      def module_node(root, name)
+        constants(root).find { |qualified, node| node.is_a?(Prism::ModuleNode) && qualified == name }&.[](1)
+      end
+
+      # Every module the tree declares, by qualified name, the first one
+      # `module_node` would find for each: one walk for many lookups.
+      #
+      # @return [Hash{String => Prism::ModuleNode}]
+      def module_nodes(root)
+        constants(root).each_with_object({}) do |(qualified, node), found|
+          found[qualified] ||= node if node.is_a?(Prism::ModuleNode)
         end
       end
 
-      def descend(node, scope, found)
-        node.child_nodes.compact.each { |child| collect(child, scope, found) }
-      end
+      # Each class and module the tree declares, in source order: its
+      # qualified name, its node, and Module.nesting inside its body,
+      # innermost first. A class is part of the name of anything inside it;
+      # `class ::Foo` inside `module A` is the top-level Foo, and `class A::B`
+      # nests only A::B where `module A; class B` nests both.
+      def constants(root)
+        return enum_for(:constants, root) unless block_given?
 
-      def collect_modules(node, scope, found)
-        case node
-        when Prism::ModuleNode
-          found << qualify(scope, node)
-          scope += [ segment(node) ]
-        when Prism::ClassNode
-          # Not recorded, but it is part of the name of anything inside it.
-          scope += [ segment(node) ]
+        stack = [ [ root, [], [] ] ]
+        until stack.empty?
+          node, scope, nesting = stack.pop
+          if node.is_a?(Prism::ClassNode) || node.is_a?(Prism::ModuleNode)
+            scope = scoped(scope, node)
+            nesting = [ scope.join("::") ] + nesting
+            yield scope.join("::"), node, nesting
+          end
+          stack.concat(node.compact_child_nodes.reverse.map { |child| [ child, scope, nesting ] })
         end
-        node.child_nodes.compact.each { |child| collect_modules(child, scope, found) }
       end
 
-      def qualify(scope, node)
-        (scope + [ segment(node) ]).join("::")
+      def scoped(scope, node)
+        node.constant_path.slice.start_with?("::") ? [ segment(node) ] : scope + [ segment(node) ]
       end
 
       # `class ::Foo::Bar` is the same constant as `class Foo::Bar`; the root
@@ -130,7 +207,7 @@ module RailsAiContext
         node.slice.delete_prefix("::")
       end
 
-      private_class_method :collect, :collect_modules, :descend, :qualify, :segment, :superclass_name
+      private_class_method :only_own_class, :scoped, :segment, :superclass_name
     end
   end
 end

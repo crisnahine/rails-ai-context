@@ -393,4 +393,55 @@ RSpec.describe RailsAiContext::Server do
       RailsAiContext.configuration.custom_tools = []
     end
   end
+
+  # The stdio transport writes JSON-RPC to $stdout, and an app logger pointed
+  # at STDOUT would put the gem's own warnings in that stream.
+  describe "warnings while the stdio transport is open" do
+    it "go to stderr, not the app logger" do
+      logger = instance_double(Logger, warn: nil)
+      allow(Rails).to receive(:logger).and_return(logger)
+      allow(MCP::Server::Transports::StdioTransport).to receive(:new).and_wrap_original do |original, *args|
+        original.call(*args).tap do |transport|
+          allow(transport).to receive(:open) { RailsAiContext.log_warn("[rails-ai-context] section failed") }
+        end
+      end
+      allow(server).to receive(:maybe_start_live_reload)
+
+      expect { server.send(:start_stdio, server.build) }
+        .to output(/section failed/).to_stderr
+      expect(logger).not_to have_received(:warn)
+    end
+
+    # The live-reload thread starts before the transport does, and a warning
+    # from that window is still the gem's own.
+    it "go to stderr from the live-reload start too" do
+      logger = instance_double(Logger, warn: nil)
+      allow(Rails).to receive(:logger).and_return(logger)
+      allow(MCP::Server::Transports::StdioTransport).to receive(:new).and_wrap_original do |original, *args|
+        original.call(*args).tap { |transport| allow(transport).to receive(:open) }
+      end
+      allow(server).to receive(:maybe_start_live_reload) do
+        RailsAiContext.log_warn("[rails-ai-context] Live reload unavailable")
+      end
+
+      expect { server.send(:start_stdio, server.build) }
+        .to output(/Live reload unavailable/).to_stderr
+      expect(logger).not_to have_received(:warn)
+    end
+
+    it "go back to the app logger once the transport has closed" do
+      logger = instance_double(Logger, warn: nil)
+      allow(Rails).to receive(:logger).and_return(logger)
+      allow(MCP::Server::Transports::StdioTransport).to receive(:new).and_wrap_original do |original, *args|
+        original.call(*args).tap { |transport| allow(transport).to receive(:open) }
+      end
+      allow(server).to receive(:maybe_start_live_reload)
+      allow($stderr).to receive(:puts)
+
+      server.send(:start_stdio, server.build)
+      RailsAiContext.log_warn("after")
+
+      expect(logger).to have_received(:warn).with("after")
+    end
+  end
 end

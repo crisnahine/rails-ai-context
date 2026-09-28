@@ -97,4 +97,73 @@ RSpec.describe RailsAiContext::AstCache do
       expect(described_class.size).to eq(0)
     end
   end
+
+  # Canvas's config/initializers/active_record.rb reaches every model's
+  # concern walk: 1,996 reads and SHA256s of one unchanged file in a run.
+  describe "an unchanged file" do
+    it "is neither read nor hashed again" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "big.rb")
+        File.write(path, "class Big\nend\n")
+        # Old enough that no rewrite can share its mtime tick.
+        File.utime(Time.now - 60, Time.now - 60, path)
+        described_class.clear
+        first = described_class.parse(path)
+        allow(File).to receive(:read).and_call_original
+        allow(Digest::SHA256).to receive(:hexdigest).and_call_original
+
+        3.times { expect(described_class.parse(path)).to equal(first) }
+
+        expect(File).not_to have_received(:read).with(path)
+        expect(Digest::SHA256).not_to have_received(:hexdigest)
+      end
+    end
+
+    it "is read again once it changes" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "big.rb")
+        File.write(path, "class Big\nend\n")
+        described_class.clear
+        described_class.parse(path)
+        File.write(path, "class Bigger\n  def x; end\nend\n")
+
+        expect(described_class.parse(path).value.slice).to include("Bigger")
+      end
+    end
+
+    it "forgets a file's stat when its parse is evicted" do
+      stub_const("#{described_class}::MAX_SIZE", 4)
+      Dir.mktmpdir do |dir|
+        described_class.clear
+        12.times do |i|
+          path = File.join(dir, "f#{i}.rb")
+          File.write(path, "class F#{i}; end\n")
+          described_class.parse(path)
+        end
+
+        expect(described_class::SEEN.size).to be <= described_class::MAX_SIZE
+        expect(described_class::SEEN.values.map { |entry| entry[1] }).to all(satisfy { |key| described_class::STORE.key?(key) })
+      end
+    end
+
+    # Linux stamps mtime from a coarse clock, so a same-size rewrite right after
+    # a parse can leave mtime, size and inode all as they were. The tie is
+    # forced here, so the answer does not depend on the filesystem's clock.
+    it "is read again after a same-size rewrite that keeps its stat" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "tie.rb")
+        File.write(path, "class Aaaa\nend\n")
+        stamp = File.mtime(path)
+        inode = File.stat(path).ino
+        described_class.clear
+        described_class.parse(path)
+
+        File.write(path, "class Bbbb\nend\n")
+        File.utime(stamp, stamp, path)
+        expect([ File.mtime(path), File.stat(path).ino ]).to eq([ stamp, inode ])
+
+        expect(described_class.parse(path).value.slice).to include("Bbbb")
+      end
+    end
+  end
 end

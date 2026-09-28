@@ -8,6 +8,44 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
   before { described_class.reset_cache! }
 
   describe ".call" do
+    # Canvas keeps a concern two directories down, under
+    # app/services/accessibility/concerns; the listing offered it as a service.
+    context "with a concern below the services root" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "accessibility", "concerns"))
+        File.write(File.join(tmpdir, "app", "services", "accessibility", "concerns", "queueable.rb"), <<~RUBY)
+          module Accessibility
+            module Concerns
+              module Queueable
+                extend ActiveSupport::Concern
+
+                def queue_it; end
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(tmpdir, "app", "services", "accessibility", "scan_service.rb"), <<~RUBY)
+          class Accessibility::ScanService
+            def call; end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        described_class.reset_cache!
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "lists the service and not the concern beside it" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("# Service Objects (1)")
+        expect(text).to include("- Accessibility::ScanService")
+        expect(text).not_to include("Queueable")
+      end
+    end
+
     # Packs and engines are searched too, so naming app/services/ alone told a
     # packwerk app to look somewhere the tool had not looked.
     it "names every directory it searched when it found none" do
@@ -16,6 +54,64 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       expect(text).to include("No services directory found")
       expect(text).to include("packs/*/app/services/")
       expect(text).to include("engines/*/app/services/")
+    end
+
+    # The scan also reads in-repo code roots and configured extra paths, and
+    # the answer named only three places.
+    context "with an in-repo code root and an extra path, and no services" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "plugins", "chat", "app", "models"))
+        File.write(File.join(tmpdir, "plugins", "chat", "plugin.rb"), "# chat\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+        allow(RailsAiContext.configuration).to receive(:extra_app_paths).and_return([ "custom/app" ])
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "names every place the scan reads" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("app/services/, packs/*/app/services/, engines/*/app/services/")
+        expect(text).to include("plugins/chat/app/services/")
+        expect(text).to include("custom/app/services/")
+      end
+    end
+
+    # Mastodon registers ActivityPub as an acronym, so its files sit under
+    # activitypub/; underscoring the name here, with none of the app's
+    # acronyms, looked under activity_pub/ and answered not found.
+    context "with a namespace the app spells with an acronym" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "activitypub"))
+        File.write(File.join(tmpdir, "app", "services", "activitypub", "process_account_service.rb"), <<~RUBY)
+          class ActivityPub::ProcessAccountService
+            def call(username); end
+          end
+        RUBY
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      # The suggestions camelized the path, so they offered Activitypub::...,
+      # a constant the app does not have.
+      it "suggests the constants the files declare when a name is not found" do
+        text = described_class.call(service: "ActivityPub::NoSuchService").content.first[:text]
+
+        expect(text).to include("ActivityPub::ProcessAccountService")
+        expect(text).not_to include("Activitypub::")
+      end
+
+      it "answers the name the listing prints" do
+        text = described_class.call(service: "ActivityPub::ProcessAccountService").content.first[:text]
+
+        expect(text).to include("# ActivityPub::ProcessAccountService")
+        expect(text).not_to include("not found")
+      end
     end
 
     context "with services only in a pack" do
@@ -49,6 +145,76 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       it "answers for the pack service by name" do
         text = described_class.call(service: "ChargeCard").content.first[:text]
         expect(text).to include("# ChargeCard")
+      end
+    end
+
+    # A base class is not a service: counted as one it inflates the total and
+    # the pattern denominator beside it, and reads as something a caller can
+    # invoke.
+    context "with a base class other services inherit from" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        services = File.join(tmpdir, "app", "services")
+        FileUtils.mkdir_p(File.join(services, "trackers"))
+        File.write(File.join(services, "application_service.rb"),
+                   "class ApplicationService\n  def self.perform(*args) = new(*args).perform\nend\n")
+        File.write(File.join(services, "trackers", "base.rb"),
+                   "module Trackers\n  class Base\n    def call; end\n  end\nend\n")
+        File.write(File.join(services, "trackers", "null.rb"),
+                   "module Trackers\n  class Null < Base\n    def call; end\n  end\nend\n")
+        File.write(File.join(services, "charge_card.rb"),
+                   "class ChargeCard\n  def call; end\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "leaves the base classes out of the count and says which" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("# Service Objects (2)")
+        expect(text).to include("Base classes not counted as services: ApplicationService, Trackers::Base")
+      end
+
+      it "leaves them out of the listing" do
+        text = described_class.call(detail: "standard").content.first[:text]
+
+        expect(text).to include("**Trackers::Null**")
+        expect(text).not_to include("**Trackers::Base**")
+        expect(text).not_to include("**ApplicationService**")
+      end
+
+      it "still answers for a base class asked for by name" do
+        text = described_class.call(service: "Trackers::Base").content.first[:text]
+
+        expect(text).to include("# Trackers::Base")
+      end
+    end
+
+    # An app whose services directory holds only its ApplicationService has
+    # no service anybody calls; the note named what was left out of a listing
+    # of nothing.
+    context "with only a base class" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        services = File.join(tmpdir, "app", "services")
+        FileUtils.mkdir_p(services)
+        File.write(File.join(services, "application_service.rb"),
+                   "class ApplicationService\n  def self.perform(*args) = new(*args).perform\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      # Every listing names what it left out, and an empty one is no exception:
+      # "no service objects" alone read as a directory with nothing in it.
+      it "says there are no services and names the base it left out" do
+        text = described_class.call(detail: "summary").content.first[:text]
+
+        expect(text).to include("contains no service objects")
+        expect(text).to include("_Base classes not counted as services: ApplicationService.")
       end
     end
 
@@ -492,7 +658,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
             object :account
 
             def execute
-              Workers::Billing::Invoices::CreateOrUpdateSheetWorker.perform_in(60)
+              Workers::Billing::Invoices::CreateReminderWorker.perform_in(60)
             end
           end
         RUBY
@@ -506,9 +672,9 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
           end
         RUBY
 
-        File.write(File.join(services_dir, "reports", "export", "profit_section.rb"), <<~RUBY)
-          # This class contains the core code for the profit section.
-          class Reports::Export::ProfitSection < ActiveInteraction::Base
+        File.write(File.join(services_dir, "reports", "export", "summary_section.rb"), <<~RUBY)
+          # This class contains the core code for the summary section.
+          class Reports::Export::SummarySection < ActiveInteraction::Base
             string :title
 
             def execute; end
@@ -539,7 +705,7 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
       it "names a service by what it declares, not by a word in a comment" do
         text = described_class.call(detail: "standard").content.first[:text]
-        expect(text).to include("**Reports::Export::ProfitSection**")
+        expect(text).to include("**Reports::Export::SummarySection**")
         expect(text).not_to include("**contains**")
       end
 
@@ -639,13 +805,13 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
       it "returns message when services directory is empty" do
         result = described_class.call
         text = result.content.first[:text]
-        expect(text).to include("no Ruby files")
+        expect(text).to include("no service objects")
       end
     end
 
-    # app/services/concerns is its own autoload root, so the concerns segment
-    # is no part of the constant. Mastodon's Payloadable was listed as
-    # Concerns::Payloadable, and `include Concerns::Payloadable` raises.
+    # app/services/concerns is its own autoload root, and a module in it is a
+    # concern the concern tool lists. Mastodon's Payloadable and
+    # SearchStoplight were counted among the app's 99 service objects.
     context "with a service concern" do
       let(:tmpdir) { Dir.mktmpdir }
 
@@ -658,15 +824,46 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
             end
           end
         RUBY
+        File.write(File.join(tmpdir, "app", "services", "create_order.rb"), <<~RUBY)
+          class CreateOrder
+            def call; end
+          end
+        RUBY
         allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
       end
 
       after { FileUtils.remove_entry(tmpdir) }
 
-      it "names it by the constant the file declares" do
+      it "leaves it out of the listing" do
         text = described_class.call(detail: "full").content.first[:text]
-        expect(text).to include("## Payloadable")
-        expect(text).not_to include("Concerns::Payloadable")
+
+        expect(text).to include("# Service Objects (1)")
+        expect(text).not_to include("Payloadable")
+      end
+
+      it "does not answer for it by name" do
+        text = described_class.call(service: "Payloadable").content.first[:text]
+
+        expect(text).to include("not found")
+      end
+    end
+
+    context "with a services directory holding only concerns" do
+      let(:tmpdir) { Dir.mktmpdir }
+
+      before do
+        FileUtils.mkdir_p(File.join(tmpdir, "app", "services", "concerns"))
+        File.write(File.join(tmpdir, "app", "services", "concerns", "payloadable.rb"),
+                   "module Payloadable\nend\n")
+        allow(Rails.application).to receive(:root).and_return(Pathname.new(tmpdir))
+      end
+
+      after { FileUtils.remove_entry(tmpdir) }
+
+      it "says the directory holds no service objects" do
+        text = described_class.call.content.first[:text]
+
+        expect(text).to include("no service objects")
       end
     end
 
@@ -863,6 +1060,21 @@ RSpec.describe RailsAiContext::Tools::GetServicePattern do
 
         expect(text).to include("lib/reporting/nightly.rb")
       end
+    end
+  end
+
+  # A scheduled enqueue and the app's own helper enqueue as surely as
+  # perform_later does, and a comment naming one does not.
+  describe "the job enqueue side effect" do
+    before do
+      allow(described_class).to receive(:cached_context)
+        .and_return(jobs: { enqueue_helpers: [ { owner: "Jobs", method: "enqueue", job_arg: 0 } ] })
+    end
+
+    it "is read off the enqueue calls" do
+      expect(described_class.send(:extract_side_effects, "RefreshWorker.perform_in(5.minutes)")).to include("job enqueue")
+      expect(described_class.send(:extract_side_effects, "Jobs.enqueue(:process_post)")).to include("job enqueue")
+      expect(described_class.send(:extract_side_effects, "# SyncJob.perform_later\nx = 1")).not_to include("job enqueue")
     end
   end
 end

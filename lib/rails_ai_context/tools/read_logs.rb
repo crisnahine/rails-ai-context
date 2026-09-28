@@ -55,20 +55,10 @@ module RailsAiContext
           return error_response("Path not allowed: #{file}. Name a log file in log/, without a path (e.g. 'production').")
         end
 
-        # Normalize and validate lines
-        original_lines = lines
-        lines = (lines || config.log_lines).to_i
-        if original_lines
-          int_val = original_lines.to_i
-          if int_val < 1
-            lines = 1
-            warnings << "lines must be >= 1, using 1"
-          elsif int_val > MAX_LINES
-            lines = MAX_LINES
-            warnings << "lines clamped to #{MAX_LINES} (was #{int_val})"
-          else
-            lines = int_val
-          end
+        requested = lines&.to_i
+        lines = requested ? requested.clamp(1, MAX_LINES) : config.log_lines.to_i
+        if requested && requested != lines
+          warnings << (requested < 1 ? "lines must be >= 1, using 1" : "lines clamped to #{MAX_LINES} (was #{requested})")
         end
 
         # Validate level
@@ -109,14 +99,7 @@ module RailsAiContext
         end
 
         # Format output
-        file_size = File.size(path)
-        size_label = if file_size > 1_000_000
-          "#{(file_size / 1_000_000.0).round(1)} MB"
-        elsif file_size > 1_000
-          "#{(file_size / 1_000.0).round(1)} KB"
-        else
-          "#{file_size} B"
-        end
+        size_label = human_size(File.size(path))
 
         level_label = level == "all" ? "all levels" : "#{level}+"
 

@@ -89,7 +89,32 @@ RSpec.describe RailsAiContext::ConcernMembership do
     it "drops framework plumbing, the stdlib and the generated modules" do
       expect(described_class.candidate?("ActiveRecord::Core")).to be false
       expect(described_class.candidate?("Kernel")).to be false
+      # Diaspora's PeopleHelper includes it, and a reader cannot read the stdlib.
+      expect(described_class.candidate?("ERB::Util")).to be false
       expect(described_class.candidate?("Post::GeneratedAttributeMethods")).to be false
+    end
+  end
+
+  # Whitehall's lib/active_record_like_interface.rb is the app's own: a
+  # default matched it because `ActiveRecord` had no namespace boundary.
+  describe "the default excluded_concerns" do
+    def excluded?(name)
+      RailsAiContext::Configuration::DEFAULT_EXCLUDED_CONCERNS.any? { |pattern| name.match?(pattern) }
+    end
+
+    it "hides a framework or gem namespace and what sits under it" do
+      %w[ActiveRecord ActiveRecord::Core ActiveModel::Validations ActionView::Helpers AbstractController::Callbacks
+         Devise::Models::Confirmable Turbo::Broadcastable GlobalID::Identification Rolify::Role
+         DEBUGGER__::TrapInterceptor Post::GeneratedAssociationMethods Post::GeneratedAttributeMethods].each do |name|
+        expect(excluded?(name)).to be(true), name
+      end
+    end
+
+    it "leaves an app module whose name only starts like one" do
+      %w[ActiveRecordLikeInterface ActiveStorageUploads ActionTextFormatter AbstractControllerHelper
+         Devise::ModelsExtra TurboStreamable Reports::GeneratedReport GeneratedAt].each do |name|
+        expect(excluded?(name)).to be(false), name
+      end
     end
   end
 end

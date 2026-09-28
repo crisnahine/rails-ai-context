@@ -17,6 +17,12 @@ RSpec.describe RailsAiContext::RouteCoverage do
         .to eq(", 1 dynamic construct not expanded")
     end
 
+    it "names the routes drawn into engines, which the count leaves out" do
+      routes = { dynamic_routes: 2, engine_routes: [ { engine: "Spree::Core::Engine", routes: [ {}, {} ] },
+                                                     { engine: "Blog::Engine", routes: [ {} ] } ] }
+      expect(described_class.suffix(routes)).to eq(", 2 dynamic constructs not expanded, 3 more in engine tables")
+    end
+
     it "is empty when the count is the whole table" do
       expect(described_class.suffix(total_routes: 20)).to eq("")
     end
@@ -27,6 +33,16 @@ RSpec.describe RailsAiContext::RouteCoverage do
 
     it "is empty for a section that is not a hash" do
       expect(described_class.suffix(nil)).to eq("")
+    end
+
+    it "names in-repo engine route files the walk never opens" do
+      expect(described_class.suffix(total_routes: 94, in_repo_route_files: 25))
+        .to eq(", 25 in-repo engine route files not read")
+    end
+
+    it "names both when the walk misses both" do
+      expect(described_class.suffix(dynamic_routes: 2, in_repo_route_files: 1))
+        .to eq(", 2 dynamic constructs not expanded, 1 in-repo engine route file not read")
     end
 
     # A booted app expands everything, so the key is absent and every surface
@@ -74,6 +90,50 @@ RSpec.describe RailsAiContext::RouteCoverage do
     it "is empty for a failed or missing section" do
       expect(described_class.app_controllers(nil)).to eq({})
       expect(described_class.app_route_count({ error: "boom" })).to eq(0)
+    end
+  end
+
+  describe ".dedupe_put_patch_routes" do
+    it "merges the PUT/PATCH pair Rails generates for one update action" do
+      routes = [
+        { verb: "PATCH", path: "/posts/:id", action: "update", controller: "posts" },
+        { verb: "PUT",   path: "/posts/:id", action: "update", controller: "posts" }
+      ]
+
+      merged = described_class.dedupe_put_patch_routes(routes)
+
+      expect(merged.size).to eq(1)
+      expect(merged.first[:verb]).to eq("PATCH|PUT")
+    end
+
+    # Forem mounts api/v0/listings and api/v1/listings on the same path. Without
+    # the controller in the match the second version's PATCH found the first
+    # version's already-merged entry, declined to merge into "PATCH|PUT" and was
+    # appended twice - so the flat count said 769 where the per-controller sum
+    # said 768.
+    it "keeps two controllers that share a path and an action apart" do
+      routes = [
+        { verb: "PATCH", path: "/api/listings/:id", action: "update", controller: "api/v1/listings" },
+        { verb: "PUT",   path: "/api/listings/:id", action: "update", controller: "api/v1/listings" },
+        { verb: "PATCH", path: "/api/listings/:id", action: "update", controller: "api/v0/listings" },
+        { verb: "PUT",   path: "/api/listings/:id", action: "update", controller: "api/v0/listings" }
+      ]
+
+      merged = described_class.dedupe_put_patch_routes(routes)
+
+      expect(merged.map { |r| [ r[:controller], r[:verb] ] })
+        .to eq([ [ "api/v1/listings", "PATCH|PUT" ], [ "api/v0/listings", "PATCH|PUT" ] ])
+    end
+
+    # The grouped entries carry no :controller - it is the group key - so the
+    # same call over one controller's actions behaves as it always did.
+    it "merges grouped entries that carry no controller key" do
+      routes = [
+        { verb: "PATCH", path: "/posts/:id", action: "update" },
+        { verb: "PUT",   path: "/posts/:id", action: "update" }
+      ]
+
+      expect(described_class.dedupe_put_patch_routes(routes).size).to eq(1)
     end
   end
 end

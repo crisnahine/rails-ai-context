@@ -101,18 +101,10 @@ module RailsAiContext
       class << self
         private
 
-        # A filter the chain runs but no ancestor the payload carries
-        # declares has no class to attribute it to, and a conditional skip
-        # names the condition it is taken out on.
+        # A conditional skip names the condition it is taken out on.
         def inherited_filter_label(filter)
-          from = if filter[:from]
-            " _(from #{filter[:from]})_"
-          elsif filter[:provenance]
-            " _(#{filter[:provenance]})_"
-          else
-            ""
-          end
-          "#{filter[:name]}#{from}#{Serializers::SectionFacts.skip_condition_tail(filter)}"
+          "#{filter[:name]}#{Serializers::SectionFacts.filter_origin(filter)}" \
+            "#{Serializers::SectionFacts.filter_condition_tail(filter)}"
         end
 
         # Word-boundary match against the feature keyword: `pattern` must align
@@ -168,7 +160,7 @@ module RailsAiContext
                 lines << "**Associations:** #{Serializers::SectionFacts.associations_list(data).join(', ')}"
               end
               if data[:validations].is_a?(Array) && data[:validations].any?
-                lines << "**Validations:** #{data[:validations].select { |v| v.is_a?(Hash) }.map { |v| "#{v[:kind]} on #{Array(v[:attributes]).join(', ')}" }.uniq.join('; ')}"
+                lines << "**Validations:** #{data[:validations].select { |v| v.is_a?(Hash) }.map { |v| [ v[:kind], Serializers::SectionFacts.validation_target(v) ].reject(&:empty?).join(" ") }.uniq.join('; ')}"
               end
               if data[:scopes].is_a?(Array) && data[:scopes].any?
                 scope_strs = data[:scopes].map { |s| s.is_a?(Hash) ? s[:name] : s.to_s }
@@ -176,7 +168,7 @@ module RailsAiContext
               end
               if data[:enums].is_a?(Hash) && data[:enums].any?
                 enum_strs = data[:enums].map do |k, v|
-                  v.is_a?(Hash) ? "#{k}: #{v.keys.join(', ')}" : "#{k}: #{Array(v).join(', ')}"
+                  "#{k}: #{Serializers::SectionFacts.enum_values(v)}"
                 end
                 lines << "**Enums:** #{enum_strs.join('; ')}"
               end
@@ -204,10 +196,10 @@ module RailsAiContext
               end
 
               filters = split[:own].map do |f|
-                label = "#{f[:kind]} #{f[:name]}"
+                label = "#{f[:kind]} #{f[:name]}#{Serializers::SectionFacts.filter_origin(f)}"
                 label += " only: #{Array(f[:only]).join(', ')}" if f[:only]&.any?
                 label += " except: #{Array(f[:except]).join(', ')}" if f[:except]&.any?
-                label + Serializers::SectionFacts.skip_condition_tail(f)
+                label + Serializers::SectionFacts.filter_condition_tail(f)
               end
               lines << "- **Filters:** #{filters.join('; ')}" if filters.any?
 
@@ -221,7 +213,7 @@ module RailsAiContext
 
         # --- AF: Routes ---
         def discover_routes(ctx, pattern, lines)
-          by_controller = ctx.dig(:routes, :by_controller) || {}
+          by_controller = RouteCoverage.all_by_controller(ctx[:routes])
           matched = by_controller.select { |ctrl, _| feature_word_match?(ctrl, pattern) }
 
           if matched.any?
@@ -278,8 +270,7 @@ module RailsAiContext
           payload_section(Payload.jobs(ctx), pattern, lines, "Jobs") do |job|
             bits = []
             bits << "queue: #{job[:queue]}" if job[:queue]
-            bits << "retry_on: #{Array(job[:retry_on]).join('; ')}" if Array(job[:retry_on]).any?
-            bits << "discard_on: #{Array(job[:discard_on]).join('; ')}" if Array(job[:discard_on]).any?
+            bits << Array(job[:retries]).join("; ") if Array(job[:retries]).any?
             bits << "perform(#{job[:perform_signature]})" if job[:perform_signature]
             bits.any? ? " (#{bits.join(', ')})" : ""
           end
@@ -461,27 +452,16 @@ module RailsAiContext
 
           real_root = File.realpath(root).to_s
 
-          # Check jobs
-          job_dir = File.join(root, "app", "jobs")
-          if Dir.exist?(job_dir)
-            safe_glob(job_dir, "**/*.rb", real_root).first(MAX_SCAN_FILES).each do |path|
-              next unless feature_word_match?(File.basename(path, ".rb"), pattern)
-              snake = File.basename(path, ".rb")
-              unless test_basenames.any? { |t| t.include?(snake) }
-                gaps << "Job `#{snake}` - no test file found"
-              end
-            end
-          end
+          { "Job" => "jobs", "Service" => "services" }.each do |label, dir|
+            path_dir = File.join(root, "app", dir)
+            next unless Dir.exist?(path_dir)
 
-          # Check services
-          service_dir = File.join(root, "app", "services")
-          if Dir.exist?(service_dir)
-            safe_glob(service_dir, "**/*.rb", real_root).first(MAX_SCAN_FILES).each do |path|
-              next unless feature_word_match?(File.basename(path, ".rb"), pattern)
+            safe_glob(path_dir, "**/*.rb", real_root).first(MAX_SCAN_FILES).each do |path|
               snake = File.basename(path, ".rb")
-              unless test_basenames.any? { |t| t.include?(snake) }
-                gaps << "Service `#{snake}` - no test file found"
-              end
+              next unless feature_word_match?(snake, pattern)
+              next if test_basenames.any? { |t| t.include?(snake) }
+
+              gaps << "#{label} `#{snake}` - no test file found"
             end
           end
 
@@ -499,11 +479,16 @@ module RailsAiContext
           return if matched_models.empty?
 
           related = {}
+          all_models = Payload.models(ctx)
           matched_models.each do |name, data|
             next unless data.is_a?(Hash)
             (data[:associations] || []).each do |a|
               next unless a.is_a?(Hash)
-              related_name = a[:class_name] || a[:name].to_s.classify
+              # A computed name classifies into a model the app does not have.
+              next if a[:computed_name] && a[:class_name].nil?
+
+              written = a[:class_name] || a[:name].to_s.classify
+              related_name = Introspectors::TableName.model_for(written, name, all_models) || written.delete_prefix("::")
               next if matched_models.key?(related_name)
               related[related_name] ||= []
               related[related_name] << "#{a[:type]} from #{name}"

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
 
 RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
   let(:introspector) { described_class.new(Rails.application) }
@@ -272,6 +273,252 @@ RSpec.describe RailsAiContext::Introspectors::ViewTemplateIntrospector do
 
     it "reads no ivars out of an image" do
       expect(result[:templates]["pdfs/summary.html.erb"][:ivars]).to eq([])
+    end
+  end
+
+  describe "a HAML view written with hashrocket data attributes" do
+    it "reads the controllers it names" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/widgets"))
+        File.write(File.join(root, "app/views/widgets/show.html.haml"),
+                   %(%div{ "data-controller" => "hello" }\n%span{ :"data-controller" => "clip board" }\n))
+        app = double("app", root: Pathname.new(root))
+
+        stimulus = described_class.new(app).call[:templates]["widgets/show.html.haml"][:stimulus]
+
+        expect(stimulus).to contain_exactly("hello", "clip", "board")
+      end
+    end
+  end
+
+  describe "a view calling url_for with a Rails controller" do
+    it "does not read the routing controller as a Stimulus controller" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/widgets"))
+        File.write(File.join(root, "app/views/widgets/index.html.erb"),
+                   %(<%= link_to "Back", url_for(controller: "admin/editions", action: "index") %>\n) +
+                   %(<div <%= tag.attributes(data: { controller: "hello" }) %>></div>\n))
+        app = double("app", root: Pathname.new(root))
+
+        stimulus = described_class.new(app).call[:templates]["widgets/index.html.erb"][:stimulus]
+
+        expect(stimulus).to contain_exactly("hello")
+      end
+    end
+  end
+
+  describe "a comment in the markup" do
+    def templates_in(root)
+      described_class.new(double("app", root: Pathname.new(root))).call[:templates]
+    end
+
+    it "reads no partial out of a HAML comment" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin"))
+        File.write(File.join(root, "app/views/admin/create.turbo_stream.haml"),
+                   "-# Pre-render the form\n= turbo_stream.replace \"x\" do\n  = render \"admin/form\"\n")
+
+        expect(templates_in(root)["admin/create.turbo_stream.haml"][:partials]).to eq([ "admin/form" ])
+      end
+    end
+
+    it "reads nothing out of the lines a HAML comment block covers" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin"))
+        File.write(File.join(root, "app/views/admin/index.html.haml"),
+                   "-# old markup\n  = render \"admin/legacy\"\n  %div{ \"data-controller\" => \"legacy\" }\n= render \"admin/current\"\n")
+
+        entry = templates_in(root)["admin/index.html.haml"]
+
+        expect(entry[:partials]).to eq([ "admin/current" ])
+        expect(entry[:stimulus]).to eq([])
+      end
+    end
+
+    it "reads no partial out of an ERB comment" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/admin"))
+        File.write(File.join(root, "app/views/admin/show.html.erb"),
+                   "<%# render \"admin/old\" and @stale_ivar %>\n<%= render \"admin/new\" %>\n")
+
+        entry = templates_in(root)["admin/show.html.erb"]
+
+        expect(entry[:partials]).to eq([ "admin/new" ])
+        expect(entry[:ivars]).to eq([])
+      end
+    end
+  end
+
+  describe ".stimulus_identifiers reading action descriptors" do
+    {
+      %(<a data-action="backlogs--work-package#openSplitPane:prevent">) => %w[backlogs--work-package],
+      %(<a data-action="click->menu#toggle:stop:once">) => %w[menu],
+      %(<input data-action="keydown.enter->search#submit keydown.ctrl+s->search#save">) => %w[search],
+      %(<div data-action="click->tabs#show keydown.esc->modal#close:prevent">) => %w[tabs modal],
+      %(<%= link_to "x", data: { action: "resize@window->chart#redraw:passive" } %>) => %w[chart]
+    }.each do |markup, identifiers|
+      it "reads #{identifiers.join(' and ')} from #{markup}" do
+        expect(described_class.stimulus_identifiers(markup)).to include(*identifiers)
+      end
+    end
+
+    it "reads no identifier out of an unquoted word#word in prose" do
+      expect(described_class.stimulus_identifiers(%(<p>see users#show for the page</p>))).to eq([])
+    end
+
+    it "reads no identifier out of a Ruby comment" do
+      source = %(# See "posts#index" for more\nclass Card\n  def data = { action: "card#open" }\nend\n)
+
+      expect(described_class.stimulus_identifiers(source, ruby: true)).to eq([ "card" ])
+    end
+
+    it "reads no identifier out of prose with a hash in it" do
+      expect(described_class.stimulus_identifiers(%(<p>Issue #42 and C# code</p>))).to eq([])
+    end
+  end
+
+  describe "the partials a render call names" do
+    def partials_in(name, source)
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app/views/products"))
+        File.write(File.join(root, "app/views/products", name), source)
+        return described_class.new(double("app", root: Pathname.new(root))).call[:templates]["products/#{name}"][:partials]
+      end
+    end
+
+    {
+      "render with parentheses and a keyword" => [ "create.turbo_stream.haml",
+        %(- row = render(partial: 'variant_row', formats: :html,\n    locals: { f: f })\n= render(partial: 'admin/shared/flashes', locals: { flashes: flash })\n),
+        %w[variant_row admin/shared/flashes] ],
+      "a positional string with and without parentheses" => [ "show.html.erb",
+        %(<%= render 'header' %>\n<%= render("footer", locals: {}) %>\n), %w[header footer] ],
+      "partial: after collection:" => [ "index.html.erb",
+        %(<%= render collection: @items, partial: "item" %>\n), %w[item] ],
+      "a keyword argument spread over lines without parentheses" => [ "edit.html.slim",
+        %(= render partial: "form",\n  locals: { product: @product }\n), %w[form] ],
+      "a template and a hashrocket partial" => [ "new.html.erb",
+        %(<%= render template: "products/base" %>\n<%= render :partial => "legacy" %>\n), %w[products/base legacy] ]
+    }.each do |label, (name, source, expected)|
+      it "reads #{label}" do
+        expect(partials_in(name, source)).to include(*expected)
+      end
+    end
+
+    it "reads no partial out of a keyword nested inside another argument" do
+      source = %(<%= render(ModalComponent.new(template: "big")) %>\n<%= render "form", locals: { template: "edit", partial: "y" } %>\n)
+
+      expect(partials_in("nested.html.erb", source)).to contain_exactly("form", "ModalComponent")
+    end
+
+    it "keeps reading past an escaped quote in an argument" do
+      expect(partials_in("escaped.html.erb", %{<%= render("a \\" (b", partial: "real") %>\n})).to eq([ "real" ])
+    end
+
+    it "does not read a partial name built at runtime" do
+      expect(partials_in("preview.html.erb", %(<%= render(partial: "mailer/\#{@system_email}") %>\n))).to eq([])
+    end
+
+    it "does not read a JavaScript render method in an inline script" do
+      expect(partials_in("captcha.html.erb", %(<script>turnstile.render('#turnstile-container', {});</script>\n)))
+        .to eq([])
+    end
+
+    it "does not read a string that is not an argument to render" do
+      expect(partials_in("form.html.erb", %(<%= form_with layout: "horizontal" %>\n<%= render @products %>\n)))
+        .to eq([ "products" ])
+    end
+  end
+
+  describe ".ruby_identifiers and the shared parse cache" do
+    it "parses once without filling the cache other introspectors reuse" do
+      RailsAiContext::AstCache.clear
+
+      found = described_class.ruby_identifiers(%(class Card\n  def call = tag.div(data: { controller: "card" })\nend\n))
+
+      expect(found).to eq([ "card" ])
+      expect(RailsAiContext::AstCache.size).to eq(0)
+    end
+
+    it "works in a fresh process where nothing has loaded Prism yet" do
+      script = %(require "rails_ai_context"; print RailsAiContext::Introspectors::ViewTemplateIntrospector) +
+               %(.ruby_identifiers(%q(x = tag.div(data: { controller: "card" }))).join)
+      out, err, status = Open3.capture3(RbConfig.ruby, "-I", File.expand_path("../../../../lib", __dir__), "-e", script)
+
+      expect([ out, status.success? ]).to eq([ "card", true ]), err
+    end
+
+    it "does not parse a file that names no data hash at all" do
+      allow(Prism).to receive(:parse).and_call_original
+
+      described_class.ruby_identifiers(%(redirect_to controller: "posts"\n))
+
+      expect(Prism).not_to have_received(:parse)
+    end
+  end
+
+  describe ".stimulus_identifiers reading action values only" do
+    it "reads an action after an apostrophe in the page text" do
+      markup = %(<p>Don't worry</p>\n<button data-action="click->modal#open">x</button>\n<p>It's fine.</p>\n)
+
+      expect(described_class.stimulus_identifiers(markup)).to eq([ "modal" ])
+    end
+
+    it "reads an action from a HAML hash, a data hash and an app's own *_actions key" do
+      markup = %(%a{ "data-action" => "click->menu#toggle" }\n) +
+               %(<%= link_to "x", "/", data: { action: "tabs#show" } %>\n) +
+               %(<%= render ConfirmModal.new(confirm_actions: "click->modal#close") %>\n)
+
+      expect(described_class.stimulus_identifiers(markup)).to contain_exactly("menu", "tabs", "modal")
+    end
+
+    it "reads action keys in markup by the same rule as in Ruby" do
+      markup = %(<%= render Autocompleter.new(hiddenFieldAction: "change->reporting--page#select") %>\n) +
+               %(<%= route_list(action: "posts#index") %>\n) +
+               %(<%= link_to "x", "/", data: { action: "tabs#show" } %>\n)
+      ruby = %(class Page\n  def a = render(Autocompleter.new(hiddenFieldAction: "change->reporting--page#select"))\n) +
+             %(  def b = route_list(action: "posts#index")\n  def c = link_to("x", "/", data: { action: "tabs#show" })\nend\n)
+
+      expect(described_class.stimulus_identifiers(markup)).to contain_exactly("reporting--page", "tabs")
+      expect(described_class.stimulus_identifiers(ruby, ruby: true)).to contain_exactly("reporting--page", "tabs")
+    end
+
+    it "reads no descriptor from a quoted value that is not an action" do
+      markup = %(<a title="see users#show here" href="<%= url_for("posts#index") %>">x</a>\n)
+
+      expect(described_class.stimulus_identifiers(markup)).to eq([])
+    end
+
+    it "reads Ruby actions under a camelCase key, in either branch of a conditional, and a controller set in a variable" do
+      source = %(class Filter\n) +
+               %(  def args = { hiddenFieldAction: "change->reporting--page#select" }\n) +
+               %(  def act = (action = outlet? ? "check-all#all:stop" : "checkable#all:stop")\n) +
+               %(  def initialize = @data_controller = "modal \#{@options.delete(:extra)}".squish\n) +
+               %(  def reflex = { data: { reflex: "click->user#accept" } }\n) +
+               %(end\n)
+
+      expect(described_class.stimulus_identifiers(source, ruby: true))
+        .to contain_exactly("reporting--page", "check-all", "checkable", "modal")
+    end
+
+    it "reads an action constant, and no route list under a bare actions: key" do
+      source = %(class Scopes\n  REFRESH_ACTION = "change->refresh-on-form-changes#trigger"\n) +
+               %(  SCOPES = { write: { actions: %w[posts#create topics#update] } }\nend\n)
+
+      expect(described_class.stimulus_identifiers(source, ruby: true)).to eq([ "refresh-on-form-changes" ])
+    end
+
+    it "reads a bare action: key outside a data hash only when it has an event or an option" do
+      source = %(class Panel\n  def button = { action: "click->meetings--submit#intercept" }\n) +
+               %(  def scopes\n    actions = %w[list#category_feed list#latest_feed]\n  end\nend\n)
+
+      expect(described_class.stimulus_identifiers(source, ruby: true)).to eq([ "meetings--submit" ])
+    end
+
+    it "reads Ruby actions through the AST, so a trailing comment names nothing" do
+      source = %(class Card\n  def call = tag.div(data: { action: "card#open" }) # see "posts#index"\n) +
+               %(  def link = url_for("users#show")\nend\n)
+
+      expect(described_class.stimulus_identifiers(source, ruby: true)).to eq([ "card" ])
     end
   end
 end

@@ -4,7 +4,7 @@ module RailsAiContext
   module Introspectors
     # Discovers authentication and authorization setup: Devise, Rails 8 auth,
     # Pundit, CanCanCan, CORS, CSP.
-    class AuthIntrospector
+    class AuthIntrospector < Base
       extend StaticTier
       static_tier :files_only
 
@@ -12,12 +12,6 @@ module RailsAiContext
       # matching how Devise's own docs name the strategies.
       SYMBOL_DEVISE_SETTINGS = %i[lock_strategy unlock_strategy].freeze
       DEVISE_SETTINGS = (%i[timeout_in maximum_attempts password_length] + SYMBOL_DEVISE_SETTINGS).freeze
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
@@ -27,14 +21,35 @@ module RailsAiContext
           devise_modules_per_model: detect_devise_modules_per_model,
           token_auth: detect_token_auth
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
 
-      def root
-        app.root.to_s
+      # One walk per model and per controller answers every macro question below.
+      def model_asts
+        @model_asts ||= begin
+          SourceScan.classes(root, kind: "app/models").map do |model_name, record|
+            [ model_name, SourceIntrospector.walk_source(record.source, {
+              devise: -> { Listeners::GenericMacroListener.new(:devise) },
+              macros: Listeners::MacrosListener
+            }) ]
+          end
+        rescue => e
+          RailsAiContext.debug_fail(e, [], label: "model_asts")
+        end
+      end
+
+      def controller_asts
+        @controller_asts ||= begin
+          SourceScan.each(root, kind: "app/controllers").map do |record|
+            [ record.file, SourceIntrospector.walk_source(record.source, {
+              unauthenticated: -> { Listeners::GenericMacroListener.new(:allow_unauthenticated_access) },
+              http_token: -> { Listeners::GenericMacroListener.new(:authenticate_with_http_token, :authenticate_or_request_with_http_token) }
+            }) ]
+          end
+        rescue => e
+          RailsAiContext.debug_fail(e, [], label: "controller_asts")
+        end
       end
 
       def detect_authentication
@@ -88,12 +103,10 @@ module RailsAiContext
       end
 
       def scan_allow_unauthenticated_access
-        SourceScan.each(root, kind: "app/controllers").flat_map do |record|
-          ast = SourceIntrospector.walk_source(record.source, { macros: -> { Listeners::GenericMacroListener.new(:allow_unauthenticated_access) } })
-          hits = ast[:macros]
+        controller_asts.flat_map do |relative, ast|
+          hits = ast[:unauthenticated]
           next [] if hits.empty?
 
-          relative = record.file
           hits.map do |hit|
             opts = hit[:options] || {}
             if opts.empty?
@@ -121,10 +134,10 @@ module RailsAiContext
         end
       end
 
+      # A gem is named only when the app bundles it: an app can have app/policies without pundit.
       def detect_authorization
         authz = {}
 
-        # Pundit
         policies_dir = File.join(root, "app/policies")
         if Dir.exist?(policies_dir)
           # Named from the path relative to app/policies, not the basename:
@@ -135,12 +148,12 @@ module RailsAiContext
           policies = Dir.glob(File.join(policies_dir, "**/*.rb")).map do |f|
             f.sub("#{policies_dir}/", "").delete_suffix(".rb").camelize
           end.sort
-          authz[:pundit] = policies if policies.any?
+          authz[gem_present?("pundit") ? :pundit : :policies] = policies if policies.any?
         end
 
-        # CanCanCan
-        ability_path = File.join(root, "app/models/ability.rb")
-        authz[:cancancan] = true if File.exist?(ability_path)
+        if file_exists?("app/models/ability.rb")
+          gem_present?("cancancan") ? authz[:cancancan] = true : authz[:ability_class] = "app/models/ability.rb"
+        end
 
         authz
       end
@@ -150,8 +163,7 @@ module RailsAiContext
 
         # CORS
         if gem_present?("rack-cors")
-          cors_init = File.join(root, "config/initializers/cors.rb")
-          security[:cors] = { configured: File.exist?(cors_init) }
+          security[:cors] = { configured: ApiIntrospector.new(app).cors_configured? }
         end
 
         # CSP
@@ -165,8 +177,7 @@ module RailsAiContext
       # `Admin::User`, and keying it by basename overwrote `User`.
       def detect_devise_modules_per_model
         result = {}
-        SourceScan.classes(root, kind: "app/models").each do |model_name, record|
-          ast = SourceIntrospector.walk_source(record.source, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
+        model_asts.each do |model_name, ast|
           hits = ast[:devise]
           next if hits.empty?
 
@@ -230,13 +241,7 @@ module RailsAiContext
       end
 
       def detect_http_token_auth
-        SourceScan.each(root, kind: "app/controllers").filter_map do |record|
-          ast = SourceIntrospector.walk_source(record.source, {
-            token: -> { Listeners::GenericMacroListener.new(:authenticate_with_http_token, :authenticate_or_request_with_http_token) }
-          })
-          next if ast[:token].empty?
-          record.file
-        end.sort
+        controller_asts.filter_map { |file, ast| file unless ast[:http_token].empty? }.sort
       rescue => e
         RailsAiContext.debug_fail(e, [], label: "detect_http_token_auth")
       end
@@ -304,8 +309,7 @@ module RailsAiContext
       end
 
       def scan_models_for_devise
-        results = SourceScan.classes(root, kind: "app/models").filter_map do |model_name, record|
-          ast = SourceIntrospector.walk_source(record.source, { devise: -> { Listeners::GenericMacroListener.new(:devise) } })
+        results = model_asts.filter_map do |model_name, ast|
           next if ast[:devise].empty?
 
           # Format matches the same way the old regex did: ":<module>, :<module>, ..."
@@ -318,8 +322,7 @@ module RailsAiContext
       end
 
       def scan_models_for_macro(macro_name)
-        results = SourceScan.classes(root, kind: "app/models").filter_map do |model_name, record|
-          ast = SourceIntrospector.walk_source(record.source, { macros: Listeners::MacrosListener })
+        results = model_asts.filter_map do |model_name, ast|
           next if ast[:macros].none? { |m| m[:macro] == macro_name }
 
           { model: model_name }

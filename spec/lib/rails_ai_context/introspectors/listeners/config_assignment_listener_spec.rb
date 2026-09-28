@@ -4,13 +4,6 @@ require "spec_helper"
 require "prism"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListener do
-  def parse_and_dispatch(source, *roots)
-    result     = Prism.parse(source)
-    listener   = described_class.new(*roots)
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   def assignments(source, *roots)
     parse_and_dispatch(source, *roots).select { |r| r[:assignment] }
   end
@@ -21,6 +14,17 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::ConfigAssignmentListene
     expect(results.size).to eq(1)
     expect(results.first[:path]).to eq([ :timeout_in ])
     expect(results.first[:source]).to eq("30.minutes")
+  end
+
+  it "keeps a heredoc value's body in its source" do
+    results = assignments(<<~RUBY)
+      config.banner = <<~TXT.squish
+        Scheduled maintenance tonight
+      TXT
+      config.timeout_in = 30.minutes
+    RUBY
+
+    expect(results.first[:source]).to eq("<<~TXT.squish\n  Scheduled maintenance tonight\nTXT\n")
   end
 
   it "reads a nested config assignment" do

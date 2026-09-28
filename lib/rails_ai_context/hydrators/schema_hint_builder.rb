@@ -24,7 +24,7 @@ module RailsAiContext
 
         columns = if table_data
           (table_data[:columns] || []).map do |col|
-            { name: col[:name], type: col[:type], null: col[:null] }.compact
+            { name: col[:name], type: col[:type], null: col[:null], array: col[:array] }.compact
           end
         else
           []
@@ -42,7 +42,8 @@ module RailsAiContext
         validations = (model_info[:validations] || []).map do |val|
           {
             kind: val[:kind],
-            attributes: val[:attributes]
+            attributes: val[:attributes],
+            validator: val[:validator]
           }.compact
         end
 
@@ -58,7 +59,7 @@ module RailsAiContext
           columns: columns,
           associations: associations,
           validations: validations,
-          primary_key: primary_key.to_s,
+          primary_key: Introspectors::SchemaConventions.primary_key_label(primary_key),
           confidence: confidence
         )
       end

@@ -138,7 +138,7 @@ module RailsAiContext
         # each row self-describing in the flattened output. PUT/PATCH update
         # pairs merge into one PATCH|PUT entry so this resource reports the
         # same counts as the routes tool.
-        by_controller = routes_data[:by_controller] || {}
+        by_controller = RouteCoverage.all_by_controller(routes_data)
         # A controller with no file derives a route key Rails never routed by,
         # so the caller's string is the filter when the exact key finds nothing.
         key = Payload.find_controller(context, controller)
@@ -166,7 +166,7 @@ module RailsAiContext
         routes = by_controller.flat_map { |name, entries|
           next [] unless selected.include?(name.to_s)
 
-          Tools::BaseTool.dedupe_put_patch_routes(Array(entries)).map { |entry| entry.merge(controller: name.to_s) }
+          RouteCoverage.dedupe_put_patch_routes(Array(entries)).map { |entry| entry.merge(controller: name.to_s) }
         }
 
         data = { filtered_by: controller, total_routes: routes.size, routes: routes }

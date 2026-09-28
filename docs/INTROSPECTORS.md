@@ -14,10 +14,11 @@
 
 Each introspector:
 
-1. Examines a specific aspect of your Rails app (schema, models, routes, etc.)
-2. Returns a Hash with structured data (never raises - wraps errors in `{ error: msg }`)
-3. Results are cached with TTL + SHA256 fingerprint invalidation
-4. Runs as part of a preset (`:standard` or `:full`) or can be configured individually
+1. Subclasses `Introspectors::Base`, taking the `app` handle
+2. Examines a specific aspect of your Rails app (schema, models, routes, etc.)
+3. Returns a Hash with structured data, and raises on failure: `Introspector#call` turns a raised section into `{ error: msg }` and logs a warning
+4. Results are cached with TTL + SHA256 fingerprint invalidation
+5. Runs as part of a preset (`:standard` or `:full`) or can be configured individually
 
 ## Presets
 
@@ -126,7 +127,7 @@ end
 
 | Introspector | Key | What it extracts |
 |:-------------|:----|:-----------------|
-| JobIntrospector | `:jobs` | Background jobs, Sidekiq workers under `app/workers`, and mailers: queue, retries, `sidekiq_options`, any `sidekiq_throttle`, schedules, and the `file:` each one is defined in |
+| JobIntrospector | `:jobs` | Background jobs and Sidekiq workers, read from `app/jobs`, `app/workers` and `app/sidekiq`, and mailers (anywhere under `app/`, by parent chain): queue, retries, `sidekiq_options`, any `sidekiq_throttle`, schedules, and the `file:` each one is defined in |
 | RakeTaskIntrospector | `:rake_tasks` | Custom rake tasks |
 
 ### Security & Auth
@@ -178,11 +179,11 @@ It runs a single-pass Dispatcher that walks the AST once and feeds events to all
 
 | Listener | What it detects |
 |:---------|:---------------|
-| AssociationsListener | `belongs_to`, `has_many`, `has_one`, `has_and_belongs_to_many` |
-| ValidationsListener | `validates`, `validates_*_of`, custom `validate :method` |
-| ScopesListener | `scope :name, -> { ... }` |
+| AssociationsListener | `belongs_to`, `has_many`, `has_one`, `has_and_belongs_to_many`, under the options of an enclosing `with_options` block |
+| ValidationsListener | `validates`, `validates_*_of`, custom `validate :method`, under the options of an enclosing `with_options` block |
+| ScopesListener | `scope :name, -> { ... }`, `lambda { ... }` and the block form |
 | EnumsListener | Rails 7+ and legacy enum syntax, prefix/suffix options |
-| CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]` |
+| CallbacksListener | All AR callback types including `around_*`, `after_touch`, `after_initialize` and `after_find`; `after_commit` with `on:` resolution; a callback object by its constant, a block as `[inline_block]`; `if:`/`unless:` kept as the source wrote them, and the options of an enclosing `with_options` block |
 | MacrosListener | `encrypts`, `normalizes`, `delegate`, `has_secure_password`, `serialize`, `store`, `has_one_attached`, `has_many_attached`, `has_rich_text`, `generates_token_for`, `attribute` |
 | MethodsListener | `def`/`def self.`, visibility tracking, parameter extraction, `class << self`; `include_initialize: true` adds the constructor a caller reports on its own |
 | MixinsListener | `include`, `prepend`, `extend`, flagging the ones that reach the ancestor chain |
@@ -198,15 +199,18 @@ Passed to `SourceIntrospector.walk(path, key => Listener)` when a specific file 
 | ConfigAssignmentListener | `config.key = value` and `config.a.b = value` in initializers and `config/environments/*.rb`, plus bare `config.jwt do ... end` section references. Takes a root name (`:config` by default, e.g. `:DatabaseCleaner`) |
 | ClassDefinitionListener | Class definitions with their superclass, namespaces resolved |
 | ComponentStructureListener | ViewComponent and Phlex structure: `renders_one`/`renders_many`, slot methods, hash/array constant tables, `case @ivar` variant branching, `CONST[@ivar]` indexing |
-| MiddlewareConfigListener | `config.middleware.use` / `insert_before` / `insert_after` |
+| MiddlewareConfigListener | The app's own stack, reached through its config (`config.middleware`, `Rails.configuration.middleware`, `app.config.middleware`), through the app (`Rails.application.middleware`, `app.middleware`) or through the app's own application class (`MyApp::Application.config.middleware`, given as `app_class:`), never another rack stack: any other constant anywhere in the chain (`MyEngine.config.middleware`, `GoodJob::Engine.middleware`) is an engine's. Reads `use`, `insert`, `insert_before`, `insert_after`, `unshift`, `swap`, `move_before`, `move_after`, `delete`, and `config.exceptions_app =` as its own `exceptions_app` action |
+| RouteFilesListener | The route files `config/application.rb` puts in `config.paths["config/routes.rb"]`: an assignment (a list, `.map`ped or not), `<<`/`push`/`concat`, `unshift`/`prepend`, `Rails.root.join` and literal `Dir[...]` globs, each as `set`/`append`/`prepend`. A list the app computes is recorded as `computed` |
+| AutoloadPathsListener | Autoload roots `config/application.rb` adds by hand: `autoload_paths`/`eager_load_paths`/`autoload_once_paths` appends, `autoload_lib`, and `config.paths.add` with `eager_load:`. Literal paths under the app root only |
+| PreviewPathsListener | ViewComponent preview directories the config sets: `view_component.previews.paths`, `preview_paths`, `preview_path`, in the same literal forms as AutoloadPathsListener |
 | SchemaDslListener | `schema.rb`: `create_table`, `t.string`, `t.index`, `add_foreign_key`, `create_enum` |
 | MigrationDslListener | Migration DSL: `create_table`, `add_column`, `add_index`, `add_reference`, and friends |
-| RoutesDslListener | `config/routes.rb`, resolving namespace/scope/resources nesting into flat routes; routing concerns (`concern` definitions replayed at each `concerns:` site), `with_options` defaults merged under each inner call, and the `as:`, `param:`, `module:`, `path:` and `only:`/`except:` options |
-| MountListener | `mount Sidekiq::Web, at: "/sidekiq"`, the hash form, and a Rack app attached with `match "/metrics", to: MetricsApp` - `mount` is that call with a name derived. Paths carry the enclosing `namespace`/`scope` prefix; a scope whose own name is an expression yields no path rather than an unprefixed one |
+| MigrationReplayListener | What a replay needs beside the DSL: `def down`, `down`/`revert` blocks, and `t.timestamps` |
+| RoutesDslListener | `config/routes.rb`, resolving namespace/scope/resources nesting into flat routes (a `controller:` with a leading slash is absolute, as in Rails); routing concerns (`concern` definitions replayed at each `concerns:` site), `with_options` defaults merged under each inner call, `match ... via:` (or the `via:` of an enclosing `scope`) as one route answering each verb it names (`GET|POST`, and `ANY` for `via: :all`, as the booted table has it), the controller a `scope(controller:)` or a route's own `controller:` names (with Rails' `a/b` shorthand when no action is given), and the `as:`, `param:`, `module:`, `path:` and `only:`/`except:` options. A block drawn through an app class (`ApiRouteSet::V1.draw(self) do`) takes the path and `as:` prefixes that class's `self.prefix` and `mapper_prefix` return as literals, or a literal prefix argument; a class whose prefix is not a literal, and that class's own `resources`, are counted as unexpanded. Routes drawn into an engine's table (`Spree::Core::Engine.routes.draw`) sit under the engine's namespace and carry `engine:`, which the route introspector files under that engine's mount, apart from the app's count. A file pulled in by `draw` is walked inside the scope its `draw` sits in, once per scope that draws it, so `draw :api` under `namespace :api` and `scope module: :v1` routes to `api/v1/...` at `/api/...` |
+| MountListener | `mount Sidekiq::Web, at: "/sidekiq"`, the hash form, and a Rack app attached with `match "/metrics", to: MetricsApp` - `mount` is that call with a name derived. Paths carry the enclosing `namespace`/`scope` prefix; a scope whose own name is an expression yields no path rather than an unprefixed one, and `scope path: nil` adds no segment. A mounted app built by a call on a constant (`Flipper::UI.app(Flipper)`) is named by that call, arguments off |
 | GemfileDslListener | `gem "name", "version"` and `group :development do ... end` |
 | RakeTaskDslListener | `namespace`, `desc`, `task` in `.rake` files |
 | EnvAccessListener | `ENV["KEY"]`, `ENV.fetch("KEY")`, `ENV.fetch("KEY", default)` |
-| MongoidFieldsListener | Mongoid `field`, embedded relations, custom collection names |
 | MailboxRoutingListener | Action Mailbox `routing` and processing callbacks |
 | ModelReferenceListener | Model constants used in controllers: `Post.find`, `params.require(:post)`, ivar writes |
 | VariantCallListener | `variant` calls (ChainedCallListener with `:variant` preset) |
@@ -229,6 +233,7 @@ Regex is the right tool, and stays, for:
 - **Files that are not Ruby.** `Gemfile.lock`, YAML (`database.yml`, `sidekiq.yml`, fixtures), `structure.sql`, Dockerfiles, ERB, HAML, Slim, JavaScript.
 - **Mixed-extension globs.** A view scan spanning ERB and Phlex `.rb` needs one matcher, or the two halves drift apart.
 - **Vocabulary classification.** "Does this middleware body talk about auth?" is about words, not structure; no node carries it.
+- **A prefilter before the parse.** Parsing every `.rb` under `app/` to find the handful that declare something costs more than a line match that ends the read; the AST still decides, on the files the match keeps.
 - **Anything the listeners cannot scope.** Tying a call to the enclosing action or `namespace` block needs block scope the listeners do not track, so those fall back to line scanning.
 
 Every remaining regex over `.rb` content carries a one-line comment saying which of these it is. If you add one without a reason, convert it instead.
@@ -242,8 +247,19 @@ same wherever it is asked. Those live as their own modules under
 | Module | What it answers |
 |:-------|:---------------|
 | `DeclaredConstant` | The constant a source file calls its own class, against the one its path camelizes to |
+| `ActionPresence` | Whether a controller has an action: the public methods and `define_method` names of the controller, its ancestors up to Rails' base and the modules they include, the templates at each ancestor's view prefix, and the ancestors or modules no app source holds, which leave a missing action unverified. `rails_validate` and `rails_generate_test` both ask it |
 | `TableName` | The table a model reads, from its own declarations |
+| `HabtmJoinTables` | The join tables every `has_and_belongs_to_many` under the app's code and lib names, lib patches and engines included, for the schema's model-less table warning |
 | `SuperclassChain` | What a class inherits from, followed through the app's own sources: the chain from a file's class up to a named base, and the constant-to-source lookup over the app's autoload roots that walks it |
+| `CallSiteExpansion` | What one call of a mixin's macro-declaring method declares. `attachable :receipt, has_one: true` runs `def attachable(name, opts = {})`, whose body declares `has_one name` or `has_many name` by `opts[:has_one]`: the parameters bind to the call's literal arguments, and a branch (`if`, `unless`, `case`) the literals decide is taken alone. Where they cannot decide, what every way through declares alike is listed once; the rest, a lone `if`'s body included, comes back under `:conditional` with its condition and is not counted. A block the method evaluates on another receiver (`other.instance_eval`) comes back under `:foreign`, named with the receiver and any condition it runs under |
+| `Includers` | Which classes and modules mix a module in, by `include`, `prepend` or `extend`: a written name resolves from the includer's namespace outward, and the nearest module the app declares decides. `rails_get_concern`'s "Included by", the service listing and the HABTM join-table owners all ask it |
+| `RetryPolicy` | What a job does when it raises, as a reader would write it: the macro, its exceptions, then `attempts:` and `wait:` whatever order the source put them in |
+| `SourceCalls` | Which other classes a file hands work to, off the call nodes: the verb list, the framework receivers left out, and the call or the class alone |
+| `ServiceClasses` | Which classes under `app/services` are services and which are only the base of one, for the tool's listing and the generated files' line alike |
+| `EnvReferences` | Every ENV name the app's source reads, file by file, for `rails_get_env` and the context file's `env` section alike: `app`, `config` and `lib` Ruby, ERB and config YAML, with config YAML on `sensitive_patterns` read for the names in its ERB tags only |
+| `GemfileGems` | The one Gemfile read, off `GemfileDslListener`: its entries with options and groups (the gems section's local gems and groups) and the gem names (every other asker), so a commented-out `gem` line is no gem anywhere |
+| `ModuleAliases` | Which app file a bare JS import specifier names: tsconfig/jsconfig `compilerOptions.paths` followed through `extends` (relative files and installed packages), and a vite/webpack/rspack `resolve.alias` written as a literal object. The Stimulus scan uses it to tie a registration or a base class to the controller file it imports |
+| `HelperNames` | The helper methods a view can call: every method the app's helper modules define in every code root, and those of a module they `include`, found through the app's autoload roots (`lib` among them) or in its enclosing namespace's file (`CanonicalURL::Helpers` in `canonical_url.rb`). `rails_get_partial_interface` uses it so a helper call is not read as a local |
 | `Interaction` | Whether a class runs as an ActiveInteraction, following its superclass chain through the app's own sources, and the filters it takes - inherited ones first, one per name, each carrying the filters nested inside its block. See the **Interaction filter** entry in `CONTEXT.md` |
 
 ### Confidence tagging
@@ -262,19 +278,25 @@ has_many :posts, class_name: name  → [INFERRED]  (name is a variable)
 
 Thread-safe parse cache using `Concurrent::Map`:
 
-- Keyed by: file path + SHA256 content hash + mtime
-- Invalidates automatically when file changes
+- Keyed by: file path + SHA256 content hash + mtime, so a changed file is parsed again
+- A file whose stat (mtime, size, inode) matches the last read answers without reading or hashing it, but only once that file was already two seconds older than the read, so a same-size rewrite within one mtime tick is still read
+- Bounded at 500 parses; a recorded stat is dropped with its parse
 - Shared by all AST-based introspectors
 - Cleared on `reset_all_caches!` (triggered by live reload)
+
+### RunCache
+
+Answers kept for one introspection run and dropped when it ends: the file list for a source kind, each file's stat, the directories a kind lives in, concern directories and listings. A section asking again inside the run gets the first answer; the next run, and any tool called after it, asks the filesystem again.
 
 ---
 
 ## Cache invalidation
 
-Introspection results are cached at two levels:
+Introspection results are cached at three levels:
 
 1. **Introspection cache** - Full context hash, invalidated by TTL (`config.cache_ttl`, default: 60s) and fingerprint change
-2. **AST cache** - Per-file parse results, invalidated by file content change (SHA256)
+2. **AST cache** - Per-file parse results, invalidated by file content change (SHA256), with a stat shortcut for a file older than the read
+3. **Run cache** - File lists, stats and directory answers for one introspection run, dropped when it ends
 
 The **Fingerprinter** computes a composite SHA256 from all watched directories (`app/`, `config/`, `db/`, `lib/tasks/`, `Gemfile.lock`). When the fingerprint changes, the introspection cache is invalidated even if TTL hasn't expired.
 

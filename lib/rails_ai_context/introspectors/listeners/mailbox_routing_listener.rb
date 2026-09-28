@@ -53,7 +53,7 @@ module RailsAiContext
         end
 
         def node_source(node)
-          node.slice
+          NodeSource.text(node)
         rescue
           RailsAiContext::Confidence::INFERRED
         end

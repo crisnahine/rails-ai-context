@@ -14,7 +14,19 @@ module RailsAiContext
   # Falls back to treating the install as in-Gemfile (the common case) when
   # the lock file can't be read.
   module InstallMode
+    # What a reader runs for each job, as [standalone, in the app's bundle].
+    COMMANDS = {
+      context: [ "rails-ai-context context", "rails ai:context" ],
+      install: [ "rails-ai-context init", "rails generate rails_ai_context:install" ],
+      serve: [ "rails-ai-context serve", "rails ai:serve" ],
+      tool: [ "rails-ai-context tool", "rails ai:tool" ]
+    }.freeze
+
     module_function
+
+    def command(job, standalone: standalone?)
+      COMMANDS.fetch(job)[standalone ? 0 : 1]
+    end
 
     def standalone?
       root = if defined?(Bundler)

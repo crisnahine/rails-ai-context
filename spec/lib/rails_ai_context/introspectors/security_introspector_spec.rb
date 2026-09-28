@@ -102,8 +102,36 @@ RSpec.describe RailsAiContext::Introspectors::SecurityIntrospector do
 
       it "flags CSP as configured and extracts directives" do
         expect(result[:content_security_policy][:configured]).to eq(true)
-        directives = result[:content_security_policy][:directives].map { |d| d[:directive] }
-        expect(directives).to include("default_src", "font_src", "img_src")
+        expect(result[:content_security_policy][:directives]).to include(
+          { directive: "default_src", value: ":self, :https" },
+          { directive: "font_src", value: ":self, :https, :data" },
+          { directive: "img_src", value: ":self, :https, :data" }
+        )
+      end
+    end
+
+    context "when permissions_policy initializer exists" do
+      let(:init_path) { File.join(Rails.root, "config/initializers/permissions_policy.rb") }
+
+      before do
+        FileUtils.mkdir_p(File.dirname(init_path))
+        File.write(init_path, <<~RUBY)
+          Rails.application.config.permissions_policy do |policy|
+            policy.camera :none
+            policy.geolocation :self, "https://example.com"
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f(init_path) }
+
+      it "flags the policy as configured and extracts features" do
+        expect(result[:permissions_policy][:configured]).to eq(true)
+        expect(result[:permissions_policy][:file]).to eq("config/initializers/permissions_policy.rb")
+        expect(result[:permissions_policy][:directives]).to include(
+          { feature: "camera", allowlist: ":none" },
+          { feature: "geolocation", allowlist: ":self, 'https://example.com'" }
+        )
       end
     end
 

@@ -27,9 +27,9 @@ module RailsAiContext
         private
 
         def extract_rails7_enum(node, name_node, args)
-          enum_name = name_node.value.to_s
+          enum_name = name_node.unescaped
           values_node = args[1]
-          raw_values = values_node ? extract_value(values_node) : {}
+          raw_values = values_node ? enum_values(values_node) : {}
           # Normalize array-style values ([:admin, :member]) to hash ({ admin: 0, member: 1 })
           values = normalize_enum_values(raw_values)
           options = extract_enum_modifiers(args[2..])
@@ -59,12 +59,24 @@ module RailsAiContext
 
             @results << {
               name:       key.to_s,
-              values:     extract_value(assoc.value),
+              values:     enum_values(assoc.value),
               options:    options,
               location:   node.location.start_line,
               confidence: confidence_for(node)
             }
           end
+        end
+
+        # A literal hash or array as its values; anything else (`Statuses.to_h`)
+        # as its source, which a String value in the enum map marks as computed.
+        def enum_values(node)
+          # `%i[low high].freeze` is the literal it freezes.
+          node = node.receiver if node.is_a?(Prism::CallNode) && node.name == :freeze && literal_collection?(node.receiver)
+          literal_collection?(node) ? extract_value(node) : one_line_source(node)
+        end
+
+        def literal_collection?(node)
+          node.is_a?(Prism::HashNode) || node.is_a?(Prism::ArrayNode)
         end
 
         def extract_enum_modifiers(remaining_args)

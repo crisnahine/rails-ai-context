@@ -24,6 +24,18 @@ RSpec.describe RailsAiContext::ConcernPaths do
         ])
     end
 
+    # Rails globs `app/{*,*/concerns}`, and app/concerns is one of the `*`:
+    # an app that keeps its concerns there has them autoloaded at the top
+    # level, and reading only app/*/concerns reported one of Huginn's 25.
+    it "reads app/concerns itself, in the root tree and in a pack" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "concerns"))
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "models", "concerns"))
+      FileUtils.mkdir_p(File.join(tmpdir, "packs", "billing", "app", "concerns"))
+
+      expect(described_class.resolve(tmpdir).map { |d| d.sub("#{tmpdir}/", "") })
+        .to eq(%w[app/concerns app/models/concerns packs/billing/app/concerns])
+    end
+
     it "skips a directory that does not exist" do
       FileUtils.mkdir_p(File.join(tmpdir, "app", "models", "concerns"))
 
@@ -150,6 +162,16 @@ RSpec.describe RailsAiContext::ConcernPaths do
       expect(described_class.find_file(tmpdir, "DebugConcern")).to be_nil
     end
 
+    # Rails autoloads every app/* directory, and Mastodon's controllers
+    # include RoutingHelper and DomainControlHelper from app/helpers.
+    it "finds a module in any app/* directory" do
+      FileUtils.mkdir_p(File.join(tmpdir, "app", "helpers"))
+      File.write(File.join(tmpdir, "app", "helpers", "routing_helper.rb"), "module RoutingHelper\nend\n")
+
+      expect(described_class.find_file(tmpdir, "RoutingHelper", prefer: "controller"))
+        .to eq(File.join(tmpdir, "app", "helpers", "routing_helper.rb"))
+    end
+
     it "finds a concern that lives only inside a pack" do
       dir = File.join(tmpdir, "packs", "billing", "app", "models", "concerns")
       FileUtils.mkdir_p(dir)
@@ -168,6 +190,44 @@ RSpec.describe RailsAiContext::ConcernPaths do
 
       expect(described_class.find_file(tmpdir, "DebugConcern", within: "Fasp::Provider"))
         .to eq(File.join(nested, "debug_concern.rb"))
+    end
+  end
+
+  # OpenProject names concerns against a hundred roots, and a stat per
+  # candidate path was most of its controllers section.
+  describe ".find_file within one run" do
+    it "stats nothing for a name no listing holds, and finds one that is there" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "models", "concerns", "billing"))
+        File.write(File.join(root, "app", "models", "concerns", "billing", "taxable.rb"), "module Billing::Taxable; end\n")
+        allow(File).to receive(:exist?).and_call_original
+
+        RailsAiContext::RunCache.around do
+          3.times { expect(described_class.find_file(root, "Shipping::Trackable")).to be_nil }
+          expect(File).not_to have_received(:exist?)
+          expect(described_class.find_file(root, "Billing::Taxable")).to end_with("concerns/billing/taxable.rb")
+        end
+      end
+    end
+  end
+
+  # The listing walk matched case exactly inside a run, while File.exist?
+  # outside one follows the filesystem: on a case-insensitive disk a tool call
+  # found a concern the context run missed.
+  describe ".find_file and letter case" do
+    it "answers inside a run what the filesystem answers outside one" do
+      Dir.mktmpdir do |root|
+        dir = File.join(root, "app", "models", "concerns")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "Taxable.rb"), "module Taxable; end\n")
+        on_disk = File.exist?(File.join(dir, "taxable.rb"))
+
+        outside = described_class.find_file(root, "Taxable")
+        inside = RailsAiContext::RunCache.around { described_class.find_file(root, "Taxable") }
+
+        expect(inside).to eq(outside)
+        expect(!outside.nil?).to eq(on_disk)
+      end
     end
   end
 end

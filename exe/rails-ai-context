@@ -8,9 +8,10 @@
 # resolve cleanly. The $LOAD_PATH entries remain (Bundler.setup replaces them anyway).
 #
 # Skip this when running under `bundle exec` — Bundler has already resolved gems
-# correctly, and clearing specs breaks gems that look up their own path at runtime
-# (e.g., MCP SDK reads Gem.loaded_specs["json-schema"].full_gem_path).
-stripped_framework_specs = {}
+# correctly, and clearing specs breaks gems that look up their own path at
+# runtime out of Gem.loaded_specs (the MCP SDK does).
+preboot_gem_specs = {}
+preboot_framework_names = []
 if defined?(Gem) && Gem.respond_to?(:loaded_specs) && !ENV["BUNDLE_BIN_PATH"]
   # Also strip the Rails-family gems' lib paths. Leaving them in $LOAD_PATH
   # lets the app's boot resolve framework files from the NEWEST installed
@@ -18,28 +19,35 @@ if defined?(Gem) && Gem.respond_to?(:loaded_specs) && !ENV["BUNDLE_BIN_PATH"]
   # framework tree: wrong Rails.version in every generated fact and
   # "already initialized constant" double-load warnings. Every Rails app's
   # bundle provides these; in app-less modes a require re-activates them
-  # fresh. Non-framework tooling deps (mcp and friends) must keep their
-  # paths - Bundler.setup during app boot locks out late RubyGems
-  # activation, and restore_standalone_environment! splices them back.
+  # fresh. The rest keep their paths until drop_conflicting_gem_activations!,
+  # since thor and the gem's own files still load out of them in this window.
   rails_family = %w[
     rails railties activesupport activemodel activerecord actionpack
     actionview actionmailer activejob actioncable activestorage
     actionmailbox actiontext
   ].freeze
   Gem.loaded_specs.each_value do |spec|
-    next if spec.default_gem? || !rails_family.include?(spec.name)
-    stripped_framework_specs[spec.name] = spec
+    next if spec.default_gem?
+    preboot_gem_specs[spec.name] = spec
+    next unless rails_family.include?(spec.name)
+
+    preboot_framework_names << spec.name
     spec.full_require_paths.each { |path| $LOAD_PATH.delete(path) }
   end
   Gem.loaded_specs.delete_if { |_, spec| !spec.default_gem? }
 end
 
-# App-less modes (--no-boot, tool --help, tool --list outside an app) need
-# these paths spliced back by hand: the specs above keep their activated
-# flag after the strip, so Gem.try_activate declines to re-add the paths and
-# any framework require fails. There is no Bundler.setup in those modes to
-# rebuild $LOAD_PATH either.
-STRIPPED_FRAMEWORK_SPECS = stripped_framework_specs.freeze
+# Every gem the binstub activated, stashed while Gem.loaded_specs still names
+# them: they keep their activated flag, so nothing else can re-add their paths.
+PREBOOT_GEM_SPECS = preboot_gem_specs.freeze
+
+# The subset whose paths came out of $LOAD_PATH right there. Only an app-less
+# entry puts those back, so re-registering their specs would tell it not to.
+PREBOOT_FRAMEWORK_NAMES = preboot_framework_names.freeze
+
+# After one of these tools' names `--environment` is its filter, never RAILS_ENV: this is
+# decided before boot, when no tool schema can load. cli_smoke_spec holds it to the schemas.
+ENVIRONMENT_PARAM_TOOLS = %w[env_config].freeze
 
 require "thor"
 
@@ -90,6 +98,19 @@ class RailsAiContextCLI < Thor
       [ rest.first, *globals, *rest[1..] ]
     end
 
+    # One answer for any command's failure; Thor's refusals and SystemExit pass through.
+    no_commands do
+      def invoke_command(command, *args)
+        super
+      rescue Thor::Error
+        raise
+      rescue StandardError, ScriptError => e
+        $stderr.puts "Error: #{e.message}"
+        Array(e.backtrace).first(15).each { |line| $stderr.puts "    #{line}" } if ENV["DEBUG"]
+        exit 1
+      end
+    end
+
     # Let Thor pass unknown options through to ToolRunner for the tool command
     stop_on_unknown_option! :tool
 
@@ -107,8 +128,13 @@ class RailsAiContextCLI < Thor
     option :list, type: :boolean, default: false, desc: "List available tools"
     option :no_boot, type: :boolean, default: false, desc: "Skip booting the app; serve static analysis only"
     def tool(name = nil, *args)
+      # stop_on_unknown_option! passes post-name flags through into args;
+      # honor --no-boot in either position, mirroring the --json handling.
+      no_boot = options[:no_boot]
+      no_boot = true if args.delete("--no-boot")
+
       if options[:list] || name.nil?
-        print_tool_list
+        print_tool_list(no_boot: no_boot)
         return
       end
 
@@ -127,27 +153,24 @@ class RailsAiContextCLI < Thor
       json_mode = true if args.delete("--json")
       json_mode = true if args.delete("-j")
 
-      # stop_on_unknown_option! passes post-name flags through into args;
-      # honor --no-boot in either position, mirroring the --json handling.
-      no_boot = options[:no_boot]
-      no_boot = true if args.delete("--no-boot")
-
-      # Same for the value-taking class options: after the tool name they
-      # arrive as plain args, and dropping them silently sends the command
-      # at the wrong app (or wrong RAILS_ENV).
+      # Value-taking class options land in args too. A tool that declares `environment`
+      # keeps it: booting in the env it filters for fails where the app has no database.
       @app_path_override = extract_value_flag!(args, "--app-path")
-      @environment_override = extract_value_flag!(args, "--environment")
+      environment_flag = extract_value_flag!(args, "--environment")
+      if environment_flag && ENVIRONMENT_PARAM_TOOLS.include?(name.to_s.delete_prefix("rails_").delete_prefix("get_"))
+        args.push("--environment", environment_flag)
+      else
+        @environment_override = environment_flag
+      end
 
       boot_rails!(command: "tool", allow_static: true, no_boot: no_boot)
 
-      runner = ::RailsAiContext::CLI::ToolRunner.new(name, args, json_mode: json_mode)
+      # A custom tool can declare `environment` too; the binary cannot see its
+      # schema before boot, so it gets the value as RAILS_ENV and as its own.
+      runner = ::RailsAiContext::CLI::ToolRunner.new(name, args, json_mode: json_mode,
+                                                                environment: @environment_override)
       puts runner.run
       exit 1 if runner.error
-    rescue SystemExit
-      raise # let exit() propagate (from boot_rails!)
-    rescue StandardError, ScriptError => e
-      $stderr.puts "Error: #{e.message}"
-      exit 1
     end
 
     desc "serve", "Start MCP server (stdio transport)"
@@ -163,11 +186,6 @@ class RailsAiContextCLI < Thor
       end
 
       ::RailsAiContext.start_mcp_server(transport: transport)
-    rescue SystemExit
-      raise
-    rescue StandardError, ScriptError => e
-      $stderr.puts "Error: #{e.message}"
-      exit 1
     end
 
     desc "context", "Generate AI context files"
@@ -206,11 +224,6 @@ class RailsAiContextCLI < Thor
       # An explicit --format overrides the recorded selection.
       result = ::RailsAiContext.generate_context(format: options[:format]&.to_sym)
       print_context_result(result)
-    rescue SystemExit
-      raise
-    rescue StandardError, ScriptError => e
-      $stderr.puts "Error: #{e.message}"
-      exit 1
     end
 
     desc "inspect", "Print introspection summary"
@@ -221,11 +234,6 @@ class RailsAiContextCLI < Thor
 
       context = ::RailsAiContext.introspect
       puts JSON.pretty_generate(context)
-    rescue SystemExit
-      raise
-    rescue StandardError, ScriptError => e
-      $stderr.puts "Error: #{e.message}"
-      exit 1
     end
 
     # Thor registers commands under their Ruby method names, and this method
@@ -239,11 +247,6 @@ class RailsAiContextCLI < Thor
     def watch
       boot_rails!(command: "watch", allow_static: true)
       ::RailsAiContext::Watcher.new.start
-    rescue SystemExit
-      raise
-    rescue StandardError, ScriptError => e
-      $stderr.puts "Error: #{e.message}"
-      exit 1
     end
 
     desc "doctor", "Run diagnostic checks and report AI readiness score"
@@ -265,11 +268,6 @@ class RailsAiContextCLI < Thor
         $stderr.puts "#{RailsAiContext::CountPhrase.call(failed, "check")} failed (--strict)"
         exit 1
       end
-    rescue SystemExit
-      raise
-    rescue StandardError, ScriptError => e
-      $stderr.puts "Error: #{e.message}"
-      exit 1
     end
 
     desc "init", "Set up rails-ai-context for standalone use (creates .rails-ai-context.yml and .mcp.json)"
@@ -337,11 +335,6 @@ class RailsAiContextCLI < Thor
         boot_rails!(command: "preset", allow_static: true)
       end
       exit 1 unless ::RailsAiContext::Presets.ok?(outcome)
-    rescue SystemExit
-      raise
-    rescue StandardError, ScriptError => e
-      $stderr.puts "Error: #{e.message}"
-      exit 1
     end
 
     desc "facts", "Print concise schema facts summary (tables, associations, dependencies)"
@@ -351,11 +344,6 @@ class RailsAiContextCLI < Thor
 
       context = ::RailsAiContext.introspect
       puts ::RailsAiContext::FactsFormatter.render(context, inspect_hint: "rails-ai-context inspect")
-    rescue SystemExit
-      raise
-    rescue StandardError, ScriptError => e
-      $stderr.puts "Error: #{e.message}"
-      exit 1
     end
 
     desc "version", "Print version"
@@ -369,17 +357,13 @@ class RailsAiContextCLI < Thor
     # The install program's voice on this entry: everything on stderr, so
     # stdout stays a clean protocol channel.
     def program_surface
-      @program_surface ||= begin
-        surface = Object.new
-        def surface.say(text = "", level = :plain)
-          $stderr.puts(level == :warn ? "Warning: #{text}" : text)
-        end
-        def surface.ask(prompt)
+      @program_surface ||= ::RailsAiContext::Install::Surface.new(
+        ->(text, level) { $stderr.puts(level == :warn ? "Warning: #{text}" : text) },
+        lambda { |prompt|
           $stderr.print "#{prompt} "
           $stdin.gets&.strip
-        end
-        surface
-      end
+        }
+      )
     end
 
     def prompt_ai_tools
@@ -482,8 +466,8 @@ class RailsAiContextCLI < Thor
     # config-driven filtering like skip_tools/custom_tools still applies);
     # otherwise load the gem standalone and list from that. Only execution
     # (running a specific tool) genuinely needs a live app.
-    def print_tool_list
-      if entry_boot.app_present?(Dir.pwd) && try_boot_for_list
+    def print_tool_list(no_boot: false)
+      if !no_boot && entry_boot.app_present?(Dir.pwd) && try_boot_for_list
         puts ::RailsAiContext::CLI::ToolRunner.tool_list
         return
       end
@@ -499,9 +483,15 @@ class RailsAiContextCLI < Thor
         puts ""
         puts "Run inside a Rails app to execute tools - static source analysis works even when the app can't boot (see --no-boot)."
       rescue LoadError, StandardError => e
-        $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
-        $stderr.puts "Run this command from your Rails app root directory."
-        $stderr.puts "  (gem also failed to load standalone: #{e.message})" if ENV["DEBUG"]
+        # A real app here is not a wrong directory: the listing failed because
+        # the gem could not load, and saying otherwise sends the reader nowhere.
+        if entry_boot.app_present?(Dir.pwd, allow_source_only: true)
+          $stderr.puts "Error: the tool list needs this gem loaded, and it failed: #{e.message}"
+        else
+          $stderr.puts "Error: No Rails app found in #{Dir.pwd}"
+          $stderr.puts "Run this command from your Rails app root directory."
+          $stderr.puts "  (gem also failed to load standalone: #{e.message})" if ENV["DEBUG"]
+        end
         exit 1
       end
     end
@@ -571,7 +561,8 @@ class RailsAiContextCLI < Thor
     def entry_boot
       @entry_boot ||= begin
         require_relative "../lib/rails_ai_context/cli/entry_boot"
-        ::RailsAiContext::CLI::EntryBoot.stripped_framework_specs = STRIPPED_FRAMEWORK_SPECS
+        ::RailsAiContext::CLI::EntryBoot.preboot_gem_specs = PREBOOT_GEM_SPECS
+        ::RailsAiContext::CLI::EntryBoot.preboot_framework_names = PREBOOT_FRAMEWORK_NAMES
         ::RailsAiContext::CLI::EntryBoot
       end
     end
@@ -589,7 +580,7 @@ class RailsAiContextCLI < Thor
     def require_install_files!
       %w[
         gem_lock install/ai_tool install/selection_record install/cleanup
-        install/program mcp_config_generator legacy_cleanup
+        install/surface install/program mcp_config_generator legacy_cleanup
       ].each { |file| require_relative "../lib/rails_ai_context/#{file}" }
 
       # Both are defined in the entry file, which is the thing that must not

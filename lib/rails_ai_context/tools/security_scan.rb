@@ -149,9 +149,22 @@ module RailsAiContext
           # the rest.
           warnings: report["warnings"].filter_map { |w| ExternalWarning.from_json(w) if w.is_a?(Hash) },
           checks_run: Array(report.dig("scan_info", "checks_performed")),
-          note: "_Scanned with brakeman #{version} from outside the app's bundle, which does not carry it. " \
-                "Add it to the Gemfile to scan in-process._"
+          note: unbundled_note(version)
         }
+      end
+
+      # The app's Gemfile.lock, read because a static run never loads the
+      # app's bundle: not reaching brakeman here says nothing about it.
+      private_class_method def self.locked_brakeman
+        RailsAiContext::GemLock.for(rails_app.root.to_s).version("brakeman")
+      end
+
+      private_class_method def self.unbundled_note(version)
+        locked = locked_brakeman
+        return "_Scanned with brakeman #{version} as its own process; the app's Gemfile.lock carries brakeman #{locked}._" if locked
+
+        "_Scanned with brakeman #{version} from outside the app's bundle, which does not carry it. " \
+          "Add it to the Gemfile to scan in-process._"
       end
 
       # The file a warning is about, in the shape brakeman's own warning
@@ -202,6 +215,19 @@ module RailsAiContext
       # gem manager installs can print there first (RVM's executable-hooks
       # writes "Resolving dependencies..."), and a report parsed off stdout
       # died on that first byte.
+      # A frame says where brakeman stopped, not why: Ruby prints the error
+      # first (`file:12:in 'scan': message (Class)`) and the frames after it.
+      BACKTRACE_FRAME = /\A(?:from\s+)?\S+:\d+:in\s/
+      ERROR_LOCATION = /\A\S+:\d+:in\s+[`'][^`']*[`']:\s+/
+
+      private_class_method def self.brakeman_error_line(err)
+        lines = err.to_s.lines.map(&:strip).reject(&:empty?)
+        raised = lines.find { |line| line.match?(ERROR_LOCATION) }
+        return raised.sub(ERROR_LOCATION, "") if raised
+
+        lines.reject { |line| line.match?(BACKTRACE_FRAME) }.last || lines.last
+      end
+
       private_class_method def self.run_brakeman_unbundled(min_confidence, resolved_checks)
         executable = brakeman_executable or return [ nil, nil ]
 
@@ -214,7 +240,7 @@ module RailsAiContext
 
           _out, err = with_unbundled_env { capture_with_timeout(command) }
           next [ nil, "no report after #{SCAN_TIMEOUT} seconds" ] if err.nil?
-          next [ nil, err.lines.map(&:strip).reject(&:empty?).last ] unless File.file?(report_path) && File.size?(report_path)
+          next [ nil, brakeman_error_line(err) ] unless File.file?(report_path) && File.size?(report_path)
 
           [ JSON.parse(File.read(report_path)), nil ]
         end
@@ -272,6 +298,15 @@ module RailsAiContext
       # same machine: booted, the app's bundle is set up and the load path
       # holds the app's gems only, so an app that does not bundle brakeman
       # cannot require it even though `gem list` shows it.
+      # Returns `:bundle` (with its version), `:machine`, or nil. Doctor answers from this, so
+      # it says what the scan would do.
+      def self.brakeman_location
+        return [ :bundle, ::Brakeman::Version ] if brakeman_available? && defined?(::Brakeman::Version)
+
+        version = brakeman_on_machine
+        version ? [ :machine, version ] : [ nil, nil ]
+      end
+
       private_class_method def self.brakeman_available?
         @brakeman_available = {} unless @brakeman_available.is_a?(Hash)
         key = RailsAiContext.static_tier? ? :static : :runtime
@@ -293,6 +328,12 @@ module RailsAiContext
       private_class_method def self.unavailable_message(failure = nil)
         version = brakeman_on_machine
         said = failure ? " It said: `#{failure}`." : ""
+        locked = locked_brakeman
+        if locked
+          problem = version ? "running brakeman #{version} produced no report.#{said}" : "it is not installed on this machine."
+          return "This app's Gemfile.lock carries brakeman #{locked}, but #{problem}\n\n" \
+                 "Run `bundle install`, then `bundle exec brakeman` in the app directory to see what it says."
+        end
         return (
           "Brakeman #{version} is installed on this machine but not in this app's bundle, and running it from " \
           "outside the bundle produced no report either.#{said}\n\n" \

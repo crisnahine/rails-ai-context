@@ -4,8 +4,7 @@ require "spec_helper"
 
 RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
   let(:context) do
-    {
-      app_name: "TestApp", rails_version: "8.0", ruby_version: "3.4",
+    serializer_context(
       schema: {
         adapter: "postgresql",
         total_tables: 2,
@@ -14,14 +13,38 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
           "posts" => { columns: [ { name: "id" }, { name: "title" } ], primary_key: "id" }
         }
       },
-      models: {
-        "User" => { table_name: "users", associations: [ { type: "has_many", name: "posts" } ], validations: [] },
-        "Post" => { table_name: "posts", associations: [ { type: "belongs_to", name: "user" } ], validations: [] }
-      },
-      routes: { total_routes: 20 },
-      gems: {},
-      conventions: {}
-    }
+      routes: { total_routes: 20 }
+    )
+  end
+
+  it "writes a partial unique index with its condition" do
+    ctx = serializer_context(schema: { adapter: "postgresql", total_tables: 1, tables: {
+      "articles" => { columns: [ { name: "id" }, { name: "canonical_url" } ], primary_key: "id",
+                      indexes: [ { name: "i", columns: [ "canonical_url" ], unique: true, where: "(published IS TRUE)" } ] }
+    } })
+
+    Dir.mktmpdir do |dir|
+      described_class.new(ctx).call(dir)
+
+      expect(File.read(File.join(dir, ".claude", "rules", "rails-schema.md")))
+        .to include("Idx: canonical_url(unique where (published IS TRUE))")
+    end
+  end
+
+  # Discourse writes `enum :status, Statuses.to_h`; the rules printed [INFERRED] as its value.
+  it "writes a computed enum as its source, marked computed" do
+    ctx = serializer_context(models: {
+      "Topic" => { associations: [ { type: :has_many, name: :posts } ], validations: [], table_name: "topics",
+                   enums: { "status" => "Statuses.to_h", "kind" => { "a" => 0, "b" => 1 } } }
+    })
+
+    Dir.mktmpdir do |dir|
+      described_class.new(ctx).call(dir)
+      content = File.read(File.join(dir, ".claude", "rules", "rails-models.md"))
+
+      expect(content).to include("  status: `Statuses.to_h` (computed)", "  kind: a, b")
+      expect(content).not_to include("[INFERRED]")
+    end
   end
 
   it "generates .claude/rules/ files" do

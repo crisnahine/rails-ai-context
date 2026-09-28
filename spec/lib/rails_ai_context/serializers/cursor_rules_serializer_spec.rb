@@ -4,15 +4,13 @@ require "spec_helper"
 
 RSpec.describe RailsAiContext::Serializers::CursorRulesSerializer do
   let(:context) do
-    {
-      app_name: "App", rails_version: "8.0", ruby_version: "3.4",
+    serializer_context(
+      app_name: "App",
       schema: { adapter: "postgresql", total_tables: 10 },
       models: { "User" => { associations: [], validations: [], table_name: "users" } },
       routes: { total_routes: 50 },
-      gems: {},
-      conventions: {},
       controllers: { controllers: { "UsersController" => { actions: %w[index show] } } }
-    }
+    )
   end
 
   it "generates .cursor/rules/*.mdc files with YAML frontmatter" do

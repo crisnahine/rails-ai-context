@@ -4,11 +4,9 @@ module RailsAiContext
   module Introspectors
     # Analyzes Gemfile.lock to identify installed gems and
     # map them to known patterns/frameworks the AI should know about.
-    class GemIntrospector
+    class GemIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
 
       # Known gems that significantly affect how the app works.
       # The AI needs to know about these to give accurate advice.
@@ -179,13 +177,9 @@ module RailsAiContext
         "webauthn"        => { category: :auth, note: "WebAuthn/passkey registration and authentication." }
       }.freeze
 
-      def initialize(app)
-        @app = app
-      end
-
       # @return [Hash] gem analysis
       def call
-        lock = RailsAiContext::GemLock.for(app.root)
+        lock = RailsAiContext::GemLock.for(root)
         if lock.missing?
           # A lockfile the app never wrote is an absent source, the way every
           # other section reports one; a lockfile this could not read failed.
@@ -199,6 +193,9 @@ module RailsAiContext
           # Named for its source: the context's own ruby_version is the Ruby
           # the app runs on, and both are served from the same run.
           declared_ruby_version: lock.ruby_version,
+          # Four files can name a Ruby version and they disagree often enough
+          # that the answer has to say which one it read.
+          declared_ruby_version_source: lock.ruby_version_source,
           notable_gems: notable,
           categories: categorize_gems(notable),
           local_gems: detect_local_gems,
@@ -208,12 +205,14 @@ module RailsAiContext
 
       private
 
-      def detect_local_gems
-        gemfile = File.join(app.root, "Gemfile")
-        return [] unless File.exist?(gemfile)
+      def gemfile_gems
+        @gemfile_gems ||= GemfileGems.entries(root)
+      end
 
-        ast_data = SourceIntrospector.walk(gemfile, { gems: -> { Listeners::GemfileDslListener.new } })
-        ast_data[:gems].filter_map do |entry|
+      def detect_local_gems
+        return [] unless gemfile_gems
+
+        gemfile_gems.filter_map do |entry|
           next unless entry[:type] == :gem
           opts = entry[:options] || {}
           if opts[:path]
@@ -227,12 +226,10 @@ module RailsAiContext
       end
 
       def detect_gem_groups
-        gemfile = File.join(app.root, "Gemfile")
-        return {} unless File.exist?(gemfile)
+        return {} unless gemfile_gems
 
-        ast_data = SourceIntrospector.walk(gemfile, { gems: -> { Listeners::GemfileDslListener.new } })
         groups = {}
-        ast_data[:gems].each do |entry|
+        gemfile_gems.each do |entry|
           next unless entry[:type] == :gem && entry[:groups]&.any?
           entry[:groups].each do |g|
             (groups[g.to_s] ||= []) << entry[:name]
@@ -264,17 +261,60 @@ module RailsAiContext
       def app_uses_indirect?(gem_name, lock)
         return true if lock.direct?(gem_name)
 
-        gem_name == "minitest" ? Dir.exist?(File.join(app.root.to_s, "test")) : false
+        gem_name == "minitest" ? Dir.exist?(File.join(root, "test")) : false
       end
 
       # What the app does with Redis is a question the app answers. The fixed
       # sentence named caching, sessions and Action Cable on an app that used
       # Solid Cache and cookie sessions.
       def refine_note(gem_name, note)
+        note = resolve_note_paths(note)
         return note unless gem_name == "redis"
 
         store = cache_store_name
         store&.include?("redis") ? "#{note} Cache store: #{store}." : note
+      end
+
+      NOTE_PATH = %r{\b(?:app|config|db|lib|spec|test)/[\w./-]*}
+
+      # A sentence naming a file is worth printing only when the file is there,
+      # under the spelling the app gives it.
+      def resolve_note_paths(note)
+        sentences = note.split(/(?<=\.)\s+/)
+        kept = sentences.filter_map do |sentence|
+          resolved = sentence.gsub(NOTE_PATH) { |match| resolve_note_path(match) || match }
+          next resolved unless missing_path?(resolved)
+          next nil if sentences.size > 1
+
+          without_path_clause(resolved)
+        end
+        kept.join(" ")
+      end
+
+      def missing_path?(sentence)
+        sentence.scan(NOTE_PATH).any? { |match| resolve_note_path(match).nil? && !named_as_absent?(sentence, match) }
+      end
+
+      # `not db/schema.rb` names the path to say the app does not have one.
+      def named_as_absent?(sentence, path)
+        sentence.match?(/\b(?:not|no)\s+#{Regexp.escape(path)}/)
+      end
+
+      # The only sentence there is, so the path clause goes and the rest of
+      # the description stays.
+      def without_path_clause(sentence)
+        cleaned = sentence.gsub(/\s+(?:in|from|at|under|to)\s+#{NOTE_PATH.source}/, "").squeeze(" ").strip
+        cleaned.end_with?(".") ? cleaned : "#{cleaned}."
+      end
+
+      def resolve_note_path(path)
+        bare = path.chomp(".")
+        full = File.join(root, bare)
+        return path if File.exist?(full) || Dir.exist?(full)
+        return nil unless bare.start_with?("config/initializers/")
+
+        found = PathResolver.app_initializer_files(root, File.basename(bare)).first
+        found && path.sub(bare, found)
       end
 
       def cache_store_name

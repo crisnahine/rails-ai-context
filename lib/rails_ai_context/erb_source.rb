@@ -37,6 +37,12 @@ module RailsAiContext
       out
     end
 
+    # Tags go and their newlines stay, so the rest parses at its written indentation;
+    # a value the file computed is absent rather than wrong.
+    def without_tags(source)
+      source.to_s.gsub(TAG) { "\n" * Regexp.last_match(0).count("\n") }
+    end
+
     def blank(text)
       text.gsub(/[^\n]/, " ")
     end

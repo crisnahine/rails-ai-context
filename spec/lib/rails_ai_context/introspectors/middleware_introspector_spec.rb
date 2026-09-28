@@ -67,6 +67,92 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
       expect(tenant[:initializes_app]).to be true
     end
 
+    it "reads the middleware's own initialize past a nested helper class" do
+      File.write(File.join(@middleware_dir, "nested_helper.rb"), <<~RUBY)
+        class NestedHelper
+          class Bucket
+            def initialize(size)
+            end
+          end
+
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+          end
+        end
+      RUBY
+
+      nested = introspector.call[:custom_middleware].find { |m| m[:class_name] == "NestedHelper" }
+      expect(nested[:has_call_method]).to be true
+      expect(nested[:initializes_app]).to be true
+    end
+
+    it "does not let a nested helper class answer for the middleware" do
+      File.write(File.join(@middleware_dir, "outer_mw.rb"), <<~RUBY)
+        class OuterMw
+          class Bucket
+            def initialize(app)
+            end
+
+            def call(env)
+            end
+          end
+
+          def initialize(config)
+            @config = config
+          end
+        end
+      RUBY
+
+      outer = introspector.call[:custom_middleware].find { |m| m[:class_name] == "OuterMw" }
+      expect(outer[:has_call_method]).to be false
+      expect(outer[:initializes_app]).to be false
+    end
+
+    it "reads the middleware class the file is named for, not a helper declared above it" do
+      File.write(File.join(@middleware_dir, "audit_logger.rb"), <<~RUBY)
+        class LogFormatter
+          def initialize(prefix)
+          end
+        end
+
+        class AuditLogger
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+          end
+        end
+      RUBY
+
+      audit = introspector.call[:custom_middleware].find { |m| m[:class_name] == "AuditLogger" }
+      expect(audit[:has_call_method]).to be true
+      expect(audit[:initializes_app]).to be true
+    end
+
+    it "names a namespaced middleware's own methods" do
+      FileUtils.mkdir_p(File.join(@middleware_dir, "api"))
+      File.write(File.join(@middleware_dir, "api", "throttle.rb"), <<~RUBY)
+        module Api
+          class Throttle
+            def initialize(app)
+              @app = app
+            end
+
+            def call(env)
+            end
+          end
+        end
+      RUBY
+
+      throttle = introspector.call[:custom_middleware].find { |m| m[:class_name] == "Api::Throttle" }
+      expect(throttle[:has_call_method]).to be true
+      expect(throttle[:initializes_app]).to be true
+    end
+
     it "detects logging pattern" do
       logger = result[:custom_middleware].find { |m| m[:class_name] == "RequestLogger" }
       expect(logger[:detected_patterns]).to include("logging")
@@ -84,6 +170,267 @@ RSpec.describe RailsAiContext::Introspectors::MiddlewareIntrospector do
 
     it "does not return an error" do
       expect(result[:error]).to be_nil
+    end
+  end
+
+  describe "insertions an initializer makes" do
+    let(:init_dir) { File.join(app.root.to_s, "config/initializers") }
+    let(:lib_dir) { File.join(app.root.to_s, "lib/middleware") }
+
+    before do
+      FileUtils.mkdir_p(init_dir)
+      FileUtils.mkdir_p(lib_dir)
+      File.write(File.join(init_dir, "200-first_middlewares.rb"), <<~RUBY)
+        Rails.configuration.middleware.unshift(Middleware::RequestTracker)
+        Rails.configuration.middleware.move_before(Middleware::RequestTracker, ActionDispatch::RemoteIp)
+        Rails.configuration.middleware.insert_before ActionDispatch::Flash, Middleware::EnforceHostname
+        Rails.configuration.middleware.swap Rails::Rack::Logger, SilenceLogger
+        Rails.configuration.middleware.delete ActionDispatch::Executor
+      RUBY
+      File.write(File.join(lib_dir, "request_tracker.rb"), <<~RUBY)
+        module Middleware
+          class RequestTracker
+            def initialize(app)
+              @app = app
+            end
+
+            def call(env)
+              @app.call(env)
+            end
+          end
+        end
+      RUBY
+    end
+
+    after do
+      FileUtils.rm_f(File.join(init_dir, "200-first_middlewares.rb"))
+      FileUtils.rm_rf(lib_dir)
+    end
+
+    it "reads the insertions config/application.rb and an environment file make" do
+      FileUtils.mkdir_p(File.join(app.root.to_s, "config/environments"))
+      File.write(File.join(app.root.to_s, "config/application.rb"), <<~RUBY)
+        module Dummy
+          class Application < Rails::Application
+            config.middleware.insert_after ActionDispatch::Flash, Middleware::DefaultHeaders
+            config.middleware.delete Rack::Lock
+          end
+        end
+      RUBY
+      File.write(File.join(app.root.to_s, "config/environments/test.rb"), <<~RUBY)
+        Rails.application.configure do
+          config.middleware.use RspecErrorTracker
+        end
+      RUBY
+
+      found = introspector.call[:middleware_from_initializers]
+
+      expect(found).to include(
+        { middleware: "Middleware::DefaultHeaders", action: "insert_after", file: "config/application.rb" },
+        { middleware: "Rack::Lock", action: "delete", file: "config/application.rb" },
+        { middleware: "RspecErrorTracker", action: "use", file: "config/environments/test.rb" }
+      )
+    ensure
+      FileUtils.rm_f(File.join(app.root.to_s, "config/application.rb"))
+      FileUtils.rm_f(File.join(app.root.to_s, "config/environments/test.rb"))
+    end
+
+    it "reads an insertion made through the app's own application class" do
+      FileUtils.mkdir_p(File.join(app.root.to_s, "config"))
+      File.write(File.join(app.root.to_s, "config/application.rb"), <<~RUBY)
+        module Dummy
+          class Application < Rails::Application
+          end
+        end
+      RUBY
+      File.write(File.join(init_dir, "app_class.rb"), <<~RUBY)
+        Dummy::Application.config.middleware.use Rack::Deflater
+        OtherApp::Application.config.middleware.use Rack::Timeout
+      RUBY
+
+      found = introspector.call[:middleware_from_initializers].map { |m| m[:middleware] }
+
+      expect(found).to include("Rack::Deflater")
+      expect(found).not_to include("Rack::Timeout")
+    ensure
+      FileUtils.rm_f(File.join(init_dir, "app_class.rb"))
+      FileUtils.rm_f(File.join(app.root.to_s, "config/application.rb"))
+    end
+
+    it "credits the app with a middleware class its initializer declares" do
+      File.write(File.join(init_dir, "silence_logger.rb"), <<~RUBY)
+        class SilenceLogger < Rails::Rack::Logger
+          def call(env)
+            super
+          end
+        end
+
+        Rails.configuration.middleware.swap Rails::Rack::Logger, SilenceLogger
+      RUBY
+
+      found = introspector.call[:custom_middleware].find { |m| m[:class_name] == "SilenceLogger" }
+
+      expect(found).to include(file: "config/initializers/silence_logger.rb", has_call_method: true)
+    ensure
+      FileUtils.rm_f(File.join(init_dir, "silence_logger.rb"))
+    end
+
+    it "does not credit the app with a gem's class an initializer reopens" do
+      File.write(File.join(init_dir, "rack_attack.rb"), <<~RUBY)
+        class Rack::Attack
+          throttle("logins/ip", limit: 5, period: 60) { |req| req.ip }
+        end
+
+        Rails.application.config.middleware.use Rack::Attack
+      RUBY
+
+      names = introspector.call[:custom_middleware].map { |m| m[:class_name] }
+
+      expect(names).not_to include("Rack::Attack")
+    ensure
+      FileUtils.rm_f(File.join(init_dir, "rack_attack.rb"))
+    end
+
+    it "names the exceptions app apart from the stack" do
+      FileUtils.mkdir_p(File.join(app.root.to_s, "config"))
+      File.write(File.join(app.root.to_s, "config/application.rb"), <<~RUBY)
+        module Dummy
+          class Application < Rails::Application
+            config.exceptions_app = Middleware::PublicExceptions.new(Rails.public_path)
+          end
+        end
+      RUBY
+      File.write(File.join(lib_dir, "public_exceptions.rb"), <<~RUBY)
+        module Middleware
+          class PublicExceptions
+            def call(env)
+              [500, {}, []]
+            end
+          end
+        end
+      RUBY
+
+      result = introspector.call
+
+      expect(result[:custom_middleware].map { |m| m[:class_name] }).not_to include("Middleware::PublicExceptions")
+      expect(result[:exceptions_app]).to eq({ class_name: "Middleware::PublicExceptions", file: "lib/middleware/public_exceptions.rb" })
+    ensure
+      FileUtils.rm_f(File.join(app.root.to_s, "config/application.rb"))
+    end
+
+    it "reads every verb off Rails.configuration.middleware" do
+      found = introspector.call[:middleware_from_initializers]
+
+      expect(found).to include(
+        { middleware: "Middleware::RequestTracker", action: "unshift", file: "config/initializers/200-first_middlewares.rb" },
+        { middleware: "ActionDispatch::RemoteIp", action: "move_before", file: "config/initializers/200-first_middlewares.rb" },
+        { middleware: "Middleware::EnforceHostname", action: "insert_before", file: "config/initializers/200-first_middlewares.rb" },
+        { middleware: "SilenceLogger", action: "swap", file: "config/initializers/200-first_middlewares.rb" },
+        { middleware: "ActionDispatch::Executor", action: "delete", file: "config/initializers/200-first_middlewares.rb" }
+      )
+    end
+
+    it "names a class under lib/middleware the way the file declares it" do
+      File.write(File.join(lib_dir, "bare_tracker.rb"), <<~RUBY)
+        class BareTracker
+          def initialize(app)
+            @app = app
+          end
+
+          def call(env)
+            @app.call(env)
+          end
+        end
+      RUBY
+      File.write(File.join(init_dir, "bare.rb"), "Rails.configuration.middleware.unshift(BareTracker)\n")
+
+      names = introspector.call[:custom_middleware].map { |m| m[:class_name] }
+
+      expect(names).to include("BareTracker")
+      expect(names).not_to include("Middleware::BareTracker")
+      expect(names.count("BareTracker")).to eq(1)
+    ensure
+      FileUtils.rm_f(File.join(init_dir, "bare.rb"))
+    end
+
+    it "lists a class the initializer unshifts onto Rails.application's own stack" do
+      FileUtils.mkdir_p(File.join(app.root.to_s, "lib/mastodon/middleware"))
+      File.write(File.join(init_dir, "prometheus_exporter.rb"), <<~RUBY)
+        Rails.application.middleware.unshift Mastodon::Middleware::PrometheusQueueTime, instrument: false
+      RUBY
+      File.write(File.join(app.root.to_s, "lib/mastodon/middleware/prometheus_queue_time.rb"), <<~RUBY)
+        module Mastodon
+          module Middleware
+            class PrometheusQueueTime
+              def initialize(app)
+                @app = app
+              end
+
+              def call(env)
+                @app.call(env)
+              end
+            end
+          end
+        end
+      RUBY
+
+      result = introspector.call
+      names = result[:custom_middleware].map { |m| m[:class_name] }
+
+      expect(names).to include("Mastodon::Middleware::PrometheusQueueTime")
+      expect(result[:middleware_from_initializers]).to include(
+        { middleware: "Mastodon::Middleware::PrometheusQueueTime", action: "unshift",
+          file: "config/initializers/prometheus_exporter.rb" }
+      )
+    ensure
+      FileUtils.rm_f(File.join(init_dir, "prometheus_exporter.rb"))
+      FileUtils.rm_rf(File.join(app.root.to_s, "lib/mastodon"))
+    end
+
+    it "lists an inserted class that lives anywhere the app autoloads from" do
+      FileUtils.mkdir_p(File.join(app.root.to_s, "app/lib/middlewares"))
+      File.write(File.join(init_dir, "middlewares.rb"), <<~RUBY)
+        Rails.configuration.middleware.use(Middlewares::SetCookieDomain)
+      RUBY
+      File.write(File.join(app.root.to_s, "app/lib/middlewares/set_cookie_domain.rb"), <<~RUBY)
+        module Middlewares
+          class SetCookieDomain
+            def initialize(app)
+              @app = app
+            end
+
+            def call(env)
+              @app.call(env)
+            end
+          end
+        end
+      RUBY
+
+      found = introspector.call[:custom_middleware].find { |m| m[:class_name] == "Middlewares::SetCookieDomain" }
+
+      expect(found[:file]).to eq("app/lib/middlewares/set_cookie_domain.rb")
+      expect(found[:has_call_method]).to be true
+    ensure
+      FileUtils.rm_f(File.join(init_dir, "middlewares.rb"))
+      FileUtils.rm_rf(File.join(app.root.to_s, "app/lib"))
+    end
+
+    it "does not list an inserted middleware that belongs to a gem" do
+      names = introspector.call[:custom_middleware].map { |m| m[:class_name] }
+
+      expect(names).not_to include("ActionDispatch::Flash", "Rails::Rack::Logger")
+    end
+
+    it "lists a class the initializer inserts and the directory scan already found only once" do
+      found = introspector.call[:custom_middleware].select { |m| m[:class_name] == "Middleware::RequestTracker" }
+
+      expect(found.size).to eq(1)
+    end
+
+    it "lists a middleware class the app keeps in lib/middleware" do
+      names = introspector.call[:custom_middleware].map { |m| m[:class_name] }
+
+      expect(names).to include("Middleware::RequestTracker")
     end
   end
 

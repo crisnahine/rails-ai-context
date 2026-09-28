@@ -5,7 +5,7 @@ module RailsAiContext
     # Generates CLAUDE.md optimized for Claude Code.
     # In :compact mode (default), produces ≤150 lines with MCP tool references.
     # In :full mode, delegates to MarkdownSerializer with behavioral rules.
-    class ClaudeSerializer
+    class ClaudeSerializer < Base
       include TestCommandDetection
       include StackOverviewHelper
       include ToolGuideHelper

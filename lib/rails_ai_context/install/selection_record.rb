@@ -47,7 +47,9 @@ module RailsAiContext
 
       # @return [Array<Symbol>, nil] the recorded tools, or nil if none.
       def read(root:)
-        from_initializer(root) || from_yaml(root)
+        match = initializer_content(root)&.match(SELECTION_LINE)
+        (match && presence(normalize(match[1].split))) ||
+          presence(normalize(yaml_record(root)[YAML_KEY]))
       end
 
       # The recorded tool mode, initializer first, same precedence as the
@@ -57,7 +59,7 @@ module RailsAiContext
       #
       # @return [Symbol, nil]
       def tool_mode(root:)
-        mode_from_initializer(root) || mode_from_yaml(root)
+        initializer_content(root)&.slice(MODE_LINE, 1)&.to_sym || yaml_record(root)["tool_mode"]&.to_sym
       end
 
       # Whether this install writes context files, initializer first, the
@@ -65,10 +67,11 @@ module RailsAiContext
       #
       # @return [Boolean, nil] nil when nothing recorded it
       def context_files(root:)
-        value = context_files_from_initializer(root)
-        return value unless value.nil?
+        declared = initializer_content(root)&.slice(CONTEXT_FILES_LINE, 1)
+        return declared == "true" unless declared.nil?
 
-        context_files_from_yaml(root)
+        recorded = yaml_record(root)["context_files"]
+        recorded.nil? ? nil : !!recorded
       end
 
       # @return [Symbol] :updated, :inserted, :unchanged or :absent
@@ -77,38 +80,13 @@ module RailsAiContext
                           CONTEXT_FILES_LINE, /^[ \t]*config\.context_files\s*=.*$/)
       end
 
-      # Rewrites (or inserts) the tool_mode line, the way `write` handles the
-      # tools line. The rake task carried its own three-branch rewriter with a
-      # duplicate of CONFIGURE_BLOCK; the file's shape belongs here. Only an
-      # uncommented line is rewritten - the generated initializer ships a
-      # commented-out default that must stay a comment.
+      # Only an uncommented line is rewritten - the generated initializer ships
+      # a commented-out default that must stay a comment.
       #
       # @return [Symbol] :updated, :inserted, :unchanged or :absent
       def write_tool_mode(mode, root:)
-        path = File.join(root.to_s, INITIALIZER)
-        return :absent unless File.exist?(path)
-
-        content = File.read(path)
-        line = "  config.tool_mode = :#{mode}"
-
-        if content.match?(MODE_LINE)
-          updated = content.sub(/^[ \t]*config\.tool_mode\s*=.*$/, line)
-          return :unchanged if updated == content
-
-          File.write(path, updated)
-          :updated
-        elsif content.match?(SELECTION_LINE)
-          File.write(path, content.sub(/^([ \t]*config\.ai_tools\s*=[^\n]*)$/) { "#{Regexp.last_match(1)}\n#{line}" })
-          :inserted
-        elsif content.match?(CONFIGURE_BLOCK)
-          File.write(path, content.sub(CONFIGURE_BLOCK) { "#{Regexp.last_match(0)}#{line}\n" })
-          :inserted
-        else
-          :absent
-        end
-      rescue StandardError => e
-        RailsAiContext.log_warn "[rails-ai-context] could not write #{INITIALIZER}: #{e.message}"
-        :unchanged
+        write_config_line(root, "  config.tool_mode = :#{mode}",
+                          MODE_LINE, /^[ \t]*config\.tool_mode\s*=.*$/)
       end
 
       # Records the selection in both places and says what it did, because
@@ -181,28 +159,27 @@ module RailsAiContext
 
       # Everything below is how the record is stored, not what callers ask of
       # it. The seam is read / write / add / messages / initializer_line.
-      private_class_method def self.from_initializer(root)
+      # @return [String, nil] the initializer's source, nil when it is missing
+      #   or unreadable.
+      private_class_method def self.initializer_content(root)
         path = File.join(root.to_s, INITIALIZER)
         return nil unless File.exist?(path)
 
-        match = File.read(path).match(SELECTION_LINE)
-        return nil unless match
-
-        presence(normalize(match[1].split))
+        File.read(path)
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not read #{INITIALIZER}: #{e.message}" if ENV["DEBUG"]
         nil
       end
 
-      private_class_method def self.from_yaml(root)
+      # @return [Hash] the parsed record, empty when it is missing or unreadable.
+      private_class_method def self.yaml_record(root)
         path = File.join(root.to_s, YAML_FILE)
-        return nil unless File.exist?(path)
+        return {} unless File.exist?(path)
 
-        data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
-        presence(normalize(data[YAML_KEY]))
+        YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
-        nil
+        {}
       end
 
       # One rewriter for the single-value keys this record owns, because the
@@ -231,51 +208,6 @@ module RailsAiContext
       rescue StandardError => e
         RailsAiContext.log_warn "[rails-ai-context] could not write #{INITIALIZER}: #{e.message}"
         :unchanged
-      end
-
-      private_class_method def self.context_files_from_initializer(root)
-        path = File.join(root.to_s, INITIALIZER)
-        return nil unless File.exist?(path)
-
-        match = File.read(path)[CONTEXT_FILES_LINE, 1]
-        match.nil? ? nil : match == "true"
-      rescue StandardError => e
-        RailsAiContext.log_warn "[rails-ai-context] could not read #{INITIALIZER}: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      private_class_method def self.context_files_from_yaml(root)
-        path = File.join(root.to_s, YAML_FILE)
-        return nil unless File.exist?(path)
-
-        data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
-        value = data["context_files"]
-        value.nil? ? nil : !!value
-      rescue StandardError => e
-        RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      private_class_method def self.mode_from_initializer(root)
-        path = File.join(root.to_s, INITIALIZER)
-        return nil unless File.exist?(path)
-
-        File.read(path)[MODE_LINE, 1]&.to_sym
-      rescue StandardError => e
-        RailsAiContext.log_warn "[rails-ai-context] could not read #{INITIALIZER}: #{e.message}" if ENV["DEBUG"]
-        nil
-      end
-
-      private_class_method def self.mode_from_yaml(root)
-        path = File.join(root.to_s, YAML_FILE)
-        return nil unless File.exist?(path)
-
-        data = YAML.safe_load_file(path, permitted_classes: PERMITTED_YAML) || {}
-        mode = data["tool_mode"]
-        mode&.to_sym
-      rescue StandardError => e
-        RailsAiContext.log_warn "[rails-ai-context] could not read #{YAML_FILE}: #{e.message}" if ENV["DEBUG"]
-        nil
       end
 
       # A name that is not a tool this gem knows would be written back out as

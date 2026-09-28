@@ -108,8 +108,9 @@ The gem has two context modes that control how much data goes into the generated
 rails ai:context
 ```
 
-- CLAUDE.md ≤150 lines
-- copilot-instructions.md ≤500 lines
+- CLAUDE.md, AGENTS.md, .cursorrules and copilot-instructions.md ≤150 non-blank
+  lines (`claude_max_lines`). Over budget, data lines are cut and the Commands,
+  Warnings, Rules and MCP-tools sections kept whole
 - Files contain a project overview + MCP tool reference
 - AI uses MCP tools for detailed data on-demand
 - **Best for:** all apps, especially large ones (30+ models)
@@ -191,7 +192,7 @@ A file whose section has nothing in it is not written. An app with no models get
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `.github/copilot-instructions.md` | Repo-wide instructions | ≤500 lines in compact mode. |
+| `.github/copilot-instructions.md` | Repo-wide instructions | ≤`claude_max_lines` (150) non-blank lines in compact mode, markers included. |
 | `.github/instructions/rails-models.instructions.md` | Model context | `applyTo: app/models/**/*.rb` - loaded when editing models. |
 | `.github/instructions/rails-controllers.instructions.md` | Controller context | `applyTo: app/controllers/**/*.rb` - loaded when editing controllers. |
 | `.github/instructions/rails-context.instructions.md` | Project context and conventions | `applyTo: **/*` - loaded everywhere. |
@@ -501,7 +502,7 @@ rails_get_controllers(detail: "full")
 
 Returns application configuration. No parameters.
 
-**Returns:** cache store, session store, timezone, queue adapter, mailer settings, custom middleware (framework defaults are filtered out), notable initializers, CurrentAttributes classes.
+**Returns:** cache store, session store, timezone, queue adapter, mailer settings, the app's own middleware classes with their files and the rest of the stack as additions (framework defaults are filtered out), notable initializers, CurrentAttributes classes.
 
 ```
 rails_get_config()
@@ -682,7 +683,7 @@ Ripgrep-powered regex search across the codebase.
 | `group_by_file` | boolean | Group results by file with match counts. Default: false. |
 | `offset` | integer | Skip this many lines for pagination. Default: 0. |
 | `limit` | integer | Max lines to return; the default is sized in matches. |
-| `context_lines` | integer | Lines of context before and after each match (like grep -C). Default: 2, max: 5. Needs ripgrep; without it the search returns match lines only. |
+| `context_lines` | integer | Lines of context before and after each match (like grep -C). Default: 2, max: 5. |
 
 Smart result limiting, sized in matches: under 10 shows all, 10-100 shows half, over 100 caps at 100. `offset` and `limit` count emitted lines, so a search with context returns more lines than matches. The header says how many matches were found, how many the page shows, and whether the line cap was reached. Once it names the cap, the count covers only the lines it scanned, so it is written `N+`.
 
@@ -715,7 +716,7 @@ rails_search_code(pattern: "User", match_type: "class")
   → Only `class User` / `module User` definitions
 ```
 
-**Security:** Uses `Open3.capture2` with array arguments (no shell injection). Validates file_type. Blocks path traversal. Respects `excluded_paths` and `sensitive_patterns` config.
+**Security:** Uses `Open3.capture2` with array arguments (no shell injection). Validates file_type. Blocks path traversal. Respects `excluded_paths` and `sensitive_patterns` config on both backends, and the Ruby fallback reads the ignore files ripgrep reads and ranks them the way ripgrep does: `.rgignore` over `.ignore` over `.gitignore` (each scoped to its own directory) over `.git/info/exclude` over the global excludes file, the file type deciding before depth, which breaks ties only within one type; `.ignore` and `.rgignore` apply outside a git repository too, and a directory the rules ignore is never entered. As ripgrep does, the fallback also reads the ignore files of every directory above the app, the git ones only as far up as the nearest `.git` (a file for a worktree or submodule), so an app nested in a larger repository gets that repository's rules and a repository nested in the app stops the app's `.gitignore`. Patterns match case-sensitively, symlinks are not followed, and a file with a NUL byte in its first 64 KiB is skipped unread, all as in ripgrep, so the two return the same set.
 
 ### rails_analyze_feature
 
@@ -877,11 +878,11 @@ rails_get_service_pattern(detail: "full")
   → All services with methods, initialize params, side effects, and rescue blocks
 ```
 
-**Returns:** Service listing with common pattern detection (initialize+call, self.call, Result objects) or full detail including file path, initialize parameters, public methods, dependencies (other classes called), error handling (rescue blocks), side effects (database writes, email delivery, job enqueues, HTTP requests, Turbo broadcasts), and a list of files that call the service.
+**Returns:** Service listing with common pattern detection (initialize+call, self.call, Result objects) or full detail including file path, initialize parameters, public methods, dependencies (other classes called), error handling (rescue blocks), side effects (database writes, email delivery, job enqueues, HTTP requests, Turbo broadcasts), and a list of files that call the service. A base class other services inherit from is named above the listing rather than counted as a service; asking for it by name still answers.
 
 ### rails_get_job_pattern
 
-Analyze background jobs in app/jobs/: queues, retries, perform signatures, guards, and what they call. Specify a job for full detail, or omit to list all jobs with queue names and retry config.
+Analyze background jobs in app/jobs/, app/workers/ and app/sidekiq/: queues, retries, perform signatures, guards, and what they call. Specify a job for full detail, or omit to list all jobs with queue names and retry config.
 
 **Parameters:**
 
@@ -1041,7 +1042,7 @@ In addition to tools, the gem registers static MCP resources that AI clients can
 | `rails://schema` | Full database schema (JSON) |
 | `rails://routes` | All routes (JSON) |
 | `rails://conventions` | Detected patterns and architecture (JSON) |
-| `rails://gems` | Notable gems with categories, plus `declared_ruby_version`, from the lockfile's RUBY VERSION section or, failing that, the Gemfile's `ruby` line (JSON) |
+| `rails://gems` | Notable gems with categories, plus `declared_ruby_version` and which of the lockfile, Gemfile, `.ruby-version` or `.tool-versions` answered (JSON) |
 | `rails://controllers` | All controllers with actions and filters (JSON) |
 | `rails://config` | Application configuration (JSON) |
 | `rails://tests` | Test infrastructure details (JSON) |
@@ -1287,7 +1288,7 @@ if defined?(RailsAiContext)
     # app/views size the doctor warns past - not a read cap (default: 10MB)
     # config.max_view_total_size = 10_000_000
 
-    # Named in that doctor warning's fix line (default: 1MB)
+    # Accepted and stored; no check reads it (default: 1MB)
     # config.max_view_file_size = 1_000_000
 
     # Max search results per call (default: 200)
@@ -1298,11 +1299,11 @@ if defined?(RailsAiContext)
 
     # --- Search and file discovery ---
 
-    # File extensions for Ruby fallback search
+    # Narrow the Ruby fallback to these extensions (unset: every file, as ripgrep)
     # config.search_extensions = %w[rb js erb yml yaml json ts tsx vue svelte haml slim]
 
     # Where to look for concern source files. Left unset, every
-    # app/*/concerns directory is discovered. Setting this replaces
+    # app/concerns and app/*/concerns directory is discovered. Setting this replaces
     # that list, so it can narrow as well as reach outside app/.
     # config.concern_paths = %w[app/models/concerns lib/concerns]
 
@@ -1333,7 +1334,7 @@ end
 | `preset` | Symbol | `:full` | Introspector preset (`:full` or `:standard`) |
 | `introspectors` | Array | 40 (full preset) | Which introspectors to run |
 | `context_mode` | Symbol | `:compact` | `:compact` or `:full` |
-| `claude_max_lines` | Integer | `150` | Max lines for CLAUDE.md in compact mode |
+| `claude_max_lines` | Integer | `150` | Max non-blank lines in a compact context file's gem-managed block, the `<!-- BEGIN/END rails-ai-context -->` markers included. Over budget, data lines are cut and the Commands, Warnings, Rules and MCP-tools sections kept whole |
 | `max_tool_response_chars` | Integer | `200_000` | Safety cap for MCP tool responses and resource payloads |
 | `cache_ttl` | Integer | `60` | Cache TTL in seconds for introspection results |
 | `custom_tools` | Array | `[]` | Additional MCP tool classes to register alongside built-in tools |
@@ -1360,7 +1361,7 @@ end
 | `max_test_file_size` | Integer | `1_000_000` | Test file read limit (1MB) |
 | `max_schema_file_size` | Integer | `10_000_000` | schema.rb / structure.sql parse limit (10MB) |
 | `max_view_total_size` | Integer | `10_000_000` | Doctor threshold: app/views above this warns (10MB). Not a read cap |
-| `max_view_file_size` | Integer | `1_000_000` | Named in that doctor warning's fix line (1MB). Not a read cap |
+| `max_view_file_size` | Integer | `1_000_000` | Accepted and stored; no check reads it (1MB). Not a read cap |
 | `max_search_results` | Integer | `200` | Max lines a search may emit per call, matches and context together |
 | `max_validate_files` | Integer | `50` | Max files per validate call |
 | `excluded_controllers` | Array | `DeviseController`, etc. | Controller classes hidden from listings |
@@ -1369,8 +1370,8 @@ end
 | `excluded_concerns` | Array of Regex or String | framework regex patterns | Patterns for concerns to hide. A YAML list replaces the framework defaults; the initializer's `+=` adds to them |
 | `excluded_filters` | Array | `verify_authenticity_token`, etc. | Framework filter names hidden from controller output |
 | `excluded_middleware` | Array | standard Rails middleware | Default middleware hidden from config output |
-| `search_extensions` | Array | `rb js erb yml yaml json ts tsx vue svelte haml slim` | File extensions the Ruby fallback searches (ripgrep, when installed, searches every file) |
-| `concern_paths` | Array | `nil` (discovers `app/*/concerns`) | Where to look for concern source files. Setting it replaces discovery |
+| `search_extensions` | Array | `nil` | Narrows the Ruby fallback to these extensions. Unset, it searches every non-hidden, non-binary file, as ripgrep does |
+| `concern_paths` | Array | `nil` (discovers `app/concerns` and `app/*/concerns`) | Where to look for concern source files. Setting it replaces discovery |
 
 ### Root file generation
 
@@ -1414,7 +1415,7 @@ Core Rails structure only. Use `config.preset = :standard` for a lighter footpri
 | `view_templates` | View file contents, partial references, Stimulus data attributes, model field usage in partials. |
 | `components` | ViewComponent/Phlex components: props, slots, previews, sidecar assets, usage examples. |
 | `turbo` | Turbo Frames (IDs and files), Turbo Stream templates, model broadcasts (`broadcasts_to`, `broadcasts`). |
-| `auth` | Devise models with modules, Rails 8 built-in auth, has_secure_password, Pundit policies, CanCanCan, CORS config, CSP config. |
+| `auth` | Devise models with modules, Rails 8 built-in auth, has_secure_password, policy classes in app/policies (named Pundit only when the app bundles it), an Ability class (named CanCanCan only when the app bundles it), CORS config, CSP config. |
 | `performance` | N+1 query risks, missing counter_cache, missing FK indexes, Model.all anti-patterns, eager load candidates. |
 | `i18n` | Default locale, available locales, locale files with key counts, backend class, parse errors. |
 
@@ -1433,7 +1434,7 @@ Includes all standard introspectors plus:
 | `devops` | Puma config (threads, workers, port), Procfile entries, Docker (multi-stage detection), deployment tools, health check routes. |
 | `action_mailbox` | Action Mailbox mailboxes with routing patterns. |
 | `seeds` | db/seeds.rb analysis (Faker usage, environment conditionals), seed files in db/seeds/, models seeded. |
-| `middleware` | Custom Rack middleware in app/middleware/ with detected patterns (auth, rate limiting, tenant isolation, logging). Full middleware stack. |
+| `middleware` | Custom Rack middleware in app/middleware/ and lib/middleware/ with detected patterns (auth, rate limiting, tenant isolation, logging), what the app's config inserts, moves or removes, and the full middleware stack. |
 | `engines` | Mounted Rails engines from routes.rb with paths and descriptions for 23+ known engines (Sidekiq::Web, Flipper::UI, PgHero, ActiveAdmin, etc.). |
 | `env_config` | Per-environment config files (`config/environments/*.rb`): notable toggles (`force_ssl`, `eager_load`, caching, log level, queue adapter, mailer delivery) with URI credentials redacted, assigned config keys. |
 | `multi_database` | Multiple databases, replicas, sharding config, model-specific `connects_to` declarations. database.yml parsing fallback. |

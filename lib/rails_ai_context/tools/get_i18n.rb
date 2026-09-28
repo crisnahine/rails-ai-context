@@ -38,7 +38,9 @@ module RailsAiContext
         fetch_section(:i18n, subject: "I18n introspection") do |i18n|
           available = i18n[:available_locales] || []
           if locale
-            match = find_closest_match(locale, available)
+            # Exact only: a substring hit rendered another locale's files
+            # under the asked-for one.
+            match = find_exact_match(locale, available)
             return not_found_response("Locale", locale, available, recovery_tool: "omit `locale` for the full I18n picture") unless match
 
             return render_locale(i18n, match, offset: offset, limit: limit)
@@ -66,7 +68,8 @@ module RailsAiContext
             lines << "- **Backend:** #{i18n[:backend]}"
           end
           lines << "- **#{Serializers::SectionFacts.available_locales_label(i18n)}:** #{available_list(i18n)}"
-          lines << "- **Locale files:** #{i18n[:total_locale_files] || files.size}"
+          lines << "- **Locale files:** #{i18n[:total_locale_files] || files.size}" \
+                   "#{Serializers::SectionFacts.unread_locale_note(i18n)}"
 
           # A language-name table under config/locales makes Rails list a
           # locale per language, and on Discourse that is 138 rows of zeroes.
@@ -163,12 +166,14 @@ module RailsAiContext
           parts.empty? ? "" : " - #{parts.join(', ')}"
         end
 
+        # A page past the end gets no heading: the hint below already says
+        # where the list ends, and a bare heading claims a list it lacks.
         def render_file_list(lines, page, heading, empty_message)
-          lines << "" << "## #{heading}"
           if page[:items].any?
+            lines << "" << "## #{heading}"
             page[:items].each { |f| lines << file_line(f) }
-          else
-            lines << empty_message
+          elsif page[:total].zero?
+            lines << "" << "## #{heading}" << empty_message
           end
 
           lines << "" << page[:hint] unless page[:hint].empty?

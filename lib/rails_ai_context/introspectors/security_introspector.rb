@@ -7,15 +7,9 @@ module RailsAiContext
     # controls: CSRF, force_ssl, HSTS, host_authorization, PermissionsPolicy,
     # ContentSecurityPolicy directives, cookie config, browser-version gates.
     # Covers RAILS_NERVOUS_SYSTEM.md §32 (Security layer).
-    class SecurityIntrospector
+    class SecurityIntrospector < Base
       extend StaticTier
       static_tier :runtime_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
@@ -29,15 +23,9 @@ module RailsAiContext
           allow_browser: extract_allow_browser,
           signed_global_id: extract_signed_gid
         }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "SecurityIntrospector#call")
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def extract_ssl_options
         options = app.config.respond_to?(:ssl_options) ? app.config.ssl_options : nil
@@ -74,7 +62,7 @@ module RailsAiContext
 
         parse_result = AstCache.parse(init_path)
         directives = []
-        extract_policy_calls(parse_result.value, directives)
+        policy_directives(parse_result.value, directives, :directive, :value)
 
         # report_only is an assignment: config.content_security_policy_report_only = true
         report_only_check = SourceIntrospector.walk(init_path, {
@@ -98,40 +86,22 @@ module RailsAiContext
 
         parse_result = AstCache.parse(init_path)
         directives = []
-        extract_permissions_policy_calls(parse_result.value, directives)
+        policy_directives(parse_result.value, directives, :feature, :allowlist)
 
         { configured: true, file: "config/initializers/permissions_policy.rb", directives: directives }
       rescue => e
         RailsAiContext.debug_fail(e, { configured: false }, label: "extract_permissions_policy")
       end
 
-      # Walk AST to find policy.directive_name calls (CSP directives).
-      # These are CallNodes where the receiver is a local variable or
-      # block parameter named "policy".
-      def extract_policy_calls(node, directives)
-        case node
-        when Prism::CallNode
-          if policy_receiver?(node.receiver)
-            directive_name = node.name.to_s
-            args = node.arguments&.arguments || []
-            value = args.map { |a| format_policy_arg(a) }.join(", ")
-            directives << { directive: directive_name, value: value } unless value.empty?
-          end
+      # Collects `policy.<name> <args>` calls, where the receiver is a local
+      # variable or block parameter named "policy".
+      def policy_directives(node, directives, name_key, value_key)
+        if node.is_a?(Prism::CallNode) && policy_receiver?(node.receiver)
+          args = node.arguments&.arguments || []
+          value = args.map { |a| format_policy_arg(a) }.join(", ")
+          directives << { name_key => node.name.to_s, value_key => value } unless value.empty?
         end
-        node.child_nodes.compact.each { |child| extract_policy_calls(child, directives) }
-      end
-
-      def extract_permissions_policy_calls(node, directives)
-        case node
-        when Prism::CallNode
-          if policy_receiver?(node.receiver)
-            feature_name = node.name.to_s
-            args = node.arguments&.arguments || []
-            allowlist = args.map { |a| format_policy_arg(a) }.join(", ")
-            directives << { feature: feature_name, allowlist: allowlist } unless allowlist.empty?
-          end
-        end
-        node.child_nodes.compact.each { |child| extract_permissions_policy_calls(child, directives) }
+        node.child_nodes.compact.each { |child| policy_directives(child, directives, name_key, value_key) }
       end
 
       def policy_receiver?(node)
@@ -147,7 +117,7 @@ module RailsAiContext
         when Prism::SymbolNode then ":#{node.value}"
         when Prism::StringNode then "'#{node.unescaped}'"
         when Prism::SplatNode then "*#{format_policy_arg(node.expression)}"
-        else node.slice rescue ""
+        else NodeSource.text(node) rescue ""
         end
       end
 

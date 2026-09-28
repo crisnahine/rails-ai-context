@@ -82,7 +82,7 @@ module RailsAiContext
                 when Prism::DefNode
                   @inline_visibility_stack.last[arg.name.to_s] = node.name
                 when Prism::SymbolNode
-                  method_name = arg.value.to_s
+                  method_name = arg.unescaped
                   @inline_visibility_stack.last[method_name] = node.name
                   existing = @results.find { |r| r[:name] == method_name && r[:owner] == @owner_stack }
                   existing[:visibility] = node.name if existing

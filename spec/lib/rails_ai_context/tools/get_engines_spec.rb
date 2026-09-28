@@ -41,6 +41,48 @@ RSpec.describe RailsAiContext::Tools::GetEngines do
       expect(text).not_to include("at `")
     end
 
+    # The count comes off the models section, not the engine's file list.
+    it "names the app's own in-repo engines with the models the scan filed there" do
+      allow(described_class).to receive(:cached_context).and_return({
+        engines: engines_data.merge(in_repo_engines: [ { name: "budgets", path: "modules/budgets" } ]),
+        models: {
+          "Budget" => { file: "modules/budgets/app/models/budget.rb" },
+          "Budget::Entry" => { file: "modules/budgets/app/models/budget/entry.rb" },
+          "Post" => { file: "app/models/post.rb" }
+        }
+      })
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("## In-Repo Engines (1)")
+      expect(text).to include("**budgets** at `modules/budgets` - 2 models")
+    end
+
+    it "prints 0 models rather than nothing for an engine the scan found none in" do
+      allow(described_class).to receive(:cached_context).and_return({
+        engines: engines_data.merge(in_repo_engines: [ { name: "web", path: "engines/web" } ]),
+        models: { "Post" => { file: "app/models/post.rb" } }
+      })
+
+      expect(described_class.call.content.first[:text]).to include("**web** at `engines/web` - 0 models")
+    end
+
+    it "says the count is unavailable when the models section failed" do
+      allow(described_class).to receive(:cached_context).and_return({
+        engines: engines_data.merge(in_repo_engines: [ { name: "budgets", path: "modules/budgets" } ]),
+        models: { error: "boom" }
+      })
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("**budgets** at `modules/budgets` - model count unavailable")
+      expect(text).not_to include("**budgets** at `modules/budgets` - 0 models")
+    end
+
+    it "leaves the in-repo section out when the app has none" do
+      expect(described_class.call.content.first[:text]).not_to include("In-Repo Engines")
+    end
+
     it "lists loaded engine classes with route and model counts" do
       text = described_class.call.content.first[:text]
       expect(text).to include("## Loaded Engine Classes")

@@ -2,7 +2,6 @@
 
 require "fileutils"
 require "json"
-require "securerandom"
 require "set"
 
 module RailsAiContext
@@ -14,8 +13,8 @@ module RailsAiContext
     # Root files (CLAUDE.md, etc.) are wrapped in section markers so user content
     # outside the markers is preserved on re-generation. Set config.generate_root_files = false
     # to skip root files entirely and only produce split rules.
-    class ContextFileSerializer
-      attr_reader :context, :format
+    class ContextFileSerializer < Base
+      attr_reader :format
 
       # Formats that produce only split rules (no root file).
       SPLIT_ONLY_FORMATS = %i[cursor].freeze
@@ -51,8 +50,8 @@ module RailsAiContext
       # END_MARKER directly. (Re-exports were considered for back-compat
       # but no external code referenced ContextFileSerializer::BEGIN_MARKER.)
       def initialize(context, format: :all)
-        @context = context
-        @format  = format
+        super(context)
+        @format = format
       end
 
       # Callers that pay for an introspection before writing check the format

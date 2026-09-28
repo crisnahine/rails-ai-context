@@ -26,6 +26,50 @@ RSpec.describe RailsAiContext::Tools::ReadLogs do
   end
 
   describe ".call" do
+    # rails-i18n ships locales whose number separator is a comma, and the tool
+    # answers an agent, not the app's users.
+    it "reports the log size in English whatever the app's locale is" do
+      File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : x\n" * 60_000)
+      with_comma_separator_locale do
+        expect(described_class.call.content.first[:text]).to include("Size: 2.29 MB")
+      end
+    end
+
+    it "still reports the log size when the app's locales leave out English" do
+      File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : x\n" * 60_000)
+      with_german_only_locales do
+        expect(described_class.call.content.first[:text]).to include("Size: 2.29 MB")
+      end
+    end
+
+    it "reports the log size in the same units as the rest of the gem" do
+      File.write(File.join(log_dir, "test.log"), "I, [2026-03-29T10:00:00 #1] INFO -- : x\n" * 60_000)
+
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("Size: #{ActiveSupport::NumberHelper.number_to_human_size(File.size(File.join(log_dir, "test.log")))}")
+      expect(text).to match(/Size: [\d.]+ MB/)
+    end
+
+    it "warns and floors a lines count below 1" do
+      text = described_class.call(lines: 0).content.first[:text]
+
+      expect(text).to include("**Warning:** lines must be >= 1, using 1")
+      expect(text).to include("Showing last 1 line ")
+    end
+
+    it "warns and caps a lines count above the maximum" do
+      text = described_class.call(lines: 9_000).content.first[:text]
+
+      expect(text).to include("**Warning:** lines clamped to 500 (was 9000)")
+    end
+
+    it "tails the configured default without a warning when lines is absent" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).not_to include("**Warning:** lines")
+    end
+
     it "reads the default environment log" do
       result = described_class.call
       text = result.content.first[:text]

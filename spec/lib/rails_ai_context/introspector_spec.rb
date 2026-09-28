@@ -27,6 +27,25 @@ RSpec.describe RailsAiContext::Introspector do
       RailsAiContext.tier = :runtime
     end
 
+    it "lists a routed action that only has a template" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "controllers"))
+        FileUtils.mkdir_p(File.join(dir, "app", "views", "pages"))
+        File.write(File.join(dir, "config", "routes.rb"), "Rails.application.routes.draw do\n  get 'about', to: 'pages#about'\nend\n")
+        File.write(File.join(dir, "app", "controllers", "pages_controller.rb"), "class PagesController < ApplicationController\nend\n")
+        File.write(File.join(dir, "app", "views", "pages", "about.html.erb"), "")
+        allow(RailsAiContext.configuration).to receive(:introspectors).and_return(%i[routes controllers])
+
+        RailsAiContext.tier = :static
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).call
+
+        expect(result.dig(:controllers, :controllers, "PagesController", :actions)).to eq([ "about" ])
+      ensure
+        RailsAiContext.tier = :runtime
+      end
+    end
+
     it "includes all configured introspectors" do
       result = introspector.call
 
@@ -71,6 +90,17 @@ RSpec.describe RailsAiContext::Introspector do
       walk.call(introspector.call, "context")
 
       expect(machine_paths).to be_empty
+    end
+
+    # Installed through the app's Gemfile, the gem is booted with the app: its
+    # own initializers and autoload dirs are not the app's, in any form.
+    it "carries none of this gem's own initializers or autoload dirs" do
+      own = RailsAiContext::PortablePath.relativize("#{RailsAiContext::Engine.root}/lib", Rails.root.to_s).delete_suffix("lib")
+      context = introspector.call
+      sources = Array(context.dig(:initializers, :initializers)).filter_map { |i| i[:source] }
+      dirs = Array(context.dig(:autoload, :autoloaders)).flat_map { |l| Array(l[:root_dirs]) }
+
+      expect((sources + dirs).grep(/\A#{Regexp.escape(own)}(?!spec)/)).to be_empty
     end
 
     it "collects _warnings when an introspector fails" do
@@ -234,6 +264,16 @@ RSpec.describe RailsAiContext::Introspector do
         expect(result[:rails_version]).to include("UNAVAILABLE")
         expect(result[:environment]).to be_a(String)
         expect(result[:generated_at]).to match(/\d{4}-\d{2}-\d{2}T/)
+      end
+    end
+
+    # An app can bundle railties without the rails meta-gem (Discourse does),
+    # and it is still a Rails app at that version.
+    it "answers the Rails version from railties when the meta-gem is absent" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "Gemfile.lock"), "GEM\n  specs:\n    railties (8.0.5.1)\n")
+        result = RailsAiContext::Introspector.new(RailsAiContext::StaticApp.new(dir)).call
+        expect(result[:rails_version]).to eq("8.0.5.1")
       end
     end
 

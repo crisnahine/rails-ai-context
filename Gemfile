@@ -8,8 +8,4 @@ eval_gemfile "gemfiles/rails.gemfile"
 
 group :development, :test do
   gem "pry", "~> 0.14"
-
-  gem "rubocop-rails-omakase", require: false
-  gem "rubocop-performance", require: false
-  gem "rubocop-rails", require: false
 end

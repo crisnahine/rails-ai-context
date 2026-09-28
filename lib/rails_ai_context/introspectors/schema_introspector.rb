@@ -4,20 +4,19 @@ module RailsAiContext
   module Introspectors
     # Extracts database schema information including tables, columns,
     # indexes, and foreign keys from the Rails application.
-    class SchemaIntrospector
+    class SchemaIntrospector < Base
       extend StaticTier
       static_tier :alternate_source
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       # @return [Hash] database schema context
       def call
         return attach_secondary_databases(static_schema_parse) unless active_record_connected?
-        return attach_secondary_databases(static_schema_parse) if table_names.empty?
+
+        if table_names.empty?
+          # Connected but not migrated: the files answer, and the notes say so.
+          @connection_state = "connected, no tables yet"
+          return attach_secondary_databases(static_schema_parse)
+        end
 
         attach_secondary_databases({
           adapter: adapter_name,
@@ -87,7 +86,7 @@ module RailsAiContext
             columns: extract_columns(table),
             indexes: extract_indexes(table),
             foreign_keys: extract_foreign_keys(table),
-            primary_key: connection.primary_key(table)
+            primary_key: SchemaConventions.primary_key_value(connection.primary_key(table))
           }
         end
       end
@@ -96,16 +95,25 @@ module RailsAiContext
         schema_defaults = parse_schema_defaults_for_table(table)
 
         connection.columns(table).map do |col|
+          # schema.rb's dumper names a bigint `bigint`, not integer with limit 8;
+          # the static tier reads that name, so the booted one says it too.
+          bigint = col.respond_to?(:bigint?) && col.bigint?
           entry = {
             name: col.name,
-            type: col.type.to_s,
+            type: bigint ? "bigint" : col.type.to_s,
             null: col.null,
             default: col.default,
-            limit: col.limit,
+            limit: (col.limit unless bigint),
             precision: col.precision,
             scale: col.scale,
             comment: col.comment
           }
+          # PostgreSQL gives an array's default as its literal ({}), which the
+          # static tier reads the way Rails dumps it ([]).
+          if col.respond_to?(:array?) && col.array?
+            entry[:array] = true
+            entry[:default] = SchemaConventions.format_default(StructureSqlReader.array_default(col.default, col.sql_type_metadata.sql_type)) if col.default.is_a?(String)
+          end
           # Supplement with schema.rb default when live DB returns nil
           if entry[:default].nil? && schema_defaults[col.name]
             entry[:default] = schema_defaults[col.name]
@@ -118,7 +126,8 @@ module RailsAiContext
         connection.indexes(table).map do |idx|
           {
             name: idx.name,
-            columns: idx.columns,
+            # An expression index's columns come as one String; split into keys as the dump readers do.
+            columns: idx.columns.is_a?(String) ? StructureSqlReader.index_keys(idx.columns) : idx.columns,
             unique: idx.unique,
             where: idx.where
           }.compact
@@ -137,8 +146,8 @@ module RailsAiContext
           }.compact
         end
       rescue => e
-        $stderr.puts "[rails-ai-context] extract_foreign_keys failed: #{e.message}" if ENV["DEBUG"]
-        [] # Some adapters don't support foreign_keys
+        # Some adapters don't support foreign_keys.
+        RailsAiContext.debug_fail(e, [], label: "extract_foreign_keys")
       end
 
       # Supplements live DB column data when the adapter returns nil defaults.
@@ -205,8 +214,14 @@ module RailsAiContext
         File.join(app.root, "db", "migrate")
       end
 
-      def max_schema_file_size
-        RailsAiContext.configuration.max_schema_file_size
+      # Every db/migrate the app owns: its own and each in-repo engine's, which create tables
+      # in the same database.
+      def migrations_dirs
+        @migrations_dirs ||= MigrationReplay.migration_dirs(app.root.to_s)
+      end
+
+      def migration_files
+        @migration_files ||= MigrationReplay.migration_files(migrations_dirs)
       end
 
       # Fallback: parse schema file as text when DB isn't connected.
@@ -236,9 +251,7 @@ module RailsAiContext
           return result if result[:total_tables].to_i > 0
         end
 
-        if Dir.exist?(migrations_dir) && Dir.glob(File.join(migrations_dir, "*.rb")).any?
-          return parse_migrations
-        end
+        return parse_migrations if migration_files.any?
 
         # schema.rb exists but has no tables - happens on fresh Rails apps right
         # after `db:create` where no migrations have been run yet. Return a
@@ -318,7 +331,8 @@ module RailsAiContext
         entry = {
           name:    index[:options][:name]&.to_s,
           columns: columns,
-          unique:  index[:options][:unique] == true
+          unique:  index[:options][:unique] == true,
+          where:   (index[:options][:where] if index[:options][:where].is_a?(String))
         }
         # An expression index (e.g. "lower(email)") names no plain column.
         entry[:expression] = true if columns.size == 1 && !columns.first.match?(/\A\w+\z/)
@@ -340,6 +354,8 @@ module RailsAiContext
             indexes: declared[:indexes].filter_map { |i| static_index(i) },
             foreign_keys: []
           }
+          key = declared.dig(:options, :primary_key)
+          tables[table_name][:primary_key] = SchemaConventions.primary_key_value(key) if key
         end
 
         schema.foreign_keys.each do |fk|
@@ -361,7 +377,7 @@ module RailsAiContext
           check_constraints: check_constraints,
           enum_types: enum_types,
           generated_columns: generated_columns(schema),
-          note: "Parsed from db/schema.rb (no DB connection)"
+          note: "Parsed from db/schema.rb (#{connection_state})"
         }
         # schema.rb records only the max applied version, so pending here
         # means "migration files newer than the schema version" - exact for
@@ -389,7 +405,7 @@ module RailsAiContext
           dialect: dialect.to_s,
           tables: tables,
           total_tables: tables.size,
-          note: "Parsed from db/structure.sql (no DB connection)"
+          note: "Parsed from db/structure.sql (#{connection_state})"
         }
         if applied.any?
           result[:schema_version] = applied.map(&:to_i).max.to_s
@@ -397,6 +413,10 @@ module RailsAiContext
           result[:pending_migrations] = RailsAiContext::PendingMigrations.for(migrate_dir: migrate_dir, applied: applied)
         end
         result
+      end
+
+      def connection_state
+        @connection_state || "no DB connection"
       end
 
       def generated_columns(schema)
@@ -412,20 +432,34 @@ module RailsAiContext
         RailsAiContext.debug_fail(e, [], label: "generated_columns")
       end
 
+      # A table whose create_table names it through the class has no literal to read, so the
+      # count says how many names came from the file instead.
+      def replay_note(tables, counts)
+        inferred = tables.count { |_, data| data[:inferred_name] }
+        note = "Reconstructed from #{CountPhrase.call(migration_files.size, "migration file")} " \
+               "(#{connection_state}, no schema.rb)"
+        note += ", #{CountPhrase.call(inferred, "table name")} read from the file rather than the create_table call" if inferred.positive?
+        note += ", #{CountPhrase.call(counts.unnamed, "create_table call")} left unnamed" if counts.unnamed.positive?
+        note += ", #{CountPhrase.call(counts.unnamed_columns, "added column")} left unnamed" if counts.unnamed_columns.positive?
+        note += ", #{CountPhrase.call(counts.helper_calls, "migration helper call")} not replayed" if counts.helper_calls.positive?
+        note += ", #{CountPhrase.call(counts.failed_files, "migration file")} it could not read" if counts.failed_files.positive?
+        note
+      end
+
       # Reconstruct schema by replaying migrations in order.
       # Handles: create_table, add_column, remove_column, rename_column,
       # rename_table, drop_table, change_column, add_index, add_reference,
       # add_foreign_key, add_timestamps.
       def parse_migrations
-        migration_files = Dir.glob(File.join(migrations_dir, "*.rb")).sort
         pk_type = SchemaConventions.implicit_pk_type(app.root.to_s, schema_file_path)
-        tables = MigrationReplay.tables(migrations_dir, pk_type: pk_type)
+        replayed = MigrationReplay.replayed(migrations_dirs, pk_type: pk_type, root: app.root.to_s)
+        tables = replayed.tables
 
         {
           adapter: "static_parse",
           tables: tables,
           total_tables: tables.size,
-          note: "Reconstructed from #{CountPhrase.call(migration_files.size, "migration file")} (no DB connection, no schema.rb)"
+          note: replay_note(tables, replayed.counts)
         }
       end
     end

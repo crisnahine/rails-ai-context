@@ -34,10 +34,12 @@ module RailsAiContext
 
       annotations(read_only_hint: true, destructive_hint: false, idempotent_hint: true, open_world_hint: false)
 
+      # A `config/initializers/` hint is resolved through PathResolver, so the
+      # spelling the app uses (a load-order prefix, a hyphen) still matches.
       GEM_CONFIG_HINTS = {
-        "devise" => "config/initializers/devise.rb",
+        "devise" => [ "config/initializers/devise.rb" ],
         "pundit" => "app/policies/",
-        "cancancan" => "app/models/ability.rb",
+        "cancancan" => %w[app/models/ability.rb],
         # A glob, because an app may name it sidekiq_production.yml or keep
         # its schedule in sidekiq_cron.yml, and the fixed string pointed at a
         # file that was not there.
@@ -47,17 +49,17 @@ module RailsAiContext
         # Checked at runtime since apps that only added the gem without
         # running the generator yet won't have either file.
         "solid_queue" => %w[config/queue.yml config/recurring.yml],
-        "redis" => "config/initializers/redis.rb",
-        "stripe" => "config/initializers/stripe.rb",
-        "sentry-ruby" => "config/initializers/sentry.rb",
-        "rollbar" => "config/initializers/rollbar.rb",
-        "aws-sdk-s3" => "config/storage.yml",
+        "redis" => [ "config/initializers/redis.rb" ],
+        "stripe" => [ "config/initializers/stripe.rb" ],
+        "sentry-ruby" => [ "config/initializers/sentry.rb" ],
+        "rollbar" => [ "config/initializers/rollbar.rb" ],
+        "aws-sdk-s3" => %w[config/storage.yml],
         "pg_search" => "app/models/ (include PgSearch::Model)",
-        "elasticsearch-rails" => "config/initializers/elasticsearch.rb",
-        "pagy" => "config/initializers/pagy.rb",
-        "kaminari" => "config/initializers/kaminari_config.rb",
-        "rack-cors" => "config/initializers/cors.rb",
-        "omniauth" => "config/initializers/omniauth.rb",
+        "elasticsearch-rails" => [ "config/initializers/elasticsearch.rb" ],
+        "pagy" => [ "config/initializers/pagy.rb" ],
+        "kaminari" => [ "config/initializers/kaminari_config.rb" ],
+        "rack-cors" => [ "config/initializers/cors.rb" ],
+        "omniauth" => [ "config/initializers/omniauth.rb" ],
         "paper_trail" => "app/models/ (has_paper_trail)"
       }.freeze
 
@@ -81,7 +83,8 @@ module RailsAiContext
               config_hint = resolve_config_hint(GEM_CONFIG_HINTS[g[:name]])
               version_str = g[:version] ? " `#{g[:version]}`" : ""
               line = "- **#{g[:name]}**#{version_str}: #{g[:note]}"
-              line += " _(config: #{config_hint})_" if config_hint
+              # Skipped when the gem's note already names the file.
+              line += " _(config: #{config_hint})_" if config_hint && !g[:note].to_s.include?(config_hint)
               lines << line
             end
           elsif page[:total].zero?
@@ -98,22 +101,26 @@ module RailsAiContext
         end
       end
 
-      # A hint is either a fixed string (shown as-is, no existence check - e.g.
-      # a directory convention like "app/policies/") or a list of candidate
-      # config file paths to check for existence, joined to show only the
-      # ones actually present. Returns nil when none of the candidates exist
-      # so the tool doesn't claim a config file that isn't there.
+      # A directory convention (kept only when the app has it) or candidate config files, of
+      # which only present ones show. nil when none is there, so no absent file is claimed.
       private_class_method def self.resolve_config_hint(hint)
-        return hint if hint.is_a?(String)
+        return convention_hint(hint) if hint.is_a?(String)
         return nil unless hint.is_a?(Array)
 
         root = rails_app.root
         present = hint.flat_map do |path|
-          next [ path ] if !path.include?("*") && File.exist?(File.join(root, path))
+          next RailsAiContext::PathResolver.app_initializer_files(root, File.basename(path)) if path.start_with?("config/initializers/")
+          next [ path ] if !path.match?(/[*{]/) && File.exist?(File.join(root, path))
 
           Dir.glob(File.join(root, path)).sort.map { |found| found.sub("#{root}/", "") }
         end
         present.any? ? present.join(", ") : nil
+      end
+
+      # The convention names a directory plus a note on what to look for in it.
+      private_class_method def self.convention_hint(hint)
+        dir = hint.split(" ").first.to_s.chomp("/")
+        hint if Dir.exist?(File.join(rails_app.root, dir))
       end
     end
   end

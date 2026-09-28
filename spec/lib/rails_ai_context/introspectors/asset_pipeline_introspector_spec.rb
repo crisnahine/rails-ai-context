@@ -33,6 +33,23 @@ RSpec.describe RailsAiContext::Introspectors::AssetPipelineIntrospector do
       expect(result).to have_key(:js_bundler)
     end
 
+    context "with an importmap.rb whose pin name is computed" do
+      let(:importmap_path) { File.join(Rails.root, "config/importmap.rb") }
+
+      before do
+        File.write(importmap_path, <<~RUBY)
+          pin File.basename("application.js", ".js")
+          pin "@hotwired/turbo-rails", to: "turbo.min.js"
+        RUBY
+      end
+
+      after { FileUtils.rm_f(importmap_path) }
+
+      it "lists the literal pins and skips the computed one" do
+        expect(result[:importmap_pins]).to eq([ "@hotwired/turbo-rails" ])
+      end
+    end
+
     context "with an importmap.rb" do
       let(:importmap_path) { File.join(Rails.root, "config/importmap.rb") }
 

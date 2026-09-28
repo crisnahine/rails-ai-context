@@ -4,81 +4,42 @@ module RailsAiContext
   module Introspectors
     # Discovers asset pipeline configuration: Propshaft/Sprockets,
     # importmap pins, CSS framework, JS bundler.
-    class AssetPipelineIntrospector
+    class AssetPipelineIntrospector < Base
       extend StaticTier
       static_tier :files_only
 
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
-
-      def call
-        {
-          pipeline: detect_pipeline,
-          importmap_pins: extract_importmap_pins,
-          css_framework: detect_css_framework,
-          js_bundler: detect_js_bundler,
-          manifest_files: detect_manifests
-        }
-      rescue => e
-        { error: e.message }
-      end
-
-      private
-
-      def root
-        app.root.to_s
-      end
-
-      def detect_pipeline
-        lock = gem_lock
-        return "propshaft" if lock.present?("propshaft")
-        return "sprockets" if lock.present?("sprockets")
-        "none"
-      end
-
-      def extract_importmap_pins
-        path = File.join(root, "config/importmap.rb")
+      # Every name config/importmap.rb pins, read through the AST so a
+      # commented-out pin is not one.
+      def self.importmap_pins(root)
+        path = File.join(root.to_s, "config/importmap.rb")
         return [] unless File.exist?(path)
 
         ast_data = SourceIntrospector.walk(path, {
           pins: -> { Listeners::GenericMacroListener.new(:pin, :pin_all_from) }
         })
 
-        # GenericMacroListener captures symbol args, but pin uses string args.
-        # Extract pin names from the raw AST results or fall back to parsing
-        # the string arguments from the macro call.
-        pin_names = ast_data[:pins].filter_map do |macro|
-          # pin/pin_all_from first arg is typically a string, captured as symbol by listener
-          macro[:args]&.first&.to_s
-        end
-
-        # If no names extracted via AST (string args not captured as symbols),
-        # fall back to reading the parse result directly
-        if pin_names.empty?
-          begin
-            parse_result = AstCache.parse(path)
-            queue = [ parse_result.value ]
-            while (node = queue.shift)
-              if node.is_a?(Prism::CallNode) && node.receiver.nil? &&
-                 %i[pin pin_all_from].include?(node.name)
-                first_arg = node.arguments&.arguments&.first
-                if first_arg.is_a?(Prism::StringNode)
-                  pin_names << first_arg.unescaped
-                end
-              end
-              node.child_nodes.compact.each { |c| queue << c }
-            end
-          rescue => _e
-            # Fall through to empty
-          end
-        end
-
-        pin_names.sort
+        ast_data[:pins].filter_map { |macro| macro[:args]&.first&.to_s }.sort
       rescue => e
-        RailsAiContext.debug_fail(e, [], label: "extract_importmap_pins")
+        RailsAiContext.debug_fail(e, [], label: "importmap_pins")
+      end
+
+      def call
+        {
+          pipeline: detect_pipeline,
+          importmap_pins: self.class.importmap_pins(root),
+          css_framework: detect_css_framework,
+          js_bundler: detect_js_bundler,
+          manifest_files: detect_manifests
+        }
+      end
+
+      private
+
+      def detect_pipeline
+        lock = gem_lock
+        return "propshaft" if lock.present?("propshaft")
+        return "sprockets" if lock.present?("sprockets")
+        "none"
       end
 
       def detect_css_framework

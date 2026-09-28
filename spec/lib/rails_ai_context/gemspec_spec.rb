@@ -31,3 +31,18 @@ RSpec.describe "rails-ai-context.gemspec outside a git checkout" do
     end
   end
 end
+
+RSpec.describe "rails-ai-context.gemspec" do
+  let(:spec) { Gem::Specification.load(File.expand_path("../../../rails-ai-context.gemspec", __dir__)) }
+
+  it "leaves the README demos and the CI gemfiles out of the packaged gem" do
+    expect(spec.files.grep(%r{\A(demo|gemfiles)/})).to be_empty
+  end
+
+  # Thor 1.0 and 1.1 raise NameError on require under Ruby 3.1 and later.
+  it "requires a thor that loads on every supported Ruby" do
+    thor = spec.runtime_dependencies.find { |dep| dep.name == "thor" }
+    expect(thor.requirement).not_to be_satisfied_by(Gem::Version.new("1.1.0"))
+    expect(thor.requirement).to be_satisfied_by(Gem::Version.new("1.2.0"))
+  end
+end

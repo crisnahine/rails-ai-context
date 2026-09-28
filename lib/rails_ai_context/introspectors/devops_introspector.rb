@@ -4,15 +4,9 @@ module RailsAiContext
   module Introspectors
     # Discovers DevOps configuration: Puma, Procfile, health checks,
     # Dockerfile, deployment tools.
-    class DevOpsIntrospector
+    class DevOpsIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
@@ -22,15 +16,9 @@ module RailsAiContext
           docker: extract_docker_info,
           deployment: detect_deployment_tool
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       PUMA_SETTINGS = %i[threads workers port].freeze
 

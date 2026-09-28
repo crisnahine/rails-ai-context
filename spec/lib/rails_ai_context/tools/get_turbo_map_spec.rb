@@ -78,6 +78,33 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
       expect(text).to include("Turbo Map")
     end
 
+    # `blog_posts` is its own controller with its own views, and a substring
+    # filter reported its frames as `posts`'s Turbo usage.
+    it "does not answer a controller with a view whose directory merely contains the name" do
+      allow(described_class).to receive(:cached_context).and_return(
+        turbo: {
+          turbo_frames: [ { tag: "turbo_frame_tag", id: "post", file: "app/views/blog_posts/show.html.erb", line: 1 } ],
+          stream_subscriptions: [], model_broadcasts: [], explicit_broadcasts: [],
+          turbo_stream_responses: [], turbo_stream_templates: []
+        }
+      )
+
+      text = described_class.call(controller: "posts", detail: "standard").content.first[:text]
+
+      expect(text).not_to include("blog_posts")
+    end
+
+    # An MCP client sends "" for an argument it leaves unset, and the segment
+    # matcher raised ArgumentError on a needle of no segments.
+    it "reads a blank filter as no filter" do
+      expect(described_class.call(controller: "").content.first[:text])
+        .to eq(described_class.call.content.first[:text])
+      expect(described_class.call(controller: "/").content.first[:text])
+        .to eq(described_class.call.content.first[:text])
+      expect(described_class.call(stream: " ").content.first[:text])
+        .to eq(described_class.call.content.first[:text])
+    end
+
     it "reports no matching turbo usage with bad controller filter" do
       result = described_class.call(controller: "nonexistent_controller_xyz", detail: "standard")
       text = result.content.first[:text]
@@ -380,6 +407,29 @@ RSpec.describe RailsAiContext::Tools::GetTurboMap do
         - **File:** `app/views/posts/show.html.erb:1`
         - **Snippet:** `<%= turbo_frame_tag :post do %>`
       TEXT
+    end
+  end
+
+  describe "more turbo_stream responses than the section prints" do
+    before { described_class.reset_cache! }
+
+    before do
+      responses = (1..20).map { |n| { controller: "PostsController", action: "act#{n}" } }
+      allow(described_class).to receive(:cached_context).and_return(turbo: { turbo_stream_responses: responses })
+    end
+
+    it "says how many it showed and how to see the rest" do
+      text = described_class.call.content.first[:text]
+
+      expect(text).to include("Showing 15 of 20")
+      expect(text).to include("rails_get_turbo_map(detail:\"full\")")
+    end
+
+    it "prints them all in full detail" do
+      text = described_class.call(detail: "full").content.first[:text]
+
+      expect(text).to include("act20")
+      expect(text).not_to include("Showing 15 of 20")
     end
   end
 end

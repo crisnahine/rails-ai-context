@@ -97,6 +97,36 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     )
   end
 
+  # Rails' add_controller_module (actionpack mapper.rb, same in 7.0 and 8.1):
+  # a controller starting with "/" drops the slash and takes no module prefix.
+  # OpenProject writes 44 of these and every one read as a doubled namespace.
+  it "treats a controller with a leading slash as absolute" do
+    records = route_records('namespace :admin do
+      namespace :settings do
+        resource :work_packages_general, controller: "/admin/settings/work_packages_general", only: [:show]
+      end
+    end')
+
+    expect(records.first[:controller]).to eq("admin/settings/work_packages_general")
+    expect(records.first[:path]).to eq("/admin/settings/work_packages_general")
+  end
+
+  it "keeps prefixing a controller written without the leading slash" do
+    records = route_records('namespace :admin do
+      resource :profile, controller: "profiles", only: [:show]
+    end')
+
+    expect(records.first[:controller]).to eq("admin/profiles")
+  end
+
+  it "treats an absolute to: target as absolute too" do
+    records = route_records('namespace :admin do
+      get "ping", to: "/health#show"
+    end')
+
+    expect(records.first[:controller]).to eq("health")
+  end
+
   it "nests resources under the parent param" do
     records = route_records('resources :posts do
       resources :comments, only: [:index, :create]
@@ -115,6 +145,20 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
     archived = records.find { |r| r[:action] == "archived" }
     expect(preview).to include(verb: "GET", path: "/posts/:id/preview", controller: "posts")
     expect(archived).to include(verb: "GET", path: "/posts/archived", controller: "posts")
+  end
+
+  # OpenProject: `get :delete, action: :deletion_dialog` inside a member block.
+  it "routes to the action an action: option names" do
+    records = route_records('Rails.application.routes.draw do
+      resources :items do
+        member do
+          get :delete, action: :deletion_dialog
+          post :new_child, action: "create"
+        end
+      end
+    end')
+    expect(records.select { |r| r[:path].end_with?("delete", "new_child") }.map { |r| [ r[:path], r[:action] ] })
+      .to contain_exactly([ "/items/:id/delete", "deletion_dialog" ], [ "/items/:id/new_child", "create" ])
   end
 
   it "handles on: :member and on: :collection keywords" do
@@ -439,5 +483,220 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::RoutesDslListener do
       "/users/:username",
       "/users/:account_username/statuses"
     )
+  end
+
+  # Routes an app adds to an engine's table (`Spree::Core::Engine.routes.draw`)
+  # reach the engine's controllers, Spree::Admin::OrdersController, not the
+  # app's Admin::OrdersController.
+  it "puts routes drawn into an engine under the engine's namespace" do
+    results = routes_for(<<~RUBY)
+      Shop::Application.routes.draw do
+        namespace :admin do
+          resources :orders, only: [:index]
+        end
+      end
+
+      Spree::Core::Engine.routes.draw do
+        namespace :admin do
+          resources :orders, only: [:index]
+        end
+      end
+    RUBY
+
+    routes = results.select { |r| r[:type] == :route }
+    expect(routes.map { |r| r[:controller] }).to contain_exactly("admin/orders", "spree/admin/orders")
+    expect(routes.find { |r| r[:controller] == "spree/admin/orders" }[:engine]).to eq("Spree::Core::Engine")
+    expect(routes.find { |r| r[:controller] == "admin/orders" }).not_to have_key(:engine)
+  end
+
+  # Rails draws one route per `match`, answering every verb in `via:` (the
+  # booted tier reads it as "GET|POST"), and `via: :all` answers any verb.
+  it "reads a match route with the verbs its via names" do
+    results = routes_for(<<~RUBY)
+      Rails.application.routes.draw do
+        namespace :oauth do
+          match "userinfo", via: [:get, :post], to: "userinfo#show"
+        end
+        match "/", via: [:post, :put, :patch, :delete], to: "application#raise_not_found"
+        match "*unmatched_route", via: :all, to: "application#raise_not_found"
+        match "computed", via: verbs_for_this, to: "pages#show"
+      end
+    RUBY
+
+    routes = results.select { |r| r[:type] == :route }.map { |r| [ r[:verb], r[:path], "#{r[:controller]}##{r[:action]}" ] }
+    expect(routes).to contain_exactly(
+      [ "GET|POST", "/oauth/userinfo", "oauth/userinfo#show" ],
+      [ "POST|PUT|PATCH|DELETE", "/", "application#raise_not_found" ],
+      [ "ANY", "/*unmatched_route", "application#raise_not_found" ]
+    )
+    expect(results.count { |r| r[:type] == :dynamic && r[:macro] == :match }).to eq(1)
+  end
+
+  # Rails moves the slash in front of an optional segment inside it, so the
+  # booted table reads "(/locale/:locale)/admin/posts", and a path made of
+  # optional segments alone keeps its leading slash.
+  it "writes a path under an optional scope the way Rails normalizes it" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        scope "(/locale/:locale)" do
+          namespace :admin do
+            resources :posts, only: [:index]
+          end
+        end
+        scope "(:locale)" do
+          root "pages#home"
+          get "about", to: "pages#about"
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| r[:path] }).to contain_exactly(
+      "(/locale/:locale)/admin/posts", "/(:locale)", "(/:locale)/about"
+    )
+  end
+
+  # What a live RouteSet draws from the same block.
+  it "routes to the controller a scope names, as Rails does" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        scope(controller: :courses) do
+          get "courses", action: :index, as: "courses"
+          get "courses/:course_id/users", action: :users
+          get "courses/:course_id/files", controller: :files, action: :api_index
+          get "search"
+          get "admin/reports"
+          get "x/y", to: "a#b", action: :c
+          get "courses/:course_id/unnamed"
+        end
+        namespace :admin do
+          scope(controller: :things) do
+            get "list", action: :list
+          end
+          namespace :settings do
+            get "plugin/:id", action: :show_plugin, as: :show_plugin
+          end
+        end
+        resources :posts, only: [] do
+          scope(controller: :other) { get "preview", on: :member }
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:path], "#{r[:controller]}##{r[:action]}", r[:name] ] }).to contain_exactly(
+      [ "/courses", "courses#index", "courses" ],
+      [ "/courses/:course_id/users", "courses#users", nil ],
+      [ "/courses/:course_id/files", "files#api_index", nil ],
+      [ "/search", "courses#search", "search" ],
+      [ "/admin/reports", "admin#reports", "admin_reports" ],
+      [ "/x/y", "a#b", "x_y" ],
+      [ "/admin/list", "admin/things#list", "admin_list" ],
+      [ "/admin/settings/plugin/:id", "admin/settings#show_plugin", "admin_settings_show_plugin" ],
+      [ "/posts/:id/preview", "other#preview", "preview_post" ]
+    )
+  end
+
+  # `ApiRouteSet::V1.draw(self) do` hands the block to the app's own class,
+  # which prefixes the path of each verb route and the name of each `as:`.
+  describe "a route set the app draws through its own class" do
+    def route_set_records(source, prefixes)
+      listener = described_class.new(route_set: ->(name) { prefixes[name] })
+      RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(Prism.parse(source).value)
+      listener.results
+    end
+
+    let(:source) do
+      <<~RUBY
+        Rails.application.routes.draw do
+          ApiRouteSet::V1.draw(self) do
+            scope(controller: :courses) do
+              get "courses", action: :index, as: "courses"
+              put "courses/:id", action: :update
+            end
+            resources :groups, except: :index
+            match "/api/v1/files/:id/create_success", via: [:options], controller: :files, action: :cors
+          end
+          ApiRouteSet.draw(self, "/api/lti") do
+            post "/tools/:tool_id/grade", controller: :lti_api, action: :grade, as: "lti_grade"
+          end
+          Unknown::Set.draw(self) do
+            get "things", controller: :things, action: :index
+          end
+        end
+      RUBY
+    end
+
+    it "prefixes the path and name the class gives, and counts what it cannot place" do
+      results = route_set_records(source, { "ApiRouteSet::V1" => { prefix: "/api/v1", name_prefix: "api_v1_" },
+                                            "ApiRouteSet" => { name_prefix: "" } })
+
+      routes = results.select { |r| r[:type] == :route }.map { |r| [ r[:verb], r[:path], "#{r[:controller]}##{r[:action]}", r[:name] ] }
+      expect(routes).to contain_exactly(
+        [ "GET", "/api/v1/courses", "courses#index", "api_v1_courses" ],
+        [ "PUT", "/api/v1/courses/:id", "courses#update", nil ],
+        [ "OPTIONS", "/api/v1/files/:id/create_success", "files#cors", nil ],
+        [ "POST", "/api/lti/tools/:tool_id/grade", "lti_api#grade", "lti_grade" ]
+      )
+      # The class's own `resources` and a class whose prefix is unread.
+      expect(results.select { |r| r[:type] == :dynamic }.map { |r| r[:macro] }).to contain_exactly(:resources, :route_set)
+    end
+  end
+
+  it "takes a match route's verbs from an enclosing scope's via" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        scope via: :all do
+          match "/400", to: "admin/errors#bad_request"
+          match "/404", to: "admin/errors#not_found", via: :get
+        end
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:verb], r[:path], r[:action] ] }).to contain_exactly(
+      [ "ANY", "/400", "bad_request" ], [ "GET", "/404", "not_found" ]
+    )
+  end
+
+  # Names checked against a live RouteSet: a singular resource draws create
+  # last, so show keeps the name, and a member route takes the singular name
+  # when show is not drawn.
+  it "names resource routes in the order Rails draws them" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        resource :profile
+        resources :entries, only: [:index, :update]
+        resource :status, only: [:create, :update]
+      end
+    RUBY
+
+    expect(records.map { |r| [ r[:verb], r[:path], r[:action], r[:name] ] }).to eq([
+      [ "GET", "/profile/new", "new", "new_profile" ],
+      [ "GET", "/profile/edit", "edit", "edit_profile" ],
+      [ "GET", "/profile", "show", "profile" ],
+      [ "PATCH", "/profile", "update", nil ],
+      [ "PUT", "/profile", "update", nil ],
+      [ "DELETE", "/profile", "destroy", nil ],
+      [ "POST", "/profile", "create", nil ],
+      [ "GET", "/entries", "index", "entries" ],
+      [ "PATCH", "/entries/:id", "update", "entry" ],
+      [ "PUT", "/entries/:id", "update", nil ],
+      [ "PATCH", "/status", "update", "status" ],
+      [ "PUT", "/status", "update", nil ],
+      [ "POST", "/status", "create", nil ]
+    ])
+  end
+
+  it "names a root by its as:, under the enclosing names" do
+    records = route_records(<<~RUBY)
+      Rails.application.routes.draw do
+        namespace :admin do
+          scope :republishing do
+            root to: "republishing#index", as: :republishing_index
+          end
+        end
+        root to: "home#index"
+      end
+    RUBY
+
+    expect(records.map { |r| r[:name] }).to eq(%w[admin_republishing_index root])
   end
 end

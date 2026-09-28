@@ -4,15 +4,9 @@ module RailsAiContext
   module Serializers
     # Generates .claude/rules/ files for Claude Code auto-discovery.
     # These provide quick-reference lists without bloating CLAUDE.md.
-    class ClaudeRulesSerializer
+    class ClaudeRulesSerializer < Base
       include StackOverviewHelper
       include ToolGuideHelper
-
-      attr_reader :context
-
-      def initialize(context)
-        @context = context
-      end
 
       RULE_FILES = {
         "rails-context.md" => { renderer: :render_context_overview, reason: "nothing to document" },
@@ -79,8 +73,7 @@ module RailsAiContext
           data = tables[name]
           columns = data[:columns] || []
           col_count = columns.size
-          pk = data[:primary_key]
-          pk_display = pk.is_a?(Array) ? pk.join(", ") : (pk || "id").to_s
+          pk_display = Introspectors::SchemaConventions.primary_key_label(data[:primary_key])
 
           # Show column names WITH types for key columns
           # Skip standard Rails FK columns (like user_id, account_id) but keep
@@ -116,7 +109,10 @@ module RailsAiContext
 
           # Key indexes (unique or composite)
           idxs = (data[:indexes] || []).select { |i| i[:unique] || Array(i[:columns]).size > 1 }
-            .map { |i| i[:unique] ? "#{Array(i[:columns]).join('+')}(unique)" : Array(i[:columns]).join("+") }
+            .map do |i|
+              where = Introspectors::SchemaConventions.where_clause(i[:where])
+              i[:unique] ? "#{Array(i[:columns]).join('+')}(unique#{where})" : "#{Array(i[:columns]).join('+')}#{where}"
+            end
           idx_str = idxs.any? ? " | Idx: #{idxs.join(', ')}" : ""
 
           lines << "- **#{name}** (#{count_phrase(col_count, 'col')})#{col_str}#{fk_str}#{idx_str}"
@@ -126,7 +122,7 @@ module RailsAiContext
           model_data = models[model_name]
           if model_data.is_a?(Hash) && model_data[:enums]&.any?
             model_data[:enums].each do |attr, values|
-              lines << "  #{attr}: #{values.is_a?(Hash) ? values.keys.join(', ') : Array(values).join(', ')}"
+              lines << "  #{attr}: #{SectionFacts.enum_values(values)}"
             end
           end
         end
@@ -198,7 +194,7 @@ module RailsAiContext
           # Include enums so agents know valid values
           enums = data[:enums] || {}
           enums.each do |attr, values|
-            lines << "  #{attr}: #{values.is_a?(Hash) ? values.keys.join(', ') : Array(values).join(', ')}"
+            lines << "  #{attr}: #{SectionFacts.enum_values(values)}"
           end
         end
 

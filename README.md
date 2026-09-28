@@ -23,7 +23,7 @@
 
 [Why](#why) • [Features](#features) • [Getting started](#getting-started) • [Usage](#usage) • [Tools](#tools) • [Configuration](#configuration) • [Documentation](#documentation)
 
-![Install demo](demo/demo.gif)
+![Install demo](https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/demo/demo.gif)
 
 </div>
 
@@ -56,7 +56,7 @@ You catch it, fix it, re-prompt, and something next to it breaks. The tokens are
 
 <div align="center">
 
-![Trace demo](demo/demo-trace.gif)
+![Trace demo](https://raw.githubusercontent.com/crisnahine/rails-ai-context/main/demo/demo-trace.gif)
 
 </div>
 

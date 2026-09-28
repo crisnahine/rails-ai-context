@@ -71,6 +71,112 @@ RSpec.describe RailsAiContext::SchemaAdapter do
       forward = { schema: { adapter: "static_parse" }, gems: { notable_gems: [ { name: "pg" }, { name: "sqlite3" } ] } }
       reverse = { schema: { adapter: "static_parse" }, gems: { notable_gems: [ { name: "sqlite3" }, { name: "pg" } ] } }
       expect(described_class.label(forward)).to eq(described_class.label(reverse))
+      expect(described_class.label(forward)).to eq("PostgreSQL or SQLite")
+    end
+
+    # Huginn bundles pg and mysql2 and runs on MySQL. Picking whichever gem
+    # came first in a constant named PostgreSQL in every generated file.
+    it "refuses to pick between two adapter gems and names them" do
+      context = { schema: { adapter: "static_parse" }, gems: { notable_gems: [ { name: "pg" }, { name: "mysql2" } ] } }
+      expect(described_class.label(context)).to eq("PostgreSQL or MySQL")
+    end
+
+    it "still answers when two gems mean the same database" do
+      context = { schema: { adapter: "static_parse" }, gems: { notable_gems: [ { name: "mysql2" }, { name: "trilogy" } ] } }
+      expect(described_class.label(context)).to eq("MySQL")
+    end
+
+    # An adapter the file computes in ERB with one literal fallback is what
+    # the app runs on with the env var unset, which is worth saying - as a
+    # default, not as an observation.
+    it "marks a configured adapter that came from an ERB default" do
+      context = {
+        schema: { adapter: "static_parse" },
+        multi_database: { databases: [ { name: "primary", adapter: "mysql2", adapter_default: true } ] }
+      }
+      expect(described_class.label(context)).to eq("MySQL by database.yml default")
+    end
+
+    # The schema tool's Adapter line has room for the reason; a sentence
+    # mid-paragraph does not.
+    it "adds the reason where a surface has room for it" do
+      context = { schema: { adapter: "static_parse" }, multi_database: { databases: [ { name: "primary", adapter: nil } ] },
+                  gems: { notable_gems: [ { name: "mysql2" }, { name: "sqlite3" } ] } }
+      expect(described_class.label_with_reason(context)).to eq("MySQL or SQLite, database.yml does not say which")
+    end
+
+    # Plots2 commits no database.yml: its five example files name both.
+    it "says the example files name each when that is where the candidates came from" do
+      context = { schema: { adapter: "static_parse" }, multi_database: { databases: [], example_adapters: %w[mysql2 sqlite3] } }
+      expect(described_class.label_with_reason(context)).to eq("MySQL or SQLite, its database.yml examples name each")
+    end
+
+    it "blames no file the app does not have" do
+      context = { schema: { adapter: "static_parse" }, multi_database: { databases: [] },
+                  gems: { notable_gems: [ { name: "pg" }, { name: "mysql2" } ] } }
+      expect(described_class.label_with_reason(context)).to eq("PostgreSQL or MySQL, the app does not say which")
+    end
+
+    it "adds no reason to an adapter it could decide" do
+      context = { schema: { adapter: "PostgreSQL" } }
+      expect(described_class.label_with_reason(context)).to eq("PostgreSQL")
+    end
+
+    # Canvas commits no database.yml and bundles pg and sqlite3, but its
+    # database.yml.example says postgresql and its tables have jsonb columns.
+    describe "evidence before the gem list" do
+      let(:two_gems) { { notable_gems: [ { name: "pg" }, { name: "sqlite3" } ] } }
+
+      it "reads the adapter a database.yml example names" do
+        context = { schema: { adapter: "static_parse" }, multi_database: { databases: [], example_adapters: %w[postgresql] }, gems: two_gems }
+        expect(described_class.label(context)).to eq("PostgreSQL")
+      end
+
+      it "names every adapter the example files name, when they name several" do
+        context = { schema: { adapter: "static_parse" }, multi_database: { databases: [], example_adapters: %w[sqlite3 mysql2] }, gems: two_gems }
+        expect(described_class.label(context)).to eq("MySQL or SQLite")
+      end
+
+      it "reads PostgreSQL from column types only it has" do
+        tables = { "courses" => { columns: [ { name: "settings", type: "jsonb" } ] } }
+        context = { schema: { adapter: "static_parse", tables: tables }, gems: two_gems }
+        expect(described_class.label(context)).to eq("PostgreSQL")
+      end
+
+      it "reads PostgreSQL from an array column" do
+        tables = { "courses" => { columns: [ { name: "tags", type: "string", array: true } ] } }
+        context = { schema: { adapter: "static_parse", tables: tables }, gems: two_gems }
+        expect(described_class.label(context)).to eq("PostgreSQL")
+      end
+
+      # An example file is a setup hint, often SQLite for convenience; a jsonb
+      # column is proof of the database the schema was dumped from.
+      it "lets column types only one database has outrank an example file" do
+        tables = { "courses" => { columns: [ { name: "settings", type: "jsonb" } ] } }
+        context = { schema: { adapter: "static_parse", tables: tables },
+                    multi_database: { databases: [], example_adapters: %w[sqlite3] }, gems: two_gems }
+        expect(described_class.label(context)).to eq("PostgreSQL")
+      end
+
+      it "lets a structure.sql dialect outrank the column types" do
+        tables = { "courses" => { columns: [ { name: "notes", type: "mediumtext" } ] } }
+        context = { schema: { adapter: "static_parse", dialect: "postgresql", tables: tables }, gems: two_gems }
+        expect(described_class.label(context)).to eq("PostgreSQL")
+      end
+
+      # activerecord-postgis-adapter names its adapter postgis; it is PostgreSQL.
+      it "reads the postgis adapter as PostgreSQL" do
+        context = { schema: { adapter: "static_parse" }, multi_database: { databases: [], example_adapters: %w[postgis] } }
+        expect(described_class.label(context)).to eq("PostgreSQL")
+        configured = { schema: { adapter: "static_parse" }, multi_database: { databases: [ { name: "primary", adapter: "postgis" } ] } }
+        expect(described_class.label(configured)).to eq("PostgreSQL")
+      end
+
+      it "leaves column types that point both ways to the gem list" do
+        tables = { "a" => { columns: [ { name: "x", type: "jsonb" }, { name: "y", type: "mediumtext" } ] } }
+        context = { schema: { adapter: "static_parse", tables: tables }, gems: two_gems }
+        expect(described_class.label(context)).to eq("PostgreSQL or SQLite")
+      end
     end
 
     it "says unknown when nothing can resolve it" do

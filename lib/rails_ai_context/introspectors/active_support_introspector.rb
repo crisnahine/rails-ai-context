@@ -6,15 +6,9 @@ module RailsAiContext
     # cover: Concerns registry (`app/**/concerns`), Deprecators registry,
     # MessageEncryptor/MessageVerifier usage, and TaggedLogging tags.
     # Covers RAILS_NERVOUS_SYSTEM.md §17 (ActiveSupport).
-    class ActiveSupportIntrospector
+    class ActiveSupportIntrospector < Base
       extend StaticTier
       static_tier :alternate_source
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
@@ -25,8 +19,6 @@ module RailsAiContext
           on_load_hooks: common_on_load_hooks,
           cache_usage: detect_cache_usage
         }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "ActiveSupportIntrospector#call")
       end
 
       # Concerns, MessageVerifier usage and tagged logging are read off disk.
@@ -43,24 +35,25 @@ module RailsAiContext
           on_load_hooks: unavailable,
           cache_usage: unavailable
         }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "ActiveSupportIntrospector#static_call")
       end
 
       private
 
-      def root
-        app.root.to_s
-      end
-
+      # Keyed by directory, each concerns directory then each autoload root holding a
+      # concern outside them, so every entry says where it lives.
       def extract_concerns
         result = {}
-        ConcernPaths.resolve(root).each do |dir|
+        lookup = SuperclassChain.lookup_for(root)
+        sources = ConcernPaths.resolve(root).map { |dir| [ dir, Dir.glob(File.join(dir, "**/*.rb")).sort ] } +
+                  ConcernPaths.outside(root).group_by(&:root_dir).map { |dir, entries| [ dir, entries.map(&:path) ] }
+        sources.each do |dir, paths|
           rel_dir = dir.sub("#{root}/", "")
 
-          modules = Dir.glob(File.join(dir, "**/*.rb")).sort.filter_map do |path|
+          modules = paths.filter_map do |path|
             content = RailsAiContext::SafeFile.read(path) or next
-            mod_name = File.basename(path, ".rb").camelize
+            # The constant the file declares, as rails_get_concern names it: Edition::Featurable
+            # and Featurable are two modules the basename would print alike.
+            mod_name = ConcernPaths.name_for(path, dir, content)
             next if RailsAiContext::ConcernMembership.excluded?(mod_name)
 
             ast = SourceIntrospector.walk(path, {
@@ -73,17 +66,19 @@ module RailsAiContext
             # validator in some apps - and a class is not a concern, let
             # alone a "plain module".
             declarations = DeclaredConstant.declarations(content)
-            declared = declarations.find { |d| d.name.split("::").last.casecmp?(mod_name) }
+            declared = declarations.find { |d| d.name.split("::").last.casecmp?(mod_name.split("::").last) }
             if declared
               entry[:kind] = "class"
               entry[:superclass] = declared.superclass
             end
+            validator = SuperclassChain.validator_base(content, name: mod_name, lookup: lookup)
+            entry[:validator] = validator if validator
             entry[:uses_active_support_concern] = true if content.include?("ActiveSupport::Concern")
             entry[:included_blocks] = hits.count { |h| h[:macro] == :included }
             entry[:class_methods_block] = hits.any? { |h| h[:macro] == :class_methods }
             entry
           end
-          result[rel_dir] = modules if modules.any?
+          result[rel_dir] = Array(result[rel_dir]) + modules if modules.any?
         end
         result
       rescue => e

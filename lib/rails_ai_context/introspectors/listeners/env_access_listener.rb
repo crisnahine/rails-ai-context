@@ -25,7 +25,7 @@ module RailsAiContext
 
         def extract_subscript(node)
           args = node.arguments&.arguments || []
-          key = string_value(args.first)
+          key = literal_string(args.first)
           return unless key
 
           @results << {
@@ -38,7 +38,7 @@ module RailsAiContext
 
         def extract_fetch(node)
           args = node.arguments&.arguments || []
-          key = string_value(args.first)
+          key = literal_string(args.first)
           return unless key
 
           @results << {
@@ -52,16 +52,6 @@ module RailsAiContext
             default:     literal_value(args[1]),
             location:    node.location.start_line
           }
-        end
-
-        # An interpolated name has no value at parse time, so it is not a
-        # variable name and this returns nil for it.
-        def string_value(node)
-          case node
-          when Prism::StringNode then node.unescaped
-          when Prism::SymbolNode then node.value
-          else nil
-          end
         end
 
         def literal_value(node)

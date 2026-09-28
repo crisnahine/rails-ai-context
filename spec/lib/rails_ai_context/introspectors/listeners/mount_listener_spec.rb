@@ -3,13 +3,6 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects mount with at: keyword" do
     results = parse_and_dispatch('mount Sidekiq::Web, at: "/sidekiq"')
     expect(results.size).to eq(1)
@@ -69,6 +62,19 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     expect(results.first).to include(engine: "StatsApp", path: "/admin/stats")
   end
 
+  it "keeps the name Rails gives the mount" do
+    results = parse_and_dispatch(<<~RUBY)
+      scope "/store" do
+        mount Shop::Engine, at: "/shop", as: "storefront"
+      end
+      namespace :admin do
+        mount Wiki::Engine => "/w"
+      end
+    RUBY
+
+    expect(results.map { |r| r.slice(:as, :name_prefix) }).to eq([ { as: "storefront" }, { name_prefix: "admin" } ])
+  end
+
   it "carries a scope's path the same way" do
     results = parse_and_dispatch(<<~RUBY)
       scope "/internal" do
@@ -77,6 +83,19 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     RUBY
 
     expect(results.first).to include(engine: "StatsApp", path: "/internal/stats")
+  end
+
+  it "writes a mount under an optional scope the way Rails normalizes it" do
+    results = parse_and_dispatch(<<~RUBY)
+      scope "(/locale/:locale)" do
+        mount Sidekiq::Web => "sidekiq"
+      end
+      scope "(:locale)" do
+        mount StatsApp => "stats"
+      end
+    RUBY
+
+    expect(results.map { |r| r[:path] }).to eq([ "(/locale/:locale)/sidekiq", "(/:locale)/stats" ])
   end
 
   it "leaves the path unknown when the enclosing scope's name cannot be read" do
@@ -184,5 +203,24 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MountListener do
     RUBY
 
     expect(results.first[:location]).to eq(2)
+  end
+
+  it "names an app a constant builds with arguments" do
+    results = parse_and_dispatch(<<~RUBY)
+      mount Flipper::UI.app(Flipper) => "/feature-toggle"
+    RUBY
+
+    expect(results).to match([ a_hash_including(engine: "Flipper::UI.app", path: "/feature-toggle") ])
+  end
+
+  # `PagesController.action(:show)` is a controller endpoint, which the booted
+  # tier counts as a dynamic route, not a mounted app.
+  it "does not name a controller action endpoint as a mounted app" do
+    results = parse_and_dispatch(<<~RUBY)
+      get "/about", to: PagesController.action(:show)
+      mount Flipper::UI.app(Flipper) => "/flags"
+    RUBY
+
+    expect(results.map { |r| r[:engine] }).to eq([ "Flipper::UI.app" ])
   end
 end

@@ -26,6 +26,48 @@ RSpec.describe RailsAiContext::Doctor do
       expect(names).to include("Schema")
     end
 
+    describe "the Brakeman check" do
+      def brakeman_check
+        doctor.run[:checks].find { |c| c.name == "Brakeman" }
+      end
+
+      it "says the scan runs from outside the bundle when that is where brakeman is" do
+        allow(RailsAiContext::Tools::SecurityScan).to receive(:brakeman_location).and_return([ :machine, "7.1.0" ])
+
+        check = brakeman_check
+        expect(check.status).to eq(:pass)
+        expect(check.message).to include("7.1.0").and include("outside")
+      end
+
+      # Mastodon locks brakeman; a static run never loads the app's bundle.
+      it "does not tell an app whose lockfile carries brakeman to add it" do
+        allow(RailsAiContext::Tools::SecurityScan).to receive(:brakeman_location).and_return([ :machine, "8.0.6" ])
+        allow(RailsAiContext::GemLock).to receive(:for).and_return(RailsAiContext::GemLock::Spec.new({ "brakeman" => "8.0.6" }))
+
+        check = brakeman_check
+        expect(check.message).to include("Gemfile.lock carries brakeman 8.0.6")
+        expect(check.fix).to be_nil
+      end
+
+      it "says to install a brakeman the lockfile carries and the machine lacks" do
+        allow(RailsAiContext::Tools::SecurityScan).to receive(:brakeman_location).and_return([ nil, nil ])
+        allow(RailsAiContext::GemLock).to receive(:for).and_return(RailsAiContext::GemLock::Spec.new({ "brakeman" => "8.0.6" }))
+
+        check = brakeman_check
+        expect(check.status).to eq(:warn)
+        expect(check.fix).to include("bundle install")
+        expect(check.fix).not_to include("gem 'brakeman'")
+      end
+
+      it "reports it missing only when no scanner is anywhere" do
+        allow(RailsAiContext::Tools::SecurityScan).to receive(:brakeman_location).and_return([ nil, nil ])
+
+        check = brakeman_check
+        expect(check.status).to eq(:warn)
+        expect(check.message).to include("not installed")
+      end
+    end
+
     it "includes core checks" do
       names = result[:checks].map(&:name)
       expect(names).to include("Controllers", "Views", "Tests", "MCP server")
@@ -65,6 +107,30 @@ RSpec.describe RailsAiContext::Doctor do
     end
   end
 
+  # A standalone install has no rake tasks and no generator: the gem is not in
+  # the app's bundle. A fix that names `rails ai:context` sends the reader to a
+  # command that does not exist there.
+  describe "the commands its fixes name" do
+    def fixes_for(standalone:)
+      allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(standalone)
+      described_class.new(Rails.application).run[:checks].filter_map(&:fix)
+    end
+
+    it "names the binary's commands in a standalone install" do
+      fixes = fixes_for(standalone: true)
+
+      expect(fixes.join("\n")).not_to match(/rails ai:|rails generate rails_ai_context/)
+      expect(fixes).to include("Run `rails-ai-context context`", "Run `rails-ai-context init` to fix")
+    end
+
+    it "names the rake task and the generator where the app bundles the gem" do
+      fixes = fixes_for(standalone: false)
+
+      expect(fixes.join("\n")).not_to match(/rails-ai-context (context|init)/)
+      expect(fixes).to include("Run `rails ai:context`", "Run `rails generate rails_ai_context:install` to fix")
+    end
+  end
+
   describe ".report_lines" do
     # The struct check below is not what a user reads. The printed report is.
     it "prints the introspector's own error under its check" do
@@ -76,7 +142,7 @@ RSpec.describe RailsAiContext::Doctor do
       index = lines.index { |line| line.include?("Introspector health") }
 
       expect(lines[index]).to include("[WARN] Introspector health:")
-      expect(lines[index + 1]).to include("Fix: database_stats: Database not found: no_such_db")
+      expect(lines[index + 1]).to include("Fix: database_stats: StandardError: Database not found: no_such_db")
       expect(lines[index + 1]).not_to include("stimulus")
     end
 
@@ -113,7 +179,7 @@ RSpec.describe RailsAiContext::Doctor do
 
       expect(check.status).to eq(:warn)
       expect(check.message).to include("database_stats")
-      expect(check.fix).to include("database_stats: Database not found: no_such_db")
+      expect(check.fix).to include("database_stats: StandardError: Database not found: no_such_db")
       expect(check.fix).not_to include("stimulus")
     end
 
@@ -284,6 +350,15 @@ RSpec.describe RailsAiContext::Doctor do
           expect(check.message).to include(stale_gem_home)
           expect(check.fix).to include("install")
         end
+
+        it "names only the command this install has" do
+          allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+          expect(check.fix).to eq("Run `rails-ai-context init`")
+
+          allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+          expect(described_class.new(Rails.application).send(:check_codex_env_staleness).fix)
+            .to eq("Run `rails generate rails_ai_context:install`")
+        end
       end
 
       context "when env section is followed by another TOML section" do
@@ -351,6 +426,19 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.status).to eq(:warn)
         expect(check.message).to include("defined?(RailsAiContext)")
         expect(check.fix).to include("respond_to?(:configure)")
+      end
+
+      it "offers the binary's init in a standalone install" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+        expect(check.fix).to include("`rails-ai-context init`")
+        expect(check.fix).not_to include("rails generate")
+      end
+
+      it "offers the generator where the app bundles the gem" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(false)
+
+        expect(check.fix).to include("`rails generate rails_ai_context:install`")
       end
     end
 
@@ -532,105 +620,93 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check.message).to include("1 of 1")
         expect(check.message).to include(".mcp.json")
       end
+
+      it "names the binary's init to regenerate it in a standalone install" do
+        allow(RailsAiContext::InstallMode).to receive(:standalone?).and_return(true)
+
+        expect(check.fix).to eq("Run `rails-ai-context init` to fix")
+      end
     end
   end
 
   describe "#check_security_gitignore" do
-    subject(:check) { doctor.send(:check_security_gitignore) }
-
-    let(:root) { Rails.application.root }
-    let(:master_key_path) { File.join(root, "config/master.key") }
-    let(:env_path) { File.join(root, ".env") }
-    let(:gitignore_path) { File.join(root, ".gitignore") }
-
-    before do
-      allow(File).to receive(:exist?).and_call_original
-      allow(File).to receive(:read).and_call_original
+    def gitignore_check_for(root)
+      described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_security_gitignore)
     end
 
-    context "when no sensitive files are present" do
-      before do
-        allow(File).to receive(:exist?).with(env_path).and_return(false)
-        allow(File).to receive(:exist?).with(master_key_path).and_return(false)
+    def app_with(files)
+      Dir.mktmpdir do |dir|
+        files.each do |path, content|
+          FileUtils.mkdir_p(File.dirname(File.join(dir, path)))
+          File.write(File.join(dir, path), content)
+        end
+        yield dir
       end
+    end
 
-      it "passes without needing a .gitignore" do
+    it "passes and says so when no sensitive file exists" do
+      app_with("app/models/user.rb" => "class User; end\n") do |dir|
+        check = gitignore_check_for(dir)
+
         expect(check.status).to eq(:pass)
+        expect(check.message).to eq("No sensitive files found")
       end
     end
 
-    context "when a sensitive file exists but .gitignore is missing" do
-      before do
-        allow(File).to receive(:exist?).with(env_path).and_return(false)
-        allow(File).to receive(:exist?).with(master_key_path).and_return(true)
-        allow(File).to receive(:exist?).with(gitignore_path).and_return(false)
-      end
+    # The check looked for three names while the tools refuse a list of patterns.
+    it "checks every file the tools refuse, and names each one and whether it is ignored" do
+      files = { "config/application.yml" => "k: v\n", ".env" => "A=1\n", "config/ssl/server.pem" => "x\n",
+                "node_modules/pkg/test.pem" => "x\n", ".gitignore" => "config/application.yml\n" }
+      app_with(files) do |dir|
+        check = gitignore_check_for(dir)
 
-      it "reports the missing .gitignore, not a missing entry" do
         expect(check.status).to eq(:fail)
-        expect(check.message).to include("No .gitignore found")
-        expect(check.message).to include("config/master.key")
-        expect(check.fix).to include("Create .gitignore with")
-        expect(check.fix).to include("config/master.key")
+        expect(check.message).to eq(".env not in .gitignore; also committed: config/ssl/server.pem")
+        expect(check.fix).to include("`.env`")
       end
     end
 
-    context "when .gitignore exists but is missing an entry" do
-      before do
-        allow(File).to receive(:exist?).with(env_path).and_return(false)
-        allow(File).to receive(:exist?).with(master_key_path).and_return(true)
-        allow(File).to receive(:exist?).with(gitignore_path).and_return(true)
-        allow(File).to receive(:read).with(gitignore_path).and_return("log/\ntmp/\n")
-      end
+    # database.yml, credentials.yml.enc and .env.development are often committed on purpose.
+    it "warns, naming them, when only files an app may commit on purpose are unignored" do
+      app_with("config/database.yml" => "x\n", "config/credentials.yml.enc" => "x\n", ".env.development" => "A=1\n",
+               "config/application.yml" => "k: v\n", ".gitignore" => "/config/application.yml\n") do |dir|
+        check = gitignore_check_for(dir)
 
-      it "reports the file is not gitignored" do
-        expect(check.status).to eq(:fail)
-        expect(check.message).to include("config/master.key not in .gitignore")
-        expect(check.fix).to include("Add to .gitignore")
+        expect(check.status).to eq(:warn)
+        expect(check.message).to eq("Committed, and never read by the tools: .env.development, config/credentials.yml.enc, config/database.yml")
       end
     end
 
-    context "when .gitignore exists and covers the sensitive file" do
-      before do
-        allow(File).to receive(:exist?).with(env_path).and_return(false)
-        allow(File).to receive(:exist?).with(master_key_path).and_return(true)
-        allow(File).to receive(:exist?).with(gitignore_path).and_return(true)
-        allow(File).to receive(:read).with(gitignore_path).and_return("config/master.key\n")
-      end
+    it "lists the sensitive files it found when every one is ignored" do
+      app_with("config/application.yml" => "k: v\n", "config/master.key" => "x\n",
+               ".gitignore" => "/config/application.yml\n/config/master.key\n") do |dir|
+        check = gitignore_check_for(dir)
 
-      it "passes" do
         expect(check.status).to eq(:pass)
+        expect(check.message).to eq("Sensitive files gitignored: config/application.yml, config/master.key")
+      end
+    end
+
+    it "reports a missing .gitignore, not a missing entry" do
+      app_with("config/master.key" => "x\n") do |dir|
+        check = gitignore_check_for(dir)
+
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include("No .gitignore found", "config/master.key")
+        expect(check.fix).to include("Create .gitignore with", "config/master.key")
       end
     end
 
     # The Codex config carries this machine's PATH and GEM_HOME, which is why
     # install gitignores it; the check never asked whether that survived.
-    context "when .codex/config.toml is committed" do
-      def gitignore_check_for(root)
-        described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_security_gitignore)
-      end
+    it "reports the Codex config as unignored, and passes once .gitignore covers it" do
+      app_with(".codex/config.toml" => "[mcp_servers.rails-ai-context]\n", ".gitignore" => "log/\n") do |dir|
+        check = gitignore_check_for(dir)
+        expect(check.status).to eq(:fail)
+        expect(check.message).to include(".codex/config.toml")
 
-      it "reports the Codex config as unignored" do
-        Dir.mktmpdir do |dir|
-          FileUtils.mkdir_p(File.join(dir, ".codex"))
-          File.write(File.join(dir, ".codex/config.toml"), "[mcp_servers.rails-ai-context]\n")
-          File.write(File.join(dir, ".gitignore"), "log/\n")
-
-          check = gitignore_check_for(dir)
-
-          expect(check.status).to eq(:fail)
-          expect(check.message).to include(".codex/config.toml")
-        end
-      end
-
-      it "passes once .gitignore covers it" do
-        Dir.mktmpdir do |dir|
-          FileUtils.mkdir_p(File.join(dir, ".codex"))
-          File.write(File.join(dir, ".codex/config.toml"), "[mcp_servers.rails-ai-context]\n")
-          File.write(File.join(dir, ".gitignore"), ".codex/config.toml\n")
-
-          expect(gitignore_check_for(dir).status).to eq(:pass)
-        end
+        File.write(File.join(dir, ".gitignore"), ".codex/config.toml\n")
+        expect(gitignore_check_for(dir).status).to eq(:pass)
       end
     end
   end
@@ -832,6 +908,63 @@ RSpec.describe RailsAiContext::Doctor do
         expect(check_named(dir, "Views").message).to eq("3 files under app/views")
         expect(check_named(dir, "View aggregation size").message)
           .to start_with("2 erb/haml/slim templates")
+      end
+    end
+
+    # Raising a setting no check reads would leave the warning in place.
+    it "names only the setting the warning is measured against" do
+      Dir.mktmpdir do |dir|
+        views = File.join(dir, "app", "views", "posts")
+        FileUtils.mkdir_p(views)
+        File.write(File.join(views, "index.html.erb"), "<h1>Posts</h1>\n")
+
+        original = RailsAiContext.configuration.max_view_total_size
+        RailsAiContext.configuration.max_view_total_size = 10
+        begin
+          check = check_named(dir, "View aggregation size")
+          expect(check.status).to eq(:warn)
+          expect(check.fix).to eq("Increase `config.max_view_total_size`")
+        ensure
+          RailsAiContext.configuration.max_view_total_size = original
+        end
+      end
+    end
+  end
+
+  describe "#check_tests" do
+    def tests_check(root)
+      described_class.new(RailsAiContext::StaticApp.new(root)).send(:check_tests)
+    end
+
+    def write(root, rel, body = "")
+      path = File.join(root, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+    end
+
+    it "agrees with test_info about a spec directory that holds no specs" do
+      Dir.mktmpdir do |root|
+        write(root, "spec/javascripts/admin_spec.js")
+        write(root, "test/unit/user_test.rb")
+
+        check = tests_check(root)
+        expect(check.status).to eq(:pass)
+        expect(check.message).to eq("minitest test suite found")
+      end
+    end
+
+    it "warns when no suite is there to find" do
+      Dir.mktmpdir do |root|
+        expect(tests_check(root).status).to eq(:warn)
+      end
+    end
+
+    it "names both suites when the app runs both" do
+      Dir.mktmpdir do |root|
+        write(root, "spec/models/user_spec.rb")
+        write(root, "test/unit/user_test.rb")
+
+        expect(tests_check(root).message).to eq("rspec, minitest test suite found")
       end
     end
   end

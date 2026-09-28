@@ -48,7 +48,7 @@ rails-ai-context version            # Show version
 ## How standalone mode works
 
 1. **Loads only its boot shim** before the app - the binary requires the two files it needs to boot Rails, then `config/environment.rb`, and requires the gem itself only after the boot returns
-2. **Restores `$LOAD_PATH`** entries that `Bundler.setup` strips (since the gem isn't in the Gemfile)
+2. **Restores `$LOAD_PATH`** entries that `Bundler.setup` strips (since the gem isn't in the Gemfile). The gem's own dependencies come off the load path for the duration of the boot, so every gem the app locks resolves to the app's pin, and go back behind it afterwards
 3. **YAML config** - uses `.rails-ai-context.yml` instead of a Ruby initializer
 
 This means you get the same 45 tools, same MCP server, same context generation - without touching the project's Gemfile.

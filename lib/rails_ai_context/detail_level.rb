@@ -3,8 +3,8 @@
 module RailsAiContext
   # The `detail` parameter shared by most tools. Values arrive over the wire as
   # strings, so this stays string-compatible rather than wrapping them; what it
-  # adds is one definition of the allowed values and an ordering, so callers can
-  # ask "is this at least standard?" instead of comparing literals.
+  # adds is one definition of the allowed values, so callers ask this module
+  # instead of comparing literals.
   module DetailLevel
     SUMMARY  = "summary"
     STANDARD = "standard"
@@ -12,8 +12,6 @@ module RailsAiContext
 
     ALL     = [ SUMMARY, STANDARD, FULL ].freeze
     DEFAULT = STANDARD
-
-    ORDER = { SUMMARY => 0, STANDARD => 1, FULL => 2 }.freeze
 
     # The `detail` property tools publish in their input schema. Tools pass
     # their own wording and get the type and the enum from here, so the
@@ -31,10 +29,6 @@ module RailsAiContext
     # whichever branch happens to be last.
     def self.normalize(detail)
       valid?(detail) ? detail.to_s : DEFAULT
-    end
-
-    def self.at_least?(detail, minimum)
-      ORDER.fetch(normalize(detail)) >= ORDER.fetch(minimum)
     end
 
     def self.full?(detail)

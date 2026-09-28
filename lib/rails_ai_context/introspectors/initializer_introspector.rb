@@ -7,21 +7,16 @@ module RailsAiContext
     # block is defined, and any declared `before:` / `after:` ordering edges.
     #
     # Covers RAILS_NERVOUS_SYSTEM.md §2 (Initializer graph).
-    class InitializerIntrospector
+    class InitializerIntrospector < Base
       extend StaticTier
       static_tier :runtime_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       # @return [Hash] initializer catalog with name, source, and ordering edges
       def call
         return { available: false, reason: "Rails.application.initializers unavailable" } unless app.respond_to?(:initializers)
 
-        all = app.initializers.to_a
+        # This gem's own initializers are not the app's.
+        all = app.initializers.to_a.reject { |init| owner_name(init) == "RailsAiContext::Engine" }
         app_initializers = extract_application_initializers
 
         {
@@ -30,15 +25,9 @@ module RailsAiContext
           by_owner: group_by_owner(all),
           initializers: summarize(all)
         }
-      rescue => e
-        RailsAiContext.debug_fail(e, { error: e.message }, label: "InitializerIntrospector#call")
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       # Summarize every initializer as { name, owner, before, after, source }.
       # Keeps the list bounded by returning a flat array of primitives only.
@@ -107,7 +96,8 @@ module RailsAiContext
         return nil unless loc
 
         path, line = loc
-        "#{PortablePath.relativize(path, root)}:#{line}"
+        portable = PortablePath.portable(path, root)
+        portable && "#{portable}:#{line}"
       rescue => e
         RailsAiContext.debug_fail(e, nil, label: "block_source_location")
       end

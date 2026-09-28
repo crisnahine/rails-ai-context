@@ -4,15 +4,9 @@ module RailsAiContext
   module Introspectors
     # Discovers database seed configuration: db/seeds.rb structure,
     # seed files in db/seeds/ directory, and what models they populate.
-    class SeedsIntrospector
+    class SeedsIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       # @return [Hash] seed file info and detected models
       def call
@@ -21,14 +15,28 @@ module RailsAiContext
           seed_files: discover_seed_files,
           models_seeded: detect_seeded_models
         }
-      rescue => e
-        { error: e.message }
       end
 
       private
 
-      def root
-        app.root.to_s
+      # Both collectors' macros in one list, so a seed file is walked once.
+      SEED_CALLS = %i[
+        create create! find_or_create_by find_or_create_by! upsert insert_all
+        new first_or_create seed
+      ].freeze
+
+      def chained_calls(path)
+        @chained_calls ||= {}
+        @chained_calls[path] ||= SourceIntrospector.walk(path, {
+          chained: -> { Listeners::ChainedCallListener.new(*SEED_CALLS) }
+        })[:chained]
+      end
+
+      def seed_paths
+        @seed_paths ||= begin
+          dir = File.join(root, "db/seeds")
+          Dir.exist?(dir) ? Dir.glob(File.join(dir, "**/*.rb")).sort : []
+        end
       end
 
       def analyze_seeds_file
@@ -38,11 +46,7 @@ module RailsAiContext
         content = RailsAiContext::SafeFile.read(path)
         return { exists: false, error: "unreadable" } unless content
 
-        # Use ChainedCallListener for method calls with receivers
-        ast_data = SourceIntrospector.walk(path, {
-          chained: -> { Listeners::ChainedCallListener.new(:create, :create!, :find_or_create_by, :find_or_create_by!, :upsert, :insert_all) }
-        })
-        chained = ast_data[:chained]
+        chained = chained_calls(path)
 
         {
           exists: true,
@@ -65,10 +69,7 @@ module RailsAiContext
       end
 
       def discover_seed_files
-        seeds_dir = File.join(root, "db/seeds")
-        return [] unless Dir.exist?(seeds_dir)
-
-        Dir.glob(File.join(seeds_dir, "**/*.rb")).sort.map do |path|
+        seed_paths.map do |path|
           {
             file: path.sub("#{root}/", ""),
             name: File.basename(path, ".rb")
@@ -78,25 +79,14 @@ module RailsAiContext
 
       def detect_seeded_models
         models = Set.new
-        seed_files = [ File.join(root, "db/seeds.rb") ]
-
-        seeds_dir = File.join(root, "db/seeds")
-        seed_files += Dir.glob(File.join(seeds_dir, "**/*.rb")) if Dir.exist?(seeds_dir)
+        seed_files = [ File.join(root, "db/seeds.rb") ] + seed_paths
 
         non_models = %w[File Dir ENV Rails Faker FactoryBot ActiveRecord IO Pathname YAML JSON CSV]
 
         seed_files.each do |path|
           next unless File.exist?(path)
 
-          # Use ChainedCallListener to find model creation calls via AST,
-          # then extract receiver constant names from the source lines at
-          # detected locations. The listener confirms the method call;
-          # the receiver name comes from the source at the AST-reported line.
-          ast_data = SourceIntrospector.walk(path, {
-            chained: -> { Listeners::ChainedCallListener.new(:create, :create!, :find_or_create_by, :find_or_create_by!, :upsert, :insert_all, :new, :first_or_create, :seed) }
-          })
-
-          ast_data[:chained].each do |entry|
+          chained_calls(path).each do |entry|
             model_name = entry[:receiver]
             next unless model_name&.match?(/\A[A-Z]/)
             models << model_name unless non_models.include?(model_name.split("::").first)

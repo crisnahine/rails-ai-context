@@ -67,4 +67,28 @@ RSpec.describe RailsAiContext::Introspectors::SourceScan do
   it "answers nothing for a root that does not exist" do
     expect(described_class.each("/nonexistent/rails-ai-context-root", kind: "app/models").to_a).to eq([])
   end
+
+  # OpenProject's run asked for app/models five times and app/controllers
+  # four; the glob and a realpath per file were a fifth of its CPU.
+  describe "within one introspection run" do
+    it "globs a kind once, and again in the next run" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post; end\n")
+        globs = 0
+        allow(Dir).to receive(:glob).and_wrap_original do |original, *args, **kwargs, &block|
+          globs += 1 if args.first.to_s.end_with?("**/*.rb")
+          original.call(*args, **kwargs, &block)
+        end
+
+        RailsAiContext::RunCache.around do
+          2.times { expect(described_class.paths(dir, kind: "app/models").map(&:path_name)).to eq([ "Post" ]) }
+        end
+        expect(globs).to eq(1)
+
+        File.write(File.join(dir, "app", "models", "tag.rb"), "class Tag; end\n")
+        expect(described_class.paths(dir, kind: "app/models").map(&:path_name)).to eq(%w[Post Tag])
+      end
+    end
+  end
 end

@@ -113,6 +113,35 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
   end
 
   describe ".reflected_actions" do
+    # Rails dispatches a controller action with no arguments, so Mastodon's
+    # after_sign_in_path_for(resource) is none; a mailer action takes them.
+    # Mastodon's BulkMailSettingsConcern does `include ActiveSupport::Concern`,
+    # and Redisable adds redis helpers; neither is an email.
+    it "keeps only the mail actions a mailer class defines" do
+      mixin = Module.new do
+        include ActiveSupport::Concern
+        def redis = nil
+      end
+      klass = Class.new(ActionMailer::Base) do
+        include mixin
+        def welcome(user) = user
+      end
+      klass.define_singleton_method(:name) { "BulkMailer" }
+
+      expect(described_class.reflected_actions(klass, kind: :mailer)).to eq(%w[welcome])
+    end
+
+    it "drops a controller method that needs an argument" do
+      klass = Class.new(ActionController::Base) do
+        def index; end
+        def after_sign_in_path_for(resource) = resource
+        def search(query: nil) = query
+      end
+      klass.define_singleton_method(:name) { "CallbacksController" }
+
+      expect(described_class.reflected_actions(klass, kind: :controller)).to eq(%w[index search])
+    end
+
     it "subtracts the app mailer base under the mailer kind" do
       am_base = fake.new(name: "ActionMailer::Base")
       application_mailer = fake.new(name: "ApplicationMailer", superclass: am_base,
@@ -421,6 +450,35 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
         .to eq(%w[index])
     end
 
+    # OpenProject's DocumentTypesController defines `delete_dialog` over an
+    # EnumerationsControllerBase that defines eight, written `::Admin::...`.
+    it "gathers every app ancestor's actions, a rooted parent name included" do
+      chain = {
+        "Admin::Settings::EnumerationsControllerBase" => { actions: %w[index new], parent_class: "Admin::Settings::MiddleBase" },
+        "Admin::Settings::MiddleBase" => { actions: %w[sort], parent_class: "ApplicationController" },
+        "Documents::DocumentTypesController" => { actions: %w[delete_dialog],
+                                                  parent_class: "::Admin::Settings::EnumerationsControllerBase" }
+      }
+
+      expect(described_class.inherited_actions_by_name(chain, "::Admin::Settings::EnumerationsControllerBase",
+                                                       kind: :controller, within: "Documents::DocumentTypesController"))
+        .to eq(%w[index new sort])
+    end
+
+    # OpenProject: `class ItemsController < CustomFields::Hierarchy::ItemsBaseController`
+    # inside Admin::Settings::ProjectCustomFields::Hierarchy names Admin::CustomFields::...
+    it "resolves a qualified parent name outward when the listing lacks it as written" do
+      chain = {
+        "Admin::CustomFields::Hierarchy::ItemsBaseController" => { actions: %w[deletion_dialog move],
+                                                                     parent_class: "ApplicationController" }
+      }
+
+      expect(described_class.inherited_actions_by_name(
+               chain, "CustomFields::Hierarchy::ItemsBaseController", kind: :controller,
+               within: "Admin::Settings::ProjectCustomFields::Hierarchy::ItemsController"
+             )).to eq(%w[deletion_dialog move])
+    end
+
     it "ends a cycle rather than walking it" do
       cyclic = {
         "A" => { actions: [], parent_class: "B" },
@@ -428,6 +486,93 @@ RSpec.describe RailsAiContext::Introspectors::ActionResolver do
       }
 
       expect(described_class.inherited_actions_by_name(cyclic, "A", kind: :controller)).to eq([])
+    end
+  end
+  # The rule lived in the job introspector and again in the job tool, and a
+  # base that owns perform moves the app's own code into execute.
+  describe ".entry_point" do
+    def methods_in(source)
+      described_class.methods_in(source)
+    end
+
+    it "reads perform where the class writes one" do
+      found = described_class.entry_point(methods_in("class A\n def perform(id); end\n def execute(x); end\nend"))
+      expect(found[:name]).to eq("perform")
+    end
+
+    it "falls back to execute" do
+      found = described_class.entry_point(methods_in("class A\n def execute(args); end\nend"))
+      expect(found[:name]).to eq("execute")
+    end
+
+    it "ignores a class method of either name" do
+      expect(described_class.entry_point(methods_in("class A\n def self.perform(id); end\nend"))).to be_nil
+    end
+  end
+
+  # An app listed `authenticate_admin`, `authority?`, `create_event(name)` and
+  # the paper_trail hooks as actions of Api::V1::Admin::BaseController.
+  describe ".actions_from_source for a controller" do
+    let(:source) do
+      <<~RUBY
+        class Api::V1::Admin::BaseController < Api::V1::BaseController
+          before_action :authenticate_admin
+
+          def index
+          end
+
+          def authority?
+            true
+          end
+
+          def reset!
+          end
+
+          def create_event(event_name)
+          end
+
+          def authenticate_admin
+          end
+
+          def report(scope = :all)
+          end
+
+          def notify(to:)
+          end
+        end
+      RUBY
+    end
+
+    it "keeps only what Rails could route to" do
+      actions = described_class.actions_from_source(
+        source, class_name: "Api::V1::Admin::BaseController", filters: [ "authenticate_admin" ]
+      )
+
+      expect(actions).to eq(%w[index report])
+    end
+
+    it "keeps every public method when no filter names one and none needs an argument" do
+      plain = "class WidgetsController < ApplicationController\n  def index; end\n  def show; end\nend\n"
+
+      expect(described_class.actions_from_source(plain, class_name: "WidgetsController")).to eq(%w[index show])
+    end
+  end
+
+  describe ".requires_argument?" do
+    def method_named(source, name)
+      described_class.methods_in(source).find { |m| m[:name] == name }
+    end
+
+    it "reads a required positional and a required keyword as arguments" do
+      source = "class A\n def a(x); end\n def b(k:); end\n def c(x = 1); end\n" \
+               " def d(*rest); end\n def e(**opts); end\n def f(&blk); end\n def g; end\n" \
+               " def h(x = [1, 2]); end\nend\n"
+
+      required = %w[a b].map { |n| described_class.requires_argument?(method_named(source, n)) }
+      optional = %w[c d e f g h].map { |n| described_class.requires_argument?(method_named(source, n)) }
+
+      expect(required).to eq([ true, true ])
+      expect(optional).to eq([ false, false, false, false, false, false ])
     end
   end
 end

@@ -16,20 +16,32 @@ module RailsAiContext
       class RoutesDslListener < BaseListener
         VERB_METHODS = %i[get post put patch delete].freeze
         PLURAL_ACTIONS = %i[index create new edit show update destroy].freeze
-        SINGULAR_ACTIONS = %i[create new edit show update destroy].freeze
+        # Rails' drawing order: the first route asking for a name gets it.
+        SINGULAR_ACTIONS = %i[new edit show update destroy create].freeze
         RESTFUL_ACTIONS = %w[index show new create edit update destroy].freeze
-        DYNAMIC_MACROS = %i[devise_for draw direct resolve match].freeze
+        DYNAMIC_MACROS = %i[devise_for draw direct resolve].freeze
 
-        def initialize
-          super
-          @stack = []
+        # `scope` is the frames a `draw` of this file sits in, as its record carries them.
+        # `route_set` answers { prefix:, name_prefix: } for an app class that draws routes.
+        # `names` is the set of route names taken so far, shared by every file of one table.
+        # ponytail: an engine's namespace is its first segment; read isolate_namespace if one differs.
+        def self.engine_namespace(engine)
+          engine.split("::").first.underscore
+        end
+
+        def initialize(scope: [], route_set: nil, names: Set.new)
+          super()
+          @stack = scope.map { |frame| frame.merge(node: nil) }
+          @route_set = route_set
           @concern_blocks = {}
           @replaying = []
-          # Rails drops a generated name another route already took.
-          @generated_names = Set.new
+          # Rails leaves a route unnamed when another route already took its name.
+          @taken_names = names
         end
 
         def on_call_node_enter(node)
+          return enter_engine_draw(node) if engine_draw?(node)
+          return enter_route_set(node) if route_set_draw?(node)
           return unless node.receiver.nil?
 
           case node.name
@@ -43,7 +55,7 @@ module RailsAiContext
           when :concerns then apply_concerns(node)
           when :with_options then enter_with_options(node)
           when :root then emit_root(node)
-          when *VERB_METHODS then emit_verb_route(node) unless rack_app_target?(node)
+          when *VERB_METHODS, :match then emit_verb_route(node) unless rack_app_target?(node)
           when *DYNAMIC_MACROS then emit_dynamic(node) unless rack_app_target?(node)
           end
         end
@@ -53,6 +65,63 @@ module RailsAiContext
         end
 
         private
+
+        # `Spree::Core::Engine.routes.draw` adds to the engine's table, controllers under its
+        # namespace (spree/admin/orders); the app's own `X::Application.routes.draw` is no engine.
+        def engine_draw?(node)
+          return false unless node.name == :draw && node.block
+
+          routes = node.receiver
+          return false unless routes.is_a?(Prism::CallNode) && routes.name == :routes
+
+          owner = routes.receiver
+          (owner.is_a?(Prism::ConstantPathNode) || owner.is_a?(Prism::ConstantReadNode)) &&
+            owner.slice.end_with?("Engine")
+        end
+
+        def enter_engine_draw(node)
+          engine = node.receiver.receiver.slice.delete_prefix("::")
+          push_frame(node, mod: self.class.engine_namespace(engine), engine: engine)
+        end
+
+        def route_set_draw?(node)
+          node.name == :draw && node.block && node.arguments&.arguments&.first.is_a?(Prism::SelfNode) &&
+            (node.receiver.is_a?(Prism::ConstantPathNode) || node.receiver.is_a?(Prism::ConstantReadNode))
+        end
+
+        # ponytail: assumes the class's verb methods prefix the path and `as:` and hand the
+        # rest to the mapper, as Canvas's ApiRouteSet does; read its `route` if another app differs.
+        def enter_route_set(node)
+          return if suppressed?
+
+          known = @route_set&.call(node.receiver.slice.delete_prefix("::"))
+          literal = node.arguments.arguments[1]
+          prefix = literal.is_a?(Prism::StringNode) ? literal.unescaped : known&.dig(:prefix)
+          unless known && prefix
+            emit_dynamic(node, macro: :route_set)
+            return push_frame(node, suppress: true)
+          end
+
+          push_frame(node, route_set: { prefix: prefix, name_prefix: known[:name_prefix].to_s })
+        end
+
+        def current_route_set
+          @stack.reverse.find { |f| f[:route_set] }&.dig(:route_set)
+        end
+
+        # The controller a route without one of its own takes: the innermost
+        # `scope(controller:)` or resource, else Rails' module path alone.
+        def current_controller
+          frame = @stack.reverse.find { |f| f[:controller] || f[:resource] }
+          return frame[:resource][:controller] if frame && !frame[:controller]
+
+          controller = prefixed_controller(frame ? frame[:controller] : "")
+          controller unless controller.empty?
+        end
+
+        def current_engine
+          @stack.reverse.find { |f| f[:engine] }&.dig(:engine)
+        end
 
         # `match "/metrics", to: MetricsApp` attaches a Rack app, which
         # MountListener names with its path. Counting it here as well, as a
@@ -176,11 +245,15 @@ module RailsAiContext
           push_frame(node,
                      prefix: path ? join_path(current_prefix, path) : current_prefix,
                      mod: opts[:module]&.to_s,
-                     name_prefix: opts[:as]&.to_s)
+                     name_prefix: opts[:as]&.to_s,
+                     controller: opts[:controller]&.to_s,
+                     via: opts[:via])
         end
 
         def handle_resources(node, singular:)
           return if suppressed?
+          # A route set's class defines its own `resources`.
+          return emit_dynamic(node) if current_route_set
 
           names = extract_symbol_args(node)
           if names.empty?
@@ -252,9 +325,9 @@ module RailsAiContext
             when :edit    then emit(node, "GET", edit_path(base, singular, param), controller, "edit", "edit_#{singular_name}")
             when :show    then emit(node, "GET", member_path(base, singular, param), controller, "show", singular_name)
             when :update
-              emit(node, "PATCH", member_path(base, singular, param), controller, "update", nil)
-              emit(node, "PUT", member_path(base, singular, param), controller, "update", nil)
-            when :destroy then emit(node, "DELETE", member_path(base, singular, param), controller, "destroy", nil)
+              emit(node, "PATCH", member_path(base, singular, param), controller, "update", singular_name)
+              emit(node, "PUT", member_path(base, singular, param), controller, "update", singular_name)
+            when :destroy then emit(node, "DELETE", member_path(base, singular, param), controller, "destroy", singular_name)
             end
           end
         end
@@ -299,6 +372,10 @@ module RailsAiContext
           return if suppressed?
 
           opts = route_options(node)
+          via = opts.key?(:via) ? opts[:via] : @stack.reverse.find { |f| f[:via] }&.dig(:via)
+          verb = node.name == :match ? match_verb(via) : node.name.to_s.upcase
+          return emit_dynamic(node) unless verb
+
           segment = literal_first_arg(node)&.to_s
           rocket_key = opts.keys.find { |k| k.is_a?(String) }
           segment ||= rocket_key
@@ -308,11 +385,28 @@ module RailsAiContext
           target = opts[:to] || (rocket_key && opts[rocket_key])
           return emit_dynamic(node) if target_given && unreadable_target?(target)
 
-          controller, action = resolve_target(target, segment)
+          route_set = current_route_set unless node.name == :match
+          if route_set
+            segment = "#{route_set[:prefix]}/#{segment}"
+            # The class passes `as: nil` when none is given, and Rails generates no name then.
+            as = opts[:as] && "#{route_set[:name_prefix]}#{opts[:as]}"
+          end
+
+          controller, action = resolve_target(target, segment, opts)
           return emit_dynamic(node) unless controller && action
 
-          emit(node, node.name.to_s.upcase, verb_route_path(segment, opts[:on]),
-               controller, action, verb_route_name(opts[:as], segment, opts[:on]))
+          name = route_set ? as && verb_route_name(as, segment, opts[:on]) : verb_route_name(opts[:as], segment, opts[:on])
+          emit(node, verb, verb_route_path(segment, opts[:on]), controller, action, name)
+        end
+
+        # Rails draws one route answering every verb in `via:` ("GET|POST"), and
+        # `via: :all` answers any verb, as the booted table shows it.
+        def match_verb(via)
+          verbs = Array(via)
+          return if verbs.empty? || verbs.include?(RailsAiContext::Confidence::INFERRED)
+          return "ANY" if verbs.map(&:to_s).include?("all")
+
+          verbs.map { |v| v.to_s.upcase }.join("|")
         end
 
         # member/collection blocks push their own prefix, so inside them the
@@ -355,18 +449,26 @@ module RailsAiContext
           !(target.is_a?(String) && target.include?("#"))
         end
 
-        def resolve_target(target, segment)
+        # Rails' order: a "controller#action" target, then the `a/b` path
+        # shorthand when no action is given, then the route's or scope's
+        # controller with the given action or the path as one.
+        def resolve_target(target, segment, opts)
+          action = opts[:action].to_s if opts[:action].is_a?(Symbol) || opts[:action].is_a?(String)
+          target ||= shorthand_target(segment) unless action
           if target.is_a?(String) && target.include?("#")
             controller, action = target.split("#", 2)
-            [ prefixed_controller(controller), action ]
-          elsif current_resource
-            [ current_resource[:controller], segment.delete_prefix("/") ]
-          else
-            parts = segment.delete_prefix("/").split("/")
-            return [ nil, nil ] if parts.size < 2
-
-            [ prefixed_controller(parts[0..-2].join("/")), parts.last ]
+            return [ prefixed_controller(controller), action ]
           end
+
+          controller = opts[:controller] ? prefixed_controller(opts[:controller].to_s) : current_controller
+          action ||= segment.tr("-", "_") if segment.match?(%r{\A[\w\-]+\z})
+          [ controller, action ]
+        end
+
+        def shorthand_target(segment)
+          return unless segment.match?(%r{\A/?[-\w]+/[-\w/]+\z})
+
+          segment.delete_prefix("/").sub(%r{/([^/]*)\z}, '#\\1').tr("-", "_")
         end
 
         def emit_root(node)
@@ -376,8 +478,9 @@ module RailsAiContext
           return emit_dynamic(node) unless target.is_a?(String) && target.include?("#")
 
           controller, action = target.split("#", 2)
+          as = route_options(node)[:as]
           emit(node, "GET", current_prefix, prefixed_controller(controller), action,
-               [ current_name_prefix, "root" ].compact.reject(&:empty?).join("_"))
+               [ current_name_prefix, (as.is_a?(Symbol) || as.is_a?(String)) ? as.to_s : "root" ].compact.reject(&:empty?).join("_"))
         end
 
         def emit(node, verb, path, controller, action, name)
@@ -390,7 +493,10 @@ module RailsAiContext
             location: node.location.start_line,
             confidence: confidence_for(node)
           }
-          record[:name] = name if name && !name.empty?
+          engine = current_engine
+          # An engine's table keeps its own names.
+          record[:name] = name if name && !name.empty? && @taken_names.add?([ engine, name ])
+          record[:engine] = engine if engine
           params = path.scan(/:(\w+)/).flatten
           record[:params] = params if params.any?
           record[:restful] = RESTFUL_ACTIONS.include?(record[:action])
@@ -401,10 +507,17 @@ module RailsAiContext
           return if suppressed?
 
           record = { type: :dynamic, macro: macro, location: node.location.start_line }
+          engine = current_engine
+          record[:engine] = engine if engine
           # `draw(:admin)` names a file, and Rails resolves it by literal path.
           # Recording the name is what lets the introspector follow it instead
           # of writing off everything the file defines.
-          record[:target] = draw_target(node) if macro == :draw
+          if macro == :draw
+            record[:target] = draw_target(node)
+            record[:scope] = @stack.map { |frame| frame.except(:node) }
+            record[:prefix] = current_prefix
+            record[:name_prefix] = current_name_prefix
+          end
           @results << record
         end
 
@@ -457,13 +570,18 @@ module RailsAiContext
         # resource option there: Rails peels it into a surrounding scope, so it
         # moves the controller and never the path.
         def resource_controller(name, opts, singular: false)
-          controller = (opts[:controller] || (singular ? name.pluralize : name)).to_s.delete_prefix("/")
+          controller = (opts[:controller] || (singular ? name.pluralize : name)).to_s
+          return controller.delete_prefix("/") if controller.start_with?("/")
+
           controller = "#{opts[:module]}/#{controller}" if opts[:module]
           prefixed_controller(controller)
         end
 
+        # A leading slash makes the controller absolute: Rails' own
+        # add_controller_module drops the slash and applies no module.
         def prefixed_controller(controller)
-          controller = controller.delete_prefix("/")
+          return controller.delete_prefix("/") if controller.start_with?("/")
+
           mods = @stack.filter_map { |f| f[:mod] }
           ([ *mods, controller ] - [ "" ]).join("/")
         end
@@ -518,15 +636,12 @@ module RailsAiContext
         end
 
         def generated_name(name)
-          return nil if name.nil? || name.empty? || !name.match?(NAMEABLE)
-          return nil unless @generated_names.add?(name)
-
-          name
+          name if name&.match?(NAMEABLE)
         end
 
         def join_path(*segments)
           cleaned = segments.compact.map { |s| s.to_s.gsub(%r{\A/+|/+\z}, "") }.reject(&:empty?)
-          "/#{cleaned.join('/')}"
+          normalize_route_path("/#{cleaned.join('/')}")
         end
       end
     end

@@ -4,13 +4,6 @@ require "spec_helper"
 require "prism"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MiddlewareConfigListener do
-  def parse_and_dispatch(source)
-    result     = Prism.parse(source)
-    listener   = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects config.middleware.use" do
     results = parse_and_dispatch(<<~RUBY)
       Rails.application.configure do
@@ -59,6 +52,74 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MiddlewareConfigListene
     RUBY
 
     expect(results).to be_empty
+  end
+
+  it "reads the app's own stack, however the initializer reaches it" do
+    results = parse_and_dispatch(<<~RUBY)
+      Rails.application.middleware.unshift PrometheusExporter::Middleware
+      Rails.application.middleware.unshift Mastodon::Middleware::PrometheusQueueTime, instrument: false
+      Rails.application.configure do |app|
+        app.middleware.insert_after ActionDispatch::DebugExceptions, Appsignal::Rack::RailsInstrumentation
+      end
+    RUBY
+
+    expect(results.map { |r| r[:middleware] }).to eq([
+      "PrometheusExporter::Middleware",
+      "Mastodon::Middleware::PrometheusQueueTime",
+      "Appsignal::Rack::RailsInstrumentation"
+    ])
+  end
+
+  it "leaves another rack stack alone" do
+    results = parse_and_dispatch(<<~RUBY)
+      GoodJob::Engine.middleware.use Rack::Auth::Basic
+      builder.middleware.use Rack::Timeout
+    RUBY
+
+    expect(results).to be_empty
+  end
+
+  it "leaves an engine's config alone, however deep the constant sits" do
+    results = parse_and_dispatch(<<~RUBY)
+      MyEngine.config.middleware.use Rack::Timeout
+      GoodJob::Engine.config.middleware.use Rack::Auth::Basic
+      Admin::Engine.application.config.middleware.use Rack::Attack
+    RUBY
+
+    expect(results).to be_empty
+  end
+
+  it "reads the app's own application class, and only that constant" do
+    results = parse_and_dispatch(<<~RUBY, app_class: "MyApp::Application")
+      MyApp::Application.config.middleware.use A1
+      ::MyApp::Application.config.middleware.use A2
+      MyApp::Application.middleware.use A3
+      OtherApp::Application.config.middleware.use B1
+      MyEngine.config.middleware.use B2
+    RUBY
+
+    expect(results.map { |r| r[:middleware] }).to eq(%w[A1 A2 A3])
+  end
+
+  it "reads no application constant when it does not know the app's" do
+    results = parse_and_dispatch("MyApp::Application.config.middleware.use A1")
+
+    expect(results).to be_empty
+  end
+
+  it "reads every way an initializer reaches the app's own stack" do
+    results = parse_and_dispatch(<<~RUBY)
+      config.middleware.use A1
+      Rails.configuration.middleware.use A2
+      Rails.application.config.middleware.use A3
+      Rails.application.middleware.use A4
+      Rails.application.configure do |app|
+        app.middleware.use A5
+        app.config.middleware.use A6
+      end
+    RUBY
+
+    expect(results.map { |r| r[:middleware] }).to eq(%w[A1 A2 A3 A4 A5 A6])
   end
 
   it "includes line locations" do

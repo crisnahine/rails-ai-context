@@ -26,7 +26,7 @@ module RailsAiContext
         # not just text_response, and a tool that calls another tool cannot
         # have its note consumed by the inner one.
         discarded = discarded_detail(kwargs)
-        kwargs = normalize_detail(kwargs)
+        kwargs = listify_arrays(normalize_detail(kwargs))
         Thread.current[:rails_ai_context_call_params] = session_params(kwargs)
 
         # Held across the tool body: a concurrent live reload must not unload
@@ -69,6 +69,21 @@ module RailsAiContext
         valid = known.any? ? "Valid params: #{known.join(', ')}" : "This tool takes no params."
         text = "Unknown param#{"s" if unknown.size > 1}: #{lines.join(', ')}\n#{valid}"
         MCP::Tool::Response.new([ { type: "text", text: text } ], error: true)
+      end
+
+      # A string where the schema declares an array is a list of one, and a
+      # comma-separated one is the list the CLI documents (`a.rb,b.rb`): an MCP
+      # client can send either, and review_changes answered a string with
+      # "undefined method 'any?'". Done here so every tool and every way in -
+      # MCP, the CLI, a direct call - gets the same list.
+      def listify_arrays(kwargs)
+        properties = (respond_to?(:input_schema) ? input_schema&.to_h : nil)&.dig(:properties) || {}
+        kwargs.to_h do |key, value|
+          prop = properties[key.to_sym] || properties[key.to_s] || {}
+          next [ key, value ] unless prop[:type] == "array" && value.is_a?(String)
+
+          [ key, value.split(",").map(&:strip).reject(&:empty?) ]
+        end
       end
 
       def failure_response(error)

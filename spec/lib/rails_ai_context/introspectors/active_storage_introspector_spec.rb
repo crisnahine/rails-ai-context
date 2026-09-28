@@ -40,6 +40,45 @@ RSpec.describe RailsAiContext::Introspectors::ActiveStorageIntrospector do
       end
     end
 
+    context "when the model walk raises" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/broken.rb") }
+
+      before do
+        File.write(fixture_model, "class Broken < ApplicationRecord\nend\n")
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_raise(ArgumentError, "boom")
+      end
+
+      after { FileUtils.rm_f(fixture_model) }
+
+      it "scans app/models once and reports the three keys empty" do
+        expect(RailsAiContext::Introspectors::SourceScan).to receive(:classes).once.and_call_original
+
+        expect(result).to include(attachments: [], validations: [], variants: [])
+      end
+    end
+
+    context "with attachment validations in model source" do
+      let(:fixture_model) { File.join(Rails.root, "app/models/upload.rb") }
+
+      before do
+        File.write(fixture_model, <<~RUBY)
+          class Upload < ApplicationRecord
+            has_one_attached :avatar
+            validates :avatar, content_type: [ "image/png" ], size: { less_than: 5.megabytes }
+          end
+        RUBY
+      end
+
+      after { FileUtils.rm_f(fixture_model) }
+
+      it "reports the content type and size rules" do
+        expect(result[:validations]).to include(
+          { model: "Upload", attachment: "avatar", type: "content_type" },
+          { model: "Upload", attachment: "avatar", type: "size" }
+        )
+      end
+    end
+
     context "with variants defined in model source" do
       let(:fixture_model) { File.join(Rails.root, "app/models/document.rb") }
 

@@ -433,6 +433,553 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   end
 
   describe "#static_call" do
+    # OpenProject mixes Acts::Journalized into ActiveRecord::Base from a
+    # plugin's init.rb, and the module lives in the file that init requires.
+    # Every model has the module; a model whose concern's `included do` calls
+    # acts_as_journalized has what the method declares, and no other does.
+    # Canvas declares DefineAttributeMethods in a 2300-line initializer full
+    # of other patches; the module is its own body, not the file's.
+    it "reads a base mixin declared in a longer file as its own body, and hides none of the model's" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "initializers", "active_record.rb"), <<~RUBY)
+          class ActiveRecord::Base
+            delegate :distinct_on, to: :all
+            has_many :everything
+          end
+
+          module DefineAttributeMethods
+            def init_internals; end
+          end
+          ActiveRecord::Base.include(DefineAttributeMethods)
+
+          module ActiveRecordSerializationSafety
+            def serializable_hash; end
+          end
+          ActiveRecord::Base.prepend(ActiveRecordSerializationSafety)
+        RUBY
+        File.write(File.join(dir, "app", "models", "color.rb"), "class Color < ApplicationRecord\nend\n")
+
+        color = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Color"]
+
+        expect(Array(color[:associations])).to be_empty
+        expect(Array(color[:delegations])).to be_empty
+        expect(color).not_to have_key(:concerns_hidden)
+        expect(color).not_to have_key(:concerns_unread)
+      end
+    end
+
+    # A mixin's attachable(name, opts) declares `has_one name` or
+    # `has_many name` by `opts[:has_one]`. Each call declares one association,
+    # named by its argument, of the kind its options choose.
+    it "reads a called method with the call's arguments, taking the branch they decide" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "lib"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "lib", "attachable.rb"), <<~RUBY)
+          module Attachable
+            def self.included(klass)
+              klass.extend(ClassMethods)
+            end
+
+            module ClassMethods
+              def attachable(name, opts = {})
+                raise ArgumentError, "owned_by" unless opts.key?(:owned_by)
+
+                if opts[:has_one]
+                  has_one name, -> { where(tag: name) }, class_name: "FileUpload", as: :foreign
+                else
+                  has_many name, -> { where(tag: name) }, class_name: "FileUpload", as: :foreign
+                end
+              end
+
+              def taggable(kind)
+                if kind.admin?
+                  has_many :admin_tags
+                  has_one :tag_summary
+                else
+                  has_many :tags
+                  has_many :tag_summary
+                end
+                has_many :flags if kind.flagged?
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "listing.rb"), <<~RUBY)
+          class Listing < ApplicationRecord
+            include Attachable
+
+            attachable :cover_image, has_one: true, owned_by: nil
+            attachable :photos, owned_by: :user_id
+            taggable Kind.current
+          end
+        RUBY
+
+        listing = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Listing"]
+        associations = listing[:associations].map { |a| [ a[:type], a[:name].to_s, a[:computed_name] ].compact }
+
+        expect(associations).to contain_exactly(
+          [ "has_one", "cover_image" ], [ "has_many", "photos" ]
+        )
+        # Located at the line of the mixin's file that declares it.
+        expect(listing[:associations].find { |a| a[:name].to_s == "photos" }[:location]).to eq(13)
+        # What only a condition the call cannot decide declares is named, not counted.
+        expect(listing[:conditional_declarations].map { |c| c.slice(:declaration, :condition, :from_concern) }).to contain_exactly(
+          { declaration: "has_many :admin_tags", condition: "kind.admin?", from_concern: "Attachable" },
+          { declaration: "has_one :tag_summary", condition: "kind.admin?", from_concern: "Attachable" },
+          { declaration: "has_many :tags", condition: "not kind.admin?", from_concern: "Attachable" },
+          { declaration: "has_many :tag_summary", condition: "not kind.admin?", from_concern: "Attachable" },
+          { declaration: "has_many :flags", condition: "kind.flagged?", from_concern: "Attachable" }
+        )
+      end
+    end
+
+    # Canvas keeps BroadcastPolicy in gems/broadcast_policy, a path gem the
+    # Gemfile declares. Its source is in the repo, so it is read like the
+    # app's own; a gem installed outside the repo stays unread and named.
+    it "reads a base mixin from a path gem inside the repo, and names one it cannot read" do
+      Dir.mktmpdir do |dir|
+        gem_lib = File.join(dir, "gems", "broadcast_policy", "lib")
+        FileUtils.mkdir_p(File.join(gem_lib, "broadcast_policy"))
+        File.write(File.join(dir, "gems", "broadcast_policy", "broadcast_policy.gemspec"), "Gem::Specification.new\n")
+        File.write(File.join(gem_lib, "broadcast_policy.rb"), "require \"broadcast_policy/class_methods\"\n")
+        File.write(File.join(gem_lib, "broadcast_policy", "class_methods.rb"), <<~RUBY)
+          module BroadcastPolicy
+            module ClassMethods
+              def has_a_broadcast_policy
+                after_save :broadcast_notifications
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "Gemfile.lock"), <<~LOCK)
+          PATH
+            remote: gems
+            specs:
+              broadcast_policy (1.0)
+
+          PATH
+            remote: ../outside
+            specs:
+              outside_gem (1.0)
+
+          GEM
+            remote: https://rubygems.org/
+            specs:
+
+          DEPENDENCIES
+            broadcast_policy!
+        LOCK
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "broadcast_policy.rb"),
+                   "require \"broadcast_policy\"\nActiveRecord::Base.extend BroadcastPolicy::ClassMethods\nActiveRecord::Base.include InstalledGem::Mixin\n")
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "submission.rb"), "class Submission < ApplicationRecord\n  has_a_broadcast_policy\nend\n")
+        File.write(File.join(dir, "app", "models", "color.rb"), "class Color < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Submission"][:callbacks]["after_save"]).to include("broadcast_notifications")
+        expect(result["Color"][:callbacks].to_h).to be_empty
+        expect(result["Color"][:concerns_unread]).to eq([ "InstalledGem::Mixin" ])
+      end
+    end
+
+    # The other ways an app mixes a module into every model: a reopened
+    # ActiveRecord::Base, a module required through __dir__, and a send
+    # inside on_load. A model's own `extend` of an app module is walked too.
+    it "reads the other shapes of a base mixin, and a model's own extend" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers", "support"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        FileUtils.mkdir_p(File.join(dir, "app", "lib"))
+        File.write(File.join(dir, "config", "initializers", "support", "stamped.rb"),
+                   "module Stamped\n  def self.included(base)\n    base.has_many :stamps\n  end\nend\n")
+        File.write(File.join(dir, "config", "initializers", "support", "logged.rb"),
+                   "module Logged\n  def self.included(base)\n    base.has_many :logs\n  end\nend\n")
+        File.write(File.join(dir, "config", "initializers", "support", "reopened.rb"),
+                   "module Reopened\n  def self.included(base)\n    base.has_many :reopenings\n  end\nend\n")
+        File.write(File.join(dir, "config", "initializers", "base.rb"), <<~RUBY)
+          require File.join(__dir__, "support", "stamped")
+          require File.expand_path("support/logged", __dir__)
+          require_relative "support/reopened"
+
+          ActiveSupport.on_load(:active_record) { send(:include, Stamped) }
+          ActiveRecord::Base.include Logged
+
+          module ActiveRecord
+            class Base
+              include Reopened
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "lib", "sluggable.rb"), <<~RUBY)
+          module Sluggable
+            def sluggable(column)
+              has_many :slugs
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\n  extend Sluggable\n  sluggable :title\nend\n")
+        File.write(File.join(dir, "app", "models", "color.rb"), "class Color < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Color"][:associations].map { |a| a[:name].to_s }).to contain_exactly("stamps", "logs", "reopenings")
+        expect(result["Post"][:associations].map { |a| a[:name].to_s }).to contain_exactly("stamps", "logs", "reopenings", "slugs")
+        expect(result["Color"]).not_to have_key(:concerns_unread)
+      end
+    end
+
+    # Canvas's Submission declares `module Tardiness` in its own file and
+    # includes it; Ruby finds Submission::Tardiness there, and so is it read.
+    it "does not call a module the model's own file declares and includes unread" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "submission.rb"), <<~RUBY)
+          class Submission < ApplicationRecord
+            module Tardiness
+              def late?; end
+            end
+
+            include Tardiness
+            include Missing
+          end
+        RUBY
+
+        submission = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Submission"]
+
+        expect(submission[:concerns_unread]).to eq([ "Missing" ])
+      end
+    end
+
+    # OpenProject's WorkPackage gets journals from acts_as_journalized, which
+    # a concern's included block calls; WorkPackage::InexistentWorkPackage
+    # inherits the association, so it counts as calling what its parent calls.
+    it "gives a subclass what its parent's concerns call into, as well as the parent" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "work_package"))
+        File.write(File.join(dir, "config", "initializers", "journalized.rb"), <<~RUBY)
+          module Acts
+            module Journalized
+              def self.included(base)
+                base.extend ClassMethods
+              end
+
+              module ClassMethods
+                def acts_as_journalized
+                  has_many :journals
+                end
+              end
+            end
+          end
+          ActiveRecord::Base.include(Acts::Journalized)
+        RUBY
+        File.write(File.join(dir, "app", "models", "work_package", "journalized.rb"), <<~RUBY)
+          module WorkPackage::Journalized
+            extend ActiveSupport::Concern
+
+            included do
+              acts_as_journalized
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "work_package.rb"),
+                   "class WorkPackage < ApplicationRecord\n  include WorkPackage::Journalized\n  has_many :relations\nend\n")
+        File.write(File.join(dir, "app", "models", "work_package", "inexistent_work_package.rb"),
+                   "class WorkPackage::InexistentWorkPackage < WorkPackage\n  has_one :ghost\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+        names = ->(model) { result[model][:associations].map { |a| a[:name].to_s } }
+
+        expect(names.call("WorkPackage")).to contain_exactly("relations", "journals")
+        expect(names.call("WorkPackage::InexistentWorkPackage")).to contain_exactly("relations", "journals", "ghost")
+      end
+    end
+
+    # Consul's Proposal calls validates_translation, which validates the model
+    # and, inside translation_class.instance_eval, the translation class.
+    it "keeps what a called method declares on another receiver out of the model, and names it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "globalizable.rb"), <<~RUBY)
+          module Globalizable
+            extend ActiveSupport::Concern
+
+            class_methods do
+              def validates_translation(method, options = {})
+                validates(method, options)
+                translation_class.instance_eval { validates method, options }
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "proposal.rb"), <<~RUBY)
+          class Proposal < ApplicationRecord
+            include Globalizable
+
+            validates_translation :title, presence: true
+          end
+        RUBY
+
+        proposal = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Proposal"]
+
+        expect(proposal[:validations].size).to eq(1)
+        expect(proposal[:foreign_declarations]).to eq(
+          [ { declaration: "validates :title, presence: true", receiver: "translation_class", from_concern: "Globalizable" } ]
+        )
+      end
+    end
+
+    it "reads a module the app includes into ActiveRecord::Base as every model's mixin" do
+      Dir.mktmpdir do |dir|
+        plugin = File.join(dir, "lib_static", "plugins", "acts_as_journalized")
+        FileUtils.mkdir_p(File.join(plugin, "lib"))
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config", "application.rb"),
+                   "module App\n  class Application < Rails::Application\n    config.autoload_once_paths << Rails.root.join(\"lib_static\").to_s\n  end\nend\n")
+        File.write(File.join(plugin, "init.rb"), "require File.dirname(__FILE__) + \"/lib/acts_as_journalized\"\nActiveRecord::Base.include(Acts::Journalized)\n")
+        File.write(File.join(plugin, "lib", "acts_as_journalized.rb"), <<~RUBY)
+          module Acts
+            module Journalized
+              def self.included(base)
+                base.extend ClassMethods
+              end
+
+              module ClassMethods
+                def acts_as_journalized
+                  has_many :journals
+                end
+              end
+            end
+          end
+        RUBY
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "sanitize.rb"), <<~RUBY)
+          module Sanitized
+            def self.included(base); end
+
+            def sanitize_all; end
+          end
+          ActiveSupport.on_load(:active_record) { include Sanitized }
+          ActiveRecord::Base.include GemSupplied::Module
+        RUBY
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "work_package"))
+        File.write(File.join(dir, "app", "models", "work_package", "journalized.rb"), <<~RUBY)
+          module WorkPackage::Journalized
+            extend ActiveSupport::Concern
+
+            included do
+              acts_as_journalized
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "work_package.rb"), "class WorkPackage < ApplicationRecord\n  include WorkPackage::Journalized\nend\n")
+        File.write(File.join(dir, "app", "models", "color.rb"), "class Color < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(Array(result["WorkPackage"][:associations]).map { |a| a[:name].to_s }).to include("journals")
+        expect(Array(result["Color"][:associations]).map { |a| a[:name].to_s }).not_to include("journals")
+        expect(result["Color"][:concerns_unread]).to include("GemSupplied::Module")
+        expect(result["Color"][:concerns_unread]).not_to include("Acts::Journalized", "Sanitized")
+      end
+    end
+
+    # Huginn's ImapFolderAgent was credited with Scrubbed, which only its
+    # nested Message class includes.
+    it "names as a model's concerns only what the model's own body includes" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "scrubbed.rb"), "module Scrubbed\n  has_many :scrubs\nend\n")
+        File.write(File.join(dir, "app", "models", "concerns", "watched.rb"), "module Watched\nend\n")
+        File.write(File.join(dir, "app", "models", "imap_folder_agent.rb"), <<~RUBY)
+          class ImapFolderAgent < ApplicationRecord
+            include Watched
+
+            class Message
+              include Scrubbed
+            end
+          end
+        RUBY
+
+        agent = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["ImapFolderAgent"]
+
+        expect(agent[:concerns]).to eq([ "Watched" ])
+        expect(Array(agent[:associations]).map { |a| a[:name].to_s }).not_to include("scrubs")
+      end
+    end
+
+    # OpenProject's ApplicationRecord includes Acts::Watchable, whose
+    # associations sit inside `def acts_as_watchable ... class_eval do`. A
+    # model that calls it has them, whether it calls it itself or its base
+    # does; every other model of the app does not.
+    # OpenProject's User includes Users::Avatars, whose `included do` calls
+    # an acts_as_* method a mixin of ApplicationRecord defines: the call runs
+    # in User, so User has what the method declares.
+    it "gives a base mixin's in-method macros to a model whose concern's included block calls the method" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "watchable.rb"), <<~RUBY)
+          module Watchable
+            def self.included(base)
+              base.extend ClassMethods
+            end
+
+            module ClassMethods
+              def acts_as_watchable
+                has_many :watchers
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "concerns", "avatars.rb"), <<~RUBY)
+          module Avatars
+            extend ActiveSupport::Concern
+
+            included do
+              acts_as_watchable
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+            include Watchable
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\n  include Avatars\nend\n")
+        File.write(File.join(dir, "app", "models", "color.rb"), "class Color < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(Array(result["User"][:associations]).map { |a| a[:name].to_s }).to include("watchers")
+        expect(Array(result["Color"][:associations]).map { |a| a[:name].to_s }).not_to include("watchers")
+      end
+    end
+
+    it "gives a mixin's in-method macros to the models that call the method, and to no others" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "watchable.rb"), <<~RUBY)
+          module Watchable
+            def self.included(base)
+              base.extend ClassMethods
+            end
+
+            module ClassMethods
+              def acts_as_watchable
+                class_eval do
+                  has_many :watchers
+                end
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "application_record.rb"), <<~RUBY)
+          class ApplicationRecord < ActiveRecord::Base
+            primary_abstract_class
+            include Watchable
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "work_package.rb"), <<~RUBY)
+          class WorkPackage < ApplicationRecord
+            include Watchable
+            acts_as_watchable
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "color.rb"), <<~RUBY)
+          class Color < ApplicationRecord
+            include Watchable
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["WorkPackage"][:associations].map { |a| a[:name].to_s }).to include("watchers")
+        expect(Array(result["Color"][:associations]).map { |a| a[:name].to_s }).not_to include("watchers")
+      end
+    end
+
+    # A leading `::` is top level to the class resolver, so both tiers keep
+    # it; the pages that print the name drop it.
+    it "records a class_name written with a leading :: as written" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "anonymous_user.rb"), <<~RUBY)
+          class AnonymousUser < ApplicationRecord
+            has_one :api_token, class_name: "::Token::API"
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["AnonymousUser"][:associations].first[:class_name]).to eq("::Token::API")
+      end
+    end
+
+    it "records a reflected class_name written with a leading :: as written" do
+      assoc = double(name: :api_token, macro: :has_one, class_name: "::Token::API",
+                     foreign_key: "user_id", options: { class_name: "::Token::API" })
+
+      detail = described_class.new(RailsAiContext::StaticApp.new(Dir.pwd)).send(:association_detail, assoc)
+
+      expect(detail[:class_name]).to eq("::Token::API")
+    end
+
+    # consul keeps app/models/custom/setting.rb, which reopens Setting to add
+    # methods. Both files declare one class, and the reopen carried no
+    # superclass, so whichever the walk saw first decided whether the app had
+    # the model at all.
+    it "reads the model off the file that defines it, not the one reopening it" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "custom"))
+        File.write(File.join(dir, "app", "models", "setting.rb"), <<~RUBY)
+          class Setting < ApplicationRecord
+            belongs_to :owner
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "custom", "setting.rb"), <<~RUBY)
+          class Setting
+            def prefix; end
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to eq([ "Setting" ])
+        expect(result["Setting"][:associations].map { |a| a[:name] }).to eq([ "owner" ])
+      end
+    end
+
+    # A plugin model sits at an un-namespaced path and declares a namespaced
+    # constant. Keyed under the path it named no superclass, so the walk read
+    # it as a PORO and left the model out of the section entirely.
+    it "names a model the way its own class does when the path carries no namespace" do
+      Dir.mktmpdir do |dir|
+        plugin = File.join(dir, "plugins", "discourse-github", "app", "models")
+        FileUtils.mkdir_p(plugin)
+        File.write(File.join(dir, "plugins", "discourse-github", "plugin.rb"), "# name: discourse-github\n")
+        RailsAiContext::PathResolver.clear_code_roots
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
+        File.write(File.join(plugin, "github_commit.rb"), <<~RUBY)
+          class DiscourseGithubPlugin::GithubCommit < ActiveRecord::Base
+            belongs_to :user
+          end
+        RUBY
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.keys).to include("DiscourseGithubPlugin::GithubCommit")
+        expect(result).not_to have_key("GithubCommit")
+        expect(result["DiscourseGithubPlugin::GithubCommit"][:associations].map { |a| a[:name] }).to eq([ "user" ])
+      end
+    end
+
     # A concern the walk cannot read used to raise out of the section, so one
     # unreadable file answered `error` for every model in the app.
     it "keeps the other models when a concern cannot be read" do
@@ -463,11 +1010,11 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         FileUtils.mkdir_p(File.join(dir, "app", "models"))
         File.write(File.join(dir, "app", "models", "post.rb"), "class Post < ApplicationRecord\nend\n")
         File.write(File.join(dir, "app", "models", "tag.rb"), "class Tag < ApplicationRecord\nend\n")
-        # The introspector resolves its paths, so /var and /private/var name
-        # the same file and only one of them matches a literal.
-        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:call).and_call_original
-        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:call)
-          .with(a_string_ending_with("app/models/post.rb")).and_raise(Errno::EACCES, "post.rb")
+        # The walk is fed the source, not the path, so the one file is named
+        # by what it declares.
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_call_original
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source)
+          .with(a_string_including("class Post")).and_raise(Errno::EACCES, "post.rb")
 
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
@@ -884,6 +1431,44 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  describe "file reads" do
+    def read_count_for(dir, basename)
+      reads = 0
+      allow(File).to receive(:read).and_wrap_original do |original, *args, **kwargs|
+        reads += 1 if args.first.to_s.end_with?("/#{basename}")
+        original.call(*args, **kwargs)
+      end
+
+      described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+      reads
+    end
+
+    it "reads a model file once per static run" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            has_many :comments
+            scope :recent, -> { order(created_at: :desc) }
+          end
+        RUBY
+
+        expect(read_count_for(dir, "post.rb")).to eq(1)
+      end
+    end
+
+    it "reads an STI base once, though its children walk it too" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "vehicle.rb"), "class Vehicle < ApplicationRecord\n  has_many :trips\nend\n")
+        File.write(File.join(dir, "app", "models", "car.rb"), "class Car < Vehicle\nend\n")
+        File.write(File.join(dir, "app", "models", "truck.rb"), "class Truck < Vehicle\nend\n")
+
+        expect(read_count_for(dir, "vehicle.rb")).to eq(1)
+      end
+    end
+  end
+
   describe "Mongoid apps" do
     it "extracts fields and embeds statically in both tiers" do
       Dir.mktmpdir do |dir|
@@ -908,6 +1493,66 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           expect(customer[:associations].map { |a| a[:name] }).to include("tickets")
           expect(customer).not_to have_key(:table_name)
         end
+      end
+    end
+
+    it "reads every embed kind and the store_in collection" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "order.rb"), <<~RUBY)
+          class Order
+            include Mongoid::Document
+            store_in collection: "legacy_orders"
+            field :total, type: BigDecimal
+            field :tags
+            embeds_many :line_items
+            embeds_one :address
+            embedded_in :customer
+          end
+        RUBY
+
+        order = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
+
+        expect(order[:collection]).to eq("legacy_orders")
+        expect(order[:fields]).to eq([ { name: :total, type: "BigDecimal" }, { name: :tags } ])
+        expect(order[:embeds]).to eq([
+          { type: :embeds_many, name: :line_items },
+          { type: :embeds_one, name: :address },
+          { type: :embedded_in, name: :customer }
+        ])
+      end
+    end
+  end
+
+  # Errbit: App embeds five relations and has_many one, and was listed with
+  # one association; ErrorReport, a plain class under app/models, was a model.
+  describe "Mongoid apps, what counts" do
+    it "counts embeds as associations and lists only documents and their subclasses" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "config", "mongoid.yml"), "development:\n  clients: {}\n")
+        File.write(File.join(dir, "app", "models", "app.rb"), <<~RUBY)
+          class App
+            include Mongoid::Document
+            embeds_many :watchers
+            embeds_one :issue_tracker, class_name: "Tracker"
+            has_many :problems
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "special_app.rb"), "class SpecialApp < App\nend\n")
+        File.write(File.join(dir, "app", "models", "error_report.rb"), "class ErrorReport\n  def initialize(x); end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        associations = result["App"][:associations]
+        expect(associations.map { |a| [ a[:name], a[:type] ] }).to contain_exactly(
+          %w[problems has_many], %w[watchers embeds_many], %w[issue_tracker embeds_one]
+        )
+        expect(associations.find { |a| a[:name] == "issue_tracker" }[:class_name]).to eq("Tracker")
+        expect(result.keys).to contain_exactly("App", "SpecialApp")
       end
     end
   end
@@ -972,9 +1617,12 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       expect(result["Comment"][:error]).to be_nil
     end
 
-    it "reports the validator with no attributes rather than raising" do
-      result = described_class.new(Rails.application).call
-      kinds = Array(result["Comment"][:validations]).map { |v| v[:kind] }
+    # The booted tier reads validations off the source now, and reflection
+    # is the fallback for a file it cannot read - where a bare Validator must
+    # still not raise.
+    it "reports the validator with no attributes rather than raising, from reflection" do
+      validations = described_class.new(Rails.application).send(:extract_validations, Comment)
+      kinds = validations.map { |v| v[:kind] }
       expect(kinds).to include(a_string_matching(/qa_shape|QaShape/i))
     end
   end
@@ -1080,6 +1728,73 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
       end
     end
 
+    it "reads an STI base's table interpolating the configured prefix and suffix" do
+      Dir.mktmpdir do |dir|
+        write_models(dir,
+          "principal.rb" => "class Principal < ApplicationRecord\n  self.table_name = \"\#{table_name_prefix}users\#{table_name_suffix}\"\nend\n",
+          "group.rb" => "class Group < Principal\nend\n")
+        RailsAiContext::Introspectors::TableName.clear_namespace_prefixes
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result.slice("Principal", "Group").transform_values { |m| m[:table_name] })
+          .to eq("Principal" => "users", "Group" => "users")
+      end
+    end
+
+    # compute_table_name (7.0 and 8.1): a class nested in a concrete model takes
+    # the parent's singular table as a prefix, so Project::Phase is project_phases.
+    it "prefixes a class nested in a model with the model's singular table" do
+      Dir.mktmpdir do |dir|
+        write_models(dir,
+          "project.rb" => "class Project < ApplicationRecord\nend\n",
+          "project/phase.rb" => "class Project::Phase < ApplicationRecord\nend\n",
+          "base.rb" => "class Base < ApplicationRecord\n  self.abstract_class = true\nend\n",
+          "base/note.rb" => "class Base::Note < ApplicationRecord\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Project::Phase"][:table_name]).to eq("project_phases")
+        expect(result["Base::Note"][:table_name]).to eq("notes")
+      end
+    end
+
+    it "reads a habtm join_table built from the affixes as the table it names" do
+      Dir.mktmpdir do |dir|
+        write_models(dir, "custom_field.rb" => <<~RUBY)
+          class CustomField < ApplicationRecord
+            has_and_belongs_to_many :projects, join_table: "\#{table_name_prefix}custom_fields_projects\#{table_name_suffix}"
+          end
+        RUBY
+        RailsAiContext::Introspectors::TableName.clear_namespace_prefixes
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["CustomField"][:associations].first[:options][:join_table]).to eq("custom_fields_projects")
+      end
+    end
+
+    # full_table_name_prefix falls back to the class attribute, which Rails
+    # sets from config.active_record.table_name_prefix.
+    it "wraps a derived table in the app's configured prefix and suffix" do
+      Dir.mktmpdir do |dir|
+        write_models(dir,
+          "project.rb" => "class Project < ApplicationRecord\nend\n",
+          "admin.rb" => "module Admin\n  def self.table_name_prefix\n    'admin_'\n  end\nend\n",
+          "admin/log.rb" => "module Admin\n  class Log < ApplicationRecord\n  end\nend\n")
+        FileUtils.mkdir_p(File.join(dir, "config"))
+        File.write(File.join(dir, "config/application.rb"),
+                   "module Op\n  class Application < Rails::Application\n    config.active_record.table_name_prefix = \"op_\"\n" \
+                   "    config.active_record.table_name_suffix = \"_v2\"\n  end\nend\n")
+        RailsAiContext::Introspectors::TableName.clear_namespace_prefixes
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Project"][:table_name]).to eq("op_projects_v2")
+        expect(result["Admin::Log"][:table_name]).to eq("admin_logs_v2")
+      end
+    end
+
     it "prepends the table_name_prefix the enclosing module declares" do
       Dir.mktmpdir do |dir|
         write_models(dir,
@@ -1089,6 +1804,77 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
         result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
 
         expect(result["Admin::ActionLog"][:table_name]).to eq("admin_action_logs")
+      end
+    end
+
+    # Rails' isolate_namespace defines table_name_prefix on the namespace as
+    # "#{underscore(mod.name).tr('/', '_')}_", and nothing in the model file
+    # says so.
+    it "reads the prefix an in-repo engine isolates its namespace with" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "plugins", "rss", "app", "models", "discourse_rss_polling"))
+        FileUtils.mkdir_p(File.join(dir, "plugins", "rss", "lib", "discourse_rss_polling"))
+        FileUtils.touch(File.join(dir, "plugins", "rss", "plugin.rb"))
+        File.write(File.join(dir, "plugins", "rss", "app", "models", "discourse_rss_polling", "rss_feed.rb"),
+                   "module DiscourseRssPolling\n  class RssFeed < ActiveRecord::Base\n  end\nend\n")
+        File.write(File.join(dir, "plugins", "rss", "lib", "discourse_rss_polling", "engine.rb"),
+                   "module DiscourseRssPolling\n  class Engine < ::Rails::Engine\n    isolate_namespace DiscourseRssPolling\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["DiscourseRssPolling::RssFeed"][:table_name]).to eq("discourse_rss_polling_rss_feeds")
+      end
+    end
+
+    it "lets an explicit table_name beat the isolated namespace's prefix" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "plugins", "chat", "app", "models", "chat"))
+        FileUtils.mkdir_p(File.join(dir, "plugins", "chat", "lib", "chat"))
+        FileUtils.touch(File.join(dir, "plugins", "chat", "plugin.rb"))
+        File.write(File.join(dir, "plugins", "chat", "app", "models", "chat", "message.rb"),
+                   "module Chat\n  class Message < ActiveRecord::Base\n    self.table_name = \"chat_messages\"\n  end\nend\n")
+        File.write(File.join(dir, "plugins", "chat", "lib", "chat", "engine.rb"),
+                   "module Chat\n  class Engine < ::Rails::Engine\n    isolate_namespace Chat\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Chat::Message"][:table_name]).to eq("chat_messages")
+      end
+    end
+
+    # The engine defines its prefix only `unless mod.respond_to?`, so a module
+    # that declares one keeps it.
+    it "lets a module's own declared prefix beat the isolated namespace's" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "plugins", "rss", "app", "models", "feeds"))
+        FileUtils.mkdir_p(File.join(dir, "plugins", "rss", "lib", "feeds"))
+        FileUtils.touch(File.join(dir, "plugins", "rss", "plugin.rb"))
+        File.write(File.join(dir, "plugins", "rss", "app", "models", "feeds.rb"),
+                   "module Feeds\n  def self.table_name_prefix\n    'legacy_'\n  end\nend\n")
+        File.write(File.join(dir, "plugins", "rss", "app", "models", "feeds", "entry.rb"),
+                   "module Feeds\n  class Entry < ActiveRecord::Base\n  end\nend\n")
+        File.write(File.join(dir, "plugins", "rss", "lib", "feeds", "engine.rb"),
+                   "module Feeds\n  class Engine < ::Rails::Engine\n    isolate_namespace Feeds\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["Feeds::Entry"][:table_name]).to eq("legacy_entries")
+      end
+    end
+
+    # Nothing isolates DiscourseGithubPlugin, so its models keep the plain
+    # demodulized table - a prefix invented here would be a wrong answer where
+    # today's is right.
+    it "leaves a namespace no engine isolates alone" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "plugins", "gh", "app", "models", "discourse_github_plugin"))
+        FileUtils.touch(File.join(dir, "plugins", "gh", "plugin.rb"))
+        File.write(File.join(dir, "plugins", "gh", "app", "models", "discourse_github_plugin", "github_commit.rb"),
+                   "module DiscourseGithubPlugin\n  class GithubCommit < ActiveRecord::Base\n  end\nend\n")
+
+        result = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(result["DiscourseGithubPlugin::GithubCommit"][:table_name]).to eq("github_commits")
       end
     end
 
@@ -1293,6 +2079,495 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
   # Both tiers read the callbacks off the model's own source. The booted tier
   # used to answer off Rails' event chains, which carry the framework's own
   # registrations and drop every block callback.
+  # Reflection dropped every `if:` (a Proc has no text) and rendered
+  # `validates_with RecordValidator` as a kind with no subject,
+  # while the walk dropped `validates_with` and `validates_date` entirely.
+  # Discourse's Chat::NullUser < User: a subclass of a concrete model, with
+  # no type column, so no STI entry either.
+  describe "the parent model a subclass names" do
+    it "is the concrete parent in both tiers, and absent under an abstract base" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "chat"))
+        File.write(File.join(dir, "app", "models", "user.rb"), "class User < ApplicationRecord\nend\n")
+        File.write(File.join(dir, "app", "models", "chat", "null_user.rb"), "module Chat\n  class NullUser < User\n  end\nend\n")
+        parent = Class.new(ApplicationRecord) { self.table_name = "users" }
+        parent.define_singleton_method(:name) { "User" }
+        child = Class.new(parent)
+        child.define_singleton_method(:name) { "Chat::NullUser" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        static = introspector.static_call
+
+        expect(introspector.send(:extract_model_details, child)[:parent_model]).to eq("User")
+        expect(introspector.send(:extract_model_details, parent)).not_to have_key(:parent_model)
+        expect(static["Chat::NullUser"][:parent_model]).to eq("User")
+        expect(static["User"]).not_to have_key(:parent_model)
+      end
+    end
+  end
+
+  # Discourse's Topic writes `after_create do` and includes
+  # RateLimiter::OnCreateRecord, whose `included do` writes one too.
+  describe "a block callback in the model and in a concern" do
+    it "keeps both, each credited to its own source" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models", "concerns"))
+        File.write(File.join(dir, "app", "models", "concerns", "limited.rb"), <<~RUBY)
+          module Limited
+            extend ActiveSupport::Concern
+
+            included do
+              after_create do
+                limit!
+              end
+            end
+          end
+        RUBY
+        File.write(File.join(dir, "app", "models", "topic.rb"),
+                   "class Topic < ApplicationRecord\n  include Limited\n\n  after_create do\n    log!\n  end\nend\n")
+
+        topic = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Topic"]
+
+        expect(topic[:callbacks]["after_create"]).to eq([ "[inline_block]", "[inline_block]" ])
+        expect(topic[:concern_callbacks].map { |c| c[:from_concern] }).to eq([ "Limited" ])
+      end
+    end
+  end
+
+  # Rails adds a presence validator for a required belongs_to; no line of the
+  # model declares it, and the booted tier had dropped it.
+  describe "the implicit presence of a required belongs_to" do
+    def write_app(dir, application: "config.load_defaults 7.1")
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      FileUtils.mkdir_p(File.join(dir, "config"))
+      File.write(File.join(dir, "config", "application.rb"),
+                 "module Demo\n  class Application < Rails::Application\n    #{application}\n  end\nend\n")
+      File.write(File.join(dir, "app", "models", "comment.rb"), <<~RUBY)
+        class Comment < ApplicationRecord
+          belongs_to :post
+          belongs_to :user, optional: true
+          belongs_to :editor, required: false
+          validates :body, presence: true
+        end
+      RUBY
+    end
+
+    def implicit(validations)
+      validations.select { |v| v[:implicit] }.map { |v| v[:attributes] }
+    end
+
+    it "lists it in both tiers, marked, ahead of the declared ones" do
+      Dir.mktmpdir do |dir|
+        write_app(dir)
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "comments"
+          self.belongs_to_required_by_default = true
+          belongs_to :post
+          belongs_to :user, optional: true
+          belongs_to :editor, required: false, class_name: "User"
+          validates :body, presence: true
+        end
+        model.define_singleton_method(:name) { "Comment" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)[:validations]
+        static = introspector.static_call["Comment"][:validations]
+
+        strip = ->(list) { list.map { |v| v.slice(:kind, :attributes, :options, :implicit) } }
+        expect(strip.call(booted)).to eq(strip.call(static))
+        expect(implicit(booted)).to eq([ %w[post] ])
+        expect(booted.map { |v| v[:attributes] }).to eq([ %w[post], %w[body] ])
+      end
+    end
+
+    it "is off statically when the app turns the default off or predates it" do
+      [ "config.load_defaults 7.1\n    config.active_record.belongs_to_required_by_default = false",
+        "config.load_defaults 4.2", "" ].each do |application|
+        Dir.mktmpdir do |dir|
+          write_app(dir, application: application)
+
+          static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Comment"][:validations]
+
+          expect(implicit(static)).to eq([]), application
+        end
+      end
+    end
+
+    # `optional: !Rails.env.test?` is decided when the class loads; statically
+    # the presence holds only when that expression is false.
+    it "leaves out an excluded association in both tiers" do
+      Dir.mktmpdir do |dir|
+        write_app(dir)
+        allow(RailsAiContext.configuration).to receive(:excluded_association_names).and_return(%w[post])
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Comment"][:validations]
+
+        expect(implicit(static)).to eq([])
+      end
+    end
+
+    # OFN's Subscription writes `self.belongs_to_required_by_default = false`.
+    it "follows a class's own setting, and its parent's in a subclass" do
+      Dir.mktmpdir do |dir|
+        write_app(dir)
+        File.write(File.join(dir, "app", "models", "comment.rb"),
+                   "class Comment < ApplicationRecord\n  self.belongs_to_required_by_default = false\n  belongs_to :post\nend\n")
+        File.write(File.join(dir, "app", "models", "reply.rb"), "class Reply < Comment\n  belongs_to :author\nend\n")
+
+        models = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call
+
+        expect(implicit(models["Comment"][:validations])).to eq([])
+        expect(implicit(models["Reply"][:validations])).to eq([])
+      end
+    end
+
+    it "is conditional on an optional: the source cannot evaluate" do
+      Dir.mktmpdir do |dir|
+        write_app(dir)
+        File.write(File.join(dir, "app", "models", "comment.rb"),
+                   "class Comment < ApplicationRecord\n  belongs_to :maybe, optional: !Rails.env.test?\nend\n")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Comment"][:validations]
+
+        expect(static).to eq([ { kind: "presence", attributes: [ "maybe" ], options: {}, implicit: true,
+                                 implicit_if: "optional: !Rails.env.test? is false" } ])
+      end
+    end
+
+    it "reads the setting from any initializer, on any receiver, and skips comments" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, application: "config.load_defaults 7.1\n    # config.active_record.belongs_to_required_by_default = true")
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "active_record.rb"),
+                   "ActiveRecord::Base.belongs_to_required_by_default = true\n")
+        File.write(File.join(dir, "config", "initializers", "zz_late.rb"),
+                   "Rails.application.config.active_record.belongs_to_required_by_default = false\n")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Comment"][:validations]
+
+        expect(implicit(static)).to eq([])
+      end
+    end
+
+    it "is on for load_defaults written as the running version" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, application: "config.load_defaults Rails::VERSION::STRING.to_f")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Comment"][:validations]
+
+        expect(implicit(static)).to eq([ %w[post] ])
+      end
+    end
+
+    it "is on when a new_framework_defaults file turns it on" do
+      Dir.mktmpdir do |dir|
+        write_app(dir, application: "")
+        FileUtils.mkdir_p(File.join(dir, "config", "initializers"))
+        File.write(File.join(dir, "config", "initializers", "new_framework_defaults.rb"),
+                   "Rails.application.config.active_record.belongs_to_required_by_default = true\n")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Comment"][:validations]
+
+        expect(implicit(static)).to eq([ %w[post] ])
+      end
+    end
+  end
+
+  # A User with has_secure_password; Devise :validatable and gem modules
+  # add validators no app line declares, and reflection is where they live.
+  describe "validations no app line declares" do
+    def lock_rails(dir, version)
+      File.write(File.join(dir, "Gemfile"), "gem \"rails\"\n")
+      File.write(File.join(dir, "Gemfile.lock"),
+                 "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (#{version})\n\nDEPENDENCIES\n  rails\n")
+    end
+
+    def secure_password_validations(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "account.rb"), "class Account < ApplicationRecord\n  has_secure_password\nend\n")
+      described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Account"][:validations]
+        .map { |v| [ v[:kind], v[:options], v[:added_by] ] }
+    end
+
+    it "reads has_secure_password as the app's locked Rails registers it" do
+      Dir.mktmpdir do |dir|
+        lock_rails(dir, "7.0.8")
+        expect(secure_password_validations(dir)).to eq([ [ "length", { maximum: 72 }, "has_secure_password" ],
+                                                         [ "confirmation", {}, "has_secure_password" ] ])
+      end
+      Dir.mktmpdir do |dir|
+        lock_rails(dir, "7.1.3")
+        expect(secure_password_validations(dir)).to eq([ [ "confirmation", {}, "has_secure_password" ] ])
+      end
+    end
+
+    it "says which Rails it assumes when no lockfile names one" do
+      Dir.mktmpdir do |dir|
+        expect(secure_password_validations(dir)).to eq([
+          [ "confirmation", {}, "has_secure_password, assuming Rails 7.1+ as Gemfile.lock names no Rails version" ]
+        ])
+      end
+    end
+
+    it "keeps reflection's, and the static tier reads the ones a known macro adds" do
+      Dir.mktmpdir do |dir|
+        lock_rails(dir, "7.2.2")
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "account.rb"), <<~RUBY)
+          class Account < ApplicationRecord
+            has_secure_password
+            validates :title, presence: true
+          end
+        RUBY
+        gem_module = Module.new do
+          extend ActiveSupport::Concern
+          included { validates :body, length: { maximum: 10 } }
+        end
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          # What has_secure_password registers; bcrypt is not in this bundle.
+          validates_confirmation_of :password, allow_nil: true
+          validates :title, presence: true
+          include gem_module
+        end
+        model.define_singleton_method(:name) { "Account" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)[:validations]
+        static = introspector.static_call["Account"][:validations]
+
+        shape = ->(list) { list.map { |v| [ v[:kind], v[:attributes], v[:added_by], v[:reflection_only] ] } }
+        expect(shape.call(booted)).to eq([
+          [ "presence", %w[title], nil, nil ],
+          [ "confirmation", %w[password], "has_secure_password", nil ],
+          [ "length", %w[body], nil, true ]
+        ])
+        expect(shape.call(static)).to eq(shape.call(booted).first(2))
+        expect(booted[1][:options]).to include(allow_nil: true)
+      end
+    end
+
+    # `LIMITS.each { |field, limit| validates field, length: ... }` declares a computed attribute.
+    it "names a computed attribute statically and the ones it ran for when booted" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "form.rb"), <<~RUBY)
+          class Form < ApplicationRecord
+            LIMITS = { title: 5, body: 9 }.freeze
+            LIMITS.each { |field, limit| validates field, length: { maximum: limit } }
+          end
+        RUBY
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          { title: 5, body: 9 }.each { |field, limit| validates field, length: { maximum: limit } }
+        end
+        model.define_singleton_method(:name) { "Form" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)[:validations]
+        static = introspector.static_call["Form"][:validations]
+
+        expect(static.map { |v| [ v[:kind], v[:attributes], v[:computed_attributes] ] }).to eq([ [ "length", [], %w[field] ] ])
+        expect(booted.map { |v| [ v[:attributes], v[:computed_attributes], v[:reflection_only] ] })
+          .to eq([ [ %w[title], %w[field], nil ], [ %w[body], %w[field], nil ] ])
+      end
+    end
+
+    it "leaves a known macro's validator of the loop's kind under its own label" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "form.rb"), <<~RUBY)
+          class Form < ApplicationRecord
+            devise :database_authenticatable, :validatable
+            { title: 5 }.each { |field, limit| validates field, length: { maximum: limit } }
+          end
+        RUBY
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          # What devise :validatable registers for the password length.
+          validates_length_of :password, within: 6..128, allow_blank: true
+          { title: 5 }.each { |field, limit| validates field, length: { maximum: limit } }
+        end
+        model.define_singleton_method(:name) { "Form" }
+
+        booted = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)[:validations]
+        lengths = booted.select { |v| v[:kind] == "length" }
+
+        expect(lengths.map { |v| [ v[:attributes], v[:computed_attributes], v[:added_by] ] })
+          .to contain_exactly([ %w[title], %w[field], nil ], [ %w[password], nil, "devise :validatable" ])
+      end
+    end
+
+    it "reads devise :validatable statically" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "member.rb"),
+                   "class Member < ApplicationRecord\n  devise :database_authenticatable, :validatable\nend\n")
+
+        static = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Member"][:validations]
+
+        expect(static.map { |v| [ v[:kind], v[:attributes].first ] }).to eq(
+          [ %w[presence email], %w[uniqueness email], %w[format email],
+            %w[presence password], %w[confirmation password], %w[length password] ]
+        )
+        expect(static.map { |v| v[:added_by] }.uniq).to eq([ "devise :validatable" ])
+      end
+    end
+  end
+
+  # A booted count carried PaperTrail::Version, which static never sees.
+  # A gem that puts a module into every model (an APM agent's base
+  # extensions) is no concern of the model; one a gem macro includes into
+  # this model alone is, and says where it came from.
+  describe "the concerns a booted model lists" do
+    it "keeps per-model modules, drops every-model ones, and agrees with static on Devise" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "account.rb"),
+                   "class Account < ApplicationRecord\n  include Trackable\n  devise :lockable\n  acts_as_widget\nend\n")
+        every_model = Module.new
+        stub_const("ApmAgent::BaseExtensions", every_model)
+        stub_const("Devise::Models::Authenticatable", Module.new)
+        stub_const("Devise::Models::Lockable", Module.new)
+        stub_const("WidgetGem::Widget", Module.new)
+        stub_const("Trackable", Module.new)
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          include every_model
+          include Trackable
+          include Devise::Models::Authenticatable
+          include Devise::Models::Lockable
+          include WidgetGem::Widget
+        end
+        model.define_singleton_method(:name) { "Account" }
+        # Devise's modules are hidden by default; this app shows them.
+        allow(RailsAiContext.configuration).to receive(:excluded_concerns).and_return([])
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+        allow(introspector).to receive(:every_model_modules).and_return([ every_model, *ActiveRecord::Base.ancestors ])
+
+        booted = introspector.send(:extract_model_details, model)
+        static = introspector.static_call["Account"]
+
+        expect(booted[:concerns]).not_to include("ApmAgent::BaseExtensions")
+        expect(booted[:concerns]).to include("Trackable", "Devise::Models::Lockable", "WidgetGem::Widget")
+        expect(booted[:concern_sources]).to eq("Devise::Models::Authenticatable" => "devise", "Devise::Models::Lockable" => "devise",
+                                               "WidgetGem::Widget" => "a gem macro (booted only)")
+        expect(static[:concerns]).to contain_exactly("Trackable", "Devise::Models::Authenticatable", "Devise::Models::Lockable")
+        expect(static[:concern_sources]).to eq("Devise::Models::Authenticatable" => "devise", "Devise::Models::Lockable" => "devise")
+      end
+    end
+  end
+
+  describe "a custom validate method with a condition" do
+    it "keeps the condition in both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "form.rb"),
+                   "class Form < ApplicationRecord\n  validate :uses_left, on: :create\n  validate :selectable, if: :changed?\n  validate :always\nend\n")
+        model = Class.new(ApplicationRecord) { self.table_name = "posts" }
+        model.define_singleton_method(:name) { "Form" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        expected = { "uses_left" => { on: :create }, "selectable" => { if: :changed? } }
+        expect(introspector.static_call["Form"][:custom_validate_conditions]).to eq(expected)
+        expect(introspector.send(:extract_model_details, model)[:custom_validate_conditions]).to eq(expected)
+      end
+    end
+  end
+
+  describe "a model a gem defines" do
+    it "is the gem's, while a gem the app sits inside is the app's" do
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "gem_version_record.rb"), "class GemVersionRecord < ActiveRecord::Base\nend\n")
+        load File.join(dir, "gem_version_record.rb")
+        introspector = described_class.new(Rails.application)
+
+        allow(Gem).to receive(:loaded_specs).and_return("paper_trail" => double(full_gem_path: dir))
+        expect(introspector.send(:gem_defined?, GemVersionRecord)).to be(true)
+        expect(introspector.send(:gem_defined?, Post)).to be(false)
+
+        allow(Gem).to receive(:loaded_specs).and_return("self" => double(full_gem_path: File.dirname(Rails.root.to_s)))
+        expect(introspector.send(:gem_defined?, Post)).to be(false)
+      ensure
+        Object.send(:remove_const, :GemVersionRecord) if Object.const_defined?(:GemVersionRecord, false)
+      end
+    end
+  end
+
+  describe "a gem installed under the app root" do
+    it "is the gem's in a vendored bundle, and the app's as an in-repo path gem" do
+      Dir.mktmpdir do |root|
+        gem_dir = File.join(root, "vendor", "bundle", "ruby", "3.4.0", "gems", "audit_trail-1.0.0")
+        FileUtils.mkdir_p(gem_dir)
+        File.write(File.join(gem_dir, "gem_version_record.rb"), "class GemVersionRecord < ActiveRecord::Base\nend\n")
+        load File.join(gem_dir, "gem_version_record.rb")
+        introspector = described_class.new(RailsAiContext::StaticApp.new(root))
+
+        vendored = double(full_gem_path: gem_dir, source: Bundler::Source::Rubygems.allocate)
+        allow(Gem).to receive(:loaded_specs).and_return("audit_trail" => vendored)
+        expect(introspector.send(:gem_defined?, GemVersionRecord)).to be(true)
+
+        in_repo = double(full_gem_path: gem_dir, source: Bundler::Source::Path.allocate)
+        allow(Gem).to receive(:loaded_specs).and_return("audit_trail" => in_repo)
+        expect(introspector.send(:gem_defined?, GemVersionRecord)).to be(false)
+      ensure
+        Object.send(:remove_const, :GemVersionRecord) if Object.const_defined?(:GemVersionRecord, false)
+      end
+    end
+  end
+
+  describe "validations in both tiers" do
+    let(:source) do
+      <<~RUBY
+        class Document < ApplicationRecord
+          validates :first_name, presence: true, if: ->(d) { d.approved? }
+          validates_date :date_of_birth, presence: true, if: ->(d) { d.approved? }
+          validates_with RecordValidator
+        end
+      RUBY
+    end
+
+    def write_document(dir)
+      FileUtils.mkdir_p(File.join(dir, "app", "models"))
+      File.write(File.join(dir, "app", "models", "document.rb"), source)
+    end
+
+    it "lists the same validations, conditions included, in both tiers" do
+      Dir.mktmpdir do |dir|
+        write_document(dir)
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          validates :first_name, presence: true, if: ->(d) { d.approved? }
+        end
+        model.define_singleton_method(:name) { "Document" }
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        booted = introspector.send(:extract_model_details, model)[:validations]
+        static = introspector.static_call["Document"][:validations]
+
+        strip = ->(list) { list.map { |v| v.slice(:kind, :attributes, :validator, :options) } }
+        expect(strip.call(booted)).to eq(strip.call(static))
+        expect(booted.map { |v| v[:kind] }).to eq(%w[presence validates_date validates_with])
+        expect(booted.first[:options]).to include(if: "->(d) { d.approved? }")
+      end
+    end
+
+    # A model whose file cannot be read still answers from reflection rather
+    # than claiming it validates nothing.
+    it "falls back to reflection when the model's source cannot be read" do
+      Dir.mktmpdir do |dir|
+        model = Class.new(ApplicationRecord) do
+          self.table_name = "posts"
+          validates :title, presence: true
+        end
+        model.define_singleton_method(:name) { "Unfiled" }
+
+        booted = described_class.new(RailsAiContext::StaticApp.new(dir)).send(:extract_model_details, model)[:validations]
+
+        expect(booted.map { |v| [ v[:kind], v[:attributes] ] }).to include([ "presence", [ "title" ] ])
+      end
+    end
+  end
+
   describe "callbacks in both tiers" do
     def write_model(dir, class_name, source)
       path = File.join(dir, "app", "models", "#{class_name.underscore}.rb")
@@ -1309,6 +2584,25 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
     def static_callbacks(dir, class_name)
       described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[class_name][:callbacks]
+    end
+
+    # A lookup keyed by name alone gave both declarations the condition of
+    # whichever was read last, so the first one read as running under the
+    # second's condition.
+    it "records one condition per declaration when a method is declared twice" do
+      Dir.mktmpdir do |dir|
+        write_model(dir, "Order", <<~RUBY)
+          class Order < ApplicationRecord
+            after_save :sync, if: :a?
+            after_save :sync, if: :b?
+          end
+        RUBY
+
+        details = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call["Order"]
+
+        expect(details[:callbacks]["after_save"]).to eq(%w[sync sync])
+        expect(details[:callback_conditions]["after_save"]).to eq([ { if: :a? }, { if: :b? } ])
+      end
     end
 
     it "reports a block callback booted, and names no framework filter" do
@@ -1563,7 +2857,7 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
       expect(details[:file]).to eq("app/models/user_with_attrs.rb")
       expect(details[:callbacks]["after_commit_on_create"]).to include("sync_to_crm")
-      expect(details[:callbacks]["after_commit_on_destroy"]).to include("notify_admin")
+      expect(details[:callbacks]["after_commit"]).to include("notify_admin")
       expect(details[:concerns_unread]).to be_blank
     end
   end
@@ -2072,6 +3366,39 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
     end
   end
 
+  # A habtm's join table and keys are what the missing-index check and the
+  # schema's join-table list look for; the booted record carried none of them,
+  # so a custom join_table was read as the default name on that tier.
+  describe "a has_and_belongs_to_many with its own join table and keys" do
+    it "records join_table and both keys, the same on both tiers" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        File.write(File.join(dir, "app", "models", "post.rb"), <<~RUBY)
+          class Post < ApplicationRecord
+            has_and_belongs_to_many :labels, class_name: "Tag", join_table: "post_labels",
+                                    foreign_key: "article_id", association_foreign_key: "label_id"
+          end
+        RUBY
+
+        model = Class.new(ApplicationRecord) do
+          # habtm builds a middle model from the owner's name, so it is set first.
+          def self.name = "Post"
+          self.table_name = "posts"
+          has_and_belongs_to_many :labels, class_name: "Tag", join_table: "post_labels",
+                                           foreign_key: "article_id", association_foreign_key: "label_id"
+        end
+        introspector = described_class.new(RailsAiContext::StaticApp.new(dir))
+
+        static = introspector.static_call["Post"][:associations].first
+        booted = introspector.send(:extract_model_details, model)[:associations].first
+
+        expected = { join_table: "post_labels", foreign_key: "article_id", association_foreign_key: "label_id" }
+        expect(static).to include(expected)
+        expect(booted).to include(expected)
+      end
+    end
+  end
+
   # Rails runs the class's own declaration: the child's enum replaces the
   # base's mapping and the model's replaces the concern's. The merge appended
   # both and the Hash builder let the last one win, which is the inherited
@@ -2416,9 +3743,9 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
           File.join(dir, "app", "models", "#{model.name.downcase}.rb")
         end
 
-        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:call).and_call_original
+        allow(RailsAiContext::Introspectors::SourceIntrospector).to receive(:walk_source).and_call_original
         expect(RailsAiContext::Introspectors::SourceIntrospector)
-          .to receive(:call).with(base_path).once.and_call_original
+          .to receive(:walk_source).with(a_string_including("scope :published")).once.and_call_original
         children.each { |child| introspector.send(:extract_model_details, child) }
       end
     end
@@ -2457,6 +3784,13 @@ RSpec.describe RailsAiContext::Introspectors::ModelIntrospector do
 
       expect(details[:table_name]).to eq("posts")
       expect(details).not_to have_key(:constants)
+    end
+
+    it "names an escaped constant symbol by what it means, not by its source text" do
+      details = details_for(%Q(class Post < ApplicationRecord\n  ROLES = [:admin, :"super\\u0020user"]\nend\n))
+
+      roles = details[:constants].find { |c| c[:name] == "ROLES" }
+      expect(roles[:values]).to eq([ "admin", "super user" ])
     end
 
     it "does not read constants out of a file it declared over the size cap" do

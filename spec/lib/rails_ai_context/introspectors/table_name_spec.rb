@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tmpdir"
+require "fileutils"
 
 RSpec.describe RailsAiContext::Introspectors::TableName do
   describe ".explicit" do
@@ -35,6 +37,54 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
       source = "class Widget < ApplicationRecord\n  self.table_name = \"\#{prefix}_widgets\"\nend\n"
 
       expect(described_class.explicit(source, "Widget")).to be_nil
+    end
+
+    # OpenProject's Principal: `"#{table_name_prefix}users#{table_name_suffix}"`
+    # reads the class attribute Rails sets from config.active_record.
+    describe "a name interpolating only the class's own prefix and suffix" do
+      let(:source) do
+        "class Principal < ApplicationRecord\n  self.table_name = \"\#{table_name_prefix}users\#{self.table_name_suffix}\"\nend\n"
+      end
+
+      def with_config(body)
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "config"))
+          File.write(File.join(dir, "config/application.rb"), body) if body
+          described_class.clear_namespace_prefixes
+          return yield(dir)
+        end
+      end
+
+      it "reads the literal with the default empty affixes" do
+        expect(described_class.explicit(source, "Principal")).to eq("users")
+        expect(with_config(nil) { |dir| described_class.explicit(source, "Principal", dir) }).to eq("users")
+      end
+
+      it "takes the affixes config/application.rb sets" do
+        config = <<~RUBY
+          module Op
+            class Application < Rails::Application
+              config.active_record.table_name_prefix = "op_"
+              config.active_record.table_name_suffix = "_v2"
+            end
+          end
+        RUBY
+
+        expect(with_config(config) { |dir| described_class.explicit(source, "Principal", dir) }).to eq("op_users_v2")
+      end
+
+      it "takes a prefix the class declares itself" do
+        own = "class Principal < ApplicationRecord\n  self.table_name_prefix = \"p_\"\n" \
+              "  self.table_name = \"\#{table_name_prefix}users\"\nend\n"
+
+        expect(described_class.explicit(own, "Principal")).to eq("p_users")
+      end
+
+      it "answers nil for any other interpolation" do
+        other = "class Principal < ApplicationRecord\n  self.table_name = \"\#{table_name_prefix}users\#{shard}\"\nend\n"
+
+        expect(described_class.explicit(other, "Principal")).to be_nil
+      end
     end
 
     it "answers nil when the class declares none" do
@@ -148,6 +198,75 @@ RSpec.describe RailsAiContext::Introspectors::TableName do
 
     it "falls back to the convention for a name no model carries" do
       expect(described_class.for_model_name("Widget", models)).to eq("widgets")
+    end
+  end
+  # Rails' rule, unchanged from 7.0 through 8.1: full_table_name_prefix takes
+  # the first module parent that responds to table_name_prefix, and
+  # isolate_namespace defines one on the namespace as
+  # "#{underscore(mod.name).tr('/', '_')}_".
+  describe ".namespace_prefixes" do
+    def app_with(files)
+      Dir.mktmpdir do |dir|
+        files.each do |rel, body|
+          path = File.join(dir, rel)
+          FileUtils.mkdir_p(File.dirname(path))
+          File.write(path, body)
+        end
+        FileUtils.mkdir_p(File.join(dir, "app", "models"))
+        return yield(dir)
+      end
+    end
+
+    it "reads isolate_namespace from an in-repo engine" do
+      result = app_with(
+        "plugins/rss/plugin.rb" => "",
+        "plugins/rss/app/models/discourse_rss_polling/rss_feed.rb" => "module DiscourseRssPolling\n  class RssFeed < ActiveRecord::Base\n  end\nend\n",
+        "plugins/rss/lib/discourse_rss_polling/engine.rb" =>
+          "module DiscourseRssPolling\n  class Engine < ::Rails::Engine\n    isolate_namespace DiscourseRssPolling\n  end\nend\n"
+      ) { |dir| described_class.namespace_prefixes(dir) }
+
+      expect(result).to eq({ "DiscourseRssPolling" => "discourse_rss_polling_" })
+    end
+
+    it "underscores a multi-level namespace the way Rails does" do
+      result = app_with(
+        "modules/budgets/budgets.gemspec" => "",
+        "modules/budgets/app/models/thing.rb" => "class Thing; end\n",
+        "modules/budgets/lib/open_project/budgets/engine.rb" =>
+          "module OpenProject\n  module Budgets\n    class Engine < ::Rails::Engine\n      isolate_namespace OpenProject::Budgets\n    end\n  end\nend\n"
+      ) { |dir| described_class.namespace_prefixes(dir) }
+
+      expect(result).to eq({ "OpenProject::Budgets" => "open_project_budgets_" })
+    end
+
+    it "prefers a literal table_name_prefix the namespace declares itself" do
+      result = app_with(
+        "plugins/rss/plugin.rb" => "",
+        "plugins/rss/app/models/thing.rb" => "class Thing; end\n",
+        "plugins/rss/lib/rss/engine.rb" =>
+          "module Rss\n  def self.table_name_prefix\n    \"legacy_\"\n  end\n\n  class Engine < ::Rails::Engine\n    isolate_namespace Rss\n  end\nend\n"
+      ) { |dir| described_class.namespace_prefixes(dir) }
+
+      expect(result).to eq({ "Rss" => "legacy_" })
+    end
+
+    it "answers empty for an app that isolates no namespace" do
+      result = app_with("app/models/post.rb" => "class Post < ApplicationRecord; end\n") do |dir|
+        described_class.namespace_prefixes(dir)
+      end
+
+      expect(result).to eq({})
+    end
+  end
+
+  describe ".model_for" do
+    let(:models) { { "AIMatch" => {}, "Shop::Payment" => {}, "Payment" => {} } }
+
+    it "spells a derived name as the model set does, from the owner's namespace outward" do
+      expect(described_class.model_for("AiMatch", nil, models)).to eq("AIMatch")
+      expect(described_class.model_for("Payment", "Shop::Order", models)).to eq("Shop::Payment")
+      expect(described_class.model_for("::Payment", "Shop::Order", models)).to eq("Payment")
+      expect(described_class.model_for("Missing", nil, models)).to be_nil
     end
   end
 end

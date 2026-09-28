@@ -110,7 +110,7 @@ module RailsAiContext
         # Without the view side's section every controller ivar reads as
         # unused, so no cross-check is the honest answer.
         if Payload.section(cached_context, :view_templates)
-          ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates, api_only: api_only?)
+          ivar_check = cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: other_templates, api_only: api_only_app?)
           lines << "" << ivar_check if ivar_check
         end
 
@@ -170,12 +170,6 @@ module RailsAiContext
 
         RailsAiContext::Introspectors::ActionResolver.method_body(source, action_name, owner: controller_name)
           &.dig(:code)
-      end
-
-      # True when the app runs in API-only mode (no view layer), so ivar
-      # cross-referencing can drop "view" language that wouldn't be truthful.
-      private_class_method def self.api_only?
-        api_only_app?
       end
 
       private_class_method def self.cross_reference_ivars(ctrl_ivars, view_ivars, rendered_templates: [], api_only: false)

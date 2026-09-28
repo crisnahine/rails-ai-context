@@ -3,13 +3,6 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::Listeners::MixinsListener do
-  def parse_and_dispatch(source)
-    result   = Prism.parse(source)
-    listener = described_class.new
-    RailsAiContext::Introspectors::ListenerRegistration.dispatcher_for(listener).dispatch(result.value)
-    listener.results
-  end
-
   it "detects an included module" do
     results = parse_and_dispatch(<<~RUBY)
       class Post < ApplicationRecord
@@ -76,5 +69,15 @@ RSpec.describe RailsAiContext::Introspectors::Listeners::MixinsListener do
     results = parse_and_dispatch("class Post\n  singleton_class.include Publishable\nend\n")
 
     expect(results).to be_empty
+  end
+
+  it "reads `send :include, X` as the include it is" do
+    results = RailsAiContext::Introspectors::SourceIntrospector.walk_source(
+      "class Post\n  send :include, Trackable\n  public_send(:extend, Finder)\n  send :before_save, :x\nend\n",
+      { mixins: described_class }
+    )[:mixins]
+
+    expect(results.map { |r| [ r[:macro], r[:name], r[:ancestor] ] })
+      .to eq([ [ :include, "Trackable", true ], [ :extend, "Finder", false ] ])
   end
 end

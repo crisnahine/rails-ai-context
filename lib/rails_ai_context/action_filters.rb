@@ -144,11 +144,11 @@ module RailsAiContext
       Array(value).map(&:to_s).join(", ")
     end
 
-    # A lambda has no name to print, and the filter records already spell
-    # that "[INFERRED]".
+    # One value keeps its type, so the renderer can tell a symbol from a line
+    # of source. A list is rendered here, element by element, by the same rule.
     def condition_text(value)
-      text = Array(value).map(&:to_s).join(", ")
-      text.match?(/\A[A-Za-z_][A-Za-z0-9_]*[?!]?\z/) ? text : "[INFERRED]"
+      values = Array(value)
+      values.size == 1 ? values.first : values.map { |one| OptionText.call(one) }.join(", ")
     end
 
     # `only` wins over `except`; declaring neither means every action. A nil
@@ -195,7 +195,7 @@ module RailsAiContext
         depth += 1
         info = controllers[name]
         source = info.is_a?(Hash) ? nil : base_controller_source(name, root)
-        info ||= { filters: Introspectors::ControllerFilters.from_source(source) } if source
+        info ||= { filters: base_filters(source, name, root) } if source
         break unless info.is_a?(Hash)
 
         # The class that skips a filter must not contribute it either: in the
@@ -363,6 +363,10 @@ module RailsAiContext
       path && SafeFile.read(path)
     end
 
+    def base_filters(source, name, root)
+      Introspectors::ControllerFilters.with_concerns(source, root: (root || default_root).to_s, within: name.to_s).first
+    end
+
     # A carried path came from the gem's own walk, and that walk keeps the
     # spelling the app uses, so realpath containment would refuse a
     # symlinked pack. The size cap still applies.
@@ -385,7 +389,7 @@ module RailsAiContext
     private_class_method :default_root, :split, :applies?, :parent_filters, :skip_source_records, :carried_source,
                          :entry_key,
 
-                         :skip_calls, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
+                         :skip_calls, :base_filters, :skip_flag_records, :redeclared_names, :last_records, :own_skips,
                          :record_attribution, :conditional?, :partial?, :absolute_names, :conditions_by_name,
                          :merge_conditions, :mark_conditional_skips, :skip_tail, :action_names, :condition_text,
                          :unplaced_conditional_skips, :evidence_skips

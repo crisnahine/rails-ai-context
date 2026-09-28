@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-require "fileutils"
-require "securerandom"
-
 module RailsAiContext
   module Serializers
     # Shared writer that wraps content in `<!-- BEGIN/END rails-ai-context -->`
@@ -15,6 +12,9 @@ module RailsAiContext
     module SectionMarkerWriter
       BEGIN_MARKER = "<!-- BEGIN rails-ai-context -->"
       END_MARKER   = "<!-- END rails-ai-context -->"
+
+      # Both markers are non-blank lines of the managed block, so the compact budget counts them.
+      MARKER_LINES = 2
 
       # The full-mode header carries the run's own clock, so a run that found
       # nothing new still put a diff in a repo that commits its context files.

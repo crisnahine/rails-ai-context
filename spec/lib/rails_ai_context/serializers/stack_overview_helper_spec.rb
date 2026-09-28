@@ -61,6 +61,25 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       expect(helper.full_preset_stack_lines.join("\n")).to include("I18n: 2 locales from locale files (en, fr)")
     end
 
+    # The locale list came off config/locales, which does not include the
+    # engines' own locale dirs. The count is of dirs, not files: "2965 more"
+    # beside a locale count would read as 2965 more locales.
+    it "says the I18n line does not cover the in-repo engine locale dirs" do
+      ctx = { i18n: { available_locales: %w[en fr], available_locales_source: "locale_files",
+                      in_repo_locale_dirs: 29, in_repo_locale_files: 2965 } }
+      helper = test_class.new(ctx)
+
+      expect(helper.full_preset_stack_lines.join("\n"))
+        .to include("I18n: 2 locales from locale files (en, fr); 29 in-repo engine locale dirs not read")
+    end
+
+    it "leaves the clause off an app with no in-repo engine locale dirs" do
+      ctx = { i18n: { available_locales: %w[en fr] } }
+      helper = test_class.new(ctx)
+
+      expect(helper.full_preset_stack_lines.join("\n")).not_to include("in-repo engine locale")
+    end
+
     it "skips I18n when only one locale" do
       ctx = { i18n: { available_locales: %w[en] } }
       helper = test_class.new(ctx)
@@ -72,7 +91,16 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       helper = test_class.new(ctx)
       text = helper.full_preset_stack_lines.join("\n")
       expect(text).to include("Storage: ActiveStorage")
-      expect(text).to include("2 models with attachments")
+      expect(text).to include("2 models with 2 attachments")
+    end
+
+    it "counts the models that hold attachments, not the attachments" do
+      ctx = { active_storage: { attachments: [
+        { model: "User", name: "avatar" }, { model: "User", name: "banner" }, { model: "Post", name: "cover" }
+      ] } }
+
+      expect(test_class.new(ctx).full_preset_stack_lines.join("\n"))
+        .to include("Storage: ActiveStorage (2 models with 3 attachments)")
     end
 
     it "renders ActionText line when rich text fields exist" do
@@ -94,9 +122,17 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       ctx = { components: { summary: { total: 5, view_component: 3, phlex: 2 } } }
       helper = test_class.new(ctx)
       text = helper.full_preset_stack_lines.join("\n")
-      expect(text).to include("Components: 5 components")
-      expect(text).to include("3 ViewComponent")
-      expect(text).to include("2 Phlex")
+      expect(text).to include("Components: 5 components (3 ViewComponent, 2 Phlex)")
+    end
+
+    # The generated files printed "N components, M ViewComponent" and left
+    # the rest unnamed, so a reader took the gap for Phlex or for nothing.
+    it "names the components of no known base class, as the catalog header does" do
+      ctx = { components: { summary: { total: 559, view_component: 484, phlex: 0, unclassified: 75 } } }
+      helper = test_class.new(ctx)
+      text = helper.full_preset_stack_lines.join("\n")
+
+      expect(text).to include("Components: 559 components (484 ViewComponent, 0 Phlex, 75 of no known base class)")
     end
 
     it "renders performance line when issues detected" do
@@ -133,6 +169,41 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       helper = test_class.new(ctx)
       text = helper.full_preset_stack_lines.join("\n")
       expect(text).to include("Mounted: Sidekiq::Web, MetricsApp")
+    end
+
+    # OFN mounts DfcProvider::Engine at three paths, which pushed Spree and
+    # Sidekiq off a line capped at five.
+    it "names an app mounted at several paths once" do
+      mounts = %w[DfcProvider::Engine DfcProvider::Engine DfcProvider::Engine Flipper::UI.app Rswag::Api::Engine
+                  Spree::Core::Engine Sidekiq::Web]
+      ctx = { engines: { mounted_engines: mounts.map { |engine| { engine: engine } } } }
+      text = test_class.new(ctx).full_preset_stack_lines.join("\n")
+      expect(text).to include("Mounted: DfcProvider::Engine (3 paths), Flipper::UI.app, Rswag::Api::Engine, " \
+                              "Spree::Core::Engine, Sidekiq::Web")
+    end
+
+    it "names the app's own in-repo engines beside what it mounts" do
+      ctx = { engines: { mounted_engines: [ { engine: "Spree::Core::Engine" } ],
+                         in_repo_engines: [ { name: "catalog" }, { name: "dfc_provider" },
+                                            { name: "order_management" }, { name: "web" } ] } }
+      helper = test_class.new(ctx)
+      text = helper.full_preset_stack_lines.join("\n")
+
+      expect(text).to include("- In-repo engines: 4 (catalog, dfc_provider, order_management, web)")
+    end
+
+    it "caps the in-repo engine list the way the other lists are capped" do
+      names = (1..8).map { |i| { name: "engine#{i}" } }
+      helper = test_class.new({ engines: { in_repo_engines: names } })
+
+      expect(helper.full_preset_stack_lines.join("\n"))
+        .to include("- In-repo engines: 8 (engine1, engine2, engine3, engine4, engine5, ...3 more)")
+    end
+
+    it "renders no in-repo engine line for an app with none" do
+      helper = test_class.new({ engines: { mounted_engines: [ { engine: "Sidekiq::Web" } ] } })
+
+      expect(helper.full_preset_stack_lines.join("\n")).not_to include("In-repo engines")
     end
 
     it "renders multi-database line when more than one database" do
@@ -184,27 +255,6 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
     end
   end
 
-  # fourth private copy that answers differently.
-  describe "#database_adapter_label" do
-    let(:host) do
-      Class.new do
-        include RailsAiContext::Serializers::StackOverviewHelper
-        attr_reader :context
-        def initialize(context) = @context = context
-      end
-    end
-
-    it "delegates to the shared seam" do
-      context = { schema: { adapter: "static_parse" }, gems: { notable_gems: [ { name: "pg" } ] } }
-      expect(host.new(context).database_adapter_label).to eq(RailsAiContext::SchemaAdapter.label(context))
-    end
-
-    it "never prints the internal marker" do
-      context = { schema: { adapter: "static_parse" } }
-      expect(host.new(context).database_adapter_label).not_to include("static_parse")
-    end
-  end
-
   describe "the app-tree scans" do
     require "tmpdir"
 
@@ -222,12 +272,83 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       end
     end
 
-    it "names the app's services, jobs and global before_actions from the given root" do
+    it "names the app's global before_actions from the given root" do
       app_tree do |root|
-        helper = test_class.new({})
-        expect(helper.detect_service_files(root)).to eq(%w[PaymentService])
-        expect(helper.detect_job_files(root)).to eq(%w[CleanupJob])
-        expect(helper.detect_before_actions(root)).to eq(%w[set_locale authenticate_user!])
+        expect(test_class.new({}).detect_before_actions(root)).to eq(%w[set_locale authenticate_user!])
+      end
+    end
+
+    # A glob over app/jobs/*.rb saw neither a nested job nor a Sidekiq worker,
+    # so the generated files named one job on an app whose listing holds 31.
+    # The line globbed app/services/*.rb: a pack service, a service in a
+    # subdirectory and an engine's were all missing from a line the generated
+    # files print beside a job list that has them, and KnowledgeBaseImporter
+    # was dropped for its name alone.
+    describe "#service_names" do
+      it "caps a long list the way the jobs line does" do
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "app", "services"))
+          40.times { |i| File.write(File.join(root, "app", "services", "s#{i}_service.rb"), "class S#{i}Service; end\n") }
+
+          names = test_class.new({}).service_names(root)
+
+          expect(names.size).to eq(RailsAiContext::Serializers::StackOverviewHelper::NAMES_SHOWN + 1)
+          expect(names.last).to eq("...28 more")
+        end
+      end
+
+      it "reads the service scan, subdirectories and all, minus the bases" do
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "app", "services", "admin"))
+          FileUtils.mkdir_p(File.join(root, "app", "services", "concerns"))
+          File.write(File.join(root, "app", "services", "base_service.rb"), "class BaseService; end\n")
+          File.write(File.join(root, "app", "services", "payment_service.rb"), "class PaymentService < BaseService; end\n")
+          File.write(File.join(root, "app", "services", "knowledge_base_importer.rb"), "class KnowledgeBaseImporter; end\n")
+          File.write(File.join(root, "app", "services", "admin", "suspend_service.rb"), "class Admin::SuspendService; end\n")
+          File.write(File.join(root, "app", "services", "concerns", "payloadable.rb"), "module Payloadable; end\n")
+
+          expect(test_class.new({}).service_names(root))
+            .to eq(%w[Admin::SuspendService KnowledgeBaseImporter PaymentService])
+        end
+      end
+    end
+
+    # CLAUDE.md, the Cursor rule, the Copilot file and AGENTS.md each print the
+    # line, and on an app with 1687 services four scans were 2.1s of a run.
+    describe "#service_names per run" do
+      it "scans once for every serializer given the same context" do
+        Dir.mktmpdir do |root|
+          FileUtils.mkdir_p(File.join(root, "app", "services"))
+          File.write(File.join(root, "app", "services", "pay_service.rb"), "class PayService; end\n")
+          allow(RailsAiContext::Introspectors::ServiceClasses).to receive(:names).and_call_original
+
+          context = {}
+          3.times { expect(test_class.new(context).service_names(root)).to eq(%w[PayService]) }
+          test_class.new({}).service_names(root)
+
+          expect(RailsAiContext::Introspectors::ServiceClasses).to have_received(:names).twice
+        end
+      end
+    end
+
+    describe "#job_names" do
+      it "reads the jobs and the workers the introspector recorded" do
+        helper = test_class.new(jobs: { jobs: [ { name: "ImportJob" } ],
+                                        workers: [ { name: "CleanupWorker" } ] })
+
+        expect(helper.job_names).to eq(%w[ImportJob CleanupWorker])
+      end
+
+      it "caps a long list and says how many it left out" do
+        workers = 40.times.map { |i| { name: "Worker#{i}" } }
+        helper = test_class.new(jobs: { jobs: [], workers: workers })
+
+        expect(helper.job_names.size).to eq(RailsAiContext::Serializers::StackOverviewHelper::NAMES_SHOWN + 1)
+        expect(helper.job_names.last).to eq("...28 more")
+      end
+
+      it "answers nothing when the section never ran" do
+        expect(test_class.new({}).job_names).to eq([])
       end
     end
 
@@ -251,11 +372,46 @@ RSpec.describe RailsAiContext::Serializers::StackOverviewHelper do
       end
     end
 
+    it "counts an unconditional before_action a concern of ApplicationController declares" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "controllers", "concerns"))
+        File.write(File.join(root, "app", "controllers", "application_controller.rb"), <<~RUBY)
+          class ApplicationController < ActionController::Base
+            include UserTracking
+            before_action :set_locale
+          end
+        RUBY
+        File.write(File.join(root, "app", "controllers", "concerns", "user_tracking.rb"), <<~RUBY)
+          module UserTracking
+            extend ActiveSupport::Concern
+
+            included do
+              before_action :update_user_sign_in
+              before_action :touch_session, if: :user_signed_in?
+            end
+          end
+        RUBY
+
+        expect(test_class.new({}).detect_before_actions(root)).to eq(%w[update_user_sign_in set_locale])
+      end
+    end
+
+    # rails_get_service_pattern leaves an abstract base out of its listing, so
+    # the generated files naming one as a service contradicted it.
+    it "leaves an abstract base out of the service list" do
+      Dir.mktmpdir do |root|
+        FileUtils.mkdir_p(File.join(root, "app", "services"))
+        File.write(File.join(root, "app", "services", "base_service.rb"), "class BaseService; end\n")
+        File.write(File.join(root, "app", "services", "application_service.rb"), "class ApplicationService; end\n")
+        File.write(File.join(root, "app", "services", "follow_service.rb"), "class FollowService < BaseService; end\n")
+
+        expect(test_class.new({}).service_names(root)).to eq(%w[FollowService])
+      end
+    end
+
     it "answers empty for a tree without those directories" do
       Dir.mktmpdir do |root|
         helper = test_class.new({})
-        expect(helper.detect_service_files(root)).to eq([])
-        expect(helper.detect_job_files(root)).to eq([])
         expect(helper.detect_before_actions(root)).to eq([])
       end
     end

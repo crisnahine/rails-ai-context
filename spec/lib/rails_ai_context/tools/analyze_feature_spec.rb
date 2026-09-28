@@ -219,6 +219,25 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       end
     end
 
+    it "names an untested job and service in the gap list" do
+      Dir.mktmpdir("rac_gap_js") do |tmp|
+        FileUtils.mkdir_p(File.join(tmp, "app", "controllers"))
+        FileUtils.mkdir_p(File.join(tmp, "app", "jobs"))
+        FileUtils.mkdir_p(File.join(tmp, "app", "services"))
+        File.write(File.join(tmp, "app", "jobs", "widget_sync_job.rb"), "class WidgetSyncJob; end\n")
+        File.write(File.join(tmp, "app", "services", "widget_pricer.rb"), "class WidgetPricer; end\n")
+
+        allow(described_class).to receive(:rails_app).and_return(double(root: Pathname.new(tmp)))
+        allow(described_class).to receive(:cached_context).and_return({})
+
+        text = described_class.call(feature: "widget").content.first[:text]
+
+        expect(text).to include("## Test Coverage Gaps")
+        expect(text).to include("- Job `widget_sync_job` - no test file found")
+        expect(text).to include("- Service `widget_pricer` - no test file found")
+      end
+    end
+
     # The gap checker matches on the path and the test lister matched on the
     # basename, so one of them saw a spec the other did not and the feature
     # read as untested.
@@ -579,7 +598,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       {
         jobs: [
           { name: "OrderExportJob", file: "app/jobs/order_export_job.rb", queue: "low",
-            retry_on: [ "Timeout::Error, attempts: 3" ], perform_signature: "order_id" }
+            retries: [ "retry_on Timeout::Error, attempts: 3" ], perform_signature: "order_id" }
         ],
         mailers: [
           { name: "OrderMailer", file: "app/mailers/order_mailer.rb", actions: %w[confirmation] }
@@ -600,7 +619,7 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       text = described_class.call(feature: "order").content.first[:text]
 
       expect(text).to include("## Jobs (1)")
-      expect(text).to include("`app/jobs/order_export_job.rb` (queue: low, retry_on: Timeout::Error, attempts: 3, perform(order_id))")
+      expect(text).to include("`app/jobs/order_export_job.rb` (queue: low, retry_on Timeout::Error, attempts: 3, perform(order_id))")
       expect(text).not_to include("queue: default")
     end
 
@@ -622,6 +641,53 @@ RSpec.describe RailsAiContext::Tools::AnalyzeFeature do
       expect(text).not_to include("## Jobs")
       expect(text).not_to include("## Mailers")
       expect(text).not_to include("## Channels")
+    end
+  end
+
+  # `belongs_to owner_name` passes a local; classified, it named an
+  # `OwnerName` model the app does not have.
+  describe "a related model reached through a computed association name" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Group" => {
+            table_name: "users",
+            associations: [ { type: "belongs_to", name: "owner_name", computed_name: true },
+                            { type: "has_many", name: "users" } ],
+            validations: [], scopes: []
+          }
+        }
+      )
+    end
+
+    it "names no model for the computed association" do
+      text = described_class.call(feature: "Group").content.first[:text]
+
+      expect(text).not_to include("OwnerName")
+      expect(text).to include("User")
+    end
+  end
+
+  # An app that declares `inflect.acronym "AI"` has AIMatchListing, which
+  # classify spells AiMatchListing.
+  describe "a related model whose name carries an app acronym" do
+    before do
+      described_class.reset_cache!
+      allow(described_class).to receive(:cached_context).and_return(
+        models: {
+          "Listing" => { table_name: "listings", validations: [], scopes: [],
+                         associations: [ { type: "has_many", name: "ai_match_listings" } ] },
+          "AIMatchListing" => { table_name: "ai_match_listings", associations: [], validations: [], scopes: [] }
+        }
+      )
+    end
+
+    it "names the model as the app spells it" do
+      text = described_class.call(feature: "Listing").content.first[:text]
+
+      expect(text).to include("AIMatchListing")
+      expect(text).not_to include("AiMatchListing")
     end
   end
 end

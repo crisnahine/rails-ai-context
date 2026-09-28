@@ -35,6 +35,13 @@ RSpec.configure do |config|
   # reset_cache! would otherwise count the teardown call as its own.
   config.before(:each) { RailsAiContext::Tools::BaseTool.reset_cache! }
 
+  # Same reason for the path caches: a spec that writes a pack or an in-repo
+  # engine under Rails.root and removes it again would otherwise be decided by
+  # whether an earlier example already resolved that root.
+  config.before(:each) { RailsAiContext::PathResolver.clear_code_roots }
+  # A spec that counts parses or walks needs a cold parse cache, whatever ran before it.
+  config.before(:each) { RailsAiContext::AstCache.clear }
+
   # Skip e2e specs unless explicitly requested via E2E=1.
   # E2E specs spawn fresh Rails apps per install path and take minutes
   # per run; they belong on a dedicated CI pipeline, not every push.

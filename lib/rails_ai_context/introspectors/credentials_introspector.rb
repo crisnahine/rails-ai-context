@@ -14,15 +14,9 @@ module RailsAiContext
     #   on the user's machine.
     # - Master-key contents are NEVER read. Only presence (file exists vs
     #   RAILS_MASTER_KEY set) is reported.
-    class CredentialsIntrospector
+    class CredentialsIntrospector < Base
       extend StaticTier
       static_tier :files_only
-
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
 
       def call
         {
@@ -37,15 +31,11 @@ module RailsAiContext
         # from OS errors (EACCES, ENOENT) or OpenSSL decryption failures
         # can contain absolute paths with the OS username or partial
         # ciphertext. The stderr log is fine because it's debug-gated.
-        $stderr.puts "[rails-ai-context] CredentialsIntrospector#call failed: #{e.message}" if ENV["DEBUG"]
-        { error: "credentials introspection failed", exception_class: e.class.name }
+        RailsAiContext.debug_fail(e, { error: "credentials introspection failed", exception_class: e.class.name },
+          label: "CredentialsIntrospector#call")
       end
 
       private
-
-      def root
-        app.root.to_s
-      end
 
       def inspect_default_credentials
         file = File.join(root, "config/credentials.yml.enc")
@@ -63,8 +53,8 @@ module RailsAiContext
         entry
       rescue => e
         # Same rationale as `#call`: keep `e.message` in stderr, never in output.
-        $stderr.puts "[rails-ai-context] inspect_default_credentials failed: #{e.message}" if ENV["DEBUG"]
-        { file: "config/credentials.yml.enc", error: "inspection failed", exception_class: e.class.name }
+        RailsAiContext.debug_fail(e, { file: "config/credentials.yml.enc", error: "inspection failed", exception_class: e.class.name },
+          label: "inspect_default_credentials")
       end
 
       def inspect_environment_credentials

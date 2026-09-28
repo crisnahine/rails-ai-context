@@ -30,6 +30,162 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
     end
   end
 
+  # The binstub activates the gem's whole dependency tree before the app's
+  # Bundler.setup runs, and Bundler adds its own paths behind the ones already
+  # in $LOAD_PATH. A gem left there keeps winning over the version the app
+  # locks - json 3 over a lock pinning json 2, and the app stops booting at
+  # the first gem that reads the removed API.
+  describe "pre-boot gem activations" do
+    around do |example|
+      stash = described_class.preboot_gem_specs
+      example.run
+    ensure
+      described_class.preboot_gem_specs = stash
+    end
+
+    def spec_double(name, path)
+      instance_double(Gem::Specification, name: name, full_require_paths: [ path ])
+    end
+
+    def drop_with(specs, path)
+      described_class.preboot_gem_specs = specs
+      allow(ENV).to receive(:[]).and_call_original
+      allow(ENV).to receive(:[]).with("BUNDLE_BIN_PATH").and_return(nil)
+      # The registry the method clears is the running suite's own.
+      allow(Gem).to receive(:loaded_specs).and_return(specs.dup)
+      $LOAD_PATH << path
+      described_class.send(:drop_conflicting_gem_activations!, [])
+    end
+
+    it "takes the load path of every gem the binstub activated out of $LOAD_PATH" do
+      drop_with({ "json" => spec_double("json", "/fake/json-3.0.2/lib") }, "/fake/json-3.0.2/lib")
+
+      expect($LOAD_PATH).not_to include("/fake/json-3.0.2/lib")
+    ensure
+      $LOAD_PATH.delete("/fake/json-3.0.2/lib")
+    end
+
+    it "leaves bundler's own load path alone" do
+      drop_with({ "bundler" => spec_double("bundler", "/fake/bundler/lib") }, "/fake/bundler/lib")
+
+      expect($LOAD_PATH).to include("/fake/bundler/lib")
+    ensure
+      $LOAD_PATH.delete("/fake/bundler/lib")
+    end
+  end
+
+  # A restored gem path appended to the end of $LOAD_PATH sits behind Ruby's
+  # own lib dirs, so a gem with a default-gem twin loads half from each: prism
+  # answered `require "prism"` from Ruby 3.4's copy and `require "prism/prism"`
+  # from the gem's newer C extension, and every tool died on
+  # `uninitialized constant Prism::CurrentVersionError`.
+  describe "the load path after the boot" do
+    around do |example|
+      paths = $LOAD_PATH.dup
+      example.run
+    ensure
+      $LOAD_PATH.replace(paths)
+    end
+
+    # What decides the restore is whether the app's bundle got onto the load
+    # path, not whether the boot finished. OpenProject and Canvas fail inside
+    # Bundler.setup; an app whose initializer raises fails after Bundler.require
+    # has already loaded half its gems, and dropping their paths then left
+    # ActiveSupport unable to finish loading and mcp loaded from two versions.
+    it "puts the pre-boot order back exactly when the app's bundle never got set up" do
+      pre_boot = $LOAD_PATH.dup.push("/fake/prism-9.9.9/lib")
+
+      described_class.send(:restore_standalone_environment!, pre_boot, {}, [])
+
+      expect($LOAD_PATH).to eq(pre_boot)
+    end
+
+    it "keeps the app's bundle when it was set up, even though the boot then failed" do
+      pre_boot = $LOAD_PATH.dup.push("/fake/prism-9.9.9/lib")
+      $LOAD_PATH.unshift("/fake/app-bundle/lib")
+
+      described_class.send(:restore_standalone_environment!, pre_boot, {}, [])
+
+      expect($LOAD_PATH).to include("/fake/app-bundle/lib")
+    end
+
+    # The app's bundle still has to win for a gem both it and the binstub
+    # carry, which is the pin a private API app's boot needs, and a gem with a
+    # default-gem twin (prism) must not load half from Ruby's own copy.
+    it "splices a restored path behind the app's bundle and ahead of Ruby's own lib dirs" do
+      pre_boot = $LOAD_PATH.dup.push("/fake/prism-9.9.9/lib")
+      $LOAD_PATH.unshift("/fake/app-bundle/lib")
+
+      described_class.send(:restore_standalone_environment!, pre_boot, {}, [])
+
+      expect($LOAD_PATH.index("/fake/app-bundle/lib"))
+        .to be < $LOAD_PATH.index("/fake/prism-9.9.9/lib")
+      expect($LOAD_PATH.index("/fake/prism-9.9.9/lib"))
+        .to be < $LOAD_PATH.index(RbConfig::CONFIG["rubylibdir"])
+    end
+  end
+
+  # The list of gems to re-register used to be hand-kept, and named json-schema,
+  # which no mcp version this gem supports pulls in. Every standalone run on an
+  # app that cannot boot warned about it, which is noise that hides a real one.
+  describe "the gemspecs put back after the boot" do
+    def spec_double(name)
+      instance_double(Gem::Specification, name: name, full_require_paths: [])
+    end
+
+    def restore(stash, registry)
+      messages = []
+      allow(ENV).to receive(:[]).and_call_original
+      allow(ENV).to receive(:[]).with("BUNDLE_BIN_PATH").and_return(nil)
+      allow(Gem).to receive(:loaded_specs).and_return(registry)
+      described_class.send(:restore_standalone_environment!, $LOAD_PATH.dup, stash, messages)
+      messages
+    end
+
+    it "says nothing about a gem this gem does not use" do
+      stash = { "mcp" => spec_double("mcp") }
+
+      expect(restore(stash, {})).to be_empty
+    end
+
+    # An app that locks one of this gem's own dependencies has already loaded
+    # it, and a second copy in the same process is the mixed load. The app's
+    # copy is used when it satisfies the gemspec, and named when it does not.
+    def gem_spec_with(requirement)
+      instance_double(
+        Gem::Specification, name: "rails-ai-context", full_require_paths: [],
+        runtime_dependencies: [ Gem::Dependency.new("mcp", *requirement) ]
+      )
+    end
+
+    def app_spec(name, version)
+      instance_double(Gem::Specification, name: name, version: Gem::Version.new(version))
+    end
+
+    it "takes the app's copy of a dependency quietly when it fits the gemspec" do
+      stash = { "rails-ai-context" => gem_spec_with([ ">= 0.13", "< 2.0" ]) }
+
+      expect(restore(stash, { "mcp" => app_spec("mcp", "0.24.0") })).to be_empty
+    end
+
+    it "names a dependency the app locks at a version this gem does not support" do
+      stash = { "rails-ai-context" => gem_spec_with([ ">= 0.13", "< 2.0" ]) }
+
+      messages = restore(stash, { "mcp" => app_spec("mcp", "0.10.0") })
+
+      expect(messages.join("\n")).to include("mcp 0.10.0", ">= 0.13, < 2.0")
+    end
+
+    it "still warns for a gemspec that did not make it back" do
+      refusing_registry = Class.new(Hash) { def []=(_key, _value); end }.new
+      stash = { "mcp" => spec_double("mcp") }
+
+      messages = restore(stash, refusing_registry)
+
+      expect(messages.first).to include("could not restore gemspec(s): mcp")
+    end
+  end
+
   describe ".call" do
     # Entering the static tier is real here, not stubbed.
     around do |example|
@@ -224,6 +380,29 @@ RSpec.describe RailsAiContext::CLI::EntryBoot do
 
       # A broken install cannot load the gem either; the boot diagnosis
       # collected so far must still reach the terminal.
+      # doctor refuses the static tier, so its branch returns before the old
+      # restore ran and left the process with no load path for its own gem.
+      it "puts the stripped load paths back even where static is refused" do
+        described_class.preboot_gem_specs = {
+          "json" => instance_double(Gem::Specification, name: "json",
+                                    full_require_paths: [ "/fake/json-3.0.2/lib" ])
+        }
+        allow(ENV).to receive(:[]).and_call_original
+        allow(ENV).to receive(:[]).with("BUNDLE_BIN_PATH").and_return(nil)
+        allow(Gem).to receive(:loaded_specs).and_return(Gem.loaded_specs.dup)
+        $LOAD_PATH << "/fake/json-3.0.2/lib"
+
+        failing_app do |dir|
+          outcome = described_class.call(root: dir, allow_static: false, command: "doctor")
+
+          expect(outcome.tier).to eq(:absent)
+          expect($LOAD_PATH).to include("/fake/json-3.0.2/lib")
+        end
+      ensure
+        described_class.preboot_gem_specs = {}
+        $LOAD_PATH.delete("/fake/json-3.0.2/lib")
+      end
+
       it "keeps the boot-failure lines when the static tier itself cannot load" do
         allow(described_class).to receive(:require_gem_without_app!).and_raise(LoadError, "cannot load such file -- mcp")
 

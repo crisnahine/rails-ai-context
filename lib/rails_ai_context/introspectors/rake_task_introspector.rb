@@ -3,18 +3,12 @@
 module RailsAiContext
   module Introspectors
     # Discovers custom rake tasks from lib/tasks/.
-    class RakeTaskIntrospector
+    class RakeTaskIntrospector < Base
       extend StaticTier
       static_tier :files_only
 
-      attr_reader :app
-
-      def initialize(app)
-        @app = app
-      end
-
       def call
-        tasks_dir = File.join(app.root.to_s, "lib/tasks")
+        tasks_dir = File.join(root, "lib/tasks")
         return { tasks: [] } unless Dir.exist?(tasks_dir)
 
         tasks = Dir.glob(File.join(tasks_dir, "**/*.rake")).sort.flat_map do |path|
@@ -22,8 +16,6 @@ module RailsAiContext
         end
 
         { tasks: tasks }
-      rescue => e
-        { error: e.message }
       end
 
       private
