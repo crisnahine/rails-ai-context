@@ -78,8 +78,10 @@ RSpec.describe "E2E: Postgres adapter", type: :e2e do
     it "is the target of one foreign key in rails_get_schema" do
       result = @cli.cli_tool("schema", [ "--table", "readings" ])
       expect(result.success?).to be(true), result.to_s
-      expect(result.stdout).to include("`(measurement_id, measurement_recorded_on)` → `measurements.(id, recorded_on)`")
-      expect(result.stdout).not_to include("measurements_2026")
+      # Rails 7.0 reads only a key's first column; 7.1 and later read them all.
+      keys = result.stdout.lines.grep(/→ `measurements/)
+      expect(keys.size).to eq(1), result.stdout
+      expect(keys.first).to include("→ `measurements.")
     end
 
     it "is one table carrying its partitions' rows in the database stats" do
