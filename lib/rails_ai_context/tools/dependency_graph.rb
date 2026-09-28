@@ -519,12 +519,18 @@ module RailsAiContext
             notes << ""
             notes << "_The association count leaves out #{count_phrase(computed.size, "association")} whose `class_name` is a runtime expression: #{named_list(computed)}._"
           end
-          broken = unresolved.flat_map do |model, names|
-            names.grep(Hash).map do |b|
-              unread = Array(b[:unread])
-              where = unread.empty? ? "which #{model} does not declare" : "which no file read for #{model} declares; #{unread.join(', ')} unread"
-              "#{model}##{b[:name]} (through :#{b[:through]}, #{where})"
-            end
+          # A literal `through: :x` reads as a bare name; anything else is source computed at run time.
+          computed_through, broken = unresolved.flat_map { |model, names| names.grep(Hash).map { |b| [ model, b ] } }
+                                                .partition { |_model, b| !b[:through].match?(/\A\w+\z/) }
+          if computed_through.any?
+            notes << ""
+            listed = computed_through.map { |model, b| "#{model}##{b[:name]} (through `#{b[:through]}`)" }.sort
+            notes << "_Not drawn, a through association whose name is computed at run time: #{named_list(listed)}._"
+          end
+          broken = broken.map do |model, b|
+            unread = Array(b[:unread])
+            where = unread.empty? ? "which #{model} does not declare" : "which no file read for #{model} declares; #{unread.join(', ')} unread"
+            "#{model}##{b[:name]} (through :#{b[:through]}, #{where})"
           end.sort
           if broken.any?
             notes << ""

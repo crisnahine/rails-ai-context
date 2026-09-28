@@ -107,6 +107,17 @@ RSpec.describe RailsAiContext::Introspectors::TestIntrospector do
       FileUtils.rm_rf(File.dirname(support))
     end
 
+    it "reads a helper included for tagged examples as the helper, not the tag" do
+      support = File.join(Rails.root, "spec/support/browser_setup.rb")
+      FileUtils.mkdir_p(File.dirname(support))
+      File.write(support, "RSpec.configure do |config|\n  config.include BrowserHelpers, :js\nend\n")
+
+      expect(result[:test_helper_setup]).to include("BrowserHelpers")
+      expect(result[:test_helper_setup]).not_to include("js")
+    ensure
+      FileUtils.rm_rf(File.dirname(support))
+    end
+
     context "with fixtures" do
       let(:fixtures_dir) { File.join(Rails.root, "test/fixtures") }
 

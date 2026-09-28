@@ -1061,14 +1061,15 @@ about 8,500 lines, most of it reading what the gem used to guess.
   same way; every tool that derives a model from a name spells it as the app
   does, acronyms included (`analyze_feature` named models that do not exist);
   two associations of one kind to one class each get an arrow labelled by
-  name; and a through association that names no association of its model draws
-  no node and is named in a note: Consul's `Budget` pointed at a top-level
-  `Investment`, `Ballot`, `Group` and `Heading`, and OpenFoodNetwork's
-  `Spree::Order` at `Payment`, `Shipment` and `Adjustment`. It draws a through
-  edge per join model, where Mastodon's `Account` lost its through `Follow`,
-  `Block` and `Mute` edges behind the first one; a through association with
-  `source_type:` points at the class `source_type` names; and the "pass
-  model:" hint is left out when a model was passed.
+  name; and a through association that names no association of its model, or
+  whose name is computed at run time, draws no node and is named in a note
+  saying which: Consul's `Budget` pointed at a top-level `Investment`,
+  `Ballot`, `Group` and `Heading`, and OpenFoodNetwork's `Spree::Order` at
+  `Payment`, `Shipment` and `Adjustment`. It draws a through edge per join
+  model, where Mastodon's `Account` lost its through `Follow`, `Block` and
+  `Mute` edges behind the first one; a through association with `source_type:`
+  points at the class `source_type` names; and the "pass model:" hint is left
+  out when a model was passed.
 - **A block callback a concern declares is kept beside the model's own block
   callback of the same kind**: Discourse's `Topic` lost the `after_create do`
   of `RateLimiter::OnCreateRecord`.

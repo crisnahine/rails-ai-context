@@ -167,7 +167,8 @@ module RailsAiContext
             chained: -> { Listeners::ChainedCallListener.new(:include, receiver: :config) }
           })
           hits = helpers.include?(path) ? ast[:bare] + ast[:chained] : ast[:chained]
-          hits.each { |hit| setup.concat(hit[:values].map(&:to_s)) }
+          # `config.include Helpers, :js` scopes Helpers to tagged examples; the tag is no helper.
+          hits.each { |hit| setup.concat(hit[:values].map(&:to_s).grep(/\A[A-Z]\w*(?:::[A-Z]\w*)*\z/)) }
         end
         setup.uniq
       end

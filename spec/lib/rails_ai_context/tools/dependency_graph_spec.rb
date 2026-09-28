@@ -791,6 +791,17 @@ RSpec.describe RailsAiContext::Tools::DependencyGraph do
                               "Listing#buyer_emails (through :buyer, which Listing does not declare)")
     end
 
+    it "says a computed through name is computed, not undeclared" do
+      allow(described_class).to receive(:cached_context).and_return(models: {
+        "Organisation" => { associations: [ { type: "has_many", name: "pages", through: '"edition_#{table_name}".to_sym' } ] }
+      })
+
+      text = described_class.call(format: "mermaid").content.first[:text]
+
+      expect(text).to include('Organisation#pages (through `"edition_#{table_name}".to_sym`)', "computed at run time")
+      expect(text).not_to include("does not declare")
+    end
+
     it "names the modules it could not read when the model includes some" do
       allow(described_class).to receive(:cached_context).and_return(models: {
         "Listing" => { concerns_unread: [ "Searchable::Model" ],
