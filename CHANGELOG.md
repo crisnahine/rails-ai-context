@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A PostgreSQL partitioned table is one table wherever its partitions can be
+  told apart.** The booted schema listed each partition as a table of its own,
+  repeating the parent's columns, indexes and keys, and one app went from 98
+  tables to 211. The schema.rb and structure.sql readers did the same with the
+  partitions Rails and pg_dump write out, and schema.rb's copies of the parent's
+  foreign keys and check constraints came with them. A foreign key to a
+  partitioned table, which PostgreSQL clones once per partition, is listed once.
+  A schema.rb from before Rails 8 does not mark partitions, so the booted schema
+  asks the primary database which tables are partitions. Everything else that
+  reads such a file, the static tier and a secondary database's dump included,
+  still lists them. A table that inherits another through `INHERITS` is not a
+  partition and keeps its own entry. (#250)
+- **Database stats and `rails_runtime_info` count a partition as part of its
+  parent.** Row counts and table sizes, which listed the parent at zero or left
+  it out, add each partition's rows and bytes to it, and index usage, which
+  listed an index once per partition, names it once. All three break ties by
+  name. On PostgreSQL 10 and 11, which lack `pg_partition_root`, they still list
+  each partition. (#250)
+- **A foreign key over more than one column reads as a column list.**
+  `rails_get_schema` and `rails-schema.md` printed a Ruby array literal for its
+  columns, `["event_id", "event_day"]`, and now write `(event_id, event_day)` →
+  `events.(id, day)`. `rails_validate` warned that such a key had no index even
+  when one led with its columns, with a generator command Rails cannot run, and
+  now suggests one `add_index` over the columns. A foreign key to a partitioned
+  table spans more than one column whenever the partition column is not its key.
+- **A PostGIS app gets PostgreSQL's answers.** `activerecord-postgis-adapter`
+  reports `PostGIS` for what is a PostgreSQL connection, and matching only
+  `postgresql` sent `rails_query` down the unguarded path with no READ ONLY
+  transaction and no statement timeout, skipped database stats and
+  `rails_runtime_info`'s table sizes and index usage, and dropped
+  `rails_migration_advisor`'s Strong Migrations warning for an `add_index`
+  without `algorithm: :concurrently`.
+
 ## [5.30.0] - 2026-09-28
 
 A pass over the whole tree for code that did not need to exist, with one base

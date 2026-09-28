@@ -684,7 +684,13 @@ module RailsAiContext
         indexed = Introspectors::SchemaConventions.lookup_indexed_columns(table_data)
 
         fk_columns.each do |col|
-          unless indexed.include?(col)
+          if col.is_a?(Array)
+            primary_key = { columns: Array(table_data[:primary_key] || table_data.dig(:options, :primary_key)) }
+            next if Introspectors::SchemaConventions.leading_index?(Array(table_data[:indexes]) + [ primary_key ], col)
+
+            warnings << "#{Introspectors::SchemaConventions.key_text(col)} in #{table_name} - foreign key without an index leading with its columns (slow queries). " \
+                        "Fix: `add_index :#{table_name}, [#{col.map { |c| ":#{c}" }.join(", ")}]`"
+          elsif !indexed.include?(col)
             warnings << "#{col} in #{table_name} - foreign key without index (slow queries). Fix: `rails g migration AddIndexTo#{table_name.camelize} #{col}:index`"
           end
         end

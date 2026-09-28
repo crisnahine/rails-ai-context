@@ -32,8 +32,8 @@ module RailsAiContext
       def foreign_key_entry(from, to, column, primary_key)
         {
           from_table: from, to_table: to,
-          column: column&.to_s || "#{to.to_s.singularize}_id",
-          primary_key: primary_key&.to_s || "id"
+          column: primary_key_value(column) || "#{to.to_s.singularize}_id",
+          primary_key: primary_key_value(primary_key) || "id"
         }
       end
 
@@ -61,6 +61,13 @@ module RailsAiContext
         # The payload keeps it on the table; the schema.rb reader in its options.
         key = Array(table[:primary_key] || table.dig(:options, :primary_key)).first
         (key ? leading << key.to_s : leading).to_set
+      end
+
+      # A key as a reader writes it beside another key: `id`, or `(id, day)`, so
+      # the two sides of a foreign key stay apart.
+      def key_text(value)
+        columns = Array(value).map(&:to_s)
+        columns.size > 1 ? "(#{columns.join(", ")})" : columns.first.to_s
       end
 
       # A partial index's condition as the dump wrote it, for the end of a line.

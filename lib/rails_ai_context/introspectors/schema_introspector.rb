@@ -12,6 +12,7 @@ module RailsAiContext
       def call
         return attach_secondary_databases(static_schema_parse) unless active_record_connected?
 
+        @partitions = PgPartitions.names(connection)
         if table_names.empty?
           # Connected but not migrated: the files answer, and the notes say so.
           @connection_state = "connected, no tables yet"
@@ -77,7 +78,8 @@ module RailsAiContext
       end
 
       def table_names
-        @table_names ||= connection.tables.reject { |t| t.start_with?("ar_internal_metadata", "schema_migrations") }
+        @table_names ||= (connection.tables - @partitions.to_a)
+          .reject { |t| t.start_with?("ar_internal_metadata", "schema_migrations") }
       end
 
       def extract_tables
@@ -135,7 +137,8 @@ module RailsAiContext
       end
 
       def extract_foreign_keys(table)
-        connection.foreign_keys(table).map do |fk|
+        # PostgreSQL clones a key that references a partitioned table once per partition.
+        connection.foreign_keys(table).reject { |fk| @partitions.to_a.include?(fk.to_table) }.map do |fk|
           {
             from_table: fk.from_table,
             to_table: fk.to_table,
@@ -158,7 +161,7 @@ module RailsAiContext
       end
 
       def schema_reader
-        @schema_reader ||= SchemaReader.new(schema_file_path)
+        @schema_reader ||= SchemaReader.new(schema_file_path, partitions: @partitions.to_a)
       end
 
       # Constraints and enum types are declared in the dump, not reported by

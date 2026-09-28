@@ -124,6 +124,9 @@ module RailsAiContext
       # with no READ ONLY transaction and no statement timeout.
       MYSQL_ADAPTER = /mysql|trilogy/i
 
+      # activerecord-postgis-adapter reports "PostGIS" for what is a PostgreSQL connection.
+      POSTGRES_ADAPTER = /postg/i
+
       # SHOW/DESCRIBE/EXPLAIN return schema metadata (a table's column list,
       # an EXPLAIN plan), never application data rows. Two consequences:
       #   1. They're inherently bounded - appending `LIMIT n` to them is
@@ -335,7 +338,7 @@ module RailsAiContext
       # the plan, so `explain: true` must not hold a connection past query_timeout.
       private_class_method def self.run_guarded(conn, adapter, sql, timeout)
         case adapter
-        when /postgresql/
+        when POSTGRES_ADAPTER
           execute_postgresql(conn, sql, timeout)
         when MYSQL_ADAPTER
           execute_mysql(conn, sql, timeout)
@@ -418,7 +421,7 @@ module RailsAiContext
         adapter = conn.adapter_name.downcase
 
         explain_sql, parser = case adapter
-        when /postgresql/
+        when POSTGRES_ADAPTER
           [ "EXPLAIN (FORMAT JSON, ANALYZE) #{sql}", :parse_pg_explain ]
         when MYSQL_ADAPTER
           # MySQL 8.3+ and 9.x default explain_format to TREE, which

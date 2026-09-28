@@ -209,6 +209,26 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
         expect(result[:tables]).not_to have_key("schema_migrations")
       end
 
+      it "keeps a foreign key over two columns as its columns on the static tier" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "db"))
+          File.write(File.join(dir, "db", "schema.rb"), <<~RUBY)
+            ActiveRecord::Schema[8.0].define(version: 1) do
+              create_table "event_refs" do |t|
+                t.bigint "event_id"
+                t.date "event_day"
+              end
+
+              add_foreign_key "event_refs", "events", column: ["event_id", "event_day"], primary_key: ["id", "day"]
+            end
+          RUBY
+
+          keys = described_class.new(RailsAiContext::StaticApp.new(dir)).static_call[:tables]["event_refs"][:foreign_keys]
+
+          expect(keys).to eq([ { from_table: "event_refs", to_table: "events", column: %w[event_id event_day], primary_key: %w[id day] } ])
+        end
+      end
+
       # `declared_tables` names what db/schema.rb declares on both tiers, and
       # a structure.sql app has no such list: the booted tier answers nil.
       it "names what db/schema.rb declares on the static tier" do
@@ -794,6 +814,41 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
       end
     end
 
+    context "when the database names some of its tables as partitions" do
+      it "lists the partitioned table and not its partitions" do
+        connection = ActiveRecord::Base.connection
+        connection.create_table(:pa_p_events, force: true) { |t| t.date :happened_on }
+        connection.create_table(:pa_p_events_2026, force: true) { |t| t.date :happened_on }
+        allow(RailsAiContext::Introspectors::PgPartitions).to receive(:names).and_return([ "pa_p_events_2026" ])
+
+        result = introspector.call
+
+        expect(result[:tables]).to have_key("pa_p_events")
+        expect(result[:tables]).not_to have_key("pa_p_events_2026")
+        expect(result[:total_tables]).to eq(result[:tables].size)
+      ensure
+        connection.drop_table(:pa_p_events, if_exists: true)
+        connection.drop_table(:pa_p_events_2026, if_exists: true)
+      end
+
+      # PostgreSQL clones a key that references a partitioned table once per partition.
+      it "keeps a foreign key to the partitioned table once" do
+        connection = ActiveRecord::Base.connection
+        connection.create_table(:pa_p_refs, force: true) { |t| t.integer :event_id }
+        allow(RailsAiContext::Introspectors::PgPartitions).to receive(:names).and_return([ "pa_p_events_2026" ])
+        allow(connection).to receive(:foreign_keys).and_call_original
+        allow(connection).to receive(:foreign_keys).with("pa_p_refs").and_return(
+          %w[pa_p_events pa_p_events_2026].map { |to| double(from_table: "pa_p_refs", to_table: to, column: "event_id", primary_key: "id", on_delete: nil, on_update: nil) }
+        )
+
+        keys = introspector.call[:tables]["pa_p_refs"][:foreign_keys]
+
+        expect(keys.map { |fk| fk[:to_table] }).to eq(%w[pa_p_events])
+      ensure
+        connection.drop_table(:pa_p_refs, if_exists: true)
+      end
+    end
+
     # The booted answer read its table list off the connection and its version
     # stamp off db/schema.rb, and joined neither, so a branch pulled without
     # running db:migrate looked like a misspelled table.
@@ -824,6 +879,29 @@ RSpec.describe RailsAiContext::Introspectors::SchemaIntrospector do
 
         expect(result[:declared_tables]).to contain_exactly("users", "order_comments")
         expect(result[:tables].keys).to eq([ "users" ])
+      ensure
+        FileUtils.rm_rf(db_dir)
+      end
+
+      # Before Rails 8 schema.rb dumps a partition as a plain table, which read
+      # as a declared table the database lacks.
+      it "does not count a partition the database names as missing" do
+        db_dir = File.join(fixture_path, "db")
+        FileUtils.mkdir_p(db_dir)
+        File.write(File.join(db_dir, "schema.rb"), <<~RUBY)
+          ActiveRecord::Schema[7.2].define(version: 2026_09_20_000000) do
+            create_table "users", force: :cascade do |t|
+              t.string "email"
+            end
+
+            create_table "users_2026", force: :cascade do |t|
+              t.string "email"
+            end
+          end
+        RUBY
+        allow(RailsAiContext::Introspectors::PgPartitions).to receive(:names).and_return([ "users_2026" ])
+
+        expect(introspector.call[:declared_tables]).to eq([ "users" ])
       ensure
         FileUtils.rm_rf(db_dir)
       end

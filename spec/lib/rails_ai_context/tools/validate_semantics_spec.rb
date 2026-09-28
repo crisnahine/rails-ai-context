@@ -123,6 +123,30 @@ RSpec.describe RailsAiContext::Tools::ValidateSemantics do
     end
   end
 
+  describe "a foreign key over two columns" do
+    def fk_warnings(indexes, primary_key: "id")
+      context = {
+        schema: { tables: { "event_refs" => { columns: [], indexes: indexes, primary_key: primary_key,
+                                              foreign_keys: [ { column: %w[event_id event_day], to_table: "events" } ] } } },
+        models: { "EventRef" => { table_name: "event_refs", file: "app/models/event_ref.rb", associations: [] } }
+      }
+      described_class.send(:check_missing_fk_index, "app/models/event_ref.rb", context)
+    end
+
+    it "counts an index leading with its columns" do
+      expect(fk_warnings([ { columns: %w[event_day event_id] } ])).to eq([])
+    end
+
+    # connection.indexes leaves out the primary key's own index.
+    it "counts a primary key over its columns" do
+      expect(fk_warnings([], primary_key: %w[event_id event_day])).to eq([])
+    end
+
+    it "suggests one index over its columns when none leads with them" do
+      expect(fk_warnings([]).join).to include("add_index :event_refs, [:event_id, :event_day]")
+    end
+  end
+
   describe ".check_rails_semantics" do
     it "answers cleanly for a plain file" do
       with_app_file("app/models/widget.rb", "class Widget < ApplicationRecord\nend\n") do |file, path|

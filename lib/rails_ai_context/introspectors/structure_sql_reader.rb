@@ -58,6 +58,9 @@ module RailsAiContext
           tables[from]&.dig(:foreign_keys)&.push({ from_table: from, to_table: to, column: col, primary_key: pk })
         end
 
+        # pg_dump writes each partition as a table, then attaches it in exactly this form.
+        content.scan(/^ALTER TABLE ONLY .+? ATTACH PARTITION (?:public\.)?(?:"([^"]+)"|(\w+)) /) { |quoted, bare| tables.delete(quoted || bare) }
+
         { dialect: detect_sql_dialect(content), tables: tables }
       end
 

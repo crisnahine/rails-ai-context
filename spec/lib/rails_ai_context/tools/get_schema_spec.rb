@@ -558,8 +558,15 @@ RSpec.describe RailsAiContext::Tools::GetSchema do
       result = described_class.call(table: "posts")
       text = result.content.first[:text]
       expect(text).to include("Foreign keys")
-      expect(text).to include("user_id")
-      expect(text).to include("users")
+      expect(text).to include("- `user_id` → `users.id`")
+    end
+
+    # Every key to a partitioned table spans the partition column too.
+    it "shows a foreign key over two columns as the column lists" do
+      tables["posts"][:foreign_keys] = [ { column: %w[user_id user_day], to_table: "users", primary_key: %w[id day] } ]
+
+      text = described_class.call(table: "posts").content.first[:text]
+      expect(text).to include("- `(user_id, user_day)` → `users.(id, day)`")
     end
 
     it "shows nullable column status" do

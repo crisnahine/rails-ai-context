@@ -823,6 +823,28 @@ RSpec.describe RailsAiContext::Tools::Query do
     end
   end
 
+  describe "PostGIS adapter dispatch" do
+    # activerecord-postgis-adapter reports adapter_name "PostGIS" for a PostgreSQL
+    # connection, which gets the same READ ONLY transaction and statement timeout.
+    before do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostGIS")
+    end
+
+    it "routes regular queries through the PostgreSQL safety wrapper" do
+      expect(described_class).to receive(:execute_postgresql).and_return(ActiveRecord::Result.new(%w[x], [ [ 1 ] ]))
+
+      expect(described_class.call(sql: "SELECT 1 AS x").content.first[:text]).to include("1")
+    end
+
+    it "asks PostgreSQL for its JSON plan" do
+      expect(described_class).to receive(:execute_postgresql)
+        .with(anything, a_string_matching(/\AEXPLAIN \(FORMAT JSON, ANALYZE\) SELECT/), anything)
+        .and_return(ActiveRecord::Result.new(%w[QUERY\ PLAN], [ [ "[]" ] ]))
+
+      described_class.call(sql: "SELECT 1 AS x", explain: true)
+    end
+  end
+
   describe "redaction skip for schema-metadata statements" do
     # MySQL's DESCRIBE returns a literal column named "Key" (PRI/UNI/MUL) -
     # not actual secret data, but it matches the generic sensitive-suffix

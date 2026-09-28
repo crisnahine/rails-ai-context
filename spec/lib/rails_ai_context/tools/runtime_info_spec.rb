@@ -161,9 +161,53 @@ RSpec.describe RailsAiContext::Tools::RuntimeInfo do
       result = described_class.send(:gather_table_sizes, conn, "trilogy")
       expect(result).to eq([ { name: "products", bytes: 1024 } ])
     end
+
+    it "reads PostgreSQL's table sizes for the PostGIS adapter" do
+      conn = double("connection")
+      allow(RailsAiContext::Introspectors::PgPartitions).to receive(:table_bytes).with(conn)
+        .and_return([ { name: "parcels", bytes: 8192 } ])
+
+      expect(described_class.send(:gather_table_sizes, conn, "postgis")).to eq([ { name: "parcels", bytes: 8192 } ])
+    end
+
+    it "lists equally large PostgreSQL tables by name" do
+      conn = double("connection")
+      allow(RailsAiContext::Introspectors::PgPartitions).to receive(:table_bytes).with(conn)
+        .and_return([ { name: "posts", bytes: 8192 }, { name: "comments", bytes: 8192 }, { name: "users", bytes: 16384 } ])
+
+      expect(described_class.send(:gather_table_sizes, conn, "postgresql").map { |r| r[:name] }).to eq(%w[users comments posts])
+    end
   end
   # SQLite reports no table sizes, so this is the only reachable seam for the
   # byte labels the database section prints.
+  describe "index usage" do
+    it "orders PostgreSQL's least used indexes by table and index name" do
+      conn = double("connection")
+      allow(RailsAiContext::Introspectors::PgPartitions).to receive(:index_stats).with(conn).and_return([
+        { table: "posts", index: "index_posts_on_title", scans: 0 },
+        { table: "comments", index: "index_comments_on_post_id", scans: 0 },
+        { table: "posts", index: "index_posts_on_slug", scans: 0 }
+      ])
+
+      expect(described_class.send(:gather_index_usage, conn, "postgresql").map { |i| i[:index] })
+        .to eq(%w[index_comments_on_post_id index_posts_on_slug index_posts_on_title])
+    end
+
+    it "lists equally used indexes by table and index name" do
+      allow(described_class).to receive(:gather_index_usage).and_return([
+        { table: "posts", index: "index_posts_on_title", scans: 4 },
+        { table: "posts", index: "index_posts_on_slug", scans: 4 },
+        { table: "comments", index: "index_comments_on_post_id", scans: 4 }
+      ])
+
+      text = described_class.call(section: "database", detail: "full").content.first[:text]
+      most_used = text[/\*\*Most used indexes:\*\*\n(.*)/m, 1].lines.grep(/\A- /)
+
+      expect(most_used.map { |line| line[/`([^`]+)`/, 1] })
+        .to eq(%w[index_comments_on_post_id index_posts_on_slug index_posts_on_title])
+    end
+  end
+
   describe "byte labels" do
     it "labels sizes in English whatever the app's locale is" do
       with_comma_separator_locale do

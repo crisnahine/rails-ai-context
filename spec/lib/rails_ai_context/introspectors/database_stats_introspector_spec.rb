@@ -24,5 +24,30 @@ RSpec.describe RailsAiContext::Introspectors::DatabaseStatsIntrospector do
       expect(result[:adapter]).to eq("mysql")
       expect(result[:tables]).to eq([ { table: "products", approximate_rows: 3 } ])
     end
+
+    # Sizing a relation waits on its lock, so a migration holding one would stall
+    # the stats; the statistics views alone take none.
+    it "reads PostgreSQL row counts without sizing any relation" do
+      conn = ActiveRecord::Base.connection
+      allow(conn).to receive(:adapter_name).and_return("PostgreSQL")
+      allow(conn).to receive(:database_version).and_return(17_00_09)
+      queries = []
+      allow(conn).to receive(:select_all) { |sql| queries << sql and [] }
+
+      introspector.call
+
+      expect(queries).not_to be_empty
+      expect(queries).to all(satisfy { |sql| !sql.include?("pg_total_relation_size") })
+    end
+
+    it "collects PostgreSQL stats for the PostGIS adapter" do
+      allow(ActiveRecord::Base.connection).to receive(:adapter_name).and_return("PostGIS")
+      allow(RailsAiContext::Introspectors::PgPartitions).to receive(:table_rows)
+        .and_return([ { name: "parcels", rows: 7, dead_rows: 0 } ])
+
+      result = introspector.call
+      expect(result[:adapter]).to eq("postgresql")
+      expect(result[:tables]).to eq([ { table: "parcels", approximate_rows: 7 } ])
+    end
   end
 end

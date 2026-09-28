@@ -573,7 +573,7 @@ module RailsAiContext
         end
 
         def postgresql_adapter?
-          current_adapter.match?(/postgres/i)
+          current_adapter.match?(/postg/i)
         end
       end
     end

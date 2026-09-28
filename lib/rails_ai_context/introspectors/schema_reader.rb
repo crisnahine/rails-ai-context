@@ -59,9 +59,12 @@ module RailsAiContext
 
       attr_reader :source
 
-      def initialize(path, pk_type: nil)
+      # partitions: the tables the database says are partitions, which a
+      # schema.rb from before Rails 8 dumps as plain tables.
+      def initialize(path, pk_type: nil, partitions: [])
         @path = path
         @pk_type = pk_type
+        @partitions = partitions
         @source = File.exist?(path.to_s) ? :schema_rb : :none
       end
 
@@ -147,9 +150,30 @@ module RailsAiContext
           current = absorb(event, schema, current)
         end
 
-        schema
+        drop_partitions(schema)
       rescue => e
         RailsAiContext.debug_fail(e, empty_schema, label: "SchemaReader")
+      end
+
+      # Rails dumps a partition as a table inheriting its parent, and PostgreSQL
+      # lets only a partition inherit a partitioned table.
+      def drop_partitions(schema)
+        table_options = schema[:tables].transform_values { |t| t.dig(:options, :options).to_s }
+        partitioned = table_options.select { |_, o| o.start_with?("PARTITION BY") }.keys
+        dumped_partitions = []
+        loop do
+          found = table_options.select { |_, o| partitioned.include?(o[/\AINHERITS \(([^,]+)\)\z/, 1]) }.keys - dumped_partitions
+          break if found.empty?
+
+          dumped_partitions.concat(found)
+          partitioned.concat(found)
+        end
+        partitions = dumped_partitions | @partitions
+
+        partitions.each { |name| schema[:tables].delete(name) }
+        schema[:foreign_keys].reject! { |fk| partitions.include?(fk[:from]) || partitions.include?(fk[:to]) }
+        schema[:check_constraints].reject! { |c| partitions.include?(c[:table]) }
+        schema
       end
 
       # AstCache caps parses below the configured schema limit, so a dump

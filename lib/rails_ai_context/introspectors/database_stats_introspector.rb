@@ -2,8 +2,8 @@
 
 module RailsAiContext
   module Introspectors
-    # Collects approximate row counts from PostgreSQL's pg_stat_user_tables.
-    # Only activates for PostgreSQL adapter; returns { skipped: true } otherwise.
+    # Approximate row counts per table on PostgreSQL, MySQL and SQLite; any
+    # other adapter returns { skipped: true }.
     class DatabaseStatsIntrospector < Base
       extend StaticTier
       static_tier :runtime_only
@@ -13,12 +13,15 @@ module RailsAiContext
       # stats collection for every Trilogy app.
       MYSQL_ADAPTER = /mysql|trilogy/i
 
+      # activerecord-postgis-adapter reports "PostGIS" for what is a PostgreSQL connection.
+      POSTGRES_ADAPTER = /postg/i
+
       def call
         return { skipped: true, reason: "ActiveRecord not available" } unless defined?(ActiveRecord::Base)
 
         adapter = ActiveRecord::Base.connection.adapter_name.downcase
         case adapter
-        when /postgresql/
+        when POSTGRES_ADAPTER
           collect_postgresql_stats
         when MYSQL_ADAPTER
           collect_mysql_stats
@@ -32,18 +35,10 @@ module RailsAiContext
       private
 
       def collect_postgresql_stats
-        rows = ActiveRecord::Base.connection.select_all(<<~SQL)
-          SELECT relname AS table_name,
-                 n_live_tup AS approximate_row_count,
-                 n_dead_tup AS dead_rows
-          FROM pg_stat_user_tables
-          ORDER BY n_live_tup DESC
-        SQL
-
-        tables = rows.map do |row|
-          entry = { table: row["table_name"], approximate_rows: row["approximate_row_count"].to_i }
-          dead = row["dead_rows"].to_i
-          entry[:dead_rows] = dead if dead > 0
+        stats = PgPartitions.table_rows(ActiveRecord::Base.connection).sort_by { |t| [ -t[:rows], t[:name] ] }
+        tables = stats.map do |t|
+          entry = { table: t[:name], approximate_rows: t[:rows] }
+          entry[:dead_rows] = t[:dead_rows] if t[:dead_rows] > 0
           entry
         end
 

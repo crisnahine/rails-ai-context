@@ -47,6 +47,21 @@ RSpec.describe RailsAiContext::Serializers::ClaudeRulesSerializer do
     end
   end
 
+  it "summarizes a foreign key over two columns as the column list" do
+    ctx = serializer_context(schema: { adapter: "postgresql", total_tables: 1, tables: {
+      "posts" => { columns: [ { name: "id" }, { name: "user_id" } ], primary_key: "id",
+                   foreign_keys: [ { column: "author_id", to_table: "authors", primary_key: "id" },
+                                   { column: %w[user_id user_day], to_table: "users", primary_key: %w[id day] } ] }
+    } })
+
+    Dir.mktmpdir do |dir|
+      described_class.new(ctx).call(dir)
+      content = File.read(File.join(dir, ".claude", "rules", "rails-schema.md"))
+
+      expect(content).to include("FK: author_id→authors, (user_id, user_day)→users")
+    end
+  end
+
   it "generates .claude/rules/ files" do
     Dir.mktmpdir do |dir|
       result = described_class.new(context).call(dir)

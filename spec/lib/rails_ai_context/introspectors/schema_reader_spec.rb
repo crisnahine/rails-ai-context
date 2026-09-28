@@ -3,10 +3,10 @@
 require "spec_helper"
 
 RSpec.describe RailsAiContext::Introspectors::SchemaReader do
-  def reader_for(source)
+  def reader_for(source, **options)
     path = File.join(Dir.tmpdir, "rac_schema_reader_#{rand(1_000_000)}.rb")
     File.write(path, source)
-    described_class.new(path)
+    described_class.new(path, **options)
   ensure
     @paths ||= []
     @paths << path
@@ -259,6 +259,127 @@ RSpec.describe RailsAiContext::Introspectors::SchemaReader do
       RUBY
 
       expect(reader.check_constraints).to eq([ { table: "users", expression: "age < 200" } ])
+    end
+  end
+
+  # Rails dumps each partition as a table inheriting its parent, with copies
+  # of the parent's keys and constraints.
+  describe "a partitioned table" do
+    let(:reader) do
+      reader_for(<<~RUBY)
+        ActiveRecord::Schema[8.1].define(version: 0) do
+          create_table "capitals", id: false, options: "INHERITS (cities)", force: :cascade do |t|
+            t.text "state"
+          end
+
+          create_table "cities", id: false, force: :cascade do |t|
+            t.text "name"
+          end
+
+          create_table "measurements", primary_key: ["id", "recorded_on"], options: "PARTITION BY RANGE (recorded_on)", force: :cascade do |t|
+            t.bigint "post_id"
+            t.check_constraint "id > 0", name: "positive_id"
+          end
+
+          create_table "measurements_2026_01", primary_key: ["id", "recorded_on"], options: "INHERITS (measurements)", force: :cascade do |t|
+            t.bigint "post_id"
+            t.check_constraint "id > 0", name: "positive_id"
+          end
+
+          create_table "measurements_2026_02", primary_key: ["id", "recorded_on"], options: "INHERITS (measurements)", force: :cascade do |t|
+            t.bigint "post_id"
+            t.check_constraint "id > 0", name: "positive_id"
+          end
+
+          create_table "measurements_2026_02_a", primary_key: ["id", "recorded_on"], options: "INHERITS (measurements_2026_02)", force: :cascade do |t|
+            t.bigint "post_id"
+            t.check_constraint "id > 0", name: "positive_id"
+          end
+
+          create_table "posts", force: :cascade do |t|
+            t.text "title"
+          end
+
+          add_foreign_key "measurements", "posts", name: "measurements_post_id_fkey"
+          add_foreign_key "measurements_2026_01", "posts", name: "measurements_post_id_fkey"
+          add_foreign_key "measurements_2026_02", "posts", name: "measurements_post_id_fkey"
+          add_foreign_key "measurements_2026_02_a", "posts", name: "measurements_post_id_fkey"
+        end
+      RUBY
+    end
+
+    it "is one table, and a table inheriting a plain one stays its own" do
+      expect(reader.tables.keys).to contain_exactly("capitals", "cities", "measurements", "posts")
+    end
+
+    it "declares its foreign key once" do
+      expect(reader.foreign_keys.map { |fk| fk[:from] }).to eq(%w[measurements])
+    end
+
+    it "declares its check constraint once" do
+      expect(reader.check_constraints.map { |c| c[:table] }).to eq(%w[measurements])
+    end
+
+    # PostgreSQL clones a key that references a partitioned table once per partition.
+    it "keeps a foreign key to a partitioned table once" do
+      reader = reader_for(<<~RUBY)
+        create_table "events", id: false, options: "PARTITION BY RANGE (day)", force: :cascade do |t|
+          t.date "day", null: false
+        end
+
+        create_table "events_2026", id: false, options: "INHERITS (events)", force: :cascade do |t|
+          t.date "day", null: false
+        end
+
+        create_table "event_refs", force: :cascade do |t|
+          t.date "event_day"
+        end
+
+        add_foreign_key "event_refs", "events", column: "event_day", primary_key: "day"
+        add_foreign_key "event_refs", "events_2026", column: "event_day", primary_key: "day"
+      RUBY
+
+      expect(reader.foreign_keys.map { |fk| fk[:to] }).to eq(%w[events])
+    end
+
+    # Rails writes the parent's name raw, not as an identifier.
+    it "is one table under a name that is not a bare word" do
+      reader = reader_for(<<~RUBY)
+        create_table "page-views", id: false, options: "PARTITION BY RANGE (viewed_on)", force: :cascade do |t|
+          t.date "viewed_on", null: false
+        end
+
+        create_table "page-views 2026", id: false, options: "INHERITS (page-views)", force: :cascade do |t|
+          t.date "viewed_on", null: false
+        end
+      RUBY
+
+      expect(reader.tables.keys).to eq([ "page-views" ])
+    end
+
+    # Before Rails 8 a partition dumps as a plain table, so only the database
+    # can say which tables are partitions.
+    it "is one table when the caller names partitions the dump does not mark" do
+      reader = reader_for(<<~RUBY, partitions: %w[measurements_2026_01])
+        ActiveRecord::Schema[7.2].define(version: 0) do
+          create_table "measurements", id: false, force: :cascade do |t|
+            t.date "recorded_on", null: false
+            t.check_constraint "recorded_on > '2000-01-01'::date", name: "recent"
+          end
+
+          create_table "measurements_2026_01", id: false, force: :cascade do |t|
+            t.date "recorded_on", null: false
+            t.check_constraint "recorded_on > '2000-01-01'::date", name: "recent"
+          end
+
+          add_foreign_key "measurements", "posts"
+          add_foreign_key "measurements_2026_01", "posts"
+        end
+      RUBY
+
+      expect(reader.tables.keys).to eq(%w[measurements])
+      expect(reader.foreign_keys.map { |fk| fk[:from] }).to eq(%w[measurements])
+      expect(reader.check_constraints.map { |c| c[:table] }).to eq(%w[measurements])
     end
   end
 

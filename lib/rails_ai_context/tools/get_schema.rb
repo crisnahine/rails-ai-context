@@ -469,7 +469,8 @@ module RailsAiContext
         if data[:foreign_keys]&.any?
           lines << "" << "### Foreign keys"
           data[:foreign_keys].each do |fk|
-            lines << "- `#{fk[:column]}` → `#{fk[:to_table]}.#{fk[:primary_key]}`"
+            lines << "- `#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:column])}` → " \
+                     "`#{fk[:to_table]}.#{RailsAiContext::Introspectors::SchemaConventions.key_text(fk[:primary_key])}`"
           end
         end
 

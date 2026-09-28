@@ -72,8 +72,8 @@ module RailsAiContext
             to:          to_arg.unescaped,
             # Absent means the Rails convention holds; naming it here would
             # make a declared column indistinguishable from a guessed one.
-            column:      options[:column]&.to_s,
-            primary_key: options[:primary_key]&.to_s,
+            column:      SchemaConventions.primary_key_value(options[:column]),
+            primary_key: SchemaConventions.primary_key_value(options[:primary_key]),
             location:    node.location.start_line
           }.compact
         end

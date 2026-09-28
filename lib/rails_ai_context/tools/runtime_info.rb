@@ -130,7 +130,7 @@ module RailsAiContext
                 lines << "**Unused indexes (0 scans):**"
                 unused.first(10).each { |i| lines << "- `#{i[:index]}` on `#{i[:table]}`" }
               end
-              hot = index_usage.sort_by { |i| -(i[:scans] || 0) }.first(5)
+              hot = index_usage.sort_by { |i| [ -i[:scans].to_i, i[:table].to_s, i[:index].to_s ] }.first(5)
               lines << "" << "**Most used indexes:**"
               hot.each { |i| lines << "- `#{i[:index]}` on `#{i[:table]}` - #{count_phrase(i[:scans], "scan")}" }
             end
@@ -152,12 +152,14 @@ module RailsAiContext
         # table sizes for every Trilogy app.
         MYSQL_ADAPTER = /mysql|trilogy/i
 
+        # activerecord-postgis-adapter reports "PostGIS" for what is a PostgreSQL connection.
+        POSTGRES_ADAPTER = /postg/i
+
         def gather_table_sizes(conn, adapter)
           rows =
             case adapter
-            when /postgresql/
-              sql = "SELECT relname AS name, pg_total_relation_size(relid) AS bytes FROM pg_stat_user_tables ORDER BY bytes DESC"
-              conn.select_all(sql).map { |r| { name: r["name"], bytes: r["bytes"].to_i } }
+            when POSTGRES_ADAPTER
+              Introspectors::PgPartitions.table_bytes(conn).sort_by { |r| [ -r[:bytes], r[:name] ] }
             when MYSQL_ADAPTER
               sql = "SELECT table_name AS name, (data_length + index_length) AS bytes FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() ORDER BY bytes DESC"
               conn.select_all(sql).map { |r| { name: r["name"], bytes: r["bytes"].to_i } }
@@ -204,9 +206,8 @@ module RailsAiContext
 
         def gather_index_usage(conn, adapter)
           case adapter
-          when /postgresql/
-            sql = "SELECT relname AS table, indexrelname AS index, idx_scan AS scans FROM pg_stat_user_indexes ORDER BY idx_scan ASC"
-            conn.select_all(sql).map { |r| { table: r["table"], index: r["index"], scans: r["scans"].to_i } }
+          when POSTGRES_ADAPTER
+            Introspectors::PgPartitions.index_stats(conn).sort_by { |i| [ i[:scans], i[:table], i[:index] ] }
           else
             nil
           end

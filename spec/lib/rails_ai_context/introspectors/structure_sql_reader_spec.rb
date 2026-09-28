@@ -237,4 +237,106 @@ RSpec.describe RailsAiContext::Introspectors::StructureSqlReader do
       expect(described_class.parse(sql)[:tables]["accounts_tags"][:primary_key]).to eq(%w[tag_id account_id])
     end
   end
+
+  # pg_dump writes each partition as its own CREATE TABLE and attaches it
+  # later, so a partitioned table read as one table per partition.
+  it "lists a partitioned table once, without its partitions" do
+    sql = <<~SQL
+      CREATE TABLE public.measurements (
+          id bigint NOT NULL,
+          recorded_on date NOT NULL
+      )
+      PARTITION BY RANGE (recorded_on);
+
+      CREATE TABLE public.measurements_2026_01 (
+          id bigint DEFAULT nextval('public.measurements_id_seq'::regclass) NOT NULL,
+          recorded_on date NOT NULL
+      );
+
+      CREATE TABLE public.measurements_2026_02 (
+          id bigint DEFAULT nextval('public.measurements_id_seq'::regclass) NOT NULL,
+          recorded_on date NOT NULL
+      )
+      PARTITION BY RANGE (recorded_on);
+
+      CREATE TABLE public.measurements_2026_02_a (
+          id bigint DEFAULT nextval('public.measurements_id_seq'::regclass) NOT NULL,
+          recorded_on date NOT NULL
+      );
+
+      CREATE TABLE public.posts (
+          id bigint NOT NULL,
+          title text
+      );
+
+      ALTER TABLE ONLY public.measurements ATTACH PARTITION public.measurements_2026_01 FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+
+      ALTER TABLE ONLY public.measurements ATTACH PARTITION public.measurements_2026_02 FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+
+      ALTER TABLE ONLY public.measurements_2026_02 ATTACH PARTITION public.measurements_2026_02_a FOR VALUES FROM ('2026-02-01') TO ('2026-02-15');
+    SQL
+
+    expect(described_class.parse(sql)[:tables].keys).to eq(%w[measurements posts])
+  end
+
+  # pg_dump quotes a name only where it has to.
+  it "lists a partitioned table once when its partition's name is quoted" do
+    sql = <<~SQL
+      CREATE TABLE public."Events" (
+          id bigint NOT NULL
+      )
+      PARTITION BY LIST (id);
+
+      CREATE TABLE public."Events_1" (
+          id bigint NOT NULL
+      );
+
+      ALTER TABLE ONLY public."Events" ATTACH PARTITION public."Events_1" FOR VALUES IN (1);
+    SQL
+
+    expect(described_class.parse(sql)[:tables].keys).to eq(%w[Events])
+  end
+
+  it "keeps a table named like the first word of a quoted partition" do
+    sql = <<~SQL
+      CREATE TABLE public."Mixed" (
+          id bigint NOT NULL
+      );
+
+      ALTER TABLE ONLY public."Mixed Case" ATTACH PARTITION public."Mixed Case 1" FOR VALUES IN (1);
+    SQL
+
+    expect(described_class.parse(sql)[:tables].keys).to eq(%w[Mixed])
+  end
+
+  it "keeps a table named like the schema of a partition attached elsewhere" do
+    sql = <<~SQL
+      CREATE TABLE public.audit (
+          id bigint NOT NULL
+      );
+
+      ALTER TABLE ONLY audit.events ATTACH PARTITION audit.events_2026 FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+    SQL
+
+    expect(described_class.parse(sql)[:tables].keys).to eq(%w[audit])
+  end
+
+  # A staging table loaded in bulk and attached later is a table until then.
+  it "keeps a table that a function body attaches" do
+    sql = <<~SQL
+      CREATE FUNCTION public.attach_staged_events() RETURNS void
+          LANGUAGE plpgsql
+          AS $$
+      BEGIN
+      ALTER TABLE events ATTACH PARTITION events_staging FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+      END
+      $$;
+
+      CREATE TABLE public.events_staging (
+          id bigint NOT NULL
+      );
+    SQL
+
+    expect(described_class.parse(sql)[:tables].keys).to eq(%w[events_staging])
+  end
 end

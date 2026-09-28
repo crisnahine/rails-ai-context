@@ -41,6 +41,73 @@ RSpec.describe "E2E: Postgres adapter", type: :e2e do
     end
   end
 
+  # A partition repeats its parent's columns, indexes and keys, so every
+  # table list names the parent once and counts its partitions' rows and
+  # bytes as the parent's.
+  describe "a partitioned table" do
+    before(:all) do
+      setup = @cli.run([ "bin/rails", "runner", <<~RUBY ])
+        ActiveRecord::Base.connection.execute(<<~SQL)
+          DROP TABLE IF EXISTS readings;
+          DROP TABLE IF EXISTS measurements;
+          CREATE TABLE measurements (id bigserial, recorded_on date NOT NULL, PRIMARY KEY (id, recorded_on)) PARTITION BY RANGE (recorded_on);
+          CREATE TABLE measurements_2026_01 PARTITION OF measurements FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+          CREATE TABLE measurements_2026_02 PARTITION OF measurements FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+          CREATE INDEX index_measurements_on_recorded_on ON measurements (recorded_on);
+          CREATE TABLE readings (id bigserial PRIMARY KEY, measurement_id bigint, measurement_recorded_on date,
+            FOREIGN KEY (measurement_id, measurement_recorded_on) REFERENCES measurements (id, recorded_on));
+          INSERT INTO measurements (recorded_on) VALUES ('2026-01-05'), ('2026-01-06'), ('2026-02-05');
+          ANALYZE measurements;
+        SQL
+      RUBY
+      raise setup.to_s unless setup.success?
+
+      # Rails dumps each partition into schema.rb as a table inheriting its parent.
+      dump = @cli.run([ "bin/rails", "db:schema:dump" ])
+      raise dump.to_s unless dump.success?
+    end
+
+    it "is one table in rails_get_schema" do
+      result = @cli.cli_tool("schema")
+      expect(result.success?).to be(true), result.to_s
+      expect(result.stdout).to match(/\bmeasurements\b/)
+      expect(result.stdout).not_to include("measurements_2026")
+    end
+
+    # PostgreSQL clones a key that references a partitioned table once per partition.
+    it "is the target of one foreign key in rails_get_schema" do
+      result = @cli.cli_tool("schema", [ "--table", "readings" ])
+      expect(result.success?).to be(true), result.to_s
+      expect(result.stdout).to include("`(measurement_id, measurement_recorded_on)` → `measurements.(id, recorded_on)`")
+      expect(result.stdout).not_to include("measurements_2026")
+    end
+
+    it "is one table carrying its partitions' rows in the database stats" do
+      result = @cli.run([ "bin/rails", "runner",
+                          "puts RailsAiContext::Introspectors::DatabaseStatsIntrospector.new(Rails.application).call.to_json" ])
+      expect(result.success?).to be(true), result.to_s
+      tables = JSON.parse(result.stdout.lines.last)["tables"]
+
+      expect(tables.map { |t| t["table"] }).not_to include(a_string_starting_with("measurements_2026"))
+      expect(tables.find { |t| t["table"] == "measurements" }).to include("approximate_rows" => 3)
+      expect(tables).to eq(tables.sort_by { |t| [ -t["approximate_rows"], t["table"] ] })
+    end
+
+    it "is one table carrying its partitions' bytes in rails_runtime_info" do
+      result = @cli.cli_tool("runtime_info", [ "--section", "database" ])
+      expect(result.success?).to be(true), result.to_s
+      expect(result.stdout).not_to include("measurements_2026")
+      expect(result.stdout).to match(/^\| measurements \| (?!0 Bytes)/)
+    end
+
+    it "is one table with one copy of each index in rails_runtime_info's index usage" do
+      result = @cli.cli_tool("runtime_info", [ "--section", "database", "--detail", "full" ])
+      expect(result.success?).to be(true), result.to_s
+      expect(result.stdout).to include("`index_measurements_on_recorded_on` on `measurements`")
+      expect(result.stdout).not_to include("measurements_2026")
+    end
+  end
+
   describe "rails_query tool against Postgres" do
     it "executes a simple SELECT and returns the result" do
       result = @cli.cli_tool("query", [ "--sql", "SELECT id, title, body FROM posts LIMIT 5" ])

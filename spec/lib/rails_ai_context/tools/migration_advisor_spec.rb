@@ -319,6 +319,16 @@ RSpec.describe RailsAiContext::Tools::MigrationAdvisor do
         expect(text).to include("algorithm: :concurrently")
       end
 
+      it "warns about add_index without :concurrently on a PostGIS app" do
+        allow(described_class).to receive(:cached_context).and_return({
+          schema: { adapter: "PostGIS", tables: { "users" => { columns: [ { name: "email", type: "string" } ] } } },
+          models: {}
+        })
+
+        text = described_class.call(action: "add_index", table: "users", column: "email").content.first[:text]
+        expect(text).to include("Strong Migrations Warnings")
+      end
+
       it "does not warn about add_index when :concurrently is already specified" do
         response = described_class.call(action: "add_index", table: "users", column: "email", options: "algorithm: :concurrently")
         text = response.content.first[:text]

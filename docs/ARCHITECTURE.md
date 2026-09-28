@@ -111,13 +111,17 @@ flowchart LR
 
 The `Introspector` orchestrator runs configured introspectors and merges results.
 
-Four modules answer questions every introspector used to answer for itself:
+Five modules answer questions every introspector used to answer for itself:
 
 - **PathResolver** - where a kind of app code lives: `app/<kind>`, packs, and the in-repo code roots read from the tree (a directory holding its own `app/` plus a gemspec, `plugin.rb` or `lib/**/engine.rb`), memoized per root
 - **SourceScan** - one walk over a kind of app source, across every directory `PathResolver` resolves: `paths` stats, `each` reads, `classes` names by the declared constant
 - **EagerLoad** - loads a directory's constants for a booted-tier walk, one file at a time, so an unloadable file costs only itself
 - **GemLock** - which gems the app resolved and at what version, read once per lockfile and matched by exact name across GEM, GIT and PATH
 - **PackageJson** - which npm packages the app depends on, read once per `package.json`: present means named in `dependencies` or `devDependencies`, so an `overrides` pin is not a dependency, and `@tailwindcss/vite` counts as tailwindcss
+
+One more reads PostgreSQL's catalogs for the schema, the database stats and `rails_runtime_info`:
+
+- **PgPartitions** - which tables are partitions, and each table's rows, bytes and index scans from `pg_stat_user_tables` and `pg_stat_user_indexes`, counting a partition toward its partitioned parent, so every surface names a partitioned table once
 
 Two more answer a question a tool asks:
 

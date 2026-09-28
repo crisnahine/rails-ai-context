@@ -104,7 +104,7 @@ module RailsAiContext
           col_str = col_sample.any? ? " - #{col_sample.join(', ')}" : ""
 
           # Foreign keys
-          fks = (data[:foreign_keys] || []).map { |f| "#{f[:column]}→#{f[:to_table]}" }
+          fks = (data[:foreign_keys] || []).map { |f| "#{Introspectors::SchemaConventions.key_text(f[:column])}→#{f[:to_table]}" }
           fk_str = fks.any? ? " | FK: #{fks.join(', ')}" : ""
 
           # Key indexes (unique or composite)
