@@ -208,6 +208,10 @@ Proof sources:
    (Ruby 3.4.10, 133 models, 102 controllers, 1630 ActiveInteraction services,
    516 Sidekiq workers) in the v5.27.0 QA round, booted and static tiers, with
    every report rebuilt on a minimal Rails 8.0.5.1 fixture before it was filed.
+   In the v5.30.0 release QA: Mastodon, Discourse, OpenProject, Canvas, Forem,
+   Whitehall, Consul, OpenFoodNetwork, Huginn, Errbit, Diaspora and Plots2 in
+   the static and failed-boot tiers, and the same private app in every tier
+   and both install paths.
 2. Non-crash coverage for every built-in tool including `get_view` in
    `spec/e2e/in_gemfile_install_spec.rb`'s full-tool sweep; output correctness
    (ivar cross-check, render-form detection, partial interfaces) verified

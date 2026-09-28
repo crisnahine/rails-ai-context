@@ -5,20 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.30.0] - 2026-09-28
 
-A pass over the whole tree for code that did not need to exist: about 1,300
-fewer lines in `lib/` and `exe/`, one base class for the introspectors and one
-for the serializers, and one table where several files each kept a copy.
-What a reader of the gem can see is below; the rest reads and walks the same
-files fewer times.
-
-The branch then ran against thirteen real apps (a private API app, Mastodon,
-Discourse, Forem, OpenProject, Canvas, Whitehall, Consul, OpenFoodNetwork,
-Huginn, Errbit, Diaspora and Plots2) and fixes what they showed: code in
-in-repo engines and plugins nobody read, jobs, mailers and Stimulus
-controllers outside the directories the scans assumed, and answers that named
-the wrong thing.
+A pass over the whole tree for code that did not need to exist, with one base
+class for the introspectors and one for the serializers, and one reader where
+several files each kept a copy. Then four real-app QA passes in every tier
+(Mastodon, Discourse, OpenProject, Canvas, Forem, Whitehall, Consul,
+OpenFoodNetwork, Huginn, Errbit, Diaspora, Plots2 and a private API app) and
+five review rounds found the wrong answers below. Their fixes grew `lib/` by
+about 8,500 lines, most of it reading what the gem used to guess.
 
 ### Added
 
